@@ -1,10 +1,14 @@
-import React, { useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
-import GraphView from './GraphView';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
+
+// GraphView pulls in cytoscape (~455 kB) — lazy-load it so the ~455 kB
+// graph vendor chunk only lands when a tool result actually carries a
+// ``graph`` payload, instead of riding the chat path for every session.
+const GraphView = lazy(() => import('./GraphView'));
 
 const ToolResultRender = ({ part }) => {
   // Decide which custom renderer(s) to show for this tool's payload. A
@@ -38,22 +42,30 @@ const ToolResultRender = ({ part }) => {
         {Array.isArray(part.result.applications) ? (
           <CandidateGrid rows={part.result.applications} />
         ) : null}
-        {part.result.graph ? <GraphView graph={part.result.graph} /> : null}
+        {part.result.graph ? (
+          <Suspense fallback={null}>
+            <GraphView graph={part.result.graph} />
+          </Suspense>
+        ) : null}
       </>
     );
   }
   return null;
 };
 
-const Message = ({ msg, isStreaming }) => {
+// Memoized per message: useChatStream replaces the streaming message's
+// object immutably on every SSE delta while every other message keeps its
+// reference, so React.memo re-renders only the one message being streamed
+// instead of re-parsing every ChatMarkdown in the thread on each token.
+const Message = React.memo(({ msg, isStreaming }) => {
   if (msg.role === 'user') {
     const text = msg.parts.find((p) => p.type === 'text')?.text || '';
-    return <ChatMessage role="user" text={text} />;
+    return <ChatMessage role="user" text={text} time={msg.createdAt} />;
   }
 
   const isEmpty = !msg.parts.length;
   return (
-    <ChatMessage role="assistant">
+    <ChatMessage role="assistant" time={msg.createdAt}>
       {/* search-preview tags each assistant turn with a mono "TAALI" kicker. */}
       <div className="cp-who">Taali</div>
       {isEmpty && isStreaming ? <ThinkingDots label="thinking…" /> : null}
@@ -74,7 +86,7 @@ const Message = ({ msg, isStreaming }) => {
       })}
     </ChatMessage>
   );
-};
+});
 
 const friendlyError = (raw) => {
   if (!raw) return null;
@@ -83,32 +95,63 @@ const friendlyError = (raw) => {
   // pointed message so the user knows where to go.
   if (/credit balance is too low/i.test(text) || /insufficient_quota/i.test(text)) {
     return {
-      title: "Anthropic credit balance is empty",
+      title: "Taali's AI is unavailable",
       detail:
-        "The chat backend hit Anthropic's API but the org's workspace has no credits. " +
-        "Top up at https://console.anthropic.com → Plans & Billing, then try again.",
+        "The AI service can't take requests right now. Try again shortly — contact support if it keeps happening.",
     };
   }
   if (/invalid_api_key|authentication_error/i.test(text)) {
     return {
-      title: "Anthropic auth failed",
+      title: "Couldn't reach Taali's AI",
       detail:
-        "The org's workspace API key was rejected. Re-provision via the Anthropic Console.",
+        "There's a configuration problem with AI access for your workspace. Contact support.",
     };
   }
   if (/rate_limit|429/i.test(text)) {
     return {
-      title: "Rate limited by Anthropic",
-      detail: "Wait a moment and retry. Heavy usage triggers a short cool-down.",
+      title: "Too many requests",
+      detail: "Wait a moment and try again.",
     };
   }
-  return { title: "Something went wrong", detail: text };
+  return { title: "Something went wrong", detail: "Please try again. If it keeps happening, contact support." };
 };
 
-const Thread = ({ messages, isStreaming, error }) => {
+// Nearest scrollable ancestor of the thread (``.cp-scroll``). We autoscroll
+// only when the user is already pinned near the bottom — a recruiter who
+// scrolls up to re-read an evidence card mid-stream keeps their position
+// instead of being yanked back down on every SSE delta.
+const NEAR_BOTTOM_PX = 80;
+const scrollParentOf = (el) => {
+  let node = el?.parentElement;
+  while (node) {
+    const oy = getComputedStyle(node).overflowY;
+    if (oy === 'auto' || oy === 'scroll') return node;
+    node = node.parentElement;
+  }
+  return null;
+};
+
+const Thread = ({ messages, isStreaming, error, onRetry }) => {
   const endRef = useRef(null);
+  // Whether the user was pinned to the bottom *before* this render grew the
+  // thread. Tracked on scroll so a mid-stream scroll-up is respected while
+  // someone sitting at the bottom keeps following the answer as it streams.
+  const pinnedRef = useRef(true);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const scroller = scrollParentOf(endRef.current);
+    if (!scroller) return undefined;
+    const onScroll = () => {
+      pinnedRef.current =
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <
+        NEAR_BOTTOM_PX;
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, []);
+  useEffect(() => {
+    if (pinnedRef.current) {
+      endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
   }, [messages, isStreaming]);
 
   const fr = friendlyError(error);
@@ -126,6 +169,11 @@ const Thread = ({ messages, isStreaming, error }) => {
         <div className="cp-error">
           <div className="cp-error-title">{fr.title}</div>
           <div className="cp-error-detail">{fr.detail}</div>
+          {onRetry ? (
+            <button type="button" className="cp-error-retry" onClick={onRetry}>
+              Try again
+            </button>
+          ) : null}
         </div>
       ) : null}
       <div ref={endRef} />

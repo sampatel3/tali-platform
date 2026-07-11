@@ -92,7 +92,7 @@ function Quote({ text, source }) {
 const RANK_LABELS = {
   taali: 'Taali fit',
   pre_screen: 'pre-screen',
-  rank: 'pairwise rank',
+  rank: 'head-to-head comparison',
   cv_match: 'CV match',
 };
 
@@ -174,7 +174,7 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
   const spec = data.spec || {};
   const candidates = data.candidates;
   const warnings = Array.isArray(data.warnings) ? data.warnings : [];
-  const rankLabel = RANK_LABELS[data.rank_by || spec.ranking_key] || data.rank_by || 'score';
+  const rankLabel = RANK_LABELS[data.rank_by || spec.ranking_key] || 'score';
   const shown = data.shown ?? candidates.length;
   const excluded = data.excluded || {};
   const hidden = excluded.not_met_total || 0;
@@ -222,7 +222,7 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
       {warnings.length ? (
         <div className="ev-warn">
           {warnings.map((w, i) => (
-            <span key={i}>{w.message || w.code}</span>
+            <span key={i}>{w.message || 'Some results may be incomplete.'}</span>
           ))}
         </div>
       ) : null}

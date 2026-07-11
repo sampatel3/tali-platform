@@ -37,6 +37,10 @@ const AgentConversation = ({
   const { showToast } = useToast() || { showToast: () => {} };
   const [timeline, setTimeline] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Set when a timeline fetch fails so we can show a quiet "couldn't
+  // refresh" row instead of collapsing a real conversation into the
+  // suggestion prompts. Cleared on the next successful load.
+  const [loadError, setLoadError] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState('');
   // Durable "agent is working…" — driven by the server (the turn runs in a
@@ -47,9 +51,24 @@ const AgentConversation = ({
   const activeRoleRef = useRef(roleId);
   useEffect(() => { activeRoleRef.current = roleId; }, [roleId]);
 
+  // Whether the user was at the bottom *before* the latest timeline update —
+  // tracked on scroll so a recruiter reading back through evidence cards
+  // mid-turn keeps their position instead of being yanked down on every
+  // 2.5s poll tick, while someone at the bottom keeps following the turn.
+  const pinnedRef = useRef(true);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const onScroll = () => {
+      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
   }, []);
 
   const load = useCallback(async (opts = {}) => {
@@ -59,10 +78,24 @@ const AgentConversation = ({
     try {
       const { data } = await agentChat.getTimeline(roleId);
       if (activeRoleRef.current !== forRole) return;
-      setTimeline(data.timeline || []);
+      const next = data.timeline || [];
+      // Skip the state churn when a silent poll returns an unchanged
+      // timeline — a fresh array reference would re-render and re-scroll
+      // the whole thread every 2.5s even though nothing moved. The last
+      // item can still grow in place during a turn (text streams in, action
+      // cards attach), so the signature covers its text + action count too.
+      const sig = (t) => {
+        const last = t[t.length - 1];
+        return `${t.length}|${last?.id ?? ''}|${last?.text?.length ?? 0}|${last?.actions?.length ?? 0}`;
+      };
+      setTimeline((prev) => (sig(prev) === sig(next) ? prev : next));
       setAgentWorking(Boolean(data.agent_working));
+      if (activeRoleRef.current === forRole) setLoadError(false);
     } catch {
-      if (!opts.silent && activeRoleRef.current === forRole) setTimeline([]);
+      // Keep whatever we last had on screen — clearing to [] would drop a
+      // real conversation back to the suggestion prompts on a transient
+      // fetch blip. Flag the error so the thread can show a quiet retry row.
+      if (activeRoleRef.current === forRole) setLoadError(true);
     } finally {
       if (!opts.silent && activeRoleRef.current === forRole) setLoading(false);
     }
@@ -71,6 +104,7 @@ const AgentConversation = ({
   useEffect(() => {
     setTimeline([]);
     setAgentWorking(false);
+    setLoadError(false);
     load();
   }, [load]);
 
@@ -269,6 +303,18 @@ const AgentConversation = ({
           <div className="cp-thread">
             <ChatMessage role="assistant"><ThinkingDots label="Loading the conversation…" /></ChatMessage>
           </div>
+        ) : loadError && items.length === 0 ? (
+          // Fetch failed with nothing to fall back on — offer a retry rather
+          // than the empty-state prompts, which would misleadingly imply the
+          // conversation is empty.
+          <div className="cp-thread">
+            <div className="cp-refresh-row">
+              Couldn’t load the conversation.
+              <button type="button" className="cp-refresh-retry" onClick={() => load()}>
+                Try again
+              </button>
+            </div>
+          </div>
         ) : items.length === 0 && !sending && !agentWorking ? (
           <ChatEmptyState
             title={<>What should this agent do<em>?</em></>}
@@ -278,6 +324,10 @@ const AgentConversation = ({
           />
         ) : (
           <div className="cp-thread">
+            {loadError ? (
+              // A refresh blipped but we kept the last good thread on screen.
+              <div className="cp-refresh-row">Couldn’t refresh — retrying.</div>
+            ) : null}
             {items.map((it) =>
               it.kind === 'needs_input' ? (
                 <NeedsInputCard key={it.id} item={it} onAnswer={answer} onDismiss={dismiss} />

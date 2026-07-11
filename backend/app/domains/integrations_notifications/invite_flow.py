@@ -124,7 +124,7 @@ def _do_workable_handoff(
             f"{settings.FRONTEND_URL}/assessment/{assessment.id}?token={assessment.token}"
         )
         activity = (
-            "TAALI assessment invite sent.\n\n"
+            "Taali assessment invite sent.\n\n"
             f"Candidate: {candidate_name} <{candidate_email}>\n"
             f"Assessment link: {assessment_link}\n"
         )

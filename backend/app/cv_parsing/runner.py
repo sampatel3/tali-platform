@@ -26,6 +26,10 @@ logger = logging.getLogger("taali.cv_parsing.runner")
 OUTPUT_TOKEN_CEILING = 4096
 MAX_RETRIES = 1
 TEMPERATURE = 0.0
+# Truncate absurdly long CVs. Most are <8KB; 30KB comfortably covers ~6000
+# words and keeps the prompt under Haiku's input budget. Shared with the
+# batch path — both must truncate identically or their cache keys diverge.
+CV_TEXT_CEILING = 30_000
 
 _SYSTEM_PROMPT = "You are a CV parser. Respond ONLY with valid JSON."
 
@@ -75,11 +79,8 @@ def parse_cv(
             model_version=MODEL_VERSION,
         )
 
-    # Truncate if absurdly long. Most CVs are <8KB; cap at 30KB which
-    # comfortably covers ~6000 words and keeps the prompt under Haiku's
-    # input budget.
-    if len(cv_text) > 30_000:
-        cv_text = cv_text[:30_000]
+    if len(cv_text) > CV_TEXT_CEILING:
+        cv_text = cv_text[:CV_TEXT_CEILING]
 
     from . import cache as cache_module
 
@@ -93,24 +94,31 @@ def parse_cv(
         if cached is not None:
             return cached.model_copy(update={"cache_hit": True})
 
-    try:
-        prompt = build_cv_parse_prompt(cv_text)
-    except Exception as exc:
-        return ParsedCV.failed(
-            reason=f"prompt_render_failed: {exc}",
+    def _fail(reason: str) -> ParsedCV:
+        failed = ParsedCV.failed(
+            reason=reason,
             prompt_version=PROMPT_VERSION,
             model_version=MODEL_VERSION,
         )
+        # cache.set filters to deterministic failure reasons; transient
+        # ones (API errors, client init) pass through uncached.
+        if not skip_cache:
+            try:
+                cache_module.set(cache_key, failed)
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning("CV parse failure-cache write failed: %s", exc)
+        return failed
+
+    try:
+        prompt = build_cv_parse_prompt(cv_text)
+    except Exception as exc:
+        return _fail(f"prompt_render_failed: {exc}")
 
     if client is None:
         try:
             client = _resolve_anthropic_client()
         except Exception as exc:
-            return ParsedCV.failed(
-                reason=f"client_init_failed: {exc}",
-                prompt_version=PROMPT_VERSION,
-                model_version=MODEL_VERSION,
-            )
+            return _fail(f"client_init_failed: {exc}")
 
     # Forced tool-use: the model emits ParsedCVSections as the tool's
     # ``.input`` dict — no JSON parsing, no fence stripping, no syntactic
@@ -130,11 +138,7 @@ def parse_cv(
     )
 
     if not result.ok or result.value is None:
-        return ParsedCV.failed(
-            reason=result.error_reason or "parse_failed",
-            prompt_version=PROMPT_VERSION,
-            model_version=MODEL_VERSION,
-        )
+        return _fail(result.error_reason or "parse_failed")
 
     parsed = ParsedCV.from_sections(
         result.value,

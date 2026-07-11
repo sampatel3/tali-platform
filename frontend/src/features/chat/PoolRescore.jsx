@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 import { roles as rolesApi } from '../../shared/api/rolesClient';
+import ConfirmDialog from './ConfirmDialog';
 
 // Talent-pool rediscovery, Phase B — the opt-in re-score action on a rediscovery
 // card. The screen (Phase A) ranks by grounded fit via cheap Haiku; this runs the
@@ -19,6 +20,7 @@ export default function PoolRescore({ requirementText, candidates }) {
   const [phase, setPhase] = useState('idle'); // idle | running | done | error
   const [results, setResults] = useState(null);
   const [err, setErr] = useState(null);
+  const [confirming, setConfirming] = useState(false);
   const timer = useRef(null);
 
   useEffect(() => () => clearInterval(timer.current), []);
@@ -34,19 +36,15 @@ export default function PoolRescore({ requirementText, candidates }) {
       return true;
     }
     if (j.status === 'error') {
-      setErr('The re-score job failed. Try again.');
+      setErr('Re-scoring failed. Try again.');
       setPhase('error');
       return true;
     }
     return false;
   }
 
-  async function start() {
-    const ok = window.confirm(
-      `Re-score ${ids.length} candidate${ids.length === 1 ? '' : 's'} against this ` +
-        `requirement for a true comparable score? Est. ~$${est} in Anthropic cost.`,
-    );
-    if (!ok) return;
+  async function run() {
+    setConfirming(false);
     setPhase('running');
     setErr(null);
     try {
@@ -59,7 +57,7 @@ export default function PoolRescore({ requirementText, candidates }) {
           if (await poll(jobId)) clearInterval(timer.current);
         } catch (e) {
           clearInterval(timer.current);
-          setErr('Lost contact with the re-score job.');
+          setErr('Lost contact while re-scoring. Refresh to check for results.');
           setPhase('error');
         }
       }, 2500);
@@ -77,10 +75,18 @@ export default function PoolRescore({ requirementText, candidates }) {
   return (
     <div className="ev-rescore">
       {phase === 'idle' ? (
-        <button type="button" className="ev-rescore-btn" onClick={start}>
+        <button type="button" className="ev-rescore-btn" onClick={() => setConfirming(true)}>
           Re-score top {ids.length} against this requirement · est ${est}
         </button>
       ) : null}
+      <ConfirmDialog
+        open={confirming}
+        title={`Re-score ${ids.length} candidate${ids.length === 1 ? '' : 's'}?`}
+        detail={`Runs the full score against this requirement for a true comparable number. Estimated cost: ~$${est}.`}
+        confirmLabel="Re-score"
+        onConfirm={run}
+        onCancel={() => setConfirming(false)}
+      />
       {phase === 'running' ? (
         <div className="ev-rescore-status">
           Re-scoring {ids.length} candidate{ids.length === 1 ? '' : 's'} against the requirement…

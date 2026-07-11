@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { MarketingNav } from '../../shared/layout/TaaliLayout';
+import { useDocumentMeta } from '../../shared/seo/useDocumentMeta';
 import { getPost, formatPostDate } from './posts';
 import './blog.css';
 
@@ -32,6 +33,10 @@ const BlogFooter = () => (
 export const BlogPostPage = ({ onNavigate }) => {
   const { slug } = useParams();
   const post = getPost(slug);
+  useDocumentMeta(post ? {
+    title: `${post.title} — Taali Blog`,
+    description: post.description,
+  } : undefined);
 
   return (
     <div className="blog-wrap">

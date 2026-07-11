@@ -398,6 +398,10 @@ const CvDocumentViewer = ({
 
   const mime = inferCvMime(filename);
   const isImage = isCvImageMime(mime);
+  // File types we normally extract text from — if one of these has no text yet,
+  // it's still being processed rather than genuinely unpreviewable.
+  const isTextParseable = /\.(pdf|docx?|txt|rtf|odt)$/i.test(String(filename || ''))
+    || /pdf|word|officedocument|text\/plain/i.test(String(mime || ''));
   const downloadName = sanitizeDownloadName(filename, 'candidate-cv');
   const cvModel = useMemo(() => normalizeCvSections({ parsedSections, cvText, application }), [application, cvText, parsedSections]);
   const hasTextFallback = Boolean(cvText || parsedSections || cvModel.summary || cvModel.rawSections.length);
@@ -546,6 +550,14 @@ const CvDocumentViewer = ({
         <div className="cv-doc-loading">
           <Spinner size={18} />
           <span>Loading CV preview...</span>
+        </div>
+      ) : isTextParseable ? (
+        // A text-friendly file (PDF/Word/txt) with no extracted text yet means
+        // the CV is still being processed — show a processing state, not a
+        // dead-end "can't preview" that reads like a permanent failure.
+        <div className="cv-doc-loading">
+          <Spinner size={18} />
+          <span>Processing this CV — the preview will appear once it&apos;s ready. You can download the original in the meantime.</span>
         </div>
       ) : (
         <div className="cv-doc-empty">

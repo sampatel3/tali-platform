@@ -367,6 +367,43 @@
   letter-spacing: 0;
   padding: 3px 11px;
 }
+/* Per-member row actions (resend / revoke / remove). The row grid keeps the
+   chip in its `auto` column; the actions sit in a trailing column, so widen
+   the template to `34px 1fr auto auto`. Text buttons, no fills — matches the
+   subtle inline-action idiom used elsewhere in settings. */
+.members .mb {
+  grid-template-columns: 34px 1fr auto auto;
+}
+.settings-member-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 14px;
+}
+.settings-member-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 0.75rem;            /* 12px */
+  font-weight: 500;
+  color: var(--purple);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings-member-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.settings-member-link:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.settings-member-link.settings-member-link-danger {
+  color: var(--mute);
+}
+.settings-member-link.settings-member-link-danger:hover:not(:disabled) {
+  color: var(--ink);
+}
 
 /* ── Credit packs: preview `.pack` centres a stacked amount → credit,
    bonus in purple. Pass-1 already de-slabbed these; ensure the price

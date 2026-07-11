@@ -180,7 +180,25 @@ class Role(Base):
     auto_reject = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # ``auto_reject_pre_screen``: narrower opt-in than ``auto_reject`` —
+    # ONLY candidates failing the cheap pre-screen gate are rejected
+    # immediately (the ``run_auto_reject_if_needed`` path). Rejects of
+    # fully-scored candidates still queue as Decision Hub cards. The full
+    # ``auto_reject`` toggle supersedes this one (OR semantics at the
+    # pre-screen gate).
+    auto_reject_pre_screen = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     auto_promote = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # ``auto_skip_assessment``: when True the assessment stage is bypassed
+    # entirely — a ``send_assessment`` verdict is translated to
+    # ``advance_to_interview`` (the same switch a role with no assessment
+    # task gets), so strong candidates land in the Decision Hub advance
+    # queue instead of receiving an assessment invite. Still HITL unless
+    # ``auto_promote`` is also on.
+    auto_skip_assessment = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
     deleted_at = Column(DateTime(timezone=True), nullable=True)

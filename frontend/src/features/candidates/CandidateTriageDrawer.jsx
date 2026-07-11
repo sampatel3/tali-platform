@@ -19,6 +19,7 @@ import {
   WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
+import { formatStatusLabel } from './candidatesUiUtils';
 
 // Pipeline stages — exported because tests and parents still import the
 // list. The drawer itself no longer renders a segmented control for
@@ -247,14 +248,14 @@ export function CandidateTriageDrawer({
             <span className="ctc-meta-role">{roleLabel}</span>
             <span className="ctc-meta-dot" />
             <span className="ctc-meta-stage">
-              Stage <span className="ctc-stage-chip">{currentStage}</span>
+              Stage <span className="ctc-stage-chip">{formatStatusLabel(currentStage)}</span>
             </span>
             {currentWorkableStage ? (
               <>
                 <span className="ctc-meta-dot" />
                 <span className="ctc-meta-workable">
                   Workable <span className="ctc-stage-chip ctc-stage-chip-workable">
-                    {currentWorkableStage}
+                    {formatStatusLabel(currentWorkableStage)}
                   </span>
                 </span>
               </>
@@ -493,7 +494,7 @@ export function CandidateTriageDrawer({
           {isRejectSelected && isPostHandoverWorkableStage(application?.workable_stage) ? (
             <div className="ctc-reject-warning" role="alert">
               <strong>Heads up —</strong> this candidate is in{' '}
-              <strong>{application?.workable_stage}</strong> in Workable
+              <strong>{formatStatusLabel(application?.workable_stage)}</strong> in Workable
               {application?.workable_candidate_id ? ', so rejecting will disqualify them there' : ''}.
               You can still reject — just make sure that&apos;s intended.
             </div>

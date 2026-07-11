@@ -12,7 +12,7 @@ import { Brain, Loader2 } from 'lucide-react';
 import { analytics as analyticsApi } from '../../shared/api';
 import { safeNum, monthShort, fmtRelAgo, fmtDay } from './analyticsFormat';
 
-const FAILURE_LABEL = {
+export const FAILURE_LABEL = {
   rubric_mismatch: 'Rubric mismatch',
   wrong_threshold: 'Score threshold',
   missing_signal: 'Missing signal',
@@ -142,7 +142,7 @@ export const TeachingTab = ({ feedback, trend, roleId, roleName }) => {
           {rows.length === 0 ? (
             <div className="an-card">
               <div className="an-empty">
-                No teach events yet — once you click &ldquo;Send back &amp; teach&rdquo; on a decision, or override one with a reason, it lands here as standing feedback the agent applies to the next cohort.
+                No teach events yet — once you click &ldquo;Send back &amp; teach&rdquo; on a decision, or override one with a reason, it lands here as standing feedback the agent applies to the next batch of candidates.
               </div>
             </div>
           ) : (
@@ -160,7 +160,7 @@ export const TeachingTab = ({ feedback, trend, roleId, roleName }) => {
           <div className="an-note">
             <Brain size={15} className="ti" aria-hidden="true" />
             <span>
-              Every override and answer becomes standing feedback the agent applies to the next cohort.
+              Every override and answer becomes standing feedback the agent applies to the next batch of candidates.
               This is the loop that makes the agent yours.
             </span>
           </div>

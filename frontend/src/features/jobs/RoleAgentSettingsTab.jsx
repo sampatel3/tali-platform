@@ -62,12 +62,15 @@ const RoleAgentSettingsTab = ({
   const dayOfMonth = new Date().getDate();
   const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const projectedCents = dayOfMonth ? Math.round((monthlySpentCents * daysInMonth) / dayOfMonth) : monthlySpentCents;
-  // Two real HITL toggles, persisted on the role record. Default off
+  // Three real HITL toggles, persisted on the role record. Default off
   // (= every candidate-affecting decision goes to the Decision Hub for
-  // human approval). Flipping on lets the agent execute that family of
-  // actions immediately and audit-log the result.
+  // human approval). Auto-reject/auto-promote let the agent execute that
+  // family of actions immediately; auto-skip-assessment reroutes strong
+  // candidates past the assessment stage into the advance queue.
   const autoReject = Boolean(role?.auto_reject);
+  const autoRejectPreScreen = Boolean(role?.auto_reject_pre_screen);
   const autoPromote = Boolean(role?.auto_promote);
+  const autoSkipAssessment = Boolean(role?.auto_skip_assessment);
   // When the linked Workable req is archived/closed/draft, Workable refuses
   // candidate write-backs (disqualify/move) with a 403 — so Taali acts locally
   // instead (rejects still complete here, just not synced upstream). The agent
@@ -205,7 +208,7 @@ const RoleAgentSettingsTab = ({
           </div>
           {thresholdMode === 'auto' ? (
             <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
-              Agent-managed — no fixed number. A general quality bar (top candidates across all your roles), recalibrated as you hire; weak pipelines surface fewer.
+              Agent-managed — no fixed number. The agent holds candidates to a quality bar set by your top candidates across all roles, and recalibrates it as you hire.
             </p>
           ) : (
             <div className="mc-agent-settings-slider">
@@ -304,10 +307,22 @@ const RoleAgentSettingsTab = ({
               sub: 'Below-threshold candidates are rejected immediately (pre-screen, scoring, and assessment stages). Off: every reject lands in the Decision Hub for one-click approval.',
             },
             {
+              key: 'auto_reject_pre_screen',
+              value: autoRejectPreScreen,
+              title: 'Auto-reject pre-screen only',
+              sub: 'Only candidates failing the initial pre-screen are rejected immediately. Rejects of fully-scored candidates still queue in the Decision Hub. Auto-reject above covers this and more.',
+            },
+            {
               key: 'auto_promote',
               value: autoPromote,
               title: 'Auto-promote',
               sub: 'Sending an assessment and advancing to interview happen without approval. Off: each invite/advance queues as a Decision Hub card.',
+            },
+            {
+              key: 'auto_skip_assessment',
+              value: autoSkipAssessment,
+              title: 'Auto skip assessment',
+              sub: 'Bypass the assessment stage: strong candidates queue as advance-to-interview cards in the Decision Hub instead of receiving an assessment invite. Combine with Auto-promote to advance them without approval.',
             },
           ].map((rule, idx) => (
             <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
@@ -356,13 +371,6 @@ const RoleAgentSettingsTab = ({
             EOM PROJECTION ≈ {fmtUsd(projectedCents)} ·{' '}
             {projectedCents > monthlyBudgetCents ? 'over budget' : 'paced under budget'}
           </div>
-          {usageBreakdown?.monthly_raw_anthropic_cost_cents != null ? (
-            <div className="mc-agent-settings-budget-foot">
-              ANTHROPIC COST ≈ {fmtUsd(usageBreakdown.monthly_raw_anthropic_cost_cents)} ·{' '}
-              MARGIN {fmtUsd(usageBreakdown.monthly_margin_cents)}
-              {usageBreakdown.margin_pct ? ` (${Math.round(usageBreakdown.margin_pct)}%)` : ''}
-            </div>
-          ) : null}
           {Array.isArray(usageBreakdown?.by_feature) && usageBreakdown.by_feature.length > 0 ? (
             <ul className="mc-agent-settings-budget-breakdown">
               {(() => {
@@ -455,12 +463,7 @@ const RoleAgentSettingsTab = ({
 
         <div className="mc-agent-settings-side-card">
           <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE THRESHOLD</div>
-          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>Agent pauses itself when budget reaches this %.</p>
-          <select className="mc-agent-settings-select" defaultValue={80}>
-            <option value={70}>70%</option>
-            <option value={80}>80%</option>
-            <option value={90}>90%</option>
-          </select>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>The agent pauses itself when spend reaches 80% of the monthly cap.</p>
         </div>
 
         <div className="mc-agent-settings-audit-callout">

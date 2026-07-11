@@ -61,7 +61,7 @@
   display: inline-flex;
   gap: 14px;
   font-size: 0.71875rem;
-  color: var(--muted, #7a6e94);
+  color: var(--mute);
   margin-bottom: 10px;
   flex-wrap: wrap;
 }
@@ -97,7 +97,7 @@
   border: 0;
   border-radius: 999px;
   background: transparent;
-  color: var(--muted, #7a6e94);
+  color: var(--mute);
   font: inherit;
   font-size: 0.78125rem;
   cursor: pointer;
@@ -177,7 +177,7 @@
   border-color: color-mix(in oklab, var(--purple, #7f39fb) 30%, var(--line, #e8e2ee));
 }
 .ce-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.ce-btn--ghost { border: 1px dashed var(--line, #e8e2ee); background: transparent; color: var(--muted, #7a6e94); }
+.ce-btn--ghost { border: 1px dashed var(--line, #e8e2ee); background: transparent; color: var(--mute); }
 .ce-btn--ghost:hover:not(:disabled) { background: transparent; color: var(--ink-2, #4a3d6b); }
 
 /* 3-column layout. Stacks on narrow screens. */
@@ -223,7 +223,7 @@
 .ce-col-count {
   background: var(--bg-2, #fff);
   border: 1px solid var(--line, #e8e2ee);
-  color: var(--muted, #7a6e94);
+  color: var(--mute);
   font-size: 0.625rem;
   padding: 1px 7px;
   border-radius: 999px;
@@ -242,7 +242,7 @@
 }
 .ce-col-empty {
   font-size: 0.75rem;
-  color: var(--muted, #7a6e94);
+  color: var(--mute);
   font-style: italic;
   padding: 6px 4px;
   text-align: center;
@@ -308,7 +308,7 @@
 .ce-chip-delete {
   background: none;
   border: 0;
-  color: var(--muted, #7a6e94);
+  color: var(--mute);
   cursor: pointer;
   padding: 0 4px;
   font-size: 0.875rem;
@@ -362,7 +362,7 @@
   border: 1px dashed var(--line, #e8e2ee);
   border-radius: 8px;
   font-size: 0.75rem;
-  color: var(--muted, #7a6e94);
+  color: var(--mute);
   background: color-mix(in oklab, var(--bg, #faf8fd) 70%, var(--bg-2, #fff));
 }
 .ce-hidden-text { flex: 1; color: var(--ink-2, #4a3d6b); text-decoration: line-through; }
@@ -371,7 +371,7 @@
   font-size: 0.59375rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--muted, #7a6e94);
+  color: var(--mute);
   padding: 1px 6px;
   background: var(--bg-2, #fff);
   border: 1px solid var(--line, #e8e2ee);

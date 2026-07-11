@@ -848,10 +848,21 @@ def _execute_scoring_v3(
         return
 
     application.cv_match_score = output.role_fit_score
+    # Promote the ingest-time PDF-hygiene stash (written to the OLD
+    # cv_match_details before this wholesale overwrite) so it reaches the report.
+    from ..services.document_hygiene import PENDING_PDF_HYGIENE_KEY
+
+    prev_details = (
+        application.cv_match_details
+        if isinstance(application.cv_match_details, dict)
+        else {}
+    )
+    pending_pdf_hygiene = prev_details.get(PENDING_PDF_HYGIENE_KEY)
     details = output.model_dump(mode="json")
     details["integrity_signals"] = _augment_integrity_signals(
         details.get("integrity_signals"), application, cv_text, job_spec_text,
         snapshot=details.get("candidate_snapshot"),
+        pdf_hygiene=pending_pdf_hygiene if isinstance(pending_pdf_hygiene, dict) else None,
     )
     application.cv_match_details = details
     application.cv_match_scored_at = datetime.now(timezone.utc)
@@ -1174,6 +1185,7 @@ def _augment_integrity_signals(
     cv_text: str,
     job_spec_text: str,
     snapshot: dict | None = None,
+    pdf_hygiene: dict | None = None,
 ) -> dict | None:
     """Merge the flag-only cross-source corroboration signals into the score's
     ``integrity_signals`` and triangulate them. Computed here because this is the
@@ -1237,6 +1249,13 @@ def _augment_integrity_signals(
         anach = detect_tech_anachronism(cv_exp)
         if anach.triggered:
             merged["tech_anachronism"] = anach.to_dict()
+
+        # Promote the ingest-time PDF-bytes hygiene scan (flag-only) under
+        # document_hygiene.pdf, preserving the LLM-path text hygiene already there.
+        if isinstance(pdf_hygiene, dict):
+            dh = dict(merged.get("document_hygiene") or {})
+            dh["pdf"] = pdf_hygiene
+            merged["document_hygiene"] = dh
 
         # Triangulate the deterministic picture — changes no score, adds the
         # verdict + trust band the report reads (and the gate the async

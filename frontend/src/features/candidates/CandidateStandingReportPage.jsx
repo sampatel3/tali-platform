@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, Sparkles } from 'lucide-react';
+import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAlert, Sparkles } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
@@ -10,10 +10,11 @@ import {
   Input,
   Panel,
   Select,
-  Spinner,
 } from '../../shared/ui/TaaliPrimitives';
+import { Skeleton, SkeletonReport } from '../../shared/ui/Skeleton';
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { DecisionRail } from './DecisionRail';
+import { useReportInFlight } from './useReportInFlight';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
@@ -24,12 +25,23 @@ import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAs
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
 // recorder from the report body; the candidate's decision now lives in the
 // DecisionRail (the dossier's left column). The component file is kept for reference.
-import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
+// Lazy-load the assessment-evidence panels. They (via CandidateDetailSecondaryTabs)
+// statically pull the ~383KB recharts vendor chunk, but they only render inside
+// the Assessment / Notes panes — secondary tabs many recruiters never open. A
+// dynamic import boundary keeps charts_vendor off the critical path of the
+// most-opened drill-down, loading it only when the tab is activated.
+const AssessmentEvidencePanels = React.lazy(() =>
+  import('./CandidateAssessmentDetailPanels').then((m) => ({ default: m.AssessmentEvidencePanels })));
+const EvaluatePanel = React.lazy(() =>
+  import('./CandidateAssessmentDetailPanels').then((m) => ({ default: m.EvaluatePanel })));
+const InterviewTranscriptCapture = React.lazy(() =>
+  import('./CandidateAssessmentDetailPanels').then((m) => ({ default: m.InterviewTranscriptCapture })));
 import { AssessmentScorecard, readGradedRubricDimensions } from './AssessmentScorecard';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import { CvDocumentViewer } from './CvDocumentViewer';
 import { CvMatchReview } from './CvMatchReview';
 import { PrepQuestionCard } from './PrepQuestionCard';
+import { InterviewFeedbackSection } from './InterviewFeedbackSection';
 import { VerdictDetail } from './VerdictDetail';
 import {
   getErrorMessage,
@@ -125,6 +137,60 @@ const OverviewFlags = ({ flags }) => {
   );
 };
 
+// Compact "Integrity" chip — the recruiter-facing trust readout that sits BESIDE
+// the match score (never lowers it). Renders ONLY when the server's triangulation
+// verdict is `review` (one soft disagreement) or `strong_review` (a deterministic
+// artifact or >=2 disagreements); a clean `ok` verdict shows nothing. Purple-scale
+// intensity, never red/green (per the design system). Click to expand the
+// canonical warnings + corroboration notes + unverified employer names.
+export const IntegrityChip = ({ verdict, trustBand, warnings, corroborations, unverifiedEmployers }) => {
+  const [open, setOpen] = useState(false);
+  if (verdict !== 'review' && verdict !== 'strong_review') return null;
+  const strong = verdict === 'strong_review';
+  const count = (warnings?.length || 0) + (unverifiedEmployers?.length || 0);
+  const bandLabel = trustBand === 'low' ? 'Low' : (trustBand === 'medium' ? 'Medium' : 'High');
+  return (
+    <section className={`mc-integrity ${strong ? 'mc-integrity-strong' : ''}`.trim()} aria-label="Integrity check">
+      <button
+        type="button"
+        className="mc-integrity-chip"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ShieldAlert size={14} aria-hidden="true" />
+        <span className="mc-integrity-label">Integrity</span>
+        <span className="mc-integrity-band">{bandLabel} trust</span>
+        {count > 0 ? <span className="mc-integrity-count">{count} to verify</span> : null}
+      </button>
+      {open ? (
+        <div className="mc-integrity-body">
+          {warnings?.length ? (
+            <ul className="mc-integrity-list">
+              {warnings.map((w, i) => (
+                <li key={`iw-${i}`}><AlertTriangle size={13} aria-hidden="true" /> {w}</li>
+              ))}
+            </ul>
+          ) : null}
+          {unverifiedEmployers?.length ? (
+            <p className="mc-integrity-emp">
+              Employer{unverifiedEmployers.length === 1 ? '' : 's'} not verbatim in the CV text:{' '}
+              {unverifiedEmployers.map((c) => `"${c}"`).join(', ')}.
+            </p>
+          ) : null}
+          {corroborations?.length ? (
+            <ul className="mc-integrity-corrob">
+              {corroborations.map((c, i) => (
+                <li key={`ic-${i}`}>{c}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="mc-integrity-note">Advisory only — this never changes the match score. Verify before deciding.</p>
+        </div>
+      ) : null}
+    </section>
+  );
+};
+
 export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
   // ``shareToken`` is set when the SPA is mounted via the public
@@ -142,11 +208,36 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [completedAssessment, setCompletedAssessment] = useState(null);
   const [orgData, setOrgData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Silent revalidate after a recruiter action (approve, note save, re-evaluate).
+  // Keeps the rendered report on screen (no full-page spinner, no scroll loss)
+  // while the fresh data lands. Only the cold load blanks to a skeleton.
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
+  // A full CV evaluation was queued for a pre-screened-out candidate and the
+  // score hasn't landed yet. Drives the in-flight banner + the poll below,
+  // so the recruiter never has to guess-and-refresh a paid job.
+  const [evaluating, setEvaluating] = useState(false);
   // Assessment-tab admin actions (resend invite / request CV / delete) live in
   // a small overflow menu so destructive controls no longer lead the pane.
   const [assessmentActionsOpen, setAssessmentActionsOpen] = useState(false);
+  const assessmentActionsRef = React.useRef(null);
+  // Close the assessment Actions overflow menu on outside click / Escape so a
+  // destructive "Delete assessment" item can't hang over the pane after the
+  // recruiter clicks elsewhere.
+  useEffect(() => {
+    if (!assessmentActionsOpen) return undefined;
+    const onPointerDown = (e) => {
+      if (!assessmentActionsRef.current?.contains(e.target)) setAssessmentActionsOpen(false);
+    };
+    const onKeyDown = (e) => { if (e.key === 'Escape') setAssessmentActionsOpen(false); };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [assessmentActionsOpen]);
   // Tracks which share button is mid-mint so we can disable it + show a
   // "Copying…" label. '' when idle, 'recruiter' or 'client' when busy.
   const [sharingMode, setSharingMode] = useState('');
@@ -244,7 +335,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     setSearchParams(nextParams, { replace: true });
   }, [availableTabIds, searchParams, setSearchParams]);
 
-  const loadStandingReport = useCallback(async () => {
+  const loadStandingReport = useCallback(async ({ silent = false } = {}) => {
     if (routeApplicationKey === 'demo') {
       setApplication(AI_SHOWCASE_APPLICATION);
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
@@ -269,65 +360,78 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       return;
     }
 
-    setLoading(true);
+    // Cold load blanks to a skeleton; a silent revalidate keeps the report
+    // painted and only dims the affected sections (refreshing flag).
+    if (silent) setRefreshing(true); else setLoading(true);
     setError('');
     try {
+      const canUseInternalApis = !isShareRoute;
       let nextApplication = null;
+
       if (isShareRoute) {
-        // /share/:token unauth flow — backend returns the full
-        // application payload (client-safe scrubbed when mode=client)
-        // plus the view mode. One round-trip, no separate fetch.
+        // /share/:token unauth flow — backend returns the full application
+        // payload plus the view mode in one round-trip; nothing else to fetch.
         const shareRes = await viewShareLink(sharedRouteToken);
         const payload = shareRes?.data || {};
         nextApplication = payload.application || null;
         setShareViewMode(payload.view === 'client' ? 'client' : 'recruiter');
+        setApplication(nextApplication);
+        const sharedEvents = Array.isArray(nextApplication?.application_events)
+          ? nextApplication.application_events
+          : [];
+        setCompletedAssessment(null);
+        setOrgData(null);
+        setAgentDecision(null);
+        setApplicationEvents(sharedEvents);
       } else {
-        const appRes = await rolesApi.getApplication(numericApplicationId, { params: { include_cv_text: true } });
+        // Recruiter path: org, events, and the pending decision only need the
+        // route's application id (== numericApplicationId), so fire them in the
+        // SAME wave as getApplication instead of waterfalling after it — one
+        // fewer full UAE→us-east4 round-trip on every open. Only the assessment
+        // fetch genuinely depends on the application response (its assessment id
+        // + status), so it's chained after the app lands.
+        // Drop include_cv_text: the CV tab is one of six and CvDocumentViewer
+        // lazy-gates its own preview, so shipping the full parsed CV text on
+        // every open was pure over-fetch.
+        const [appRes, orgRes, eventsRes, decisionRes] = await Promise.all([
+          rolesApi.getApplication(numericApplicationId),
+          organizationsApi?.get ? organizationsApi.get() : Promise.resolve(null),
+          rolesApi?.listApplicationEvents && Number.isFinite(numericApplicationId)
+            ? rolesApi.listApplicationEvents(numericApplicationId).catch(() => null)
+            : Promise.resolve(null),
+          // The candidate's own pending agent decision for the DecisionRail.
+          // A failure here must not blank the report, so swallow it to null.
+          apiClient.agent?.listDecisions && Number.isFinite(numericApplicationId)
+            ? apiClient.agent
+                .listDecisions({ application_id: numericApplicationId, status: 'pending', limit: 1 })
+                .catch(() => null)
+            : Promise.resolve(null),
+        ]);
         nextApplication = appRes?.data || null;
         setShareViewMode(null);
+        setApplication(nextApplication);
+
+        const assessmentId = resolveAssessmentId(nextApplication);
+        const hasCompletedAssessment = Boolean(
+          assessmentId
+          && COMPLETED_ASSESSMENT_STATUSES.has(resolveAssessmentStatus(nextApplication))
+        );
+        const assessmentRes = canUseInternalApis && hasCompletedAssessment && assessmentsApi?.get
+          ? await assessmentsApi.get(Number(assessmentId))
+          : null;
+
+        setCompletedAssessment(assessmentRes?.data || null);
+        setOrgData(orgRes?.data || null);
+        setAgentDecision(Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null);
+        const sharedEvents = Array.isArray(nextApplication?.application_events)
+          ? nextApplication.application_events
+          : [];
+        setApplicationEvents(
+          Array.isArray(eventsRes?.data)
+            ? eventsRes.data
+            : (eventsRes?.data?.items || sharedEvents)
+        );
       }
-      setApplication(nextApplication);
-
-      const assessmentId = resolveAssessmentId(nextApplication);
-      const hasCompletedAssessment = Boolean(
-        assessmentId
-        && COMPLETED_ASSESSMENT_STATUSES.has(resolveAssessmentStatus(nextApplication))
-      );
-      const canUseInternalApis = !isShareRoute;
-
-      const [assessmentRes, orgRes, eventsRes, decisionRes] = await Promise.all([
-        canUseInternalApis && hasCompletedAssessment && assessmentsApi?.get
-          ? assessmentsApi.get(Number(assessmentId))
-          : Promise.resolve(null),
-        canUseInternalApis && organizationsApi?.get
-          ? organizationsApi.get()
-          : Promise.resolve(null),
-        canUseInternalApis && rolesApi?.listApplicationEvents && nextApplication?.id
-          ? rolesApi.listApplicationEvents(nextApplication.id)
-          : Promise.resolve(null),
-        // The candidate's own pending agent decision for the header strip.
-        // Recruiter-view only (canUseInternalApis ⇒ non-share route). A
-        // failure here must not blank the report, so swallow it to null.
-        canUseInternalApis && apiClient.agent?.listDecisions && nextApplication?.id
-          ? apiClient.agent
-              .listDecisions({ application_id: nextApplication.id, status: 'pending', limit: 1 })
-              .catch(() => null)
-          : Promise.resolve(null),
-      ]);
-
-      setCompletedAssessment(assessmentRes?.data || null);
-      setOrgData(orgRes?.data || null);
-      setAgentDecision(Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null);
-      // Recruiter shares can't call the auth-only /events endpoint, so the
-      // backend embeds the audit timeline in the share payload instead.
-      const sharedEvents = Array.isArray(nextApplication?.application_events)
-        ? nextApplication.application_events
-        : [];
-      setApplicationEvents(
-        Array.isArray(eventsRes?.data)
-          ? eventsRes.data
-          : (eventsRes?.data?.items || sharedEvents)
-      );
     } catch (err) {
       const message = getErrorMessage(err, 'Failed to load candidate report.');
       setApplication(null);
@@ -340,6 +444,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       if (!isShareRoute) showToast(message, 'error');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [assessmentsApi, isShareRoute, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
 
@@ -381,9 +486,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
     setDecisionBusy(true);
     try {
-      await apiClient.agent.approveDecision(decision.id, {}, { force: Boolean(decision.is_stale) });
+      // Do NOT force past the server's staleness guard silently. A stale
+      // decision approved here used to slip through with no warning; instead
+      // let the 409 decision_stale surface below so the recruiter re-evaluates
+      // on fresh inputs (the same warn-then-decide path the hub uses).
+      await apiClient.agent.approveDecision(decision.id, {});
       showToast('Approved.', 'success');
-      await Promise.all([loadAgentDecision(), loadStandingReport()]);
+      await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
     } catch (err) {
       if (isDecisionStaleError(err)) {
         showToast("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
@@ -421,7 +530,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     try {
       await apiClient.agent.reEvaluateDecision(decision.id);
       showToast('Re-evaluating with fresh inputs…', 'success');
-      await Promise.all([loadAgentDecision(), loadStandingReport()]);
+      await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
     } catch (err) {
       showToast(getErrorMessage(err, 'Re-evaluate failed'), 'error');
     } finally {
@@ -429,11 +538,37 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   }, [loadAgentDecision, loadStandingReport, showToast]);
 
+  // `eventsRefetchTick` is bumped after a recruiter saves a note so the report
+  // picks up the new timeline event. That refetch must be SILENT — saving a
+  // note should never blank the whole dossier to a spinner. The very first run
+  // (mount / applicationId change) is a cold load; every tick-driven run after
+  // is silent. loadStandingReport identity changes with the route id, so a
+  // route change resets to a cold load correctly.
+  const coldLoadedRef = React.useRef(false);
   useEffect(() => {
-    void loadStandingReport();
-    // `eventsRefetchTick` is bumped after a recruiter saves a note so the
-    // standing report reloads with the new event in the timeline.
+    coldLoadedRef.current = false;
+  }, [loadStandingReport]);
+  useEffect(() => {
+    const silent = coldLoadedRef.current;
+    coldLoadedRef.current = true;
+    void loadStandingReport({ silent });
   }, [loadStandingReport, eventsRefetchTick]);
+
+  // In-flight polling (full evaluation / re-score) + lazy CV-text fetch live in
+  // a sibling hook so this page stays under the architecture line cap.
+  useReportInFlight({
+    rolesApi,
+    numericApplicationId,
+    isShareRoute,
+    activeTab,
+    application,
+    agentDecision,
+    evaluating,
+    setEvaluating,
+    setApplication,
+    loadAgentDecision,
+    loadStandingReport,
+  });
 
   const reportModel = useMemo(() => (
     application ? buildStandingCandidateReportModel({
@@ -517,14 +652,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       // plain rescore would just re-filter on the same evidence. Force the
       // full v3 cv_match score past the gate.
       await rolesApi.scoreSelected(application.role_id, [application.id], { force: true, bypassPreScreen: true });
-      showToast('Full CV evaluation queued. Refresh in a few seconds.', 'success');
-      void loadStandingReport();
+      // Real in-flight state instead of "refresh in a few seconds": mark the
+      // evaluation running (the banner flips to a spinner) and let the poll
+      // below swap in the fresh score in place when it lands.
+      setEvaluating(true);
+      showToast('Running full evaluation — the report updates when the score lands.', 'info');
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to start full evaluation.'), 'error');
     } finally {
       setBusyAction('');
     }
-  }, [application?.id, application?.role_id, loadStandingReport, rolesApi, showToast]);
+  }, [application?.id, application?.role_id, rolesApi, showToast]);
   // Sort so recruiter-added criteria (id prefix ``crit_``) surface
   // ahead of JD-extracted ones (``jd_req_``), then by priority. Show
   // every requirement — silently truncating recruiter must-haves at 4
@@ -629,7 +767,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       {
         question: 'Where did AI help, and where did you deliberately slow down or reject its suggestion?',
         listenFor: 'Clear boundaries around AI assistance, verification, and accountability.',
-        source: 'Taali + Fireflies',
+        source: 'Taali',
       },
     ].slice(0, 4);
     return { stageOne, stageTwo };
@@ -806,7 +944,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       // Clipboard API unavailable / blocked — surface the URL so the
       // user can copy it manually instead of silently throwing away a
       // minted link.
-      showToast(`Link ready, copy failed: ${url}`, 'info');
+      showToast(`Couldn't copy automatically — here's your link: ${url}`, 'info');
     } finally {
       setSharingMode('');
     }
@@ -868,14 +1006,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   }, [assessmentId, assessmentsApi, showToast, onNavigate]);
 
+  // Cold load only — a refreshing revalidate keeps the report painted (see the
+  // `refreshing` flag threaded into the DecisionRail + panes below).
   if (loading) {
     return (
       <div>
         {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
         <div className="page">
-          <div className="flex min-h-[17.5rem] items-center justify-center">
-            <Spinner size={22} />
-          </div>
+          <SkeletonReport />
         </div>
       </div>
     );
@@ -889,6 +1027,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">
             {error || 'Candidate report unavailable.'}
           </Panel>
+          {/* A stale candidate link (deleted application, revoked share,
+              transient network) shouldn't dead-end. Give a way forward.
+              Share/interview routes are unauth, so only offer nav in the app. */}
+          {!isInterviewView ? (
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+              <Button type="button" variant="primary" onClick={() => { void loadStandingReport(); }}>
+                Retry
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => onNavigate('jobs')}>
+                Back to Jobs
+              </Button>
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -979,15 +1130,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           >
             <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
               <strong>Filtered out by pre-screen{preScreenScore != null ? ` · ${Math.round(preScreenScore)}/100` : ''}.</strong>{' '}
-              {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
+              {evaluating
+                ? 'Running a full CV evaluation now — the report updates automatically when the score lands.'
+                : (preScreenReason || 'Pre-screening found this CV unlikely to meet the role’s must-haves.')}
             </div>
             <button
               type="button"
               className="btn btn-primary btn-sm"
               onClick={handleRunFullEvaluation}
-              disabled={busyAction === 'rescore'}
+              disabled={busyAction === 'rescore' || evaluating}
             >
-              {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
+              {evaluating ? (
+                <><Sparkles size={13} className="rq-spin" /> Evaluating…</>
+              ) : busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
             </button>
           </div>
         ) : null}
@@ -1001,7 +1156,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <p style={{ fontSize: '14px', color: 'var(--ink-2)', margin: '0 0 12px' }}>
               {`Shared for ${application.client_share_summary.role}.`}
               {Number.isFinite(Number(application.client_share_summary.score_100))
-                ? ` TAALI score: ${Math.round(Number(application.client_share_summary.score_100))}/100.`
+                ? ` Taali score: ${Math.round(Number(application.client_share_summary.score_100))}/100.`
                 : ''}
             </p>
             {Array.isArray(application.client_share_summary.highlights)
@@ -1015,7 +1170,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
         ) : null}
 
-        <div className="dossier">
+        {/* refreshing = a silent revalidate after an action. Dim + mark busy so
+            the recruiter sees "updating" without the report unmounting. */}
+        <div
+          className="dossier"
+          aria-busy={refreshing || undefined}
+          style={refreshing ? { opacity: 0.6, transition: 'opacity 120ms ease' } : undefined}
+        >
           <DecisionRail
             candidateName={candidateLabel}
             candidateInitials={candidateInitials}
@@ -1146,6 +1307,20 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 return <OverviewFlags flags={flags} />;
               })() : null}
 
+              {/* (1c) Integrity chip — the compact trust readout beside the score.
+                  Renders only on a review / strong_review verdict; expands to the
+                  canonical warnings + corroborations + unverified employers.
+                  Recruiter-only (stripped from client shares server-side). */}
+              {!isClientView ? (
+                <IntegrityChip
+                  verdict={reportModel?.roleFitModel?.integrityVerdict}
+                  trustBand={reportModel?.roleFitModel?.integrityTrustBand}
+                  warnings={reportModel?.roleFitModel?.integrityFlags}
+                  corroborations={reportModel?.roleFitModel?.corroborations}
+                  unverifiedEmployers={reportModel?.roleFitModel?.unverifiedEmployers}
+                />
+              ) : null}
+
               {/* (2) CV match review moved to its own Requirements tab (matches
                   report-preview's 6-tab layout). The Overview keeps the verdict,
                   flags and scorecard; the per-requirement breakdown lives one
@@ -1272,7 +1447,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   </div>
                 ) : null}
                 {assessmentId ? (
-                  <div className="assessment-actions">
+                  <div className="assessment-actions" ref={assessmentActionsRef}>
                     <button
                       type="button"
                       className="btn btn-outline btn-sm"
@@ -1335,7 +1510,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               }
             >
-              <AssessmentEvidencePanels candidate={candidateView} />
+              <Suspense fallback={<Skeleton width="100%" height="12rem" />}>
+                <AssessmentEvidencePanels candidate={candidateView} />
+              </Suspense>
             </ErrorBoundary>
           ) : null}
 
@@ -1361,16 +1538,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     Optional manual rubric, strengths and improvements
                   </span>
                 </summary>
-                <EvaluatePanel
-                  candidate={candidateView}
-                  evaluationRubric={evaluationRubric}
-                  assessmentId={assessmentId}
-                  assessmentsApi={assessmentsApi}
-                  roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
-                  recommendation={reportModel?.recommendation}
-                  recruiterSummary={reportModel?.recruiterSummaryText || ''}
-                  hideDecision
-                />
+                <Suspense fallback={<Skeleton width="100%" height="8rem" />}>
+                  <EvaluatePanel
+                    candidate={candidateView}
+                    evaluationRubric={evaluationRubric}
+                    assessmentId={assessmentId}
+                    assessmentsApi={assessmentsApi}
+                    roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
+                    recommendation={reportModel?.recommendation}
+                    recruiterSummary={reportModel?.recruiterSummaryText || ''}
+                    hideDecision
+                  />
+                </Suspense>
               </details>
             </ErrorBoundary>
           ) : null}
@@ -1471,6 +1650,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
           {/* Interview transcript capture moved to the "Notes & context" tab
               (PR3) — it's add-info, not prep reference material. */}
+
+          {/* Structured interview feedback — recruiters record what actually
+              happened (round, recommendation, 5-Ds ratings, probe results,
+              notes). Hidden on client shares (the payload strips it anyway);
+              read-only on recruiter share links (entries arrive with the
+              payload but the viewer is unauthenticated, so no record/edit). */}
+          {!isClientView && application?.id ? (
+            <InterviewFeedbackSection
+              applicationId={application.id}
+              interviewKit={application?.candidate_interview_kit}
+              initialFeedback={application?.interview_feedback}
+              rolesApi={rolesApi}
+              readOnly={isInterviewView}
+            />
+          ) : null}
         </div>
 
         <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only={isClientView ? '' : undefined}>
@@ -1570,9 +1764,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
             const eventDotColor = (event) => {
               const type = String(event?.event_type || '').toLowerCase();
-              if (type.includes('reject')) return 'var(--red, #dc2626)';
-              if (type.includes('advance') || type.includes('approved')) return 'var(--green, #16a34a)';
-              if (type.includes('assess')) return '#2563eb';
+              // reject/advance keep the established red/green verdict semantics;
+              // everything else stays on the purple token scale (the raw blue
+              // hex previously used for assess events was off the design system
+              // — no blue token exists).
+              if (type.includes('reject')) return 'var(--red)';
+              if (type.includes('advance') || type.includes('approved')) return 'var(--green)';
+              if (type.includes('assess')) return 'var(--purple)';
               if (type.includes('cv_scored') || type.includes('invite')) return 'var(--purple)';
               return 'var(--mute)';
             };
@@ -1775,12 +1973,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   {!isShareRoute ? (
                     <div className="mc-notes-input" data-internal-only style={{ marginTop: 14 }}>
                       <div className="mc-kicker" style={{ marginBottom: 6 }}>INTERVIEW TRANSCRIPT</div>
-                      <InterviewTranscriptCapture
-                        application={application}
-                        firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}
-                        rolesApi={rolesApi}
-                        onRefresh={loadStandingReport}
-                      />
+                      <Suspense fallback={<Skeleton width="100%" height="5rem" />}>
+                        <InterviewTranscriptCapture
+                          application={application}
+                          firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}
+                          rolesApi={rolesApi}
+                          onRefresh={() => loadStandingReport({ silent: true })}
+                        />
+                      </Suspense>
                     </div>
                   ) : null}
 
@@ -1917,7 +2117,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           onClose={() => setTeachFor(null)}
           onSubmitted={async () => {
             showToast('Feedback recorded. Decision returned to the queue.', 'success');
-            await Promise.all([loadAgentDecision(), loadStandingReport()]);
+            await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
           }}
         />
       ) : null}
@@ -1934,10 +2134,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           onClose={() => setAlternativeFor(null)}
           onSubmitted={async () => {
             showToast(
-              `${alternativeFor.alternative.confirmLabel || 'Decision'} dispatched.`,
+              `${alternativeFor.alternative.confirmLabel || 'Decision'} done.`,
               'success',
             );
-            await Promise.all([loadAgentDecision(), loadStandingReport()]);
+            await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
           }}
         />
       ) : null}

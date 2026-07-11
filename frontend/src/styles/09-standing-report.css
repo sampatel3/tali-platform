@@ -1401,6 +1401,10 @@ button.eng-badge-button:focus-visible {
   margin-top: 2px;
   color: var(--taali-purple, #7d56f3);
 }
+/* A failed job must not read as a purple/success completion — flag it. */
+.bg-jobs-icon-failed {
+  color: var(--taali-danger);
+}
 .bg-jobs-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -1756,12 +1760,74 @@ button.eng-badge-button:focus-visible {
 }
 .mc-flags-toggle:hover { text-decoration: underline; }
 
+/* Integrity chip — the trust readout beside the score. Purple-scale intensity
+   only (never red/green): `review` uses the soft purple; `strong_review` deepens
+   it. Advisory, never a verdict. */
+.mc-integrity { margin: 0 0 20px; }
+.mc-integrity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 12%, var(--bg-2));
+  border: 1px solid color-mix(in oklab, var(--purple) 28%, transparent);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.mc-integrity-chip svg { color: var(--purple); flex: none; }
+.mc-integrity-band { font-weight: 500; color: var(--purple-2, var(--purple)); }
+.mc-integrity-count {
+  font-weight: 600;
+  color: var(--purple);
+  padding-left: 7px;
+  border-left: 1px solid color-mix(in oklab, var(--purple) 28%, transparent);
+}
+.mc-integrity-strong .mc-integrity-chip {
+  color: #fff;
+  background: var(--purple);
+  border-color: var(--purple);
+}
+.mc-integrity-strong .mc-integrity-chip svg,
+.mc-integrity-strong .mc-integrity-band { color: #fff; }
+.mc-integrity-strong .mc-integrity-count { color: #fff; border-left-color: color-mix(in oklab, #fff 40%, transparent); }
+.mc-integrity-body {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+}
+.mc-integrity-list { list-style: none; margin: 0; padding: 0; }
+.mc-integrity-list li {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 6px 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.mc-integrity-list svg { color: var(--purple); flex: none; margin-top: 3px; }
+.mc-integrity-emp { font-size: 0.8125rem; color: var(--ink); margin: 8px 0 0; }
+.mc-integrity-corrob { list-style: disc; margin: 8px 0 0; padding-left: 20px; }
+.mc-integrity-corrob li { font-size: 0.8125rem; color: var(--mute); line-height: 1.5; }
+.mc-integrity-note { font-size: 0.75rem; color: var(--mute); margin: 10px 0 0; font-style: italic; }
+
 /* Recommended action — the bold dark-purple "agent ON" treatment lives on the
    button ITSELF (no surrounding slab); the kicker + confidence sit as one quiet
    caption line under it. Matches the hub's .rq-rec-btn. */
 .dossier-rail .dr-rec {
   text-align: center;
   margin-bottom: 12px;
+}
+/* Re-score in flight: grey everything under the banner (matching the hub's
+   .rq-hybrid-detail.is-rescoring treatment) so nothing invites a click on the
+   soon-to-be-replaced score. The status banner itself stays full-opacity. */
+.dossier-rail .is-rescoring > *:not([role="status"]) {
+  opacity: 0.55;
 }
 @keyframes drFlow {
   0% { background-position: 0% 50%; }
@@ -1792,7 +1858,7 @@ button.eng-badge-button:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  background: var(--grad-agent-on-animated);
   background-size: 300% 300%;
   animation: drFlow 7s ease-in-out infinite;
   color: #fff;
@@ -1820,7 +1886,7 @@ button.eng-badge-button:focus-visible {
    slab, but STATIC + read-only: it surfaces the decision that was MADE (the
    outcome), not an action to take. */
 .dossier-rail .dr-decided {
-  background: linear-gradient(150deg, #3a1d6e, #241147);
+  background: var(--grad-agent-on);
   border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
   border-radius: 16px;
   padding: 16px 15px;

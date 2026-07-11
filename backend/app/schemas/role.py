@@ -92,10 +92,12 @@ class RoleUpdate(BaseModel):
     agent_action_allowlist: Optional[list[str]] = None
     agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
-    # HITL toggles. Both default False on the model — sending `null`
+    # HITL toggles. All default False on the model — sending `null`
     # leaves the existing value unchanged.
     auto_reject: Optional[bool] = None
+    auto_reject_pre_screen: Optional[bool] = None
     auto_promote: Optional[bool] = None
+    auto_skip_assessment: Optional[bool] = None
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
     monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
@@ -193,7 +195,9 @@ class RoleResponse(BaseModel):
     agent_token_budget_per_cycle: Optional[int] = None
     agent_decision_budget_per_cycle: Optional[int] = None
     auto_reject: bool = False
+    auto_reject_pre_screen: bool = False
     auto_promote: bool = False
+    auto_skip_assessment: bool = False
     monthly_usd_budget_cents: Optional[int] = None
     score_threshold: Optional[int] = None
     agent_paused_at: Optional[datetime] = None
@@ -292,6 +296,11 @@ class ApplicationResponse(BaseModel):
     role_name: Optional[str] = None
     cv_filename: Optional[str] = None
     cv_uploaded_at: Optional[datetime] = None
+    # True when the application row has extracted CV text — what scoring and
+    # pre-screening actually consume. A CV file can exist while extraction
+    # produced nothing; the role page "New CVs" tile needs the distinction to
+    # mirror the auto-scorer's cv_text filter.
+    has_cv_text: bool = False
     cv_match_score: Optional[float] = None
     cv_match_details: Optional[dict] = None
     cv_match_scored_at: Optional[datetime] = None
@@ -322,6 +331,10 @@ class ApplicationResponse(BaseModel):
     candidate_experience: Optional[list] = None
     candidate_summary: Optional[str] = None
     candidate_workable_created_at: Optional[datetime] = None
+    # When the candidate applied to THIS role: per-application Workable
+    # created_at, falling back to the candidate-level copy (legacy rows), then
+    # to the local application created_at (manual/non-Workable sources).
+    applied_at: Optional[datetime] = None
     workable_sourced: Optional[bool] = None
     workable_profile_url: Optional[str] = None
     workable_enriched: Optional[bool] = None
@@ -376,6 +389,9 @@ class ApplicationDetailResponse(ApplicationResponse):
     workable_comments: list[dict[str, Any]] = Field(default_factory=list)
     workable_questionnaire_answers: list[dict[str, Any]] = Field(default_factory=list)
     workable_activity_log: list[dict[str, Any]] = Field(default_factory=list)
+    # Structured recruiter interview feedback, newest-first. Recruiter-internal;
+    # None on client shares (stripped in application_detail_payload).
+    interview_feedback: Optional[list[dict[str, Any]]] = None
 
 
 class ApplicationCvUploadResponse(BaseModel):

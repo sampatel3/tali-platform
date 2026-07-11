@@ -175,7 +175,7 @@ function ProcessCounters({ data }) {
         <div key={l} className="bg-jobs-panel-breakdown">{l}</div>
       ))}
       {data?.current_step ? (
-        <div className="bg-jobs-panel-phase">step: <code>{data.current_step}</code></div>
+        <div className="bg-jobs-panel-phase">Current step: {humanize(data.current_step)}</div>
       ) : null}
     </div>
   );
@@ -275,10 +275,10 @@ function WorkableCounters({ data }) {
     <div className="bg-jobs-panel-counters">
       <strong>{jobsProcessed}</strong> / {jobsTotal} jobs
       <div className="bg-jobs-panel-breakdown">
-        {candidatesSeen} seen · {candidatesUpserted} upserted · {applicationsUpserted} apps · {errCount} errors
+        {candidatesSeen} candidates · {candidatesUpserted} added or updated · {applicationsUpserted} applications · {errCount} errors
       </div>
       {data?.phase && data?.status === 'running' ? (
-        <div className="bg-jobs-panel-phase">phase: <code>{data.phase}</code></div>
+        <div className="bg-jobs-panel-phase">Current step: {humanize(data.phase)}</div>
       ) : null}
     </div>
   );
@@ -373,6 +373,12 @@ export default function BackgroundJobsPanel() {
     let cancelled = false;
     let timer = null;
     const load = async () => {
+      // Skip the round-trip while the tab is backgrounded — the loop keeps
+      // rescheduling and a visibilitychange listener refreshes on refocus.
+      if (typeof document !== 'undefined' && document.hidden) {
+        if (!cancelled) timer = setTimeout(load, HISTORY_POLL_MS);
+        return;
+      }
       try {
         const [bg, wk] = await Promise.allSettled([
           rolesApi.backgroundJobsRuns(20),
@@ -386,11 +392,20 @@ export default function BackgroundJobsPanel() {
       if (!cancelled) timer = setTimeout(load, HISTORY_POLL_MS);
     };
     load();
+    // Refresh immediately on refocus — cancel the pending tick first so we
+    // don't fork a second poll loop.
+    const onVisible = () => {
+      if (document.hidden) return;
+      if (timer) clearTimeout(timer);
+      load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     const heartbeat = setInterval(() => setTick((t) => t + 1), HISTORY_POLL_MS);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
       clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 
@@ -606,13 +621,13 @@ export default function BackgroundJobsPanel() {
     if (graphSync && isVisible(graphSync.status)) {
       rows.push({
         key: 'graph-live',
-        type: 'Graph sync',
+        type: 'Talent data sync',
         status: graphSync.status,
         sortAt: tsValue(graphSync?.started_at),
         node: (
           <JobRow
             key="graph-live"
-            type="Graph sync"
+            type="Talent data sync"
             status={graphSync.status}
             scope="Org-wide"
             counters={<GraphCounters data={graphSync} />}
@@ -631,13 +646,13 @@ export default function BackgroundJobsPanel() {
       if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       rows.push({
         key: `graph-hist-${r.id}`,
-        type: 'Graph sync',
+        type: 'Talent data sync',
         status: r.status,
         sortAt: tsValue(r.started_at),
         node: (
           <JobRow
             key={`graph-hist-${r.id}`}
-            type="Graph sync"
+            type="Talent data sync"
             status={r.status}
             scope="Org-wide"
             counters={<GraphCounters data={{ ...r.counters }} />}

@@ -19,6 +19,9 @@ export function useCandidateTriage({
   roleApplications,
   roleTasks,
   loadRoleWorkspace,
+  // Patch a single application row after a mutation instead of reloading the
+  // whole workspace. Falls back to loadRoleWorkspace when not provided.
+  patchApplicationRow,
   showToast,
   rolesApi,
   viewCandidateReport,
@@ -69,19 +72,27 @@ export function useCandidateTriage({
     setTriageApplicationId(null);
   }, []);
 
+  // Single-candidate mutations patch just the affected row (a fast one-row
+  // refetch) instead of re-downloading the whole 4,000-row workspace. The
+  // success toast fires immediately; the row reconciles behind it.
+  const refreshRow = useCallback(async (applicationId) => {
+    if (patchApplicationRow) return patchApplicationRow(applicationId);
+    return loadRoleWorkspace();
+  }, [patchApplicationRow, loadRoleWorkspace]);
+
   const handleMoveStage = useCallback(async (application, nextStage) => {
     if (!application?.id || !nextStage) return;
     setStageBusy(true);
     try {
       await rolesApi.updateApplicationStage(application.id, { pipeline_stage: nextStage });
-      await loadRoleWorkspace();
       showToast(`Moved to ${String(nextStage).replace(/_/g, ' ')}.`, 'success');
+      await refreshRow(application.id);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to move stage.'), 'error');
     } finally {
       setStageBusy(false);
     }
-  }, [rolesApi, loadRoleWorkspace, showToast]);
+  }, [rolesApi, refreshRow, showToast]);
 
   const handleSendAssessment = useCallback(async (application, taskId) => {
     if (!application?.id || !taskId) return;
@@ -94,17 +105,17 @@ export function useCandidateTriage({
         application.id,
         isAuto ? {} : { task_id: Number(taskId) },
       );
-      await loadRoleWorkspace();
       showToast(
         isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.',
         'success',
       );
+      await refreshRow(application.id);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to send invite.'), 'error');
     } finally {
       setAssessmentBusy(false);
     }
-  }, [rolesApi, loadRoleWorkspace, showToast]);
+  }, [rolesApi, refreshRow, showToast]);
 
   const handleReject = useCallback(async (application) => {
     if (!application?.id) return;
@@ -114,29 +125,32 @@ export function useCandidateTriage({
         application_outcome: 'rejected',
         reason: 'Recruiter reject from role view',
       });
-      await loadRoleWorkspace();
       showToast('Candidate rejected.', 'success');
       setTriageApplicationId(null);
+      // Patch the one row: it flips application_outcome → 'rejected' and the
+      // active/rejected buckets re-derive, so it leaves the open list without
+      // a 4,000-row refetch.
+      await refreshRow(application.id);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to reject.'), 'error');
     } finally {
       setRejectBusy(false);
     }
-  }, [rolesApi, loadRoleWorkspace, showToast]);
+  }, [rolesApi, refreshRow, showToast]);
 
   const handleMoveToWorkableStage = useCallback(async (application, targetStage) => {
     if (!application?.id || !targetStage) return;
     setWorkableMoveBusy(true);
     try {
       await rolesApi.moveApplicationToWorkableStage(application.id, { target_stage: targetStage });
-      await loadRoleWorkspace();
       showToast(`Sent to Workable: ${targetStage}.`, 'success');
+      await refreshRow(application.id);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to move in Workable.'), 'error');
     } finally {
       setWorkableMoveBusy(false);
     }
-  }, [rolesApi, loadRoleWorkspace, showToast]);
+  }, [rolesApi, refreshRow, showToast]);
 
   // Plain click on a candidate row opens the drawer in-place. Modifier-
   // click (cmd/ctrl/shift/alt) and middle-click keep the anchor's

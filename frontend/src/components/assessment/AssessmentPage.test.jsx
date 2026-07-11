@@ -15,6 +15,7 @@ vi.mock('../../shared/api', () => ({
     saveRepoFile: (...args) => mockSaveRepoFile(...args),
     claudeChat: (...args) => mockClaudeChat(...args),
     submit: (...args) => mockSubmit(...args),
+    runtimeEvent: vi.fn(() => Promise.resolve({ data: { success: true } })),
   },
 }));
 
@@ -474,7 +475,7 @@ describe('AssessmentPage live agentic runtime', () => {
 
     render(<AssessmentPage token="tok9" startData={startData} />);
 
-    expect(await screen.findByText(/Claude budget exhausted for this task/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Claude budget used up for this task/i)).toBeInTheDocument();
   });
 
   it('updates Claude credit display after an agentic chat response', async () => {

@@ -19,6 +19,13 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
       setError('Password must be at least 8 characters long.');
       return;
     }
+    // bcrypt only hashes the first 72 bytes, so the backend rejects anything
+    // longer. We encourage passphrases, so catch it here with a clear message
+    // rather than letting a long one fail server-side.
+    if (new TextEncoder().encode(password).length > 72) {
+      setError('That passphrase is too long — please keep it to 72 characters or fewer.');
+      return;
+    }
     if (password !== confirm) {
       setError('Passwords do not match');
       return;
@@ -32,7 +39,15 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
       await auth.resetPassword(token, password);
       setSuccess(true);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Reset failed');
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+      if (err.code === 'ERR_NETWORK' || err.message === 'Network Error' || (status && status >= 502)) {
+        setError('Can\'t reach Taali right now — try again in a moment.');
+      } else if (status === 400 && detail?.code === 'RESET_PASSWORD_INVALID_PASSWORD') {
+        setError(detail.reason || 'That password can\'t be used — try a different one.');
+      } else {
+        setError('We couldn\'t update your password. The link may have expired — request a new one below.');
+      }
     } finally {
       setLoading(false);
     }
@@ -63,7 +78,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
       onNavigate={onNavigate}
       kicker="SET A NEW PASSWORD"
       title="Choose something memorable"
-      sub="Use a passphrase, not a word. Mix at least 12 characters; we won't make you add a symbol."
+      sub="Use a passphrase, not a word. At least 8 characters; we won't make you add a symbol."
       topRight={(
         <span>
           Back to{' '}
@@ -93,7 +108,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
           placeholder="••••••••"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          helper="12+ characters. Strong: a string of words you'll remember."
+          helper="At least 8 characters. Strong: a string of words you'll remember."
         />
         <AuthField
           label="Confirm new password"

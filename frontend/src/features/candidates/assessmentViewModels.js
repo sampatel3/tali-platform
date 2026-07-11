@@ -482,6 +482,26 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
     integrityFlags: Array.isArray(application?.score_summary?.integrity?.warnings)
       ? application.score_summary.integrity.warnings.filter((w) => typeof w === 'string' && w.trim())
       : [],
+    // The server's triangulation verdict + trust band drive the compact
+    // Integrity chip (rendered only for review / strong_review). null when the
+    // server computed nothing (or stripped it for a client share).
+    integrityVerdict: String(application?.score_summary?.integrity?.verdict || '').trim().toLowerCase() || null,
+    integrityTrustBand: String(application?.score_summary?.integrity?.trust_band || '').trim().toLowerCase() || null,
+    // Positive cross-source corroborations (server-canonical, same single source
+    // as warnings) — shown inside the expanded chip alongside the warnings.
+    corroborations: Array.isArray(application?.score_summary?.integrity?.corroborations)
+      ? application.score_summary.integrity.corroborations.filter((c) => typeof c === 'string' && c.trim())
+      : [],
+    // Employer names the parser could not verify verbatim in the CV text
+    // (cv_sections.experience[].company_unverified) — quoted in the chip so a
+    // recruiter can eyeball the specific companies. Derived from the CV sections
+    // already on the payload; no new server field.
+    unverifiedEmployers: Array.isArray(application?.cv_sections?.experience)
+      ? application.cv_sections.experience
+        .filter((e) => e && e.company_unverified && String(e.company || '').trim())
+        .map((e) => String(e.company).trim())
+        .slice(0, 10)
+      : [],
     summaryText,
     hasAnyEvidence: Boolean(
       payload.roleFitScore != null
@@ -623,7 +643,7 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
     strongestLabel: '—',
     weakestLabel: '—',
     heuristicSummary: roleFitModel.rationaleBullets[0]
-      || 'TAALI score is currently driven by CV-to-role evidence until a completed assessment is available.',
+      || 'Taali score is currently driven by CV-to-role evidence until a completed assessment is available.',
     categoryScores: {},
     assessmentStatus: scoreSummary.assessment_status || null,
     completedAt: scoreSummary.assessment_completed_at || null,
@@ -713,7 +733,7 @@ const buildEvidenceSections = ({ application, completedAssessment, roleFitModel,
     gitEvidence.diff_main ? 'Diff against main was captured' : null,
     gitEvidence.diff_staged ? 'Staged diff evidence is available' : null,
     gitEvidence.status_porcelain ? 'Working tree status was captured' : null,
-    gitEvidence.error ? `Git evidence warning: ${gitEvidence.error}` : null,
+    gitEvidence.error ? 'Some code evidence could not be captured for this attempt.' : null,
     assessment.final_repo_state ? 'Final repository state snapshot is attached' : null,
   ] : [];
   const timelineItems = assessment ? [
@@ -743,7 +763,7 @@ const buildEvidenceSections = ({ application, completedAssessment, roleFitModel,
       badgeVariant: assessment ? 'purple' : 'muted',
       description: assessment
         ? 'Prompt activity, browser focus, and calibration stay attached to the standing report.'
-        : 'This section activates after a completed assessment adds prompt telemetry.',
+        : 'This section fills in once the candidate completes an assessment.',
       items: aiUsageItems,
       emptyMessage: 'No AI usage evidence is available yet.',
     }),
@@ -852,8 +872,8 @@ const buildFirefliesModel = ({ application }) => {
     statusLabel = 'Awaiting Fireflies transcript';
     badgeVariant = 'info';
     description = inviteEmail
-      ? `Include ${inviteEmail} in the Workable interview invite so TAALI can capture the Stage 1 call.`
-      : 'Fireflies is configured and TAALI is waiting for the Stage 1 transcript to be linked.';
+      ? `Include ${inviteEmail} in the Workable interview invite so Taali can capture the Stage 1 call.`
+      : 'Fireflies is configured and Taali is waiting for the Stage 1 transcript to be linked.';
   } else if (status === 'not_expected') {
     statusLabel = 'Fireflies capture not expected';
     badgeVariant = 'muted';
@@ -924,7 +944,7 @@ export const buildStandingCandidateReportModel = ({
   const recruiterSummaryText = roleFitModel.summaryText
     || roleFitModel.rationaleBullets?.[0]
     || summaryModel.heuristicSummary
-    || 'TAALI keeps the evidence attached to the score so recruiters can move faster with less ambiguity.';
+    || 'Taali keeps the evidence attached to the score so recruiters can move faster with less ambiguity.';
   const probeTitle = roleFitModel.firstRequirementGap?.requirement
     || (summaryModel.weakestLabel !== '—' ? summaryModel.weakestLabel : 'Primary probe area');
   const probeDescription = roleFitModel.firstRequirementGap?.impact
@@ -949,7 +969,7 @@ export const buildStandingCandidateReportModel = ({
     : (
       roleFitModel.roleFitScore != null
         ? 'Role fit is the strongest available signal until more completed-assessment evidence is present.'
-        : 'Signal will strengthen as TAALI collects more completed assessment evidence.'
+        : 'Signal will strengthen as Taali collects more completed assessment evidence.'
     );
   const evidenceSections = buildEvidenceSections({
     application,

@@ -480,6 +480,7 @@ def test_list_agent_decisions_route_returns_pending_with_staleness(db):
     # FastAPI's Query(...) default resolution.
     payloads = agentic_routes.list_agent_decisions(
         role_id=int(role.id),
+        application_id=None,
         status="pending",
         decision_type=None,
         q=None,
@@ -565,11 +566,20 @@ def test_re_evaluate_route_409s_on_resolved_app(db):
 
 
 def test_recently_discarded_decision_suppresses_reemit(db):
+    from app.models.user import User
+
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
-    # Recruiter discards it.
+    recruiter = User(
+        email=f"rec-{id(db)}@x.test", hashed_password="x", full_name="Rec",
+        organization_id=org.id, is_active=True, is_verified=True, is_superuser=False,
+    )
+    db.add(recruiter); db.flush()
+    # Recruiter discards it. resolved_by_user_id marks it as an explicit
+    # human "no" — system discards (NULL) deliberately don't suppress.
     decision.status = "discarded"
     decision.resolved_at = datetime.now(timezone.utc)
+    decision.resolved_by_user_id = recruiter.id
     db.add(decision); db.commit()
 
     # Agent re-emits the same type within the 10-min window.

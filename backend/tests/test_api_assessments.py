@@ -367,14 +367,14 @@ def test_preview_assessment_includes_workspace_shape_without_file_contents(clien
 def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     canonical_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Canonical demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=15,
         starter_code="print('demo')",
         test_code="def test_placeholder():\n    assert True\n",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
     )
     db.add(canonical_task)
     db.commit()
@@ -447,20 +447,20 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assert assessment.task_id == canonical_task.id
     assert assessment.demo_profile["work_email"] == "demo-user@company.com"
     assert assessment.demo_profile["marketing_consent"] is True
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
 
 def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     platform_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Data platform demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
     )
     ai_task = Task(
         organization_id=None,
@@ -509,7 +509,7 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
 
     monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
 
-    # Legacy track "data_eng_c_backfill_schema" aliases to the canonical Glue task.
+    # Legacy track "data_eng_c_backfill_schema" aliases to the bronze-ingestion flagship.
     payload = {
         "full_name": "Frontend Demo User",
         "position": "Engineering Director",
@@ -528,20 +528,20 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "data_eng_c_backfill_schema"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
 
 def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, monkeypatch):
     demo_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Data platform demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
         repo_structure={"files": {"src/main.py": "def run():\n    return 1\n"}},
     )
     db.add(demo_task)
@@ -625,7 +625,7 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
 
     body = resp.json()
     assert body["sandbox_id"] == "demo-fallback-sandbox"
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
     sandbox = holder["sandbox"]
     assert any(path.endswith("/src/main.py") for path, _ in sandbox.files.writes)
@@ -640,14 +640,14 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
 def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     platform_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Demo task (legacy alias backend-reliability)",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
     )
     db.add(platform_task)
     db.commit()
@@ -701,7 +701,7 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "backend-reliability"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
 
 def test_demo_start_rejects_invalid_track(client):
@@ -1208,3 +1208,112 @@ def test_interview_debrief_generation_includes_linked_fireflies_context_from_app
     assert payload["interview_debrief"]["fireflies_context"]["invite_email"] == "taali@fireflies.ai"
     assert "Stage 1 Fireflies transcript is linked" in payload["interview_debrief"]["summary"]
     assert payload["interview_debrief"]["probing_questions"][0]["dimension"] == "Stage 1 screening"
+
+
+def test_preview_stamps_first_view_once(client, db):
+    task = Task(
+        name="Preview stamp task",
+        description="Stamp the first preview view.",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        task_key="preview_stamp_task",
+        scenario="Look before you start.",
+        repo_structure={"files": {"README.md": "hello"}},
+    )
+    db.add(task)
+    db.flush()
+    assessment = Assessment(
+        task_id=task.id,
+        token="preview-stamp-token",
+        duration_minutes=30,
+        status=AssessmentStatus.PENDING,
+    )
+    db.add(assessment)
+    db.commit()
+
+    assert assessment.preview_viewed_at is None
+    resp = client.get(f"/api/v1/assessments/token/{assessment.token}/preview")
+    assert resp.status_code == 200, resp.text
+    db.refresh(assessment)
+    first_stamp = assessment.preview_viewed_at
+    assert first_stamp is not None
+    events = [e for e in (assessment.timeline or []) if e.get("event_type") == "preview_viewed"]
+    assert len(events) == 1
+    assert events[0]["can_start"] in (True, False)
+
+    # A repeat visit neither rewrites the stamp nor appends another event.
+    resp = client.get(f"/api/v1/assessments/token/{assessment.token}/preview")
+    assert resp.status_code == 200
+    db.refresh(assessment)
+    assert assessment.preview_viewed_at == first_stamp
+    events = [e for e in (assessment.timeline or []) if e.get("event_type") == "preview_viewed"]
+    assert len(events) == 1
+
+
+def test_runtime_event_records_once_per_type(client, db):
+    task = Task(
+        name="Runtime event task",
+        description="Beacon test.",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        task_key="runtime_event_task",
+        repo_structure={"files": {"README.md": "hello"}},
+    )
+    db.add(task)
+    db.flush()
+    assessment = Assessment(
+        task_id=task.id,
+        token="runtime-event-token",
+        duration_minutes=30,
+        status=AssessmentStatus.IN_PROGRESS,
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(assessment)
+    db.commit()
+
+    headers = {"X-Assessment-Token": assessment.token}
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "runtime_loaded"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"recorded": True}
+    db.refresh(assessment)
+    events = [e for e in (assessment.timeline or []) if e.get("event_type") == "runtime_loaded"]
+    assert len(events) == 1
+    assert events[0]["seconds_since_start"] >= 0
+
+    # Same type again → deduped.
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "runtime_loaded"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"recorded": False, "reason": "already_recorded"}
+
+    # A different allowed type still records.
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "file_opened"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"recorded": True}
+
+    # Unknown types are rejected; bad tokens are forbidden.
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "keylogger"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "runtime_loaded"},
+        headers={"X-Assessment-Token": "wrong"},
+    )
+    assert resp.status_code == 403

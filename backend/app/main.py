@@ -8,6 +8,7 @@ _API_ERROR_MESSAGES = {
     "REGISTER_USER_ALREADY_EXISTS": "An account with this email already exists. Sign in instead or use a different email.",
 }
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
@@ -175,6 +176,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
+# Compress large JSON responses. UAE users hit a us-east4 API, so the network
+# hop is the documented bottleneck; repetitive list JSON compresses ~80-90%.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 def _normalize_origin(origin: str | None) -> str | None:
     cleaned = (origin or "").strip().rstrip("/")
     if not cleaned:
@@ -298,6 +303,10 @@ from .domains.share_links import (
     router as share_links_router,
 )
 from .domains.top_reports.routes import public_router as top_reports_public_router
+from .domains.submittal_packs import (
+    public_router as submittal_packs_public_router,
+    router as submittal_packs_router,
+)
 from .domains.assessments_runtime.pool_rescore_routes import router as pool_rescore_router
 
 # FastAPI-Users auth routers
@@ -321,6 +330,12 @@ app.include_router(
     prefix="/api/v1/auth",
     tags=["auth"],
 )
+# Team-invite routes (invite/list/resend/DELETE) mount BEFORE the
+# FastAPI-Users users router so our org-scoped ``DELETE /users/{id}``
+# (soft-remove) wins over FastAPI-Users' superuser-only hard delete at the
+# same path. The remaining FastAPI-Users routes (GET/PATCH /{id}, /me) don't
+# collide and are still served below.
+app.include_router(users_router, prefix="/api/v1")
 app.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/api/v1/users",
@@ -331,7 +346,6 @@ app.include_router(assessments_router, prefix="/api/v1")
 app.include_router(pool_rescore_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
 app.include_router(org_criteria_router, prefix="/api/v1")
-app.include_router(users_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
@@ -345,6 +359,7 @@ app.include_router(workable_router, prefix="/api/v1")
 app.include_router(bullhorn_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
+app.include_router(submittal_packs_router, prefix="/api/v1")
 from .decision_policy.routes import router as decision_policy_router  # noqa: E402
 from .domains.capabilities.routes import router as capability_flags_router  # noqa: E402
 from .services.threshold_calibration.routes import router as threshold_calibration_router  # noqa: E402
@@ -371,6 +386,9 @@ app.include_router(workable_provider_router)
 # any browser without auth and without exposing the API surface.
 app.include_router(share_links_public_router)
 app.include_router(top_reports_public_router)
+# Public curated client submittal: GET /submittal/{token} (no auth) — the
+# agency shortlist a recruiter shares with their client for one role.
+app.include_router(submittal_packs_public_router)
 # Public job page: GET /api/v1/public/job/{token} (no auth) — the shareable
 # listing minted when a requisition is published.
 from .domains.job_pages import public_router as job_pages_public_router  # noqa: E402
@@ -382,6 +400,12 @@ app.include_router(job_pages_public_router)
 from .domains.client_intake import public_router as client_intake_public_router  # noqa: E402
 
 app.include_router(client_intake_public_router)
+
+# Public demo-lead capture: POST /api/v1/public/demo-lead (no auth) — the
+# marketing "book a demo" form; forwards the lead to hello@ by email.
+from .domains.marketing_leads import public_router as marketing_leads_public_router  # noqa: E402
+
+app.include_router(marketing_leads_public_router)
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (

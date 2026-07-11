@@ -414,3 +414,31 @@ input[type="time"]::-webkit-datetime-edit {
   border-left: none;
   color: var(--mute);
 }
+
+/* iOS Safari zooms the whole page when a focused input's font-size is under
+   16px, and the viewport meta (correctly) sets no maximum-scale. Every control
+   is below 16px at the app's 0.8rem density, so on a phone any focus zooms and
+   breaks the mobile layout. Lift text controls to 16px on touch-width viewports
+   only — desktop density is untouched. This complements the per-component
+   overrides in chat-kit.css and 11-nav-mobile-search.css. */
+@media (max-width: 720px) {
+  .taali-input,
+  .taali-textarea,
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="search"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="number"],
+  textarea,
+  select:not(.taali-select),
+  .taali-select-trigger,
+  input[type="date"],
+  input[type="datetime-local"],
+  input[type="time"],
+  input[type="month"],
+  input[type="week"] {
+    font-size: 16px;
+  }
+}

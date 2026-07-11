@@ -24,7 +24,7 @@ import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import { RoleSheet } from '../candidates/RoleSheet';
-import { trimOrUndefined } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
 import {
   EmptyState,
   Select,
@@ -58,7 +58,7 @@ const SOURCE_FILTERS = [
   { key: 'live', label: 'Live' },
   { key: 'workable', label: 'From Workable' },
   { key: 'manual', label: 'Created in Taali' },
-  { key: 'active', label: 'Active' },
+  { key: 'active', label: 'With open candidates' },
   { key: 'draft', label: 'Draft' },
 ];
 
@@ -601,7 +601,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       setRoleSheetOpen(false);
       await loadJobsHub();
     } catch (err) {
-      setRoleSheetError(err?.response?.data?.detail || 'Failed to save role.');
+      setRoleSheetError(getErrorMessage(err, 'Failed to save role.'));
     } finally {
       setSavingRole(false);
     }
@@ -663,8 +663,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           tall. */}
       <AgentHeader
         breadcrumbs={[{ label: 'Jobs' }]}
-        kicker={`JOBS · ${sourceCounts.live} ACTIVE ROLE${sourceCounts.live === 1 ? '' : 'S'}`}
-        title={<>{sourceCounts.live} active <em>roles</em></>}
+        kicker={`JOBS · ${sourceCounts.live} LIVE ROLE${sourceCounts.live === 1 ? '' : 'S'}`}
+        title={<>{sourceCounts.live} live <em>roles</em></>}
         period={false}
         subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
         actions={(
@@ -708,7 +708,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             </div>
             <div>
               <div style={{ fontSize: '13.5px', fontWeight: 600, marginBottom: '2px' }}>
-                Synced from Workable · {workableRolesCount} of {roles.length} roles
+                Synced from Workable · {workableRolesCount} role{workableRolesCount === 1 ? '' : 's'}{sourceCounts.manual > 0 ? ` · ${sourceCounts.manual} created in Taali` : ''}
               </div>
               <div className="meta">
                 <span>
@@ -744,12 +744,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
 
         {/* Org KPI strip — shares the <KpiStrip> tile with the Home hub so the
             two surfaces look identical. Roles-focused subset:
-              In pipeline · Active roles · Awaiting you · Org budget · MTD.
+              In pipeline · Live roles · Awaiting you · Org budget · MTD.
             "Awaiting you" is the pending-decision queue (summed from the
             /roles/{id}/agent/status fan-out), the same metric the Home hub
             surfaces — not the Review funnel stage. */}
         {(() => {
-          const activeRoles = sourceCounts.live;
+          const liveRoles = sourceCounts.live;
           const starredCount = roles.filter((r) => r.starred_for_auto_sync).length;
           const pipelineCount = roles.reduce(
             (acc, r) => acc + inPipelineFromStageCounts(r?.stage_counts),
@@ -781,12 +781,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   key: 'pipeline',
                   label: 'In pipeline',
                   value: formatCount(pipelineCount),
-                  sub: `across ${formatCount(activeRoles)} active role${activeRoles === 1 ? '' : 's'}`,
+                  sub: `across ${formatCount(liveRoles)} live role${liveRoles === 1 ? '' : 's'}`,
                 },
                 {
                   key: 'roles',
-                  label: 'Active roles',
-                  value: formatCount(activeRoles),
+                  label: 'Live roles',
+                  value: formatCount(liveRoles),
                   sub: starredCount > 0 ? `${formatCount(starredCount)} starred` : 'none starred',
                 },
                 {
@@ -845,9 +845,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               </Select>
             </label>
           ) : null}
-          <button type="button" className="f-chip add" disabled title="Additional recruiter filters are coming next.">
-            + Add filter
-          </button>
           {rolesPartial ? (
             <span
               className="flex items-center gap-1 text-xs text-[var(--mute)]"
@@ -1011,7 +1008,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           roleDept || null,
                           roleLoc || null,
                           lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-                        ].filter(Boolean).join(' · ') || 'No metadata yet'}
+                        ].filter(Boolean).join(' · ') || 'No details yet'}
                       </div>
                     </div>
                     {agentPaused ? (

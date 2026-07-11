@@ -200,7 +200,7 @@ export const AI_SHOWCASE_APPLICATION = {
     taali_score: 81,
     // Provenance line shown under the score on the standing report + role-fit
     // summary ("Scored 20 Apr 2026 · v2.1.0 · Sonnet"). Holistic engine v2.1.0.
-    score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' },
+    score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z' },
   },
   screening_interview_summary: {
     fireflies: {
@@ -622,6 +622,11 @@ export const PRODUCT_WALKTHROUGH = {
       'Prioritize the highest-risk launch blockers first, then outline the smallest safe patch sequence for this regulated GenAI release.',
     claudeConversation: [
       {
+        role: 'assistant',
+        content:
+          "Hi — I'm Claude, and I'll be pairing with you on this. I already have the repo open and I've read the brief, so there's nothing to set up. If you'd like to see where things stand first, just ask me to run the tests.\n\nBefore we start, two decisions need to come from you — not from me:\n\n1. Where the confidence-gating threshold for high-risk actions should sit — and who reviews the borderline band just under it.\n\n2. Whether ungrounded retrieval context should hard-fail the request, or degrade the answer with a flag on it.\n\nThese calls are yours — I'll build to whatever you decide. You're scored on the steering, not on typing the code.",
+      },
+      {
         role: 'user',
         content:
           'Read RISKS.md and the launch checklist before anything else. Summarise the highest-blast-radius failures in the failing pytest run, in priority order. Do not propose patches yet.',
@@ -761,7 +766,7 @@ export const PRODUCT_WALKTHROUGH_TASK = {
   role: 'AI Engineer',
   durationLabel: `${aiGenaiProductionReadinessTask.duration_minutes} min`,
   stack: 'Python · Claude · Release safety',
-  tools: 'Repo · Editor · Terminal · Claude',
+  tools: 'Repo · Editor · Claude · Sandboxed tests',
   description:
     'Review a regulated GenAI launch, tighten the safety guardrails, and show how the candidate works with AI when the repo and launch pressure are both real.',
 };
@@ -880,7 +885,7 @@ export const CANDIDATES_DIRECTORY_SHOWCASE = [
     pre_screen_score: 86,
     taali_score: 81,
     // Re-scored on the current holistic engine — fresh v2.1.0 provenance.
-    score_summary: { taali_score: 81, assessment_status: 'completed', assessment_id: 1042, score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' } },
+    score_summary: { taali_score: 81, assessment_status: 'completed', assessment_id: 1042, score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z' } },
     score_status: 'done',
     source: 'workable',
     workable_candidate_id: 'wkbl-cand-91',
@@ -984,7 +989,7 @@ export const CANDIDATES_DIRECTORY_SHOWCASE = [
     // Scored before the engine cutover — legacy v1.18.0 (graded Haiku). Renders
     // muted on every surface so a recruiter can spot it needs re-scoring at a
     // glance; demonstrates the stale half of the provenance feature.
-    score_summary: { taali_score: 79, assessment_status: 'completed', assessment_id: 1101, score_provenance: { engine_version: '1.18.0', scored_at: '2026-04-15T11:30:00.000Z', model: 'Haiku' } },
+    score_summary: { taali_score: 79, assessment_status: 'completed', assessment_id: 1101, score_provenance: { engine_version: '1.18.0', scored_at: '2026-04-15T11:30:00.000Z' } },
     score_status: 'done',
     source: 'workable',
     workable_candidate_id: 'wkbl-cand-96',

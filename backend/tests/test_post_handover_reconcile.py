@@ -133,16 +133,18 @@ def test_phone_screen_does_not_advance(db, monkeypatch):
     assert app.pipeline_stage == "applied"
 
 
-def test_mid_interview_discards_stale_reject(db, monkeypatch):
-    # The dangerous case #652 fixed: a reject card on someone now in a live
-    # interview. We still kill it — without freezing the candidate.
+def test_mid_interview_keeps_reject_card(db, monkeypatch):
+    # A reject card on someone in a live interview is Taali's honest HITL
+    # second opinion — it stays live (approve surfaces warn the recruiter;
+    # nothing auto-executes it). Verdict-flip staleness is the cohort tick's
+    # ``_reconcile_stale_pending`` to manage, not the sync reflection's.
     _pin_verdict(monkeypatch, "advance")
     org, role, app = _seed(db, workable_stage="Final Interview")
     _pending_reject(db, org=org, role=role, app=app)
     assert reconcile_post_handover_advanced(db, app=app, role=role) is False
     db.commit()
     assert app.pipeline_stage != "advanced"
-    assert _has_pending(db, app) is False  # stale reject discarded
+    assert _has_pending(db, app) is True  # reject card preserved
 
 
 def test_mid_interview_keeps_legitimate_pending(db, monkeypatch):
@@ -169,6 +171,20 @@ def test_mid_interview_heals_agent_stranded_review(db, monkeypatch):
     assert reconcile_post_handover_advanced(db, app=app, role=role) is True
     db.commit()
     assert app.pipeline_stage == "advanced"
+
+
+def test_mid_interview_never_heals_under_live_reject_card(db, monkeypatch):
+    # While a reject card is still PENDING, the heal must not advance the
+    # candidate — advancing under a live reject card would contradict it.
+    _pin_verdict(monkeypatch, None)
+    org, role, app = _seed(db, workable_stage="Final Interview", pipeline_stage="review")
+    app.pipeline_stage_source = "agent"
+    db.commit()
+    _pending_reject(db, org=org, role=role, app=app)
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+    db.commit()
+    assert app.pipeline_stage == "review"  # untouched while the card is live
+    assert _has_pending(db, app) is True
 
 
 def test_mid_interview_does_not_heal_legit_system_review(db, monkeypatch):

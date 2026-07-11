@@ -12,14 +12,16 @@ import time
 
 import resend
 
-from ...platform.brand import BRAND_NAME, brand_email_from
+from ...platform.brand import BRAND_DOMAIN, BRAND_NAME, brand_email_from
 from .templates import (
     assessment_expiry_reminder_html,
     assessment_invite_html,
+    assessment_nudge_html,
     assessment_invite_text,
     email_verification_html,
     password_reset_html,
     results_notification_html,
+    team_invite_html,
 )
 
 
@@ -136,6 +138,10 @@ def _send_resend_email(payload: dict, *, recipient: str) -> dict:
     5xx. Returns the raw Resend response on success; re-raises the last
     exception once the in-process attempt budget is spent (the caller maps that
     to a failure result)."""
+    # noreply@ has no mailbox — replies to it bounce. Every send needs a
+    # staffed reply-to unless the caller set one (e.g. the recruiter).
+    if not (payload.get("reply_to") or "").strip():
+        payload["reply_to"] = f"support@{BRAND_DOMAIN}"
     for attempt in range(1, _MAX_SEND_ATTEMPTS + 1):
         try:
             return resend.Emails.send(payload)
@@ -276,6 +282,24 @@ class EmailService:
             logger.error("Failed to send results notification to %s: %s", user_email, str(e))
             return {"success": False, "email_id": ""}
 
+    def send_internal_alert(self, to_email: str, subject: str, text_body: str) -> dict:
+        """Plain-text notification to an internal inbox (e.g. a demo lead
+        forwarded to hello@). Not for candidate- or recruiter-facing mail —
+        those go through the branded template senders above."""
+        try:
+            email = _send_resend_email({
+                "from": self.from_email,
+                "to": [to_email],
+                "subject": subject,
+                "text": text_body,
+            }, recipient=to_email)
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            logger.info("Internal alert sent (email_id=%s, to=%s)", email_id, to_email)
+            return {"success": True, "email_id": email_id}
+        except Exception as e:
+            logger.error("Failed to send internal alert to %s: %s", to_email, str(e))
+            return {"success": False, "email_id": ""}
+
     def send_email_verification(self, to_email: str, full_name: str, verification_link: str) -> dict:
         try:
             logger.info("Sending email verification to %s", to_email)
@@ -312,6 +336,63 @@ class EmailService:
             return {"success": True, "email_id": email_id}
         except Exception as e:
             logger.error("Failed to send password reset to %s: %s", to_email, str(e))
+            return {"success": False, "email_id": ""}
+
+    def send_team_invite(
+        self,
+        to_email: str,
+        inviter_name: str,
+        org_name: str,
+        accept_link: str,
+    ) -> dict:
+        try:
+            logger.info("Sending team invite to %s (org=%s)", to_email, org_name)
+            html_body = team_invite_html(
+                inviter_name=inviter_name,
+                org_name=org_name,
+                accept_link=accept_link,
+            )
+            email = _send_resend_email({
+                "from": self.from_email,
+                "to": [to_email],
+                "subject": f"You're invited to join {org_name} on {BRAND_NAME}",
+                "html": html_body,
+            }, recipient=to_email)
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            logger.info("Team invite sent successfully (email_id=%s, to=%s)", email_id, to_email)
+            return {"success": True, "email_id": email_id}
+        except Exception as e:
+            logger.error("Failed to send team invite to %s: %s", to_email, str(e))
+            return {"success": False, "email_id": ""}
+
+    def send_assessment_nudge(
+        self,
+        candidate_email: str,
+        candidate_name: str,
+        task_name: str,
+        assessment_link: str,
+        kind: str,
+        expiry_text: str,
+    ) -> dict:
+        try:
+            logger.info("Sending assessment nudge (%s) to %s", kind, candidate_email)
+            html_body = assessment_nudge_html(
+                candidate_name=candidate_name,
+                task_name=task_name,
+                assessment_link=assessment_link,
+                kind=kind,
+                expiry_text=expiry_text,
+            )
+            email = _send_resend_email({
+                "from": self.from_email,
+                "to": [candidate_email],
+                "subject": f"Your {BRAND_NAME} assessment is waiting",
+                "html": html_body,
+            }, recipient=candidate_email)
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            return {"success": True, "email_id": email_id}
+        except Exception as exc:
+            logger.error("Failed to send assessment nudge to %s: %s", candidate_email, str(exc))
             return {"success": False, "email_id": ""}
 
     def send_assessment_expiry_reminder(

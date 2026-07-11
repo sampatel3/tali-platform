@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play, Sparkles } from 'lucide-react';
 
-import { agent as agentApi, roles as rolesApi } from '../api';
+import { agent as agentApi } from '../api';
 
 const POLL_INTERVAL_MS = 30_000;
 const AMBER_THRESHOLD_PCT = 80;
-const ROLE_FANOUT_LIMIT = 25;
 
 const formatDollars = (cents) => {
   if (cents == null) return null;
@@ -87,18 +86,18 @@ export const useAgentStatus = (roleId) => {
   return { status, error, setStatus, refetch };
 };
 
-// Fan out across /roles client-side and aggregate into a single status
-// object that mimics the per-role response shape. HANDOFF Phase 1 explicitly
-// allows this in lieu of a backend org-aggregate endpoint:
-//   "Org-level data via client-side fan-out across `/roles` (acceptable for
-//   typical org size). cost_per_decision and eom_projection derived
-//   client-side from existing monthly_spent_cents + decision count + day-of-
-//   month — no backend change required."
+// Org rollup for the global header strip. Reads the single purpose-built
+// aggregate GET /agent/org-status (counts + sums computed server-side) instead
+// of fanning out /roles + up to 25 per-role /agent/status calls
+// every 30s on every page — that fan-out issued up to 26 requests/poll against
+// a us-east4 API just to derive an on/paused boolean + budget bar.
 //
-// We cap the fan-out at ROLE_FANOUT_LIMIT roles (skipping ones the agent is
-// not enabled on) so the aggregate stays bounded for huge orgs. If/when the
-// backend ships an org-aggregate endpoint, the bar can switch to that without
-// changing its render shape.
+// The returned shape is unchanged for consumers (Shell, JobsPage, AgentHeader):
+// `paused`, `pending_decisions`, `monthly_spent_cents`, `monthly_budget_cents`,
+// `current_run`, `last_activity` (pre-annotated summary), `paused_reason`,
+// `active_role_count`. org-status splits enabled roles into active (running)
+// vs paused counts, so `active_role_count` = running + paused (total enabled)
+// and `paused` = all-enabled-paused, matching the old fan-out semantics.
 export const useAgentStatusOrg = () => {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
@@ -106,129 +105,28 @@ export const useAgentStatusOrg = () => {
 
   const fetchOnce = useCallback(async () => {
     try {
-        const rolesRes = await rolesApi.list();
-        const allRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
-        // Only roles where the agent is currently enabled count toward the
-        // org bar — they're the only ones spending budget or queueing
-        // decisions. Cap to bound fan-out cost.
-        const activeRoles = allRoles
-          .filter((role) => role && role.agentic_mode_enabled)
-          .slice(0, ROLE_FANOUT_LIMIT);
-
-        if (activeRoles.length === 0) {
-          if (!cancelledRef.current) {
-            setStatus({
-              paused: false,
-              pending_decisions: 0,
-              monthly_spent_cents: 0,
-              monthly_budget_cents: 0,
-              current_run: null,
-              last_activity: null,
-              active_role_count: 0,
-            });
-            setError(null);
-          }
-          return;
-        }
-
-        const settled = await Promise.allSettled(
-          activeRoles.map((role) => agentApi.status(role.id))
-        );
-
+        const res = await agentApi.orgStatus();
         if (cancelledRef.current) return;
+        const data = res?.data || {};
+        const running = Number(data.active_role_count || 0);
+        const pausedRoles = Number(data.paused_role_count || 0);
+        const enabledTotal = running + pausedRoles;
 
-        let monthlySpent = 0;
-        let monthlyBudget = 0;
-        let pending = 0;
-        let allPaused = true;
-        let anyPaused = false;
-        let pausedReason = null;
-        let currentRun = null;
-        let latestActivity = null;
-        let latestActivityRole = null;
-        let latestActivityTs = -Infinity;
-
-        const tsOf = (activity) => {
-          if (!activity || typeof activity !== 'object') return -Infinity;
-          // Real backend uses `created_at`; legacy fixtures use `at` /
-          // `timestamp` / `occurred_at`. Try each in turn.
-          const raw = activity.created_at
-            || activity.at
-            || activity.timestamp
-            || activity.occurred_at;
-          if (!raw) return -Infinity;
-          const parsed = Date.parse(String(raw));
-          return Number.isNaN(parsed) ? -Infinity : parsed;
-        };
-
-        settled.forEach((entry, idx) => {
-          if (entry.status !== 'fulfilled') return;
-          const data = entry.value?.data || {};
-          const role = activeRoles[idx];
-          monthlySpent += Number(data.monthly_spent_cents || 0);
-          monthlyBudget += Number(data.monthly_budget_cents || 0);
-          pending += Number(data.pending_decisions || 0);
-          // Backend returns `paused_at: datetime|null`; tests/legacy callers
-          // may set `paused: bool`. Accept either.
-          const isPaused = data.paused != null ? Boolean(data.paused) : Boolean(data.paused_at);
-          if (isPaused) {
-            anyPaused = true;
-            // Carry one representative reason so the panel can tell a
-            // deliberate "Pause all" from an auto budget-pause.
-            if (!pausedReason && data.paused_reason) pausedReason = data.paused_reason;
-          } else {
-            allPaused = false;
-          }
-          if (!currentRun && data.current_run) currentRun = data.current_run;
-          const ts = tsOf(data.last_activity);
-          if (ts > latestActivityTs) {
-            latestActivityTs = ts;
-            latestActivity = data.last_activity;
-            latestActivityRole = role?.name || null;
-          }
+        setStatus({
+          // All enabled roles paused → bar reads "Agent mode paused".
+          paused: enabledTotal > 0 && running === 0,
+          any_paused: pausedRoles > 0,
+          paused_reason: data.paused_reason || null,
+          pending_decisions: Number(data.pending_decisions || 0),
+          monthly_spent_cents: Number(data.org_budget_spent_cents || 0),
+          monthly_budget_cents: Number(data.org_budget_cap_cents || 0),
+          current_run: data.current_run || null,
+          last_activity: data.last_activity || null,
+          // Total agent-enabled roles (running + paused) — the bar renders
+          // whenever any role has the agent on, paused or not.
+          active_role_count: enabledTotal,
         });
-
-        // Annotate the aggregated tick so it reads "<event> · <role> · <ago>"
-        // instead of the per-role bar's "<event> · <ago>". When the upstream
-        // (real backend) payload doesn't have a pre-computed `summary`,
-        // derive one from `event_type` + `candidate_name` so the aggregate
-        // tick still reads as a sentence and not just the role name.
-        let annotatedActivity = latestActivity;
-        if (latestActivity && latestActivityRole) {
-          let baseSummary = latestActivity.summary;
-          if (!baseSummary) {
-            const subject = latestActivity.candidate_name
-              || (latestActivity.application_id ? `application #${latestActivity.application_id}` : 'candidate');
-            switch (latestActivity.event_type) {
-              case 'pipeline_stage_changed': baseSummary = `Advanced ${subject}`; break;
-              case 'application_outcome_changed': baseSummary = `Updated outcome on ${subject}`; break;
-              case 'agent_paused': baseSummary = `Paused — ${latestActivity.reason || 'budget reached'}`; break;
-              default: baseSummary = latestActivity.reason
-                || (latestActivity.event_type ? String(latestActivity.event_type).replace(/_/g, ' ') : null);
-            }
-          }
-          annotatedActivity = {
-            ...latestActivity,
-            summary: baseSummary
-              ? `${baseSummary} · ${latestActivityRole}`
-              : latestActivityRole,
-          };
-        }
-
-        if (!cancelledRef.current) {
-          setStatus({
-            paused: activeRoles.length > 0 && allPaused,
-            any_paused: anyPaused,
-            paused_reason: allPaused ? pausedReason : null,
-            pending_decisions: pending,
-            monthly_spent_cents: monthlySpent,
-            monthly_budget_cents: monthlyBudget,
-            current_run: currentRun,
-            last_activity: annotatedActivity,
-            active_role_count: activeRoles.length,
-          });
-          setError(null);
-        }
+        setError(null);
       } catch (err) {
         if (!cancelledRef.current) setError(err);
       }

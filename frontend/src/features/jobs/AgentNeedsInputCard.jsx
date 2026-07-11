@@ -39,7 +39,7 @@ export default function AgentNeedsInputCard({ roleId }) {
         setRows(Array.isArray(data) ? data : []);
         setError(null);
       })
-      .catch((e) => setError(e.response?.data?.detail || e.message))
+      .catch(() => setError('Couldn\'t load the agent\'s questions — try again.'))
       .finally(() => setLoading(false));
   }, [roleId]);
 
@@ -57,8 +57,8 @@ export default function AgentNeedsInputCard({ roleId }) {
         response: { value },
       });
       reload();
-    } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+    } catch {
+      setError('That didn\'t go through — try again.');
     } finally {
       setBusyId(null);
     }
@@ -69,8 +69,8 @@ export default function AgentNeedsInputCard({ roleId }) {
     try {
       await api.post(`/agent-needs-input/${id}/dismiss`);
       reload();
-    } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+    } catch {
+      setError('That didn\'t go through — try again.');
     } finally {
       setBusyId(null);
     }
@@ -94,8 +94,8 @@ export default function AgentNeedsInputCard({ roleId }) {
       }
       setConfirmingRejectId(null);
       reload();
-    } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+    } catch {
+      setError('That didn\'t go through — try again.');
     } finally {
       setBusyId(null);
     }

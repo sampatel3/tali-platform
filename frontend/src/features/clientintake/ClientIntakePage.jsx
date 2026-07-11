@@ -309,7 +309,7 @@ export function ClientIntakePage() {
   }, [addFiles]);
 
   // ---- send a turn ----
-  const runTurn = useCallback(async (message, files, echoAttachments) => {
+  const runTurn = useCallback(async (message, files, echoAttachments, onFailRestore, onSuccessCleanup) => {
     if (turnInFlight || submitting || submitted) return;
     if (!message && (!files || files.length === 0)) return;
 
@@ -326,8 +326,13 @@ export function ClientIntakePage() {
     try {
       const res = await publicIntakeApi.chat(token, { message, files: files || [] });
       adopt(res);
+      if (onSuccessCleanup) onSuccessCleanup();
     } catch {
-      setError('The assistant could not process that — your message is preserved above, try again.');
+      // Roll back the optimistic echo and restore the client's text +
+      // attachments into the composer so they don't have to retype/re-attach.
+      setMessages((prev) => prev.slice(0, -1));
+      if (onFailRestore) onFailRestore();
+      setError('The assistant could not process that — your message and attachments are back in the box, try again.');
     } finally {
       setTurnInFlight(false);
     }
@@ -338,10 +343,23 @@ export function ClientIntakePage() {
     const files = attachments.map((a) => a.file);
     if (!message && files.length === 0) return;
     const echoAttachments = attachments.map((a) => ({ name: a.file.name, kind: isImage(a.file) ? 'image' : 'file' }));
+    // Snapshot the staged attachments so we can re-stage them on failure. We
+    // clear the composer/attachments optimistically but DON'T revoke the object
+    // URLs (clearAttachments would) — keep them alive so the previews still work
+    // if we restore.
+    const stagedSnapshot = attachments.slice();
     setComposer('');
-    clearAttachments();
-    void runTurn(message, files, echoAttachments);
-  }, [composer, attachments, clearAttachments, runTurn]);
+    setAttachments([]);
+    const restore = () => {
+      setComposer(message);
+      setAttachments(stagedSnapshot);
+    };
+    // On success the snapshot's object URLs are no longer needed — revoke them.
+    const cleanup = () => {
+      stagedSnapshot.forEach((a) => a.url && URL.revokeObjectURL(a.url));
+    };
+    void runTurn(message, files, echoAttachments, restore, cleanup);
+  }, [composer, attachments, runTurn]);
 
   const onComposerSubmit = useCallback(() => { void sendTurn(); }, [sendTurn]);
 
@@ -451,7 +469,7 @@ export function ClientIntakePage() {
           </h1>
           <p className="ci-lede">
             Chat with our assistant the way you'd brief a colleague — what the role is, what great looks
-            like, must-haves and nice-to-haves. Paste notes or a draft JD if you have one. It fills in
+            like, must-haves and nice-to-haves. Paste notes or a draft job description if you have one. It fills in
             beside the conversation as you go.
           </p>
         </header>
@@ -497,7 +515,7 @@ export function ClientIntakePage() {
                 >
                   <Paperclip size={14} /> Attach
                 </button>
-                <span className="ci-attach-hint">notes or a JD · or paste an image</span>
+                <span className="ci-attach-hint">notes or a job description · or paste an image</span>
                 <input
                   ref={fileInputRef}
                   type="file"

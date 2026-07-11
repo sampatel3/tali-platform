@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
 import { PageLink } from '../../shared/ui/PageLink';
@@ -74,7 +74,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'The standing report your hiring manager opens.',
       outcomes: [
-        'Five evidence-linked axes — the 4 Ds + Deliverable: Delegation, Description, Discernment, Diligence, Deliverable',
+        'Five evidence-linked axes — the 5 Ds: Delegation, Description, Discernment, Diligence, Deliverable',
         'Every score links back to the moment in the session it came from',
         'Shareable link, expiring, no PDFs, no leaks',
       ],
@@ -149,6 +149,14 @@ const useFrameLoadGuard = () => {
 
 export const DemoShowcasePage = ({ onNavigate }) => {
   const [active, setActive] = useState('workflow');
+  // Each iframe boots a full copy of the SPA, so only load a tab the first
+  // time it becomes active (then keep it mounted so re-clicks stay instant).
+  // Loading all five on mount fired five parallel app boots on the prospect-
+  // facing walkthrough — the landing CTA target, worst on mobile.
+  const [visited, setVisited] = useState(() => new Set(['workflow']));
+  useEffect(() => {
+    setVisited((prev) => (prev.has(active) ? prev : new Set(prev).add(active)));
+  }, [active]);
   const guard = useFrameLoadGuard();
   const tab = SHOWCASE_TABS.find((t) => t.k === active) || SHOWCASE_TABS[0];
   const idx = SHOWCASE_TABS.findIndex((t) => t.k === active);
@@ -175,9 +183,9 @@ export const DemoShowcasePage = ({ onNavigate }) => {
         </PageLink>
         <span className="mc-show-topbar-meta">· LIVE WALKTHROUGH · ACME / SR. BACKEND</span>
         <span className="mc-show-spacer" />
-        <span className="mc-show-chip green">Demo data · resets daily</span>
+        <span className="mc-show-chip">Demo data · resets daily</span>
         <PageLink page="landing" className="mc-show-btn">Skip the tour</PageLink>
-        <PageLink page="demo-lead" className="mc-show-btn primary">Start with free credits →</PageLink>
+        <PageLink page="demo-lead" className="mc-show-btn primary">Get started →</PageLink>
       </div>
 
       {/* HERO */}
@@ -254,7 +262,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
             <div className="mc-show-frame-stage">
               <iframe
                 title={t.label}
-                src={t.src}
+                src={visited.has(t.k) ? t.src : undefined}
                 sandbox="allow-scripts allow-same-origin"
                 referrerPolicy="no-referrer"
                 onLoad={guard(t)}
@@ -291,15 +299,15 @@ export const DemoShowcasePage = ({ onNavigate }) => {
           <div>
             <div className="mc-show-kicker mc-show-mb-10">READY TO PUT IT TO WORK?</div>
             <h2 className="mc-show-cta-h">
-              Wire your <em>real pipeline</em> into Taali. Start with $1.50 in free credits.
+              Wire your <em>real pipeline</em> into Taali.
             </h2>
             <p className="mc-show-cta-sub">
-              Connect Workable, point the agent at one role, and watch it triage your next batch of CVs by morning. Usage-based — like Anthropic, OpenAI, Cursor. No card, no subscription, no monthly minimum.
+              Connect Workable, point the agent at one role, and watch it triage your next batch of CVs by morning. Usage-based — pay only for what you use. No card, no subscription, no monthly minimum.
             </p>
           </div>
           <div className="mc-show-cta-side">
             <PageLink page="demo-lead" className="mc-show-btn primary tall">
-              Start with free credits →
+              Get started →
             </PageLink>
             <div className="mc-show-cta-foot">SOC 2 · GDPR · NEVER USED FOR TRAINING</div>
           </div>

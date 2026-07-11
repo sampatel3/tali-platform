@@ -101,25 +101,9 @@ export const statusVariant = (status) => {
   return 'muted';
 };
 
-export const getErrorMessage = (err, fallback) => {
-  const d = err?.response?.data?.detail;
-  if (d != null) {
-    if (typeof d === 'string') return d;
-    if (Array.isArray(d) && d.length) {
-      const first = d[0] || {};
-      const msg = first?.msg ?? String(first);
-      const locParts = Array.isArray(first?.loc)
-        ? first.loc.filter((segment) => String(segment).toLowerCase() !== 'body')
-        : [];
-      if (locParts.length) {
-        const loc = locParts.join('.').replace(/_/g, ' ');
-        return `${loc}: ${msg}`;
-      }
-      return msg;
-    }
-  }
-  return fallback;
-};
+// Re-exported from the shared helper so existing imports keep working while
+// there is a single implementation of error extraction across the app.
+export { getErrorMessage } from '../../shared/getErrorMessage';
 
 export const toCvScore100 = (score, details = null) => {
   return normalizeScore(score, details?.score_scale || '');

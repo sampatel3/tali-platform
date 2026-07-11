@@ -2,18 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, FileSearch, Loader2 } from 'lucide-react';
 
 import { assessments } from '../../shared/api';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 import { ChatComposer, ChatMarkdown } from '../../shared/chat';
 
-const MESSAGE_BUFFER_LIMIT = 30;
-
-// Compact token-count formatter (12000 → "12.0k", 8 → "8"). Used in
-// the token-tracker pill so the candidate sees activity without a
-// big four-digit number stealing focus.
-const formatTokenCount = (n) => {
-  const safe = Math.max(0, Number(n) || 0);
-  if (safe < 1000) return String(Math.round(safe));
-  return `${(safe / 1000).toFixed(safe < 10_000 ? 1 : 0)}k`;
-};
+const MESSAGE_BUFFER_LIMIT = 60;
 
 const formatCostUsd = (usd) => {
   const safe = Math.max(0, Number(usd) || 0);
@@ -35,18 +27,34 @@ const generateRequestId = () => {
 };
 
 const errorMessageFromException = (err) => {
-  const detail = err?.response?.data?.detail;
-  if (typeof detail === 'string' && detail.trim()) return detail;
-  if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
-    return detail.message;
+  // A stalled connection trips the per-request timeout in assessmentsClient
+  // (axios raises ECONNABORTED). Keep the candidate-facing "Claude" wording
+  // here (assessments say Claude by design) rather than the shared generic
+  // timeout line.
+  if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
+    return 'Claude took too long — try again.';
   }
-  if (typeof err?.message === 'string' && err.message.trim()) return err.message;
-  return 'Claude prompt failed.';
+  return getErrorMessage(err, "Your message didn't go through. Check your connection and try again.");
 };
 
 const MessageRow = ({ entry }) => {
-  const isUser = String(entry?.role || '').toLowerCase() === 'user';
+  const role = String(entry?.role || '').toLowerCase();
+  const isUser = role === 'user';
+  const isError = role === 'error';
   const content = String(entry?.content || '');
+
+  if (isError) {
+    return (
+      <div className="text-[0.875rem]">
+        <div className="mb-1.5 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--taali-danger)]">
+          <span>Message not sent</span>
+        </div>
+        <div className="inline-block max-w-[94%] rounded-[12px] rounded-tl-[4px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-4 py-2.5 text-left">
+          <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.55] text-[var(--taali-danger)]">{content}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`text-[0.875rem] ${isUser ? 'text-right' : ''}`}>
@@ -135,6 +143,23 @@ export const AssessmentClaudeChat = ({
   const [pending, setPending] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [pasteDetected, setPasteDetected] = useState(false);
+  // Flips true the first time the transcript overflows MESSAGE_BUFFER_LIMIT
+  // and older turns are dropped, so we can tell the candidate their earlier
+  // history was trimmed rather than silently losing it.
+  const [historyTrimmed, setHistoryTrimmed] = useState(false);
+
+  // Append a row and keep only the last MESSAGE_BUFFER_LIMIT turns. Flags
+  // historyTrimmed whenever the append actually drops an older message.
+  const appendMessage = useCallback((row) => {
+    setMessages((prev) => {
+      const next = [...prev, row];
+      if (next.length > MESSAGE_BUFFER_LIMIT) {
+        setHistoryTrimmed(true);
+        return next.slice(-MESSAGE_BUFFER_LIMIT);
+      }
+      return next;
+    });
+  }, []);
 
   const lastPromptAtRef = useRef(null);
 
@@ -205,18 +230,18 @@ export const AssessmentClaudeChat = ({
       request_id: generateRequestId(),
     };
 
+    // Remember the paste signal for this send so a failure can restore the
+    // exact same anti-cheat context when the candidate retries.
+    const pasteDetectedForSend = pasteDetected;
     setInputValue('');
     setPasteDetected(false);
     setPending(true);
-    setMessages((prev) => {
-      const next = [...prev, { role: 'user', content: message }];
-      return next.slice(-MESSAGE_BUFFER_LIMIT);
-    });
+    appendMessage({ role: 'user', content: message });
 
     try {
       const res = await assessments.claudeChat(assessmentId, requestPayload, token);
       const payload = res?.data || {};
-      const reply = String(payload.content || '').trim() || 'No response from Claude.';
+      const reply = String(payload.content || '').trim() || 'No response — try asking again.';
 
       if (payload.claude_budget && typeof payload.claude_budget === 'object') {
         try {
@@ -226,20 +251,21 @@ export const AssessmentClaudeChat = ({
         }
       }
 
-      setMessages((prev) => {
-        const next = [...prev, { role: 'assistant', content: reply }];
-        return next.slice(-MESSAGE_BUFFER_LIMIT);
-      });
+      appendMessage({ role: 'assistant', content: reply });
     } catch (err) {
       const errorText = errorMessageFromException(err);
-      setMessages((prev) => {
-        const next = [...prev, { role: 'assistant', content: `[Error] ${errorText}` }];
-        return next.slice(-MESSAGE_BUFFER_LIMIT);
-      });
+      appendMessage({ role: 'error', content: errorText });
+      // Restore the message into the composer so the candidate can retry
+      // without retyping. This is a programmatic set (not an onPaste), so it
+      // does NOT retrip paste detection — we re-apply the original paste flag
+      // explicitly so the retry carries the same signal.
+      setInputValue((current) => (current.trim() ? current : message));
+      setPasteDetected(pasteDetectedForSend);
     } finally {
       setPending(false);
     }
   }, [
+    appendMessage,
     assessmentId,
     codeContext,
     disabled,
@@ -254,8 +280,8 @@ export const AssessmentClaudeChat = ({
 
 
   const placeholder = useMemo(() => {
-    if (locked) return 'Read-only demo — the transcript above is a real candidate session. Book a demo to drive Claude yourself.';
-    if (isBudgetExhausted) return 'Claude budget exhausted for this assessment.';
+    if (locked) return 'Read-only demo — this transcript is from a real candidate session. Book a demo to try it live.';
+    if (isBudgetExhausted) return 'Your Claude budget for this assessment is used up.';
     if (disabled) return 'Claude is unavailable right now.';
     return 'Ask Claude to inspect the repo, explain a failure, or suggest a patch path…';
   }, [disabled, isBudgetExhausted, locked]);
@@ -274,17 +300,17 @@ export const AssessmentClaudeChat = ({
       className="flex h-full min-h-0 flex-col rounded-[var(--radius-lg)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)]"
       data-testid="assessment-claude-chat"
     >
-      {/* Token tracker. Always visible so the candidate has a persistent
-          read on accumulating spend; pulses briefly after each Claude
-          response so they SEE the system ticking. Data comes from the
-          same claude_budget snapshot the workspace top-bar uses. */}
+      {/* Activity tracker. Always visible so the candidate has a persistent
+          read on accumulating spend; pulses briefly after each response so
+          they SEE the system ticking. Data comes from the same claude_budget
+          snapshot the workspace top-bar uses. */}
       <div
         className={`flex items-center justify-between gap-3 border-b border-[var(--taali-runtime-border)] px-5 py-2.5 font-mono text-[0.6875rem] transition-colors duration-700 ${
           trackerHighlight
             ? 'bg-[var(--purple-soft)] text-[var(--purple)]'
             : 'text-[var(--mute)]'
         }`}
-        data-testid="assessment-claude-chat-token-tracker"
+        data-testid="assessment-claude-chat-activity-tracker"
       >
         <div className="flex items-center gap-2">
           <Activity size={12} className={trackerHighlight ? 'animate-pulse' : ''} />
@@ -293,11 +319,7 @@ export const AssessmentClaudeChat = ({
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span data-testid="token-tracker-tokens">
-            {formatTokenCount(tokensUsed)} tokens
-          </span>
-          <span aria-hidden="true">·</span>
-          <span data-testid="token-tracker-usd">
+          <span data-testid="activity-tracker-usd">
             {formatCostUsd(usedUsd)}
           </span>
         </div>
@@ -309,6 +331,15 @@ export const AssessmentClaudeChat = ({
         data-testid="assessment-claude-chat-messages"
       >
         <div className="space-y-3">
+          {historyTrimmed ? (
+            <div
+              className="text-center font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]"
+              data-testid="assessment-claude-chat-history-trimmed"
+            >
+              Older messages are hidden
+            </div>
+          ) : null}
+
           {messages.length === 0 && !pending ? (
             <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
               <div className="mb-2 flex items-center gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--purple)]">
@@ -339,13 +370,6 @@ export const AssessmentClaudeChat = ({
                     className="tabular-nums"
                   >
                     {elapsedSec}s
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span
-                    data-testid="assessment-claude-chat-pending-tokens"
-                    className="tabular-nums"
-                  >
-                    {formatTokenCount(tokensUsed)} tokens
                   </span>
                 </div>
               </div>

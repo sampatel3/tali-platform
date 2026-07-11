@@ -22,6 +22,31 @@ import {
 
 const ASSESSMENT_THEME_STORAGE_KEY = 'taali_assessment_theme';
 
+// Default orientation path shown when a task ships no two_stage config —
+// a visible way through the first minutes (where most drop-off happens).
+// Purely presentational: the stepper never locks the workspace.
+const DEFAULT_ORIENTATION_STAGES = {
+  parts: [
+    {
+      title: 'Get oriented',
+      minutes: 5,
+      blurb:
+        "Skim the brief, then ask Claude to run the tests to see where things stand — it already has the repo open and knows the task.",
+    },
+    {
+      title: 'Decide & direct',
+      blurb:
+        'Own the key decisions Claude raises, then direct it to build to your calls. You are scored on how you steer, not on typing the code yourself.',
+    },
+    {
+      title: 'Verify & submit',
+      blurb:
+        'Re-run the tests, check the result matches your decisions, then submit. Verifying before you call it done is part of the score.',
+    },
+  ],
+  note: 'This path is guidance, not a lock — work however suits you.',
+};
+
 const readAssessmentLightModePreference = () => {
   if (typeof window === 'undefined') return true;
   try {
@@ -175,6 +200,13 @@ export default function AssessmentPage({
   const [executing, setExecuting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [submitted, setSubmitted] = useState(false);
+  // The submit request is in flight. We keep the candidate in the workspace
+  // (NOT on the submitted screen) until the API resolves 2xx, so a failure
+  // never flashes the "Task submitted" screen and then silently reverts.
+  const [submitting, setSubmitting] = useState(false);
+  // Prominent submit-failure surface rendered near the submit action (a
+  // failed submit must be impossible to miss — the output dock is closed).
+  const [submitError, setSubmitError] = useState(null);
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [showTabWarning, setShowTabWarning] = useState(false);
@@ -189,6 +221,12 @@ export default function AssessmentPage({
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const [editorContent, setEditorContent] = useState("");
   const [savingRepoFile, setSavingRepoFile] = useState(false);
+  // Honest unsaved-changes signal. There is NO autosave — only manual
+  // Save/Run and a one-shot pre-timeout snapshot — so we track whether the
+  // open editor buffer has edits that haven't been synced to the workspace
+  // yet, and surface it so "Save again to be safe" copy stays truthful.
+  const [hasUnsavedEdits, setHasUnsavedEdits] = useState(false);
+  const [lastSavedAtIso, setLastSavedAtIso] = useState(null);
   const [creatingRepoFile, setCreatingRepoFile] = useState(false);
   const [newRepoFilePath, setNewRepoFilePath] = useState('');
   const [demoRunCount, setDemoRunCount] = useState(0);
@@ -231,6 +269,8 @@ export default function AssessmentPage({
 
   useEffect(() => {
     setSubmitted(false);
+    setSubmitting(false);
+    setSubmitError(null);
     setDemoRunCount(0);
     setDemoSaveCount(0);
     setOutputPanelOpen(false);
@@ -247,6 +287,8 @@ export default function AssessmentPage({
     setEditorContent('');
     setCollapsedRepoDirs({});
     setSavingRepoFile(false);
+    setHasUnsavedEdits(false);
+    setLastSavedAtIso(null);
     setCreatingRepoFile(false);
     setNewRepoFilePath('');
 
@@ -302,8 +344,8 @@ export default function AssessmentPage({
         setIsTimerPaused(Boolean(normalized.is_timer_paused));
         setPauseReason(normalized.pause_reason || null);
         setClaudeBudget(normalized.claude_budget || null);
-      } catch (err) {
-        setOutput(`Error starting assessment: ${err.message}`);
+      } catch {
+        setOutput("Couldn't load the assessment. Refresh the page to try again.");
       } finally {
         setLoading(false);
       }
@@ -486,6 +528,24 @@ export default function AssessmentPage({
     contextWindowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
+  // First-minutes engagement beacons — fire-and-forget, deduped locally and
+  // once-per-type server-side; never sent from the demo/deck walkthrough.
+  const runtimeEventSentRef = useRef({});
+  const sendRuntimeEvent = useCallback(
+    (eventType) => {
+      const id = assessment?.id ?? assessmentId;
+      if (demoMode || !id || !assessmentTokenForApi) return;
+      if (runtimeEventSentRef.current[eventType]) return;
+      runtimeEventSentRef.current[eventType] = true;
+      assessments.runtimeEvent(id, eventType, assessmentTokenForApi).catch(() => {});
+    },
+    [assessment?.id, assessmentId, assessmentTokenForApi, demoMode],
+  );
+
+  useEffect(() => {
+    if (!loading && assessment) sendRuntimeEvent('runtime_loaded');
+  }, [loading, assessment, sendRuntimeEvent]);
+
   const toggleRepoDir = useCallback((dir) => {
     if (!dir) return;
     setCollapsedRepoDirs((prev) => ({
@@ -509,13 +569,18 @@ export default function AssessmentPage({
       setSelectedRepoFile(normalizedPath || null);
       setEditorContent(nextContent);
       codeRef.current = nextContent;
+      // The freshly-opened buffer matches what's in the workspace snapshot,
+      // so it starts clean; edits below will re-flag it.
+      setHasUnsavedEdits(false);
+      sendRuntimeEvent('file_opened');
     },
-    [selectedRepoPath, editorContent, repoFilesState],
+    [selectedRepoPath, editorContent, repoFilesState, sendRuntimeEvent],
   );
 
   const handleEditorChange = useCallback((value) => {
     setEditorContent(value ?? "");
     codeRef.current = value ?? "";
+    setHasUnsavedEdits(true);
   }, []);
 
   const buildRepoSnapshot = useCallback(
@@ -536,12 +601,14 @@ export default function AssessmentPage({
     const normalizedPath = normalizeRepoPathInput(requestedPath);
     if (!normalizedPath) {
       setOutput('Enter a valid relative file path like src/new_file.py.');
+      setOutputPanelOpen(true);
       return;
     }
 
     const nextRepoFiles = buildRepoSnapshot(editorContent);
     if (nextRepoFiles.some((fileEntry) => fileEntry.path === normalizedPath)) {
       setOutput(`File already exists: ${normalizedPath}`);
+      setOutputPanelOpen(true);
       return;
     }
 
@@ -567,7 +634,8 @@ export default function AssessmentPage({
   const handleExecute = useCallback(
     async (code) => {
       if (isTimerPaused) {
-        setOutput("Assessment is paused. Retry Claude to resume execution.");
+        setOutput("Assessment is paused and your timer is stopped. Running code will be available again when the session resumes.");
+        setOutputPanelOpen(true);
         return;
       }
       setOutputPanelOpen(true);
@@ -603,7 +671,8 @@ export default function AssessmentPage({
           setPauseMessage(detail.message || "Assessment is paused.");
         }
         setOutput(
-          `Execution error: ${detail?.message || detail || err.message}`,
+          detail?.message
+            || (typeof detail === 'string' ? detail : 'Something went wrong running your code. Try again — your latest saved work is kept.'),
         );
       } finally {
         setExecuting(false);
@@ -612,12 +681,18 @@ export default function AssessmentPage({
     [assessment, assessmentId, assessmentTokenForApi, isTimerPaused, demoMode, demoProfile?.output, buildRepoSnapshot, selectedRepoPath],
   );
 
+  const markSaved = useCallback(() => {
+    setHasUnsavedEdits(false);
+    setLastSavedAtIso(new Date().toISOString());
+  }, []);
+
   const syncSelectedRepoFileToWorkspace = useCallback(async (code, { announceSuccess = false } = {}) => {
     codeRef.current = code;
     const repoSnapshot = buildRepoSnapshot(code);
     setRepoFilesState(repoSnapshot);
 
     if (!selectedRepoPath) {
+      markSaved();
       if (announceSuccess) {
         setOutput("Code saved.");
       }
@@ -626,6 +701,7 @@ export default function AssessmentPage({
 
     const id = assessment?.id || assessmentId;
     if (!id || !assessmentTokenForApi) {
+      markSaved();
       if (announceSuccess) {
         setOutput(`Saved ${selectedRepoPath} locally.`);
       }
@@ -642,21 +718,26 @@ export default function AssessmentPage({
         },
         assessmentTokenForApi,
       );
+      markSaved();
       if (announceSuccess) {
         setOutput(`Saved ${selectedRepoPath} to the live workspace.`);
       }
       return { success: true, repoSnapshot };
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      const errorMessage = `Save error: ${detail?.message || detail || err.message}`;
+      const errorMessage = detail?.message
+        || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
       if (announceSuccess) {
+        // A failed save must be visible — open the dock so the error isn't
+        // buried in a closed panel.
         setOutput(errorMessage);
+        setOutputPanelOpen(true);
       }
       return { success: false, repoSnapshot, errorMessage };
     } finally {
       setSavingRepoFile(false);
     }
-  }, [buildRepoSnapshot, selectedRepoPath, assessment, assessmentId, assessmentTokenForApi]);
+  }, [buildRepoSnapshot, selectedRepoPath, assessment, assessmentId, assessmentTokenForApi, markSaved]);
 
   // Sync the entire in-browser repo snapshot (every modified file) to the
   // sandbox. Used by the pre-timeout snapshot push so the captured git diff
@@ -681,7 +762,8 @@ export default function AssessmentPage({
       return { success: true, repoSnapshot };
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      const errorMessage = `Save error: ${detail?.message || detail || err.message}`;
+      const errorMessage = detail?.message
+        || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
       return { success: false, repoSnapshot, errorMessage };
     } finally {
       setSavingRepoFile(false);
@@ -697,7 +779,7 @@ export default function AssessmentPage({
 
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
-      if (submitted) return;
+      if (submitted || submitting) return;
       // The demo / showcase preview is read-only — a viewer (or the pitch
       // deck) must never be able to submit the walkthrough assessment, which
       // would flip the surface to the "Task submitted" screen. This covers the
@@ -705,7 +787,7 @@ export default function AssessmentPage({
       // route through handleSubmit.
       if (demoMode) return;
       if (isTimerPaused) {
-        setOutput("Assessment is paused. Retry Claude before submitting.");
+        setSubmitError("Assessment is paused and your timer is stopped. You can submit once the session resumes.");
         return;
       }
 
@@ -714,19 +796,19 @@ export default function AssessmentPage({
         return;
       }
 
+      // Enter the in-flight state — the candidate STAYS in the workspace
+      // (we do NOT flip to the submitted screen yet). Only a 2xx response
+      // flips submitted=true below, so a failed submit never flashes the
+      // "Task submitted" screen and then silently reverts.
       setSubmitConfirmOpen(false);
-      setSubmitted(true);
-      setSubmittedAtIso(new Date().toISOString());
+      setSubmitError(null);
+      setSubmitting(true);
       clearInterval(timerRef.current);
 
       try {
         const id = assessment?.id || assessmentId;
         const repoSnapshot = buildRepoSnapshot(codeRef.current);
         setRepoFilesState(repoSnapshot);
-        if (demoMode) {
-          setOutput("Task submitted successfully. You may close this tab.");
-          return;
-        }
         await assessments.submit(
           id,
           {
@@ -739,9 +821,9 @@ export default function AssessmentPage({
             tab_switch_count: proctoringEnabled ? tabSwitchCount : 0,
           },
         );
-        setOutput(
-          "Assessment submitted successfully! You may close this window.",
-        );
+        // Success — now (and only now) flip to the submitted screen.
+        setSubmittedAtIso(new Date().toISOString());
+        setSubmitted(true);
       } catch (err) {
         const detail = err.response?.data?.detail;
         if (detail?.code === "ASSESSMENT_PAUSED") {
@@ -749,9 +831,15 @@ export default function AssessmentPage({
           setPauseReason(detail.pause_reason || "claude_outage");
           setPauseMessage(detail.message || "Assessment is paused.");
         }
-        setOutput(`Submit error: ${detail?.message || detail || err.message}`);
-        setSubmitted(false);
-        setSubmittedAtIso(null);
+        // Keep the candidate in the workspace and show the failure in the
+        // prominent submit-error banner (near the submit action), not the
+        // closed output dock.
+        setSubmitError(
+          detail?.message
+            || (typeof detail === 'string' ? detail : "Couldn't submit. Check your connection and try again — your latest saved work is kept."),
+        );
+      } finally {
+        setSubmitting(false);
       }
     },
     [
@@ -759,6 +847,7 @@ export default function AssessmentPage({
       assessmentId,
       assessmentTokenForApi,
       submitted,
+      submitting,
       tabSwitchCount,
       isTimerPaused,
       demoMode,
@@ -796,15 +885,28 @@ export default function AssessmentPage({
   const isTimeLow = timeLeft > 0 && timeLeft < 300; // under 5 minutes
   const timeUrgencyLevel = remainingRatio <= 0.1 ? 'danger' : (remainingRatio <= 0.2 ? 'warning' : 'normal');
   const isClaudeBudgetExhausted = Boolean(claudeBudget?.enabled && claudeBudget?.is_exhausted);
+  // Honest save state — there is NO autosave, so surface either the unsaved
+  // signal, the last manual-save time, or a neutral "not saved yet" line.
+  const saveStateLabel = useMemo(() => {
+    if (hasUnsavedEdits) return 'Unsaved changes';
+    if (lastSavedAtIso) {
+      const savedDate = new Date(lastSavedAtIso);
+      const hhmm = Number.isNaN(savedDate.getTime())
+        ? null
+        : savedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return hhmm ? `Saved · ${hhmm}` : 'Saved';
+    }
+    return 'Not saved yet';
+  }, [hasUnsavedEdits, lastSavedAtIso]);
   const privacyFlags = useMemo(() => {
-    const flags = ['Autosave active'];
+    const flags = [];
     flags.push(proctoringEnabled ? 'Activity signals enabled' : 'Session transcript only');
     if (isTimerPaused) {
       flags.push('Session paused');
     } else if (isClaudeBudgetExhausted) {
-      flags.push('Claude credit exhausted');
+      flags.push('Claude budget used up');
     } else {
-      flags.push('Claude credit OK');
+      flags.push('Claude budget OK');
     }
     return flags;
   }, [isClaudeBudgetExhausted, isTimerPaused, proctoringEnabled]);
@@ -853,12 +955,12 @@ export default function AssessmentPage({
         onOpenGuide={handleOpenGuide}
         reportIssueHref={reportIssueHref}
         onSubmit={() => handleSubmit(false)}
-        submitDisabled={demoMode}
+        submitDisabled={demoMode || submitting}
       />
 
       <div className="flex-1 overflow-y-auto">
         <div className={`${demoMode ? 'w-full' : 'mx-auto max-w-[90rem]'} px-4 py-4 lg:px-8 lg:py-5`}>
-          <AssessmentStagePanel twoStage={assessment?.task?.two_stage} />
+          <AssessmentStagePanel twoStage={assessment?.task?.two_stage || DEFAULT_ORIENTATION_STAGES} />
           <AssessmentContextWindow
             ref={contextWindowRef}
             taskName={assessment?.task_name || 'Assessment brief'}
@@ -917,6 +1019,40 @@ export default function AssessmentPage({
             chatLocked={demoMode}
           />
 
+          {submitError ? (
+            <div
+              className="mt-4 flex flex-col gap-3 rounded-[var(--radius-lg)] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-5 py-4 shadow-[var(--shadow-sm)] md:flex-row md:items-center md:justify-between lg:px-6"
+              role="alert"
+              data-testid="assessment-submit-error"
+            >
+              <div className="min-w-0">
+                <div className="font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--taali-danger)]">
+                  Submit didn&rsquo;t go through
+                </div>
+                <p className="mt-1 text-[0.8125rem] leading-5 text-[var(--taali-danger)]">
+                  {submitError}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSubmit(true)}
+                  disabled={isTimerPaused || submitting}
+                  className="rounded-full bg-[var(--purple)] px-4 py-2 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+                >
+                  {submitting ? 'Submitting...' : 'Retry submit'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubmitError(null)}
+                  className="rounded-full border border-[var(--taali-danger-border)] bg-[var(--bg-2)] px-4 py-2 text-[0.75rem] font-medium text-[var(--taali-danger)] transition-colors hover:border-[var(--taali-danger)]"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <section className="mt-4 grid gap-4 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-5 py-5 shadow-[var(--shadow-sm)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:px-6">
             <div className="flex flex-wrap items-center gap-4">
               <span className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-[var(--mute)]">Progress</span>
@@ -945,10 +1081,10 @@ export default function AssessmentPage({
               <button
                 type="button"
                 onClick={() => handleSubmit(false)}
-                disabled={isTimerPaused}
+                disabled={isTimerPaused || submitting}
                 className="rounded-full bg-[var(--purple)] px-4 py-2 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
               >
-                Submit
+                {submitting ? 'Submitting...' : 'Submit'}
               </button>
             </div>
           </section>
@@ -958,6 +1094,15 @@ export default function AssessmentPage({
               We record your editor and Claude chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
             </div>
             <div className="flex flex-wrap items-center gap-4">
+              {/* Honest save state — amber dot while there are unsaved edits,
+                  green once the open file is synced. There is no autosave, so
+                  this is the candidate's cue to Save before finalizing. */}
+              <span className="inline-flex items-center gap-2 font-mono" data-testid="assessment-save-state">
+                <span
+                  className={`h-[0.375rem] w-[0.375rem] rounded-full ${hasUnsavedEdits ? 'bg-[var(--amber)]' : 'bg-[var(--green)]'}`}
+                />
+                {saveStateLabel}
+              </span>
               {privacyFlags.map((flag) => (
                 <span key={flag} className="inline-flex items-center gap-2 font-mono">
                   <span className="h-[0.375rem] w-[0.375rem] rounded-full bg-[var(--green)]" />

@@ -95,7 +95,8 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
       } catch (err) {
         if (!cancelled) {
           setPreviewData(null);
-          setPreviewError(err?.response?.data?.detail || 'Task preview is not available yet.');
+          const detail = err?.response?.data?.detail;
+          setPreviewError(typeof detail === 'string' && detail.trim() ? detail : 'Task preview is not available yet.');
         }
       } finally {
         if (!cancelled) setPreviewLoading(false);
@@ -154,7 +155,8 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
       onStarted?.(payload);
       onNavigate?.('assessment');
     } catch (err) {
-      setStartError(err?.response?.data?.detail || 'Failed to start assessment.');
+      const detail = err?.response?.data?.detail;
+      setStartError(typeof detail === 'string' && detail.trim() ? detail : 'Failed to start assessment.');
     } finally {
       setLoadingStart(false);
     }
@@ -205,7 +207,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                   the column (Sam, 2026-06-02). */}
               <h1 className="mt-4 font-[var(--font-display)] text-[clamp(2.25rem,4vw,3.25rem)] font-semibold leading-[0.98] tracking-[-0.04em]">
                 {candidateName ? (
-                  <>Hi {getFirstName(candidateName)} - ready to show your <em>work</em>?</>
+                  <>Hi {getFirstName(candidateName)} — ready to show your <em>work</em>?</>
                 ) : (
                   <>Ready to show your <em>work</em>?</>
                 )}
@@ -225,7 +227,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                   'A real prompt, not a riddle.',
                   'Work the way you normally do with Claude and the live repo.',
                   'You are scored on how you steer and the design decisions you make — not on whether you reach working code. The agent can write code; the judgment is yours to show.',
-                  'The session transcript is reviewed - not your screen, mic, or camera.',
+                  'The session transcript is reviewed — not your screen, mic, or camera.',
                 ].map((item) => (
                   <div key={item} className="flex items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3">
                     <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
@@ -269,7 +271,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
             <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] p-6 text-[var(--bg)] shadow-[var(--shadow-lg)]">
               <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-2)]">What to expect</div>
               <h2 className="mt-4 font-[var(--font-display)] text-[1.875rem] font-semibold leading-[1] tracking-[-0.03em]">
-                Repo, editor, and Claude - all in one workspace.
+                Repo, editor, and Claude — all in one workspace.
               </h2>
               <p className="mt-4 text-[0.875rem] leading-7 text-white/72">
                 We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.

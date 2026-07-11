@@ -261,6 +261,26 @@ def _shown_text_len(operands: Any) -> int:
     return total
 
 
+def scan_pdf_document_hygiene(content: bytes, extension: str) -> dict[str, Any] | None:
+    """Combine the PDF-bytes hygiene scans (metadata keyword-stuffing +
+    invisible-render-mode text) into one persistable dict for the report's
+    ``integrity_signals.document_hygiene.pdf`` block.
+
+    Guards non-PDF (returns ``None`` for docx/txt/anything else — those carry no
+    PDF metadata or content stream). Fail-open + flag-only: each sub-scan already
+    returns ``{"checked": False}`` on a parse error, and NOTHING here changes a
+    score. ``triggered`` is True when either sub-scan fired.
+    """
+    if (extension or "").lower().lstrip(".") != "pdf" or not content:
+        return None
+    metadata = scan_pdf_metadata(content)
+    render = scan_pdf_render_state(content)
+    triggered = bool(
+        metadata.get("metadata_keyword_stuffing") or render.get("triggered")
+    )
+    return {"triggered": triggered, "metadata": metadata, "render": render}
+
+
 def scan_pdf_render_state(pdf_bytes: bytes, *, max_pages: int = 10) -> dict[str, Any]:
     """Flag text drawn under an invisible text-render mode (Tr 3/7). Returns
     ``{checked, triggered, invisible_render_chars}``; ``{"checked": False}`` when
@@ -294,3 +314,30 @@ def scan_pdf_render_state(pdf_bytes: bytes, *, max_pages: int = 10) -> dict[str,
         }
     except Exception:  # pragma: no cover — never fail ingest on a hygiene scan
         return {"checked": False}
+
+
+# ── Ingest-time PDF-hygiene stash (flag-only, survives to score time) ───────
+# The PDF *bytes* are only in hand at ingest (upload / Workable CV fetch), long
+# before scoring runs. The report reads ``cv_match_details.integrity_signals``,
+# which is (re)built wholesale on every score — so an ingest-time write there
+# would be clobbered. We stash the scan under a reserved top-level key on the
+# (usually still-null) ``cv_match_details`` at ingest, and the score-time
+# integrity merge promotes it into ``integrity_signals.document_hygiene.pdf``.
+# Flag-only end to end: nothing here touches a score.
+PENDING_PDF_HYGIENE_KEY = "pending_document_hygiene_pdf"
+
+
+def stash_pdf_hygiene_on_application(app: Any, content: bytes, extension: str) -> None:
+    """Best-effort: scan the uploaded PDF bytes and stash the result on ``app``
+    for the score-time integrity merge to promote. No-op for non-PDF / on any
+    failure — must never break ingest."""
+    try:
+        scan = scan_pdf_document_hygiene(content, extension)
+        if scan is None:
+            return
+        details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
+        details = dict(details)
+        details[PENDING_PDF_HYGIENE_KEY] = scan
+        app.cv_match_details = details
+    except Exception:  # pragma: no cover — never fail ingest on a hygiene scan
+        pass

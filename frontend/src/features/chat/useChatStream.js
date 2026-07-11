@@ -45,10 +45,18 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
     setError(null);
   }, []);
 
+  // Clears just the error banner without touching the message log — used
+  // when switching to a different conversation (so conv A's error frame
+  // doesn't render over conv B) or when the user hits "Try again".
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
   // Replaces the message log with rows hydrated from the persistence
   // API. We intentionally do NOT clear the ``error`` state here — that
   // would race with an in-flight stream's error frame (caller is
-  // responsible for resetting it via ``reset()`` when starting fresh).
+  // responsible for resetting it via ``reset()`` / ``clearError()`` when
+  // switching conversations).
   const setHistory = useCallback((history) => {
     setMessages(history);
   }, []);
@@ -282,7 +290,7 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
     [],
   );
 
-  return { messages, isStreaming, error, send, stop, reset, setHistory };
+  return { messages, isStreaming, error, send, stop, reset, clearError, setHistory };
 };
 
 export default useChatStream;

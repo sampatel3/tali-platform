@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bell,
   Briefcase,
   CheckSquare,
   ChevronDown,
@@ -80,10 +79,21 @@ const useHomePendingCount = (isAuthenticated) => {
       }
     };
     void tick();
-    const id = window.setInterval(tick, 30_000);
+    // Skip the poll while the tab is hidden so background tabs don't hit the
+    // us-east4 API every 30s; refetch once on becoming visible again (mirrors
+    // AgentBar's document.hidden guard).
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void tick();
+    }, 30_000);
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) void tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [isAuthenticated]);
   return count;
@@ -261,13 +271,16 @@ export const Shell = ({ currentPage, onNavigate }) => {
   const homePending = useHomePendingCount(Boolean(user));
   const navLocked = isPreviewNavSurface();
 
-  // Map legacy page identifiers onto canonical tabs.
-  // 'reporting' / 'analytics' fold into 'home' (the Hub) — keep the icon
-  // highlighted while users on those legacy paths still hit the redirect.
-  const resolvedPage = (currentPage === 'assessments')
-    ? 'candidates'
-    : (currentPage === 'reporting' || currentPage === 'analytics')
-      ? 'home'
+  // Map non-tab page identifiers onto the canonical nav tab that owns them.
+  //   - 'analytics' IS a real tab now — keep it (do NOT fold into Home).
+  //   - legacy 'reporting' → the Analytics tab (its route redirects there).
+  //   - candidate detail, assessments inbox, and requisitions all live under
+  //     the Jobs tab, so highlight Jobs on those surfaces.
+  const JOBS_TAB_PAGES = new Set(['assessments', 'candidates', 'requisitions']);
+  const resolvedPage = JOBS_TAB_PAGES.has(currentPage)
+    ? 'jobs'
+    : currentPage === 'reporting'
+      ? 'analytics'
       : currentPage;
   const handleLogout = () => {
     setMenuOpen(false);
@@ -298,7 +311,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
       title={navLocked ? 'Preview — navigation disabled' : undefined}
     >
       <PageLink
-        page="jobs"
+        page="home"
         className="mc-nav-logo"
         aria-label="Taali home"
       >
@@ -354,10 +367,6 @@ export const Shell = ({ currentPage, onNavigate }) => {
           </PageLink>
         ) : null}
         <GlobalSearch onNavigate={onNavigate} />
-        <button type="button" className="mc-icon-btn" aria-label="Notifications">
-          <Bell size={15} strokeWidth={1.7} />
-          <span className="mc-dot" aria-hidden="true" />
-        </button>
         <div className="mc-nav-avatar-wrap">
           <button
             type="button"

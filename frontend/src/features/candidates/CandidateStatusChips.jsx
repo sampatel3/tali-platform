@@ -22,7 +22,9 @@ export function PreScreenChip({ recommendation, runAt = null, compact = false })
     label = compact ? 'Review' : 'Manual review';
   } else if (r.startsWith('below')) {
     cls = 'ps-chip ps-chip--rejected';
-    label = compact ? 'Rejected' : 'Below threshold';
+    // One honest label in both compact and expanded forms — "Rejected" vs
+    // "Below threshold" read as two different outcomes for the same state.
+    label = compact ? "Didn't pass" : "Didn't pass pre-screen";
   }
   const title = runAt ? `Pre-screen run: ${new Date(runAt).toLocaleString()}` : 'No pre-screen yet';
   return <span className={cls} title={title}>{label}</span>;

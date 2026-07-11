@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   CreditCard,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -8,6 +9,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import {
   Button,
@@ -23,6 +25,7 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import BackgroundJobsPanel from './BackgroundJobsPanel';
 import { BullhornConnection } from '../integrations/BullhornConnection';
+import MembersSection from './MembersSection';
 import UsagePanel from './UsagePanel';
 import ApiKeysPanel from './ApiKeysPanel';
 import { ClientsManager } from '../clients/ClientsManager';
@@ -124,7 +127,7 @@ const normalizeWorkableError = (input) => {
     return 'Workable integration is not available on your current plan. Contact support to upgrade.';
   }
   if (lower.includes('oauth failed')) {
-    return 'Workable OAuth failed. Verify callback URL and scopes in your Workable app, then try again.';
+    return 'We couldn\'t connect to Workable. Try again, or contact support if it keeps failing.';
   }
   return raw || 'Workable connection failed.';
 };
@@ -157,21 +160,6 @@ const workableStageLabel = (stage) => (
   || stage?.id
   || ''
 );
-
-const getErrorMessage = (error, fallback) => (
-  error?.response?.data?.detail
-  || error?.message
-  || fallback
-);
-
-const initialsFor = (value) => {
-  const letters = String(value || '')
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part[0])
-    .join('');
-  return (letters.slice(0, 2) || 'U').toUpperCase();
-};
 
 const canonicalSection = (raw) => SECTION_ALIASES[String(raw || '').trim().toLowerCase()] || 'org';
 
@@ -349,6 +337,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const initialSection = initialHashSection || canonicalSection(pathSegment);
 
   const [activeSection, setActiveSection] = useState(initialSection);
+  // Sections mount lazily on first visit and then stay mounted (kept behind
+  // ``hidden`` so their state survives tab switches). This stops every fetch-
+  // heavy panel — clients, developers, background jobs, usage — from mounting
+  // and firing its list request the moment /settings loads, and keeps
+  // BackgroundJobsPanel's 5s poll from running before its tab is opened.
+  const [visitedSections, setVisitedSections] = useState(() => new Set([initialSection]));
   const [orgData, setOrgData] = useState(null);
   const [orgLoading, setOrgLoading] = useState(true);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_SETTINGS);
@@ -366,15 +360,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   });
   const [ssoSaving, setSsoSaving] = useState(false);
   const [teamMembers, setTeamMembers] = useState([]);
-  const [inviteName, setInviteName] = useState('');
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteLoading, setInviteLoading] = useState(false);
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingCosts, setBillingCosts] = useState(null);
   const [billingCredits, setBillingCredits] = useState(null);
   const [billingBreakdown, setBillingBreakdown] = useState(null);
   const [billingEvents, setBillingEvents] = useState([]);
   const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
   const [apiSaving, setApiSaving] = useState(false);
@@ -393,8 +385,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   // by the agent before it sends new invites.
   const [spendCapForm, setSpendCapForm] = useState({ usd: '' });
   const [spendCapSaving, setSpendCapSaving] = useState(false);
-  // 2FA + audit toggle on the Security tab. Persisted alongside SSO.
-  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
   const [firefliesForm, setFirefliesForm] = useState(DEFAULT_FIRELIES_FORM);
   const [firefliesSaving, setFirefliesSaving] = useState(false);
   const [firefliesHasApiKey, setFirefliesHasApiKey] = useState(false);
@@ -444,10 +434,27 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [clearWorkableModalOpen, setClearWorkableModalOpen] = useState(false);
   const [clearWorkableLoading, setClearWorkableLoading] = useState(false);
 
+  // Escape closes the destructive-clear modal (backdrop click is handled on the
+  // element itself); ignored while the clear is in flight.
+  useEffect(() => {
+    if (!clearWorkableModalOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape' && !clearWorkableLoading) setClearWorkableModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [clearWorkableModalOpen, clearWorkableLoading]);
+
   const selectedWorkableScopes = WORKABLE_SCOPE_OPTIONS
     .filter((scope) => workableSelectedScopes[scope.id])
     .map((scope) => scope.id);
   const missingRequiredWorkableScopes = WORKABLE_REQUIRED_SCOPES.filter((scope) => !selectedWorkableScopes.includes(scope));
+  // Scopes ACTUALLY granted on the stored token (from the last OAuth). The
+  // connection status + write validation must derive from this, not the local
+  // checkbox state — ticking a box on the page doesn't re-grant the token.
+  const grantedWorkableScopes = Array.isArray(orgData?.workable_config?.granted_scopes)
+    ? orgData.workable_config.granted_scopes
+    : [];
 
   const loadOrg = useCallback(async () => {
     setOrgLoading(true);
@@ -464,6 +471,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
   const loadBilling = useCallback(async () => {
     setBillingLoading(true);
+    setBillingError(false);
     try {
       const [usageRes, costsRes, creditsRes, breakdownRes, eventsRes] = await Promise.all([
         billingApi.usage(),
@@ -478,15 +486,31 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       setBillingBreakdown(breakdownRes?.data || null);
       setBillingEvents(eventsRes?.data?.events || []);
     } catch {
-      setBillingUsage(null);
-      setBillingCosts(null);
-      setBillingCredits(null);
-      setBillingBreakdown(null);
-      setBillingEvents([]);
+      // Never render $0.00 / "No usage yet" for a failed load — that reads as a
+      // genuinely empty account on a money surface. Flag an error state instead.
+      setBillingError(true);
     } finally {
       setBillingLoading(false);
     }
   }, []);
+
+  const [portalLoading, setPortalLoading] = useState(false);
+  const handleManageInStripe = useCallback(async () => {
+    setPortalLoading(true);
+    try {
+      const res = await billingApi.portalSession(window.location.href);
+      const url = res?.data?.url;
+      if (url) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } else {
+        showToast('Couldn\'t open the Stripe billing portal. Try again in a moment.', 'error');
+      }
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Couldn\'t open the Stripe billing portal. Try again in a moment.'), 'error');
+    } finally {
+      setPortalLoading(false);
+    }
+  }, [showToast]);
 
   const loadTeam = useCallback(async () => {
     try {
@@ -715,7 +739,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setSpendCapForm({
       usd: seedCapCents != null ? String((seedCapCents / 100).toFixed(2)) : '',
     });
-    setTwoFactorRequired(Boolean(orgData.two_factor_required));
     const firefliesConfig = orgData.fireflies_config || {};
     setFirefliesForm({
       apiKey: '',
@@ -818,36 +841,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleSaveAccess = async () => {
-    setAccessSaving(true);
-    const domains = String(accessForm.allowedEmailDomains || '')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-    try {
-      const res = await orgsApi.update({
-        allowed_email_domains: domains,
-      });
-      setOrgData(res?.data || null);
-      showToast('Roles and access settings saved.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save roles and access settings.'), 'error');
-    } finally {
-      setAccessSaving(false);
-    }
-  };
-
   const handleSaveSso = async () => {
     setSsoSaving(true);
     try {
-      // The backend silently ignores keys it doesn't recognise (Pydantic
-      // strict-mode is off on OrgUpdate), so sending two_factor_required
-      // is safe even on workspaces that haven't shipped the column yet.
       const res = await orgsApi.update({
         sso_enforced: Boolean(ssoForm.ssoEnforced),
         saml_enabled: Boolean(ssoForm.samlEnabled),
         saml_metadata_url: String(ssoForm.samlMetadataUrl || '').trim() || null,
-        two_factor_required: Boolean(twoFactorRequired),
       });
       setOrgData(res?.data || null);
       showToast('Security settings saved.', 'success');
@@ -1018,26 +1018,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleInvite = async (event) => {
-    event.preventDefault();
-    if (!inviteName.trim() || !inviteEmail.trim()) return;
-    setInviteLoading(true);
-    try {
-      const res = await teamApi.invite({
-        email: inviteEmail.trim(),
-        full_name: inviteName.trim(),
-      });
-      setTeamMembers((prev) => [...prev, res?.data].filter(Boolean));
-      setInviteName('');
-      setInviteEmail('');
-      showToast('Invite sent.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to invite team member.'), 'error');
-    } finally {
-      setInviteLoading(false);
-    }
-  };
-
   const handleAddCredits = async (packId) => {
     const base = `${window.location.origin}/settings/billing`;
     setCheckoutLoading(true);
@@ -1068,6 +1048,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         'success'
       );
       setClearWorkableModalOpen(false);
+      // Refresh the tab so the connection stats / roles list don't keep showing
+      // the purged data (which contradicts the success toast).
+      await Promise.allSettled([loadOrg(), loadWorkableSyncJobs()]);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to clear Workable data.'), 'error');
     } finally {
@@ -1160,13 +1143,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const defaultSyncMode = workableForm.defaultSyncMode || 'full';
     const inviteStageName = String(workableForm.inviteStageName || '').trim();
     const autoRejectEnabled = Boolean(workableForm.autoRejectEnabled);
-    const hasWriteScope = selectedWorkableScopes.includes('w_candidates');
+    // Validate against the scopes the stored token ACTUALLY has, not a
+    // page-local checkbox — otherwise auto-reject could be enabled against a
+    // read-only token and every write would silently fail in the background.
+    const hasWriteScope = grantedWorkableScopes.includes('w_candidates');
     const workableActorMemberId = String(workableForm.workableActorMemberId || '').trim();
     const workableDisqualifyReasonId = String(workableForm.workableDisqualifyReasonId || '').trim();
     const autoRejectNoteTemplate = String(workableForm.autoRejectNoteTemplate || '').trim();
 
     if ((emailMode === 'workable_preferred_fallback_manual' || autoRejectEnabled) && !hasWriteScope) {
-      showToast('Reconnect Workable with `w_candidates` scope to enable Workable invite, reject, and reopen actions.', 'error');
+      showToast('Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, reject, and reopen actions.', 'error');
       return;
     }
     if (emailMode === 'workable_preferred_fallback_manual' && !inviteStageName) {
@@ -1270,18 +1256,39 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const selectedRoleSetForSync = useMemo(() => new Set(workableSelectedJobShortcodes), [workableSelectedJobShortcodes]);
   const workableConnected = Boolean(orgData?.workable_connected);
   const workableConfig = orgData?.workable_config || {};
-  const workableHealth = orgData?.workable_last_sync_status === 'failed'
+  const workableLastSyncStatus = String(orgData?.workable_last_sync_status || '').toLowerCase();
+  const workableHealth = workableLastSyncStatus === 'failed'
     ? 'error'
-    : orgData?.workable_last_sync_at
-      ? 'healthy'
-      : 'stale';
+    : workableLastSyncStatus === 'partial'
+      ? 'warning'
+      : orgData?.workable_last_sync_at
+        ? 'healthy'
+        : 'stale';
+  // The status label must track the dot — never say "Healthy" next to a red
+  // (failed) or amber (partial/never-synced) dot.
+  const workableHealthLabel = !workableConnected
+    ? 'Waiting for connection'
+    : workableHealth === 'error'
+      ? 'Sync failed'
+      : workableHealth === 'warning'
+        ? (workableLastSyncStatus === 'partial' ? 'Last sync partially failed' : 'Never synced')
+        : workableHealth === 'stale'
+          ? 'Never synced'
+          : 'Healthy';
   // Jobs metadata syncs every 15 min (sync_workable_jobs Beat task).
   // The legacy ``sync_interval_minutes`` config was removed by the 2026-05-20
   // sync redesign — per-candidate cadences live in the beat schedule now.
   const nextWorkablePull = orgData?.workable_last_sync_at
     ? new Date(new Date(orgData.workable_last_sync_at).getTime() + 15 * 60000)
     : null;
+  // When syncs have stalled the computed "next pull" is in the past — showing
+  // "3 hours ago" as a future schedule is misleading, so flag it as overdue.
+  const nextPullOverdue = nextWorkablePull != null && nextWorkablePull.getTime() < Date.now();
   const lastSyncSummary = orgData?.workable_last_sync_summary || {};
+  const lastSyncErrors = Array.isArray(lastSyncSummary.errors) ? lastSyncSummary.errors : [];
+  const firstSyncErrorText = lastSyncErrors.length
+    ? String(lastSyncErrors[0]?.message || lastSyncErrors[0]?.detail || lastSyncErrors[0] || '').trim()
+    : '';
   // Usage-based pricing (post 2026-04-29). Balance is in micro-credits
   // ($0.000001 per credit). Packs come pre-shaped from the backend.
   const creditsBalance = Number(billingCredits?.credits_balance ?? orgData?.credits_balance ?? 0);
@@ -1316,6 +1323,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const navigateToSection = (sectionId) => {
     const next = canonicalSection(sectionId);
     setActiveSection(next);
+    setVisitedSections((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
     if (typeof window !== 'undefined' && window.history?.replaceState) {
       const hash = next === 'org' ? '' : `#${next}`;
       // Collapse any /settings/<section> path the user landed on via a
@@ -1445,7 +1453,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Hiring departments"
                   subtitle="Whoever a requisition is for — an external client like ADCB or an internal team like Engineering. Add one, then assign it to a requisition to track its rate, margin, and open / filled jobs; filter the Jobs page by department to see each one's pipeline."
                 >
-                  <ClientsManager />
+                  {visitedSections.has('clients') ? <ClientsManager /> : null}
 
                   {/* The role template — what every new role captures + its JD.
                       Lives here with the hiring setup; links to its own editor. */}
@@ -1473,7 +1481,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Developers"
                   subtitle="API keys for the Taali public API. Keys are scoped to this workspace; the secret is shown once on creation."
                 >
-                  <ApiKeysPanel />
+                  {visitedSections.has('developers') ? <ApiKeysPanel /> : null}
                 </SectionPanel>
               </div>
 
@@ -1510,107 +1518,27 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               </div>
 
               <div ref={(node) => { sectionRefs.current.members = node; }} hidden={activeSection !== "members"}>
-                <SectionPanel
-                  id="members"
-                  title="Members"
-                  subtitle={`${teamMembers.length} ${teamMembers.length === 1 ? 'person' : 'people'} in this workspace.`}
-                >
-                  <form className="settings-invite-form" onSubmit={handleInvite}>
-                    <label className="field">
-                      <span className="k">Full name</span>
-                      <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Alex Weston" />
-                    </label>
-                    <label className="field">
-                      <span className="k">Email</span>
-                      <input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="alex@company.com" />
-                    </label>
-                    <div className="settings-member-actions">
-                      <button type="submit" className="btn btn-purple btn-sm" disabled={inviteLoading}>
-                        {inviteLoading ? 'Inviting...' : '+ Invite member'}
-                      </button>
-                    </div>
-                  </form>
-                  {/* HANDOFF settings.md — role assignment moved off the
-                      removed "Roles & access" tab onto a column on this
-                      table. We default to Owner / Admin / Recruiter /
-                      Hiring manager, with Owner/Admin able to manage
-                      others. */}
-                  {/* Preview `.member` — flat divider list: avatar · name/email ·
-                      role chip. Active roles read purple, an unverified
-                      "Invited" member greys out the avatar + chip. No per-row
-                      action button (the preview omits it). */}
-                  <div className="members">
-                    {teamMembers.map((member) => {
-                      const isSelf = member?.email === user?.email;
-                      const role = isSelf
-                        ? 'Owner'
-                        : (String(member?.role || '').trim() || (member?.is_email_verified ? 'Recruiter' : 'Invited'));
-                      const invited = role === 'Invited';
-                      return (
-                        <div key={member.id} className="mb">
-                          <div className={`av${invited ? ' inv' : ''}`}>{initialsFor(member.full_name || member.email)}</div>
-                          <div className="who">
-                            <b>{member.full_name || member.email}</b>
-                            <div>{isSelf ? 'you' : (member?.email || '—')}</div>
-                          </div>
-                          <span className={`chip${invited ? '' : ' purple'}`}>{role}</span>
-                        </div>
-                      );
-                    })}
-                    {teamMembers.length === 0 ? (
-                      <div className="settings-empty-state">
-                        No team members yet.
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {/* Access — preview shows this as its own flat divider-led
-                      section ("Access" / "Limit who can join by email
-                      domain."). The summary card stays (live-derived, useful)
-                      but the section now carries the matching heading. */}
-                  <div className="settings-subcard settings-top-gap">
-                    <div className="settings-subcard-head">
-                      <div>
-                        <h3>Access</h3>
-                        <p>Limit who can join this workspace by email domain.</p>
-                      </div>
-                    </div>
-                    <div className="row-form">
-                      <label className="field">
-                        <span className="k">Allowed email domains (comma separated)</span>
-                        <input
-                          value={accessForm.allowedEmailDomains}
-                          onChange={(event) => setAccessForm((prev) => ({ ...prev, allowedEmailDomains: event.target.value }))}
-                          placeholder="company.com, subsidiary.org"
-                        />
-                      </label>
-                      <div className="settings-summary-card">
-                        <div className="settings-summary-label">Current access model</div>
-                        <div className="settings-summary-value">{teamMembers.length || 0} members</div>
-                        <div className="settings-summary-note">
-                          {accessForm.allowedEmailDomains.trim()
-                            ? `Invites limited to ${accessForm.allowedEmailDomains}.`
-                            : 'Invites are currently open to any verified domain.'}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="settings-save-row">
-                      <div className="settings-inline-note">Team invites respect the allowed domain list immediately.</div>
-                      <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAccess} disabled={accessSaving}>
-                        {accessSaving ? 'Saving...' : 'Save access settings'}
-                      </button>
-                    </div>
-                  </div>
-                </SectionPanel>
+                <MembersSection
+                  SectionPanel={SectionPanel}
+                  teamMembers={teamMembers}
+                  setTeamMembers={setTeamMembers}
+                  showToast={showToast}
+                  userEmail={user?.email}
+                  accessForm={accessForm}
+                  setAccessForm={setAccessForm}
+                  accessSaving={accessSaving}
+                  setAccessSaving={setAccessSaving}
+                  setOrgData={setOrgData}
+                />
               </div>
 
               <div ref={(node) => { sectionRefs.current.jobs = node; }} hidden={activeSection !== "jobs"}>
                 <SectionPanel
                   id="jobs"
                   title="Background jobs"
-                  subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and graph sync. The agent fleet lives on the Analytics page."
+                  subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and talent data sync. The agent fleet lives on the Analytics page."
                 >
-                  <BackgroundJobsPanel />
+                  {visitedSections.has('jobs') ? <BackgroundJobsPanel /> : null}
                 </SectionPanel>
               </div>
 
@@ -1627,11 +1555,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <div className="meta">
                         <span>
                           <SyncPulse status={workableHealth} />
-                          <span>{workableConnected ? ' Healthy' : ' Waiting for connection'}</span>
+                          <span>{` ${workableHealthLabel}`}</span>
                         </span>
                         <span>Last sync: <b>{orgData?.workable_last_sync_at ? formatRelativeDateTime(orgData.workable_last_sync_at) : 'Never'}</b></span>
-                        <span>Token: <b>{selectedWorkableScopes.includes('w_candidates') ? 'write-back' : 'read-only'}</b></span>
-                        <span>Next pull: <b>{nextWorkablePull ? formatRelativeDateTime(nextWorkablePull.toISOString()) : 'Not scheduled'}</b></span>
+                        <span>Token: <b>{grantedWorkableScopes.includes('w_candidates') ? 'write-back' : 'read-only'}</b></span>
+                        <span>Next pull: <b>{!nextWorkablePull ? 'Not scheduled' : nextPullOverdue ? 'Overdue — check sync' : formatRelativeDateTime(nextWorkablePull.toISOString())}</b></span>
                       </div>
                     </div>
                     <div className="settings-inline-actions">
@@ -1682,10 +1610,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <div className="l">New since last sync</div>
                       </div>
                       <div className="stat">
-                        <div className="n">{Array.isArray(lastSyncSummary.errors) ? lastSyncSummary.errors.length : 0}</div>
+                        <div className="n">{lastSyncErrors.length}</div>
                         <div className="l">Errors</div>
                       </div>
                     </div>
+                    {firstSyncErrorText ? (
+                      <div className="settings-hint" style={{ color: 'var(--taali-danger)' }}>
+                        Last error: {firstSyncErrorText}
+                        {lastSyncErrors.length > 1 ? ` (+${lastSyncErrors.length - 1} more)` : ''}
+                      </div>
+                    ) : null}
                   </div>
 
                   {workableSyncInProgress ? (
@@ -1803,7 +1737,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <div className="settings-toggle-list settings-top-gap">
                     <ToggleCard
                       title="Enable Workable auto-reject"
-                      description="Workspace kill-switch for the disqualify pipeline. The per-role score cutoff and HITL toggle live on the role page."
+                      description="Turn automatic Workable rejections on or off for the whole workspace. Each role's score cutoff and its 'ask me first' setting live on the role page."
                       checked={Boolean(workableForm.autoRejectEnabled)}
                       onChange={(value) => setWorkableForm((prev) => ({ ...prev, autoRejectEnabled: value }))}
                     />
@@ -1820,19 +1754,29 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </label>
 
                   <div className="settings-scope-list settings-top-gap">
-                    {WORKABLE_SCOPE_OPTIONS.map((scope) => (
-                      <label key={scope.id} className="settings-scope-item">
-                        <input
-                          type="checkbox"
-                          checked={workableSelectedScopes[scope.id]}
-                          onChange={() => toggleWorkableScope(scope.id)}
-                        />
-                        <span>
-                          <b>{scope.label}</b>
-                          <small>{scope.description}</small>
-                        </span>
-                      </label>
-                    ))}
+                    {WORKABLE_SCOPE_OPTIONS.map((scope) => {
+                      // Read-only: reflects what the stored token was ACTUALLY
+                      // granted, not a page-local checkbox. Changing permissions
+                      // requires an OAuth reconnect (the Manage drawer), so a tick
+                      // here can't grant write access the token never had.
+                      const granted = grantedWorkableScopes.includes(scope.id);
+                      return (
+                        <div key={scope.id} className="settings-scope-item" aria-readonly="true">
+                          <SyncPulse status={granted ? 'healthy' : 'stale'} />
+                          <span>
+                            <b>{scope.label}</b>
+                            <small>{scope.description}{granted ? '' : ' — not granted'}</small>
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      className="settings-link-button"
+                      onClick={() => setWorkableDrawerOpen(true)}
+                    >
+                      Reconnect to change permissions
+                    </button>
                   </div>
 
                   <div className="settings-role-picker settings-top-gap">
@@ -1994,22 +1938,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </div>
                   </div>
 
-                  <div className="settings-subcard settings-top-gap">
-                    <div className="settings-subcard-head">
-                      <div>
-                        <h3>Two-factor authentication</h3>
-                        <p>Require recruiters to confirm a second factor on every sign-in. Bypassed for SSO logins.</p>
-                      </div>
-                    </div>
-                    <div className="settings-toggle-list">
-                      <ToggleCard
-                        title="Require 2FA for password login"
-                        description="Time-based codes via authenticator app. Backup codes available from each member's profile."
-                        checked={twoFactorRequired}
-                        onChange={(value) => setTwoFactorRequired(value)}
-                      />
-                    </div>
-                  </div>
+                  {/* The "Require 2FA" toggle was removed: it persisted an
+                      org.two_factor_required flag that nothing at login ever
+                      enforced (no TOTP enrollment/verification exists), giving a
+                      false sense of security. Honest UI beats a dead switch —
+                      re-add this only once real TOTP enforcement ships. */}
 
                   <div className="settings-subcard settings-top-gap">
                     <div className="settings-subcard-head">
@@ -2029,7 +1962,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
 
                   <div className="settings-save-row">
-                    <div className="settings-inline-note">SAML metadata is required when SAML is enabled. 2FA is workspace-wide.</div>
+                    <div className="settings-inline-note">SAML metadata is required when SAML is enabled.</div>
                     <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveSso} disabled={ssoSaving}>
                       {ssoSaving ? 'Saving...' : 'Save security settings'}
                     </button>
@@ -2183,6 +2116,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <Spinner size={18} />
                       Loading billing...
                     </div>
+                  ) : billingError ? (
+                    <div className="settings-banner warning">
+                      <div className="settings-banner-icon"><AlertTriangle size={16} /></div>
+                      <div>
+                        <div className="settings-banner-title">Couldn&apos;t load billing</div>
+                        <div className="settings-banner-copy">
+                          This is usually a temporary connection issue — your balance and history are safe.
+                        </div>
+                        <button type="button" className="btn btn-outline btn-sm settings-top-gap" onClick={() => void loadBilling()}>
+                          Retry
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <>
                       {/* HANDOFF settings.md — Plan is hardcoded
@@ -2213,17 +2159,22 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <div className="settings-billing-card">
                           <div className="settings-summary-label">Card on file</div>
                           <div className="settings-summary-value">
-                            {orgData?.stripe_customer_id ? 'Stripe customer' : 'No card yet'}
+                            {orgData?.has_billing_account ? 'Connected' : 'No card yet'}
                           </div>
                           <div className="settings-summary-note">
-                            <a
-                              href="https://billing.stripe.com/p/login"
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              style={{ color: 'var(--purple)' }}
-                            >
-                              Manage in Stripe →
-                            </a>
+                            {orgData?.has_billing_account ? (
+                              <button
+                                type="button"
+                                className="settings-link-button"
+                                onClick={handleManageInStripe}
+                                disabled={portalLoading}
+                                style={{ color: 'var(--purple)' }}
+                              >
+                                {portalLoading ? 'Opening…' : 'Manage in Stripe →'}
+                              </button>
+                            ) : (
+                              <span>Add credits to set up a card and billing.</span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -2288,7 +2239,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
                       <div className="settings-usage-table">
                         <div className="settings-usage-head">
-                          <h3>Recent invoices</h3>
+                          <h3>Recent usage charges</h3>
                         </div>
                         <table>
                           <thead>
@@ -2327,9 +2278,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="usage"
                   title="Usage"
-                  subtitle="Per-feature Claude spend, daily breakdowns, and reconciliation against Anthropic billing."
+                  subtitle="AI spend across your workspace — daily totals and a breakdown by surface."
                 >
-                  <UsagePanel />
+                  {visitedSections.has('usage') ? <UsagePanel /> : null}
                 </SectionPanel>
               </div>
 
@@ -2372,7 +2323,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     />
                     <ToggleCard
                       title="Agent paused"
-                      description="Fires when the autonomous agent stops on its own — bad sample, recruiter intervention, or ratelimit."
+                      description="Get an alert when a role's agent pauses itself — for example after hitting its budget or running into repeated errors."
                       checked={notificationPreferencesForm.agent_paused}
                       onChange={(value) => setNotificationPreferencesForm((prev) => ({ ...prev, agent_paused: value }))}
                     />
@@ -2460,7 +2411,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <input
                   value={workableTokenForm.subdomain}
                   onChange={(event) => setWorkableTokenForm((prev) => ({ ...prev, subdomain: event.target.value }))}
-                  placeholder="deeplight-ai"
+                  placeholder="your-company"
                 />
               </label>
               <label className="field">
@@ -2485,8 +2436,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       </Sheet>
 
       {clearWorkableModalOpen ? (
-        <div className="settings-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="clear-workable-title">
-          <Panel className="settings-modal">
+        <div
+          className="settings-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="clear-workable-title"
+          onClick={() => { if (!clearWorkableLoading) setClearWorkableModalOpen(false); }}
+        >
+          <Panel className="settings-modal" onClick={(e) => e.stopPropagation()}>
             <h2 id="clear-workable-title">Remove all Workable data?</h2>
             <p>This will delete every role, candidate, and application imported from Workable.</p>
             <div className="settings-inline-actions end">

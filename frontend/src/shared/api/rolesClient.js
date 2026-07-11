@@ -70,6 +70,19 @@ export const roles = {
   createApplicationShareLink: (applicationId, { mode, expiry }) =>
     api.post(`/applications/${applicationId}/share-links`, { mode, expiry }),
   revokeShareLink: (linkId) => api.delete(`/share-links/${linkId}`),
+  // WS2 — curated multi-candidate client submittal packs. POST mints a frozen,
+  // client-safe snapshot of the selected candidates for one role and returns
+  // { id, token, url_path, expires_at }; GET lists packs for the role (audit +
+  // revoke); DELETE revokes one pack by id (org-scoped).
+  listSubmittalPacks: (roleId) => api.get(`/roles/${roleId}/submittal-packs`),
+  createSubmittalPack: (roleId, { applicationIds, title, notes, expiresIn = '7d' }) =>
+    api.post(`/roles/${roleId}/submittal-packs`, {
+      application_ids: applicationIds,
+      title: title || null,
+      notes: notes || null,
+      expires_in: expiresIn,
+    }),
+  revokeSubmittalPack: (packId) => api.delete(`/submittal-packs/${packId}`),
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
   // Drop a recruiter note on the candidate's timeline. Works with or without
   // a linked assessment. `forAgent` (default true) makes the note visible to
@@ -79,6 +92,17 @@ export const roles = {
   addApplicationNote: (applicationId, note, forAgent = true, extra = {}) =>
     api.post(`/applications/${applicationId}/notes`, { note, for_agent: forAgent, ...extra }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
+  // Structured interview feedback — a recruiter's record of what happened in an
+  // interview (round, recommendation, optional 5-Ds ratings, per-probe results,
+  // notes). Recruiter-internal; joined by the score↔outcome calibration script.
+  listInterviewFeedback: (applicationId) =>
+    api.get(`/applications/${applicationId}/interview-feedback`),
+  createInterviewFeedback: (applicationId, data) =>
+    api.post(`/applications/${applicationId}/interview-feedback`, data),
+  updateInterviewFeedback: (applicationId, feedbackId, data) =>
+    api.patch(`/applications/${applicationId}/interview-feedback/${feedbackId}`, data),
+  deleteInterviewFeedback: (applicationId, feedbackId) =>
+    api.delete(`/applications/${applicationId}/interview-feedback/${feedbackId}`),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
     api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob', ...config }),

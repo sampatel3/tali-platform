@@ -84,6 +84,19 @@ def parse_and_store_cv_sections(
         logger.exception("parse_cv raised for application_id=%s", app_id)
         return False
 
+    return store_parsed_cv_sections(app, parsed=parsed, cv_text=cv_text)
+
+
+def store_parsed_cv_sections(app: Any, *, parsed: Any, cv_text: str) -> bool:
+    """Write an already-obtained ``ParsedCV`` into ``app.cv_sections`` (and
+    the candidate's), with employer grounding. The store half of
+    ``parse_and_store_cv_sections``, shared with the Batches API path which
+    obtains its ``ParsedCV`` from an asynchronously-fetched batch result.
+    Mutates ORM attributes in place; the caller commits.
+    """
+    app_id = getattr(app, "id", None)
+    candidate = getattr(app, "candidate", None)
+
     if parsed.parse_failed:
         # Leave cv_sections null so the page keeps its raw-text fallback and
         # a later trigger (re-sync, backfill) can retry. Storing the failed

@@ -193,6 +193,12 @@ class RepoFileSaveRequest(BaseModel):
     files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
 
 
+class RuntimeEventRequest(BaseModel):
+    """Once-per-type engagement beacon from the candidate workspace."""
+
+    event_type: str = Field(min_length=1, max_length=40)
+
+
 class ClaudeChatRequest(BaseModel):
     """Request body for the new agentic ``/claude/chat`` endpoint.
 

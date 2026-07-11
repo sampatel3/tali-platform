@@ -286,10 +286,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       }
     };
     void tick();
-    const id = window.setInterval(tick, ORG_STATUS_POLL_MS);
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void tick();
+    }, ORG_STATUS_POLL_MS);
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) void tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -319,10 +327,16 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const loadDecisionsRef = useRef(loadDecisions);
   useEffect(() => { loadDecisionsRef.current = loadDecisions; }, [loadDecisions]);
   useEffect(() => {
+    // `focus` and `visibilitychange` both fire on a tab return, which used to
+    // issue two near-simultaneous fetches; a small guard collapses back-to-back
+    // triggers into one so the tab return costs a single round-trip.
+    let lastRun = 0;
     const refresh = () => {
-      if (document.visibilityState === 'visible') {
-        void loadDecisionsRef.current({ silent: true });
-      }
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastRun < 1000) return;
+      lastRun = now;
+      void loadDecisionsRef.current({ silent: true });
     };
     const id = window.setInterval(refresh, DECISIONS_POLL_MS);
     window.addEventListener('focus', refresh);
@@ -377,8 +391,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   useEffect(() => {
     void loadAgents();
-    const id = window.setInterval(() => { void loadAgents(); }, AGENTS_POLL_MS);
-    return () => window.clearInterval(id);
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void loadAgents();
+    }, AGENTS_POLL_MS);
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) void loadAgents();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [loadAgents]);
 
   // Selecting an agent focuses both the chat dock and the decision feed on that

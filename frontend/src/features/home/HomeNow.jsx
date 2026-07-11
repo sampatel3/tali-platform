@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import {
+  AlertTriangle,
   ArrowRight,
   Check,
   ClipboardList,
@@ -92,6 +93,54 @@ const TYPE_CATEGORY_EXPANSION = {
   assessment: ['send_assessment', 'resend_assessment_invite'],
 };
 
+// Debounced queue search. Typing updates a local input immediately (so the
+// field feels responsive) but only commits `q` to the shared filters ~250ms
+// after the last keystroke — each committed value recreates loadDecisions and
+// fires an uncached listDecisions fetch, so without this every keystroke was a
+// separate UAE→us-east4 round-trip. URL persistence still works because we
+// commit through the same setFilters path. In the Assessment-stage (invited)
+// view the list isn't searchable server-side, so we disable the box with a hint
+// instead of firing requests that visibly do nothing.
+const SearchInput = ({ filters, setFilters }) => {
+  const invited = filters.view === 'invited';
+  const [text, setText] = useState(filters.q || '');
+  const committed = useRef(filters.q || '');
+
+  // Keep the field in sync when q changes from outside typing (e.g. URL nav,
+  // clearing a filter) — but not while the user is mid-type toward a value we
+  // haven't committed yet.
+  useEffect(() => {
+    const q = filters.q || '';
+    if (q !== committed.current) {
+      committed.current = q;
+      setText(q);
+    }
+  }, [filters.q]);
+
+  useEffect(() => {
+    if (text === committed.current) return undefined;
+    const t = setTimeout(() => {
+      committed.current = text;
+      setFilters((f) => ({ ...f, q: text || null }));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [text, setFilters]);
+
+  return (
+    <span className={`rq-search${invited ? ' is-disabled' : ''}`}>
+      <Search size={13} strokeWidth={2} aria-hidden="true" />
+      <input
+        placeholder={invited ? 'Search unavailable on this view' : 'Search candidates, IDs, reasoning…'}
+        value={invited ? '' : text}
+        disabled={invited}
+        onChange={(e) => setText(e.target.value)}
+        aria-label="Search decisions"
+        title={invited ? "Search isn't available in the Assessment-stage view yet." : undefined}
+      />
+    </span>
+  );
+};
+
 const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
@@ -154,21 +203,13 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
           }))}
         >
           <RefreshCw size={12} strokeWidth={2.2} aria-hidden="true" />
-          {staleCount.toLocaleString()} need re-eval
+          {staleCount.toLocaleString()} scores out of date
         </button>
       ) : null}
     </div>
     <div className="rq-toolbar-r">
       {bulkAction}
-      <span className="rq-search">
-        <Search size={13} strokeWidth={2} aria-hidden="true" />
-        <input
-          placeholder="Search candidates, IDs, reasoning…"
-          value={filters.q || ''}
-          onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value || null }))}
-          aria-label="Search decisions"
-        />
-      </span>
+      <SearchInput filters={filters} setFilters={setFilters} />
     </div>
   </div>
 );
@@ -258,7 +299,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
             key={p.id}
             role="button"
             tabIndex={0}
-            className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' ? 'is-processing' : ''}`.trim()}
+            className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -287,10 +328,22 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                   score-provenance/version chip. */}
               <div className="rq-qsub">
                 {p.role_name || `Role #${p.role_id}`} · {formatRelativeAge(p.created_at)}
+                {p.applied_at ? (
+                  <span title="When this application was submitted — how fresh the candidate is">
+                    · applied {formatRelativeAge(p.applied_at)} ago
+                  </span>
+                ) : null}
               </div>
               <div className="rq-qverdict">
                 <VerdictPill type={p.decision_type} />
-                {p.is_stale ? (
+                {p.rescore_in_flight ? (
+                  <span
+                    className="rq-qstale"
+                    title="Re-scoring in progress — refreshes automatically"
+                  >
+                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" className="rq-spin" /> re-scoring
+                  </span>
+                ) : p.is_stale ? (
                   <span
                     className="rq-qstale"
                     title="Score out of date — re-evaluate"
@@ -497,7 +550,7 @@ export const HomeNow = ({
   filters,
   setFilters,
   rolesBreakdown,
-  reload,
+  reload: reloadProp,
   onNavigate,
   // When the agent chat dock is present it owns the agent's questions, so the
   // feed hides its own needs-input block to avoid duplicating them.
@@ -505,6 +558,15 @@ export const HomeNow = ({
 }) => {
   const { showToast } = useToast() || { showToast: () => {} };
   const [busyId, setBusyId] = useState(null);
+  // Bumped every time we reload after an action, so the RecentDecisions list
+  // re-fetches and the call the recruiter just made shows up there immediately
+  // (it fetches RESOLVED decisions, which the hub's pending feed doesn't cover).
+  const [recentRefresh, setRecentRefresh] = useState(0);
+  const reload = useCallback(async (...args) => {
+    const r = await reloadProp?.(...args);
+    setRecentRefresh((v) => v + 1);
+    return r;
+  }, [reloadProp]);
   // Invited-candidate tracker ("Assessment pending" view). Fetched on demand
   // from the applications list — these are sent assessments, not decisions, so
   // they don't ride the decision queue's data flow.
@@ -594,6 +656,13 @@ export const HomeNow = ({
   const actedRef = useRef(acted);
   useEffect(() => { actedRef.current = acted; }, [acted]);
 
+  // Optimistic re-scores. Clicking Re-evaluate on an old-engine score enqueues
+  // an async re-score and the decision STAYS in the queue until the fresh
+  // score lands — so grey it immediately. This set covers the gap between the
+  // click and the next fetch; after that the server's ``rescore_in_flight``
+  // flag (from the live score job) takes over and the poll un-greys the card.
+  const [rescoring, setRescoring] = useState(() => new Set());
+
   // Client-side role-scope guard. The parent fetches role-scoped data, but
   // while a role switch is mid-flight it keeps the *previous* scope's rows on
   // screen (stale-while-revalidate — see HomePage.loadDecisions) to avoid a
@@ -631,17 +700,22 @@ export const HomeNow = ({
   // the capped page — counting client-side here silently under-reports a deep
   // backlog.
   const staleOnly = filters.status === 'stale';
+  // Overlay the optimistic re-score mark onto server rows (see ``rescoring``).
+  const withRescoring = useCallback(
+    (d) => (rescoring.has(d.id) && !d.rescore_in_flight ? { ...d, rescore_in_flight: true } : d),
+    [rescoring],
+  );
   const effPending = useMemo(
-    () => pendingOrdered.filter(
-      (d) => inRoleScope(d) && inTypeScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale),
-    ),
-    [pendingOrdered, acted, inRoleScope, inTypeScope, staleOnly],
+    () => pendingOrdered
+      .filter((d) => inRoleScope(d) && inTypeScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale))
+      .map(withRescoring),
+    [pendingOrdered, acted, inRoleScope, inTypeScope, staleOnly, withRescoring],
   );
   const effDecisions = useMemo(
     () => decisions
       .filter((d) => inRoleScope(d) && inTypeScope(d))
-      .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : d)),
-    [decisions, acted, inRoleScope, inTypeScope],
+      .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : withRescoring(d))),
+    [decisions, acted, inRoleScope, inTypeScope, withRescoring],
   );
 
   const selected = useMemo(
@@ -735,13 +809,22 @@ export const HomeNow = ({
   };
 
   // A4: discard a stale decision and re-run the agent on fresh inputs.
+  // Engine-stale decisions instead get an async re-score and STAY in the
+  // queue — mark them rescoring immediately so the row + card grey out;
+  // the server's rescore_in_flight flag takes over on the next fetch.
   const handleReEvaluate = async (decision) => {
     setBusyId(decision.id);
+    setRescoring((prev) => new Set(prev).add(decision.id));
     try {
       await agentApi.reEvaluateDecision(decision.id);
       showToast?.('Re-evaluating with fresh inputs…', 'success');
       await reload?.();
+      // Fresh data is in: the live score job now reports rescore_in_flight
+      // itself (or the decision left the queue), so drop the optimistic mark —
+      // keeping it would grey the refreshed card forever.
+      setRescoring((prev) => { const next = new Set(prev); next.delete(decision.id); return next; });
     } catch (err) {
+      setRescoring((prev) => { const next = new Set(prev); next.delete(decision.id); return next; });
       showToast?.(apiErrorMessage(err, 'Re-evaluate failed'), 'error');
     } finally {
       setBusyId(null);
@@ -771,7 +854,12 @@ export const HomeNow = ({
   // Pending decisions matching the current filter scope. Used by the
   // bulk-approve action: we only ever approve what's visible, so the
   // recruiter's confirmation matches the rows they see on screen.
-  const visiblePending = useMemo(() => effDecisions.filter((d) => d.status === 'pending'), [effDecisions]);
+  // Rows mid-re-score are excluded: their score is being replaced, so a bulk
+  // approve must not act on them (mirrors the card's frozen action bar).
+  const visiblePending = useMemo(
+    () => effDecisions.filter((d) => d.status === 'pending' && !d.rescore_in_flight),
+    [effDecisions],
+  );
   // "Skip & advance" only makes sense for the assessment decisions — it skips
   // the assessment and re-queues the candidate as an advance. It's meaningless
   // (and a no-op the server would reject) for an advance or reject decision.
@@ -833,12 +921,31 @@ export const HomeNow = ({
       advanceRolesMap.get(key).count += 1;
     }
     const advanceRoles = [...advanceRolesMap.values()];
+    // Rejects on candidates already advanced in Workable (live interview /
+    // offer stage): still approvable in bulk — Taali warns, never blocks —
+    // but the recruiter must see exactly who they'd be disqualifying there
+    // before confirming (no silent irreversible write-backs in a batch).
+    const postHandoverRejects = visiblePending
+      .filter(
+        (d) => (d.decision_type === 'reject' || d.decision_type === 'skip_assessment_reject')
+          && d.candidate_post_handover,
+      )
+      .map((d) => ({
+        name: d.candidate_name || `#${d.id}`,
+        stage: d.candidate_workable_stage || 'a live interview stage',
+      }));
     setBulkStages({});
-    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles });
+    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles, postHandoverRejects });
   };
 
   const runBulkApprove = async () => {
     if (!bulkConfirm) return;
+    // Never advance with an incomplete stage map — the same gate the Confirm
+    // button enforces (bulkStagesReady). Without this a caller (e.g. the Enter
+    // key) could submit with stages={}, silently advancing candidates on Tali's
+    // internal stage with nothing posted to Workable. Bulk actions must collect
+    // their required inputs.
+    if (!bulkStagesReady) return;
     const { ids, count } = bulkConfirm;
     const stages = { ...bulkStages };
     setBulkConfirm(null);
@@ -965,7 +1072,7 @@ export const HomeNow = ({
   useEffect(() => {
     const onKey = (e) => {
       if (invitedView) return;  // invited tracker has no decision under focus
-      if (teachFor || bulkConfirm) return;  // an open modal owns the keyboard
+      if (teachFor || bulkConfirm || alternativeFor) return;  // an open modal owns the keyboard
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -983,19 +1090,23 @@ export const HomeNow = ({
     // — re-binding on each pending row is cheap and keeps the closure
     // pointing at the right target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status, teachFor, bulkConfirm, invitedView]);
+  }, [selected?.id, selected?.status, teachFor, bulkConfirm, alternativeFor, invitedView]);
 
-  // Esc cancels / Enter confirms the bulk-approve modal.
+  // Esc cancels / Enter confirms the bulk-approve modal. Enter only fires once
+  // every advancing role has its stage picked (bulkStagesReady) — matching the
+  // Confirm button's disabled state so the natural confirm key can't bypass the
+  // required Workable stage pick. We depend on bulkStagesReady (and re-bind
+  // runBulkApprove) so the handler never closes over a stale empty stage map.
   useEffect(() => {
     if (!bulkConfirm) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); setBulkConfirm(null); }
-      if (e.key === 'Enter') { e.preventDefault(); runBulkApprove(); }
+      if (e.key === 'Enter' && bulkStagesReady) { e.preventDefault(); runBulkApprove(); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bulkConfirm]);
+  }, [bulkConfirm, bulkStagesReady]);
 
   return (
     <section className="home-section">
@@ -1078,7 +1189,7 @@ export const HomeNow = ({
           {/* Minimal recent-decisions list — who, what was decided, when, and a
               link to the report. Find a candidate again after they've moved on;
               the full audit trail lives on Analytics → Decision log. */}
-          <RecentDecisions roleId={filters.role_id} collapsedCount={5} />
+          <RecentDecisions roleId={filters.role_id} collapsedCount={5} refreshKey={recentRefresh} />
         </>
       )}
 
@@ -1121,6 +1232,12 @@ export const HomeNow = ({
             aria-labelledby="rq-bulk-title"
             style={{ width: 'min(480px, 100%)' }}
             onClick={(e) => e.stopPropagation()}
+            tabIndex={-1}
+            // Move focus into the dialog on open so keyboard/screen-reader users
+            // land inside it (focus otherwise stays on the "Approve N" trigger
+            // behind the backdrop) — this is also what keeps stray a/t/s
+            // shortcuts from reaching the decision underneath.
+            ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus(); }}
           >
             <div className="rq-modal-head">
               <div>
@@ -1147,6 +1264,19 @@ export const HomeNow = ({
             </div>
 
             <div className="rq-modal-body">
+              {(bulkConfirm.postHandoverRejects || []).length > 0 ? (
+                <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.5 }}>
+                  <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>
+                    <strong>Heads up —</strong> this batch rejects{' '}
+                    {bulkConfirm.postHandoverRejects.length === 1 ? 'a candidate' : `${bulkConfirm.postHandoverRejects.length} candidates`}{' '}
+                    already advanced in Workable (
+                    {bulkConfirm.postHandoverRejects.slice(0, 3).map((p) => `${p.name} · ${p.stage}`).join(', ')}
+                    {bulkConfirm.postHandoverRejects.length > 3 ? ` and ${bulkConfirm.postHandoverRejects.length - 3} more` : ''}
+                    ). Approving disqualifies them there.
+                  </span>
+                </div>
+              ) : null}
               {bulkConfirm.advanceRoles.length > 0 ? (
                 <div className="rq-modal-section">
                   <span className="rq-modal-label">
@@ -1178,7 +1308,7 @@ export const HomeNow = ({
                           </span>
                         ) : stages.length === 0 ? (
                           <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>
-                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Tali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
+                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                           </span>
                         ) : (
                           <div className="rq-modal-pills" role="radiogroup" aria-label={`Workable stage for ${r.role_name}`}>

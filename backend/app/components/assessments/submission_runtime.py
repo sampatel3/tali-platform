@@ -652,6 +652,18 @@ def submit_assessment_impl(
     # grades cleanly; falls back to the heuristic composite when grading
     # fails (so the candidate is never blocked from a score by a transient
     # Anthropic error).
+    # Deterministic process features — the loop skeleton (test runs,
+    # challenges, cadence) counted from ai_prompts + timeline. Computed
+    # regardless of whether rubric grading runs: recruiter evidence first,
+    # grader context second. Never fatal to submission.
+    from .process_features import compute_process_features
+
+    try:
+        process_features = compute_process_features(assessment.ai_prompts, assessment.timeline)
+    except Exception:
+        logger.exception("process feature computation failed assessment_id=%s", assessment.id)
+        process_features = {}
+
     rubric_breakdown: Dict[str, Any] = {}
     if task.evaluation_rubric and settings_obj.ANTHROPIC_API_KEY:
         try:
@@ -713,6 +725,7 @@ def submit_assessment_impl(
                 # candidate worked, not just the message/response text.
                 git_evidence=(assessment.git_evidence or {}) if isinstance(assessment.git_evidence, dict) else {},
                 traps=traps_for_grader,
+                process_features=process_features,
             )
             scorer = RubricScorer(
                 api_key=settings_obj.ANTHROPIC_API_KEY,
@@ -894,6 +907,7 @@ def submit_assessment_impl(
         "detailed_scores": detailed_scores,
         "explanations": explanations,
         "rubric_grading": rubric_breakdown,
+        "process_features": process_features,
         "tier_reached": tier_reached,
         "cv_claim_consistency": cv_consistency,
         "score_formula_version": TAALI_SCORING_RUBRIC_VERSION,

@@ -346,10 +346,58 @@ def list_assessments(
     total = q.count()
     assessments = q.offset(offset).limit(limit).all()
     return {
-        "items": [assessment_to_response(a, db) for a in assessments],
+        "items": [assessment_to_response(a, db, summary=True) for a in assessments],
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.get("/stats")
+def assessment_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Org-wide assessment counts for the inbox KPI cards.
+
+    The inbox previously counted only the current 10-row page, so the KPI
+    numbers changed as the recruiter paged. These counts are computed over the
+    whole (non-voided) org set with cheap COUNT queries so the cards show true
+    totals. ``expiring_soon`` = pending invites expiring within 3 days.
+    ``scoring`` = submitted-but-not-yet-scored (completed with no score yet).
+    """
+    base = db.query(Assessment).filter(
+        Assessment.organization_id == current_user.organization_id,
+        Assessment.is_voided.is_(False),
+    )
+    invited = base.filter(Assessment.status == "pending").count()
+    in_progress = base.filter(Assessment.status == "in_progress").count()
+    completed_statuses = ["completed", "completed_due_to_timeout"]
+    completed = base.filter(Assessment.status.in_(completed_statuses)).count()
+
+    now = utcnow()
+    soon = now + timedelta(days=3)
+    expiring_soon = base.filter(
+        Assessment.status == "pending",
+        Assessment.expires_at.isnot(None),
+        Assessment.expires_at > now,
+        Assessment.expires_at <= soon,
+    ).count()
+
+    scoring = base.filter(
+        Assessment.status.in_(completed_statuses),
+        Assessment.scored_at.is_(None),
+    ).count()
+
+    bounced = base.filter(Assessment.invite_email_status == "bounced").count()
+
+    return {
+        "invited": invited,
+        "in_progress": in_progress,
+        "completed": completed,
+        "expiring_soon": expiring_soon,
+        "scoring": scoring,
+        "bounced": bounced,
     }
 
 

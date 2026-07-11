@@ -9,6 +9,7 @@ import { AuthShell, AuthField } from './AuthShell';
 const LOGIN_ERROR_MESSAGES = {
   LOGIN_BAD_CREDENTIALS: 'Incorrect email or password. Please try again.',
   INVALID_CREDENTIALS: 'Incorrect email or password. Please try again.',
+  LOGIN_USER_NOT_VERIFIED: 'Please verify your email first — we can resend the link.',
 };
 
 const getLoginErrorMessage = (err) => {
@@ -18,15 +19,19 @@ const getLoginErrorMessage = (err) => {
   if (typeof detail === 'string') {
     const normalizedDetail = detail.trim();
     const mappedMessage = LOGIN_ERROR_MESSAGES[normalizedDetail.toUpperCase()];
-    return mappedMessage || normalizedDetail;
+    if (mappedMessage) return mappedMessage;
+    if (/^[A-Z0-9_]+$/.test(normalizedDetail)) {
+      return 'Unable to sign in. Please try again.';
+    }
+    return normalizedDetail;
   }
 
   if (err?.code === 'ERR_NETWORK' || message === 'Network Error') {
-    return 'Unable to reach the Taali API. Please refresh and try again.';
+    return 'Can\'t reach Taali right now. Please check your connection and try again.';
   }
 
   if (err?.response?.status === 404 || err?.response?.status === 502 || err?.response?.status === 503) {
-    return 'Unable to reach the Taali API. Please try again in a moment.';
+    return 'Can\'t reach Taali right now. Please try again in a moment.';
   }
 
   if (Array.isArray(detail) && detail.length > 0) {
@@ -40,7 +45,11 @@ const getLoginErrorMessage = (err) => {
   if (typeof message === 'string' && message.trim()) {
     const normalizedMessage = message.trim();
     const mappedMessage = LOGIN_ERROR_MESSAGES[normalizedMessage.toUpperCase()];
-    return mappedMessage || normalizedMessage;
+    if (mappedMessage) return mappedMessage;
+    if (/^[A-Z0-9_]+$/.test(normalizedMessage)) {
+      return 'Unable to sign in. Please try again.';
+    }
+    return normalizedMessage;
   }
 
   return 'Unable to sign in. Please try again.';
@@ -72,6 +81,7 @@ export const LoginPage = ({ onNavigate }) => {
   const [ssoMessage, setSsoMessage] = useState('');
 
   const handleLogin = async () => {
+    if (loading) return;
     setError('');
     setNeedsVerification(false);
     setLoading(true);
@@ -86,7 +96,13 @@ export const LoginPage = ({ onNavigate }) => {
     } catch (err) {
       const status = err.response?.status;
       const rawDetail = err.response?.data?.detail;
-      if (status === 403 && typeof rawDetail === 'string' && rawDetail.toLowerCase().includes('verify')) {
+      // The real fastapi-users contract for an unverified account is 400 with
+      // detail 'LOGIN_USER_NOT_VERIFIED'; keep the legacy 403/"verify" branch
+      // too in case a proxy rewrites the status.
+      const notVerified =
+        (typeof rawDetail === 'string' && rawDetail.toUpperCase() === 'LOGIN_USER_NOT_VERIFIED') ||
+        (status === 403 && typeof rawDetail === 'string' && rawDetail.toLowerCase().includes('verify'));
+      if (notVerified) {
         setNeedsVerification(true);
       }
       setError(getLoginErrorMessage(err));
@@ -112,7 +128,16 @@ export const LoginPage = ({ onNavigate }) => {
       }
       setSsoMessage(payload?.message || 'No SSO configured for this domain. Use email/password instead.');
     } catch (err) {
-      setSsoMessage(err?.response?.data?.detail || 'Unable to check SSO right now. Please try again.');
+      // A bad email trips a 422 whose detail is an array of pydantic error
+      // objects — never render that raw. Only trust string details.
+      const detail = err?.response?.data?.detail;
+      if (typeof detail === 'string') {
+        setSsoMessage(detail);
+      } else if (err?.response?.status === 422) {
+        setSsoMessage('That doesn\'t look like a valid email address.');
+      } else {
+        setSsoMessage('Unable to check SSO right now. Please try again.');
+      }
     } finally {
       setSsoChecking(false);
     }
@@ -184,44 +209,44 @@ export const LoginPage = ({ onNavigate }) => {
         </div>
       ) : null}
 
-      <AuthField
-        label="Work email"
-        name="email"
-        type="email"
-        autoComplete="email"
-        placeholder="you@company.com"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <AuthField
-        label="Password"
-        name="password"
-        type="password"
-        autoComplete="current-password"
-        placeholder="••••••••"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
+      <form onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+        <AuthField
+          label="Work email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@company.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <AuthField
+          label="Password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          placeholder="••••••••"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 18 }}>
+          <button
+            type="button"
+            onClick={() => onNavigate('forgot-password')}
+            style={{ background: 'none', border: 0, color: 'var(--purple)', fontSize: 12.5, fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          >
+            Forgot password?
+          </button>
+        </div>
+
         <button
-          type="button"
-          onClick={() => onNavigate('forgot-password')}
-          style={{ background: 'none', border: 0, color: 'var(--purple)', fontSize: 12.5, fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          type="submit"
+          className="mc-auth-cta"
+          disabled={loading}
         >
-          Forgot password?
+          {loading ? 'Signing in...' : 'Sign in →'}
         </button>
-      </div>
-
-      <button
-        type="button"
-        className="mc-auth-cta"
-        onClick={handleLogin}
-        disabled={loading}
-        onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-      >
-        {loading ? 'Signing in...' : 'Sign in →'}
-      </button>
+      </form>
 
       <div className="mc-auth-divider">
         <span>OR</span>
@@ -243,6 +268,7 @@ export const LoginPage = ({ onNavigate }) => {
           <input
             type="email"
             className="mc-auth-input"
+            aria-label="Work email for SSO"
             placeholder="you@company.com"
             value={ssoEmail}
             onChange={(event) => setSsoEmail(event.target.value)}
@@ -256,7 +282,7 @@ export const LoginPage = ({ onNavigate }) => {
             {ssoChecking ? 'Checking SSO...' : 'Continue to SSO'}
           </button>
           {ssoMessage ? (
-            <p style={{ fontSize: 12, color: 'var(--mute)', margin: 0 }}>{ssoMessage}</p>
+            <div className="mc-auth-field-error">{ssoMessage}</div>
           ) : null}
         </div>
       ) : null}

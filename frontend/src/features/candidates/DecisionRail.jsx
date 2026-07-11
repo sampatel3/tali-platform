@@ -69,6 +69,22 @@ export const DecisionRail = ({
   const isActionable = Boolean(
     decision && (decision.status === 'pending' || decision.status === 'reverted_for_feedback'),
   );
+  // A re-score is running for this candidate (Re-evaluate on an old-engine
+  // score, or a bulk re-score). Grey the rail + freeze actions until the fresh
+  // score lands — mirrors the hub's AgentDecisionCard (PR 872). The report's
+  // decision poll un-freezes it automatically.
+  const rescoring = isActionable && Boolean(decision?.rescore_in_flight);
+  // Inputs (or the scoring engine) changed since this was decided. Approving
+  // acts on the OLD score — warn, don't block (Taali advises, never refuses).
+  const isStale = isActionable && Boolean(decision?.is_stale);
+  const stalenessReasons = Array.isArray(decision?.staleness_reasons) ? decision.staleness_reasons : [];
+  const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
+  const frozen = busy || rescoring;
+  const primaryTitle = staleEngineOnly
+    ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
+    : isStale
+      ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
+      : undefined;
   const spec = isActionable ? (DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS) : null;
   const PrimaryIcon = spec?.primaryIcon || Check;
   const confPct = decision?.confidence != null && !Number.isNaN(Number(decision.confidence))
@@ -99,13 +115,27 @@ export const DecisionRail = ({
       </div>
 
       {canDecide && isActionable ? (
-        <div data-internal-only>
+        <div data-internal-only className={rescoring ? 'is-rescoring' : undefined}>
+          {/* Re-score in flight: one banner at the top; everything below is
+              greyed (.is-rescoring) and the actions frozen so nothing is
+              approved on a score that's being replaced. */}
+          {rescoring ? (
+            <div
+              className="dr-hint"
+              role="status"
+              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              <RefreshCw size={13} strokeWidth={2} aria-hidden="true" className="rq-spin" />
+              <span>Re-scoring this candidate — the recommendation updates automatically when the new score lands.</span>
+            </div>
+          ) : null}
           <div className="dr-rec">
             <button
               type="button"
               className="dr-rec-btn"
               onClick={() => onApprove?.(decision)}
-              disabled={busy}
+              disabled={frozen}
+              title={primaryTitle}
             >
               <PrimaryIcon size={16} strokeWidth={2.2} aria-hidden="true" /> {spec.primaryLabel}
             </button>
@@ -114,6 +144,30 @@ export const DecisionRail = ({
               {confPct != null ? ` · Confidence ${confPct}%` : ''}
             </div>
           </div>
+
+          {/* Stale inputs / old engine: warn before the one-click approve.
+              Advice, never a block — the button stays live. */}
+          {isStale && !rescoring ? (
+            <div className="dr-hint" role="alert">
+              <span>
+                {staleEngineOnly
+                  ? 'This score came from an older version of Taali’s scoring. Re-evaluate to refresh it before approving.'
+                  : 'Inputs changed since this was decided. Re-evaluate to refresh before approving.'}
+              </span>
+            </div>
+          ) : null}
+
+          {/* Reject recommended for a candidate already advanced in Workable:
+              warn before the one-click approve. Advice, never a block. */}
+          {postHandover
+            && (decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject') ? (
+              <div className="dr-hint" role="alert">
+                <span>
+                  <strong>Heads up —</strong> in <strong>{application.workable_stage}</strong> in
+                  Workable. Approving this reject disqualifies them there.
+                </span>
+              </div>
+            ) : null}
 
           {flagCount > 0 ? (
             <div className="dr-flags-chip">
@@ -131,7 +185,7 @@ export const DecisionRail = ({
                   type="button"
                   className="dr-btn dr-btn-counter"
                   onClick={() => onAlternative?.(decision, alt)}
-                  disabled={busy}
+                  disabled={frozen}
                   title={alt.body}
                 >
                   <AltIcon size={14} strokeWidth={2} aria-hidden="true" /> {alt.label}
@@ -142,7 +196,7 @@ export const DecisionRail = ({
               type="button"
               className="dr-btn"
               onClick={() => onTeach?.(decision)}
-              disabled={busy}
+              disabled={frozen}
             >
               <Brain size={14} strokeWidth={2} aria-hidden="true" /> Teach
             </button>
@@ -150,7 +204,7 @@ export const DecisionRail = ({
               type="button"
               className="dr-btn"
               onClick={() => onSnooze?.(decision)}
-              disabled={busy}
+              disabled={frozen}
             >
               <Clock size={14} strokeWidth={2} aria-hidden="true" /> Snooze
             </button>
@@ -159,7 +213,7 @@ export const DecisionRail = ({
                 type="button"
                 className="dr-btn dr-btn-wide"
                 onClick={() => onReEvaluate(decision)}
-                disabled={busy}
+                disabled={frozen}
               >
                 <RefreshCw size={14} strokeWidth={2} aria-hidden="true" /> Re-evaluate
               </button>
@@ -184,11 +238,11 @@ export const DecisionRail = ({
             <span>No agent decision yet — score this candidate to get a recommendation.</span>
           ) : postHandover ? (
             <span>
-              In <strong>{application.workable_stage}</strong> in Workable — Taali defers to you on
-              candidates you&apos;re interviewing.
+              In <strong>{application.workable_stage}</strong> in Workable — the recommendation
+              will appear here shortly. Taali advises; acting on a reject here is always your call.
             </span>
           ) : (
-            <span>Scored — the deterministic decision will appear here once it&apos;s computed.</span>
+            <span>Scored — the recommendation will appear here shortly.</span>
           )}
         </div>
       ) : null}

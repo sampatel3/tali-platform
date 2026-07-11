@@ -26,10 +26,9 @@ const _NOW = Date.now();
 // Score-provenance line the live feed + detail panel render under each score
 // ("Scored {date} · v2.1.0 · Sonnet" in the detail panel; a version pill in the
 // list). Today's decisions are all on the current holistic engine.
-const prov = (hoursAgo, version = '2.1.0', model = 'Sonnet') => ({
+const prov = (hoursAgo, version = '2.1.0') => ({
   engine_version: version,
   scored_at: new Date(_NOW - hoursAgo * 60 * 60 * 1000).toISOString(),
-  model,
 });
 
 // Rows match the AgentDecisionPayload shape the live feed consumes:

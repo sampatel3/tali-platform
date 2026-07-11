@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { Suspense, lazy, useMemo, useState } from 'react';
 import { ArrowUp, Sparkles } from 'lucide-react';
 
 import './chat.css';
@@ -6,7 +6,9 @@ import './chat.css';
 // styling here. The live /chat page rides these in globally via Home; the
 // standalone showcase iframe must pull them in itself.
 import '../home/agentchat/agentchat.css';
-import GraphView from './GraphView';
+// Lazy so cytoscape (~455 kB) stays out of the showcase path until a
+// message actually carries a graph payload.
+const GraphView = lazy(() => import('./GraphView'));
 import CandidateGrid from './CandidateGrid';
 import ToolCallCard from './ToolCallCard';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
@@ -102,7 +104,7 @@ const SHOWCASE_APPLICATIONS = [
     taali_score: 81,
     pre_screen_score: 84,
     // Provenance pill under the score in the candidate grid (current engine).
-    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' } },
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z' } },
     pipeline_stage: 'Onsite',
     frontend_url: '/c/demo?view=interview&k=demo-token&showcase=1',
   },
@@ -114,7 +116,7 @@ const SHOWCASE_APPLICATIONS = [
     role_name: 'Senior Backend',
     taali_score: 76,
     pre_screen_score: 79,
-    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-22T13:05:00.000Z', model: 'Sonnet' } },
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-22T13:05:00.000Z' } },
     pipeline_stage: 'Review',
   },
   {
@@ -125,7 +127,7 @@ const SHOWCASE_APPLICATIONS = [
     role_name: 'AI Engineer',
     taali_score: 73,
     pre_screen_score: 71,
-    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-23T09:40:00.000Z', model: 'Sonnet' } },
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-23T09:40:00.000Z' } },
     pipeline_stage: 'Review',
   },
   {
@@ -136,7 +138,7 @@ const SHOWCASE_APPLICATIONS = [
     role_name: 'Senior Backend',
     taali_score: 68,
     pre_screen_score: 70,
-    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-24T16:12:00.000Z', model: 'Sonnet' } },
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-24T16:12:00.000Z' } },
     pipeline_stage: 'Pre-screen',
   },
 ];
@@ -550,7 +552,7 @@ const AskCenter = () => (
       <div className="cp-head-grow" />
       <span className="cp-head-pill">
         <span className="cp-pill-glyph">▮</span>
-        MCP · 9 tools
+        14 tools connected
       </span>
     </header>
     <div className="cp-scroll">
@@ -571,7 +573,11 @@ const AskCenter = () => (
                   ) : (
                     <>
                       <CandidateGrid rows={m.tool.result.applications} />
-                      {m.tool.result.graph ? <GraphView graph={m.tool.result.graph} /> : null}
+                      {m.tool.result.graph ? (
+                        <Suspense fallback={null}>
+                          <GraphView graph={m.tool.result.graph} />
+                        </Suspense>
+                      ) : null}
                     </>
                   )}
                 </>

@@ -64,9 +64,8 @@ export default function RecruiterAnswersLog({ roleId }) {
         params: { role_id: roleId, status: 'resolved', limit: 25 },
       });
       setRows(Array.isArray(resp?.data) ? resp.data : []);
-    } catch (err) {
-      const msg = err?.response?.data?.detail || err?.message || 'Failed to load Q&A history.';
-      setError(typeof msg === 'string' ? msg : 'Failed to load Q&A history.');
+    } catch {
+      setError('Couldn\'t load the Q&A history — try again.');
     } finally {
       setLoading(false);
     }

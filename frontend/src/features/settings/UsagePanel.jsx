@@ -51,6 +51,33 @@ const formatNumber = (n) => Number(n || 0).toLocaleString();
 
 const surfaceById = (id) => SURFACES.find((s) => s.id === id);
 
+// Human labels for the raw backend feature codes. Mirrors the map inside
+// RecruiterSettingsPage (which is component-local and can't be imported) so
+// the "Calls by feature" table never shows a raw code like ``cv_parse``.
+const FEATURE_LABELS = {
+  prescreen: 'Pre-screening',
+  score: 'CV scoring',
+  assessment: 'Assessment workspace',
+  taali_chat: 'Taali Chat',
+  agent_autonomous: 'Autonomous agent',
+  cv_parse: 'CV parsing',
+  cv_rerank: 'Search rerank',
+  search_parse: 'Search query parsing',
+  archetype_synthesis: 'Archetype synthesis',
+  pairwise_judge: 'Pairwise calibration',
+  interview_focus: 'Interview focus',
+  interview_tech: 'Tech interview prompts',
+  fit_matching: 'Fit matching',
+  other: 'Other / unattributed',
+};
+
+const featureLabel = (feature) => {
+  const key = String(feature || '').toLowerCase();
+  if (!key) return 'Unattributed';
+  if (FEATURE_LABELS[key]) return FEATURE_LABELS[key];
+  return key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+};
+
 const PERIOD_DAYS = 30;
 
 // Pivot the per-feature timeseries into per-day, three-surface buckets
@@ -342,19 +369,23 @@ const GAP_PERIOD_DAYS = 7;
 export default function UsagePanel() {
   const [timeseries, setTimeseries] = useState(null);
   const [loadingSeries, setLoadingSeries] = useState(false);
+  const [seriesError, setSeriesError] = useState(false);
   // Admin-only metering-gap summary (claude_call_log). null when the
   // endpoint 403s for non-admins or hasn't loaded — section stays hidden.
   const [meteringGap, setMeteringGap] = useState(null);
 
   const loadTimeseries = useCallback(async () => {
     setLoadingSeries(true);
+    setSeriesError(false);
     try {
       // Always feature-grouped — we collapse the per-feature buckets into
       // the three customer-facing surfaces below.
       const res = await billingApi.usageTimeseries(PERIOD_DAYS, 'feature');
       setTimeseries(res?.data || null);
     } catch {
-      setTimeseries(null);
+      // Don't render $0.00 / "No activity" for a failed load — that's
+      // indistinguishable from a genuinely quiet window on a money surface.
+      setSeriesError(true);
     } finally {
       setLoadingSeries(false);
     }
@@ -390,6 +421,22 @@ export default function UsagePanel() {
     () => [...surfaceSummary].sort((a, b) => b.cost_usd - a.cost_usd)[0] || null,
     [surfaceSummary],
   );
+
+  if (seriesError && !loadingSeries) {
+    return (
+      <div className="settings-banner warning">
+        <div>
+          <div className="settings-banner-title">Couldn&apos;t load usage</div>
+          <div className="settings-banner-copy">
+            This is usually a temporary connection issue — your usage history is safe.
+          </div>
+          <button type="button" className="btn btn-outline btn-sm settings-top-gap" onClick={() => void loadTimeseries()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -496,22 +543,22 @@ function MeteringGapPanel({ gap }) {
   return (
     <div style={{ marginTop: 32 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
-        <h3 style={{ fontSize: 14, margin: 0 }}>Anthropic call log</h3>
+        <h3 style={{ fontSize: 14, margin: 0 }}>AI activity log</h3>
         <span style={{ fontSize: 11, color: 'var(--mute)' }}>
           admin · ground truth · trailing {gap.period_days || GAP_PERIOD_DAYS} days
         </span>
       </div>
       <p style={{ fontSize: 12, color: 'var(--mute)', marginTop: 0, marginBottom: 12 }}>
-        Every Anthropic call writes a row here regardless of whether the app
-        attributed it. The attribution gap is spend with no feature record —
-        non-zero means a code path is calling Claude without metering it.
+        Every AI request is recorded here, even if it wasn't attributed to a
+        feature. The attribution gap is spend with no feature record — a
+        non-zero gap means some AI activity isn't being tracked.
       </p>
 
       <div className="settings-billing-summary">
         <div className="settings-billing-card">
           <div className="settings-summary-label">Total calls</div>
           <div className="settings-summary-value">{formatNumber(totalCalls)}</div>
-          <div className="settings-summary-note">{formatUsd(totalUsd)} raw cost</div>
+          <div className="settings-summary-note">{formatUsd(totalUsd)} total cost</div>
         </div>
         <div className="settings-billing-card">
           <div className="settings-summary-label">Attribution gap</div>
@@ -534,7 +581,7 @@ function MeteringGapPanel({ gap }) {
             {errorPct.toFixed(1)}%
           </div>
           <div className="settings-summary-note">
-            {formatNumber(errorCalls)} non-ok of {formatNumber(totalCalls)}
+            {formatNumber(errorCalls)} failed of {formatNumber(totalCalls)}
           </div>
         </div>
       </div>
@@ -549,13 +596,13 @@ function MeteringGapPanel({ gap }) {
               <tr>
                 <th>Feature</th>
                 <th>Calls</th>
-                <th>Raw cost</th>
+                <th>Cost</th>
               </tr>
             </thead>
             <tbody>
               {byFeature.map((row) => (
                 <tr key={row.feature || 'unknown'}>
-                  <td>{row.feature || '(unattributed)'}</td>
+                  <td>{featureLabel(row.feature)}</td>
                   <td>{formatNumber(row.calls)}</td>
                   <td>{formatUsd4(row.cost_usd)}</td>
                 </tr>

@@ -137,6 +137,8 @@ def draft_summary(task: Task) -> dict[str, Any]:
         if isinstance(d, dict) and d.get("headline")
     ]
     files = (task.repo_structure or {}).get("files") if isinstance(task.repo_structure, dict) else {}
+    from ..services.task_battle_test import battle_test_summary
+
     return {
         "task_id": int(task.id),
         "task_key": task.task_key,
@@ -146,6 +148,10 @@ def draft_summary(task: Task) -> dict[str, Any]:
         "decisions": decisions,
         "rubric": _rubric_dims(task.evaluation_rubric),
         "repo_file_count": len(files) if isinstance(files, dict) else 0,
+        # Report card from the automated E2B battle-test (None = not yet run):
+        # verdict, baseline pass/fail counts, failed checks — what turns draft
+        # approval into a 2-minute read instead of an 800-line-JSON audit.
+        "battle_test": battle_test_summary(task),
     }
 
 

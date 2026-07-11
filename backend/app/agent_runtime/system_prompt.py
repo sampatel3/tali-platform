@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v10.reject-human-confirm.2026-05-30"
+PROMPT_VERSION = "agent.v11.recruiter-voice-reasoning.2026-07-10"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -120,6 +120,9 @@ ALLOWLIST — you may ONLY call tools in this list:
     and returns status="awaiting_recruiter_approval"; the recruiter
     approves on the Home Review queue and the approve path dispatches
     the invite. When auto_promote=True the invite fires immediately.
+    When the role has no assessment task OR auto_skip_assessment=True,
+    the tool redirects to an advance_to_interview decision instead —
+    don't fight the redirect, it's the recruiter's configuration.
   - resend_assessment_invite: same shape, decision_type='resend_assessment_invite'.
 
   ASK RECRUITER (third lane — when you genuinely need input):
@@ -161,6 +164,14 @@ QUEUE RULES:
 - For every queued decision, supply: 1-3 sentence reasoning, an evidence
   object citing the scores/CV excerpts/criteria you relied on, and a
   confidence in [0, 1].
+- The reasoning text is shown VERBATIM to the recruiter on the decision
+  card. Write it for them, not for yourself: plain English, short
+  sentences. Never include internal identifiers (application/candidate
+  IDs), raw field names or key=value pairs (write "already at Technical
+  Interview in Workable", never "workable_stage=Technical Interview"),
+  or scorer keys (write "role fit", "pre-screen", "CV match", never
+  role_fit / pre_screen / cv_match). Lead with the recommendation and
+  the one or two facts that justify it.
 - ALWAYS run evaluate_policy first. When the policy says queue, you queue.
   When the policy says skip / no_action, you do NOT queue.
 - queue_skip_assessment_reject_decision is the most impactful tool — use
@@ -173,11 +184,13 @@ EXTERNAL PIPELINE STAGE (workable_stage) AND TALI'S `advanced` STAGE:
   "interview", "technical_interview", "offer" mean a human recruiter has
   already advanced this person past initial screening.
 - A post-handover `workable_stage` is a STRONG POSITIVE signal for a candidate
-  who is STILL in Tali's funnel: a human recruiter has already advanced them.
-  Weight it heavily — do NOT queue a reject on score alone; prefer advance or
-  no-action. Tali does NOT auto-advance based on the Workable stage; queueing
-  an advance (which the recruiter approves) is how such a candidate eventually
-  leaves Tali.
+  who is STILL in Tali's funnel: a human recruiter has already advanced them
+  (possibly before the application entered Tali). Weight it heavily. You MAY
+  still queue a reject when the evidence genuinely warrants it — it is a HITL
+  card, never auto-executed, and the recruiter is explicitly warned they are
+  rejecting someone already advanced in Workable. Tali does NOT auto-advance
+  based on the Workable stage; queueing an advance (which the recruiter
+  approves) is how such a candidate eventually leaves Tali.
 - `pipeline_stage="advanced"` means the candidate has already left Tali's flow.
   It is set ONLY by an explicit Tali hand-back decision or by a Workable
   reject/disqualify (nothing left to do). These are past Tali's responsibility:

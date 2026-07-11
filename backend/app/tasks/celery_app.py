@@ -113,9 +113,36 @@ celery_app.conf.update(
             "task": "app.tasks.workable_tasks.expire_stuck_decision_batches",
             "schedule": 300.0,
         },
+        # Message Batches API pipelines (cv_parse today). Submit sweeps
+        # parse-pending applications into per-org batches every 15 min
+        # (no-op unless CV_PARSE_BATCH_ENABLED); poll drains ended batches
+        # every 5 min (never gated, so in-flight batches finish even after
+        # the flag is turned off). Most batches end within minutes, so a
+        # fresh parse lands ~15-20 min after ingest at 50% of live pricing.
+        "submit-cv-parse-batches-every-15-minutes": {
+            "task": "app.tasks.anthropic_batch_tasks.submit_cv_parse_batches",
+            "schedule": 900.0,
+        },
+        "poll-cv-parse-batches-every-5-minutes": {
+            "task": "app.tasks.anthropic_batch_tasks.poll_cv_parse_batches",
+            "schedule": 300.0,
+        },
         "assessment-expiry-reminders-daily": {
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
+        },
+        # Mid-window nudges (delivered-not-opened / opened-not-started at 48h,
+        # one per assessment). No-op unless ASSESSMENT_NUDGES_ENABLED is set.
+        "assessment-nudges-daily": {
+            "task": "app.tasks.assessment_tasks.send_assessment_nudges",
+            "schedule": 86400.0,
+        },
+        # Per-(task, role_family) predictive-quality calibration. The engine
+        # (sub_agents.task_calibration.recompute_all) predates this entry but
+        # was never scheduled. Weekly is plenty at current volume.
+        "recompute-task-calibrations-weekly": {
+            "task": "app.tasks.assessment_tasks.recompute_task_calibrations",
+            "schedule": 604800.0,
         },
         # Reap abandoned assessments: mark PENDING-past-expiry as EXPIRED and
         # close IN_PROGRESS sessions left open > 2h. The task existed and was

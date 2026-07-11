@@ -14,6 +14,7 @@
 // by the bundler.
 import React from 'react';
 import {
+  AlertTriangle,
   Brain,
   Check,
   Eye,
@@ -37,6 +38,17 @@ import { ScoreProvenance } from '../../features/candidates/ScoreProvenance';
 import { IntegrityFlags } from './IntegrityFlags';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from './decisionActions';
 import '../../features/home/home.css';
+
+// Absolute applied date ("12 Jun 2026") — same format as the ScoreProvenance
+// date pill so the two provenance lines read consistently.
+const fmtAppliedDate = (v) => {
+  if (!v) return null;
+  try {
+    return new Date(v).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return null;
+  }
+};
 
 // `middleSlot` / `hideDecisionParts` / `statusPill` let a non-decision surface
 // reuse this card VERBATIM. The invited-candidate tracker passes the assessment
@@ -63,23 +75,34 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
 
   const isPending = decision.status === 'pending' || decision.status === 'reverted_for_feedback';
+  // A re-score is running for this candidate (Re-evaluate on an old-engine
+  // score, or a bulk re-score). Grey the card + freeze actions until the
+  // fresh score lands — the decisions poll un-greys it automatically.
+  const rescoring = isPending && Boolean(decision.rescore_in_flight);
+  const frozen = busy || rescoring;
+  // Post-handover warning: the candidate already sits in a live Workable
+  // interview/offer stage (possibly moved there before the application ever
+  // reached Taali). Rejects stay fully approvable — Taali warns, never
+  // blocks — but the recruiter must see what approving does before one click.
+  const isRejectType = decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject';
+  const postHandoverWarn = isRejectType && Boolean(decision.candidate_post_handover);
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
   const PrimaryIcon = spec.primaryIcon || Check;
   const primaryTitle = staleEngineOnly
-    ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
+    ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
     : isStale
       ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
       : undefined;
 
   return (
-    <section className="rq-hybrid-detail">
+    <section className={`rq-hybrid-detail${rescoring ? ' is-rescoring' : ''}`}>
       {/* Compact header (preview): the score ring + name + role, with the scored
           date/version as clean provenance text underneath — one vertical stack,
           so nothing overlaps. The decision type is NOT repeated as a top badge;
           it lives in the recommendation slab below. */}
       <div className="rq-detail-head2">
         {decision.taali_score != null ? (
-          <ScoreRing score={decision.taali_score} size={58} label="TALI" />
+          <ScoreRing score={decision.taali_score} size={58} label="TAALI" />
         ) : (
           <Avatar initials={initialsFrom(decision.candidate_name)} size={52} />
         )}
@@ -100,6 +123,14 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             {[decision.role_name, decision.candidate_email].filter(Boolean).join(' · ')}
           </div>
           <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
+          {decision.applied_at ? (
+            <div
+              style={{ fontSize: 11, color: 'var(--mute)', marginTop: 2 }}
+              title="When this application was submitted — how fresh the candidate is"
+            >
+              Applied {fmtAppliedDate(decision.applied_at)} · {formatRelativeAge(decision.applied_at)} ago
+            </div>
+          ) : null}
         </div>
         {statusPill || (decision.status === 'pending' ? (
           <span className="rq-stream-pendpill" style={{ alignSelf: 'flex-start' }}>NEEDS YOU</span>
@@ -129,8 +160,33 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </button>
       </div>
 
+      {/* Re-score in flight: one unmissable banner at the top; everything
+          below it is greyed (via .is-rescoring) and the actions are frozen
+          so nothing is approved on a score that's being replaced. */}
+      {rescoring ? (
+        <div className="rq-rescore-banner" role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>
+          <RefreshCw size={14} strokeWidth={2} aria-hidden="true" className="rq-spin" />
+          <span>Re-scoring this candidate — the card updates automatically when the new score lands.</span>
+        </div>
+      ) : null}
+
       {/* Invited mode: the assessment stage tracker takes the slab's place. */}
       {middleSlot}
+
+      {/* Reject on a candidate already advanced in Workable: warn BEFORE the
+          approve button. Advice, never a block — approving disqualifies them
+          in Workable, so the recruiter must knowingly confirm. */}
+      {!hideDecisionParts && isPending && postHandoverWarn ? (
+        <div className="rq-posthandover-banner" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.45 }}>
+          <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />
+          <span>
+            <strong>Heads up —</strong> this candidate is in{' '}
+            <strong>{decision.candidate_workable_stage || 'a live interview stage'}</strong> in
+            Workable. Approving this reject will disqualify them there. You can still
+            approve — just make sure that&apos;s intended.
+          </span>
+        </div>
+      ) : null}
 
       {/* Agent-recommends slab — near the TOP (preview order): the recommendation
           first, then reasoning + flags, with the secondary actions at the bottom. */}
@@ -140,7 +196,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             type="button"
             className="rq-rec-btn"
             onClick={() => onApprove(decision)}
-            disabled={busy}
+            disabled={frozen}
             title={primaryTitle}
           >
             <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
@@ -188,12 +244,12 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      {!hideDecisionParts && isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
+      {!hideDecisionParts && isStale && !rescoring && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
         <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>
           <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
           <span>
             {staleEngineOnly
-              ? 'This score is from an older model. Re-evaluate to re-score on the current engine.'
+              ? 'This score came from an older version of Taali’s scoring. Re-evaluate to refresh it.'
               : `Inputs changed since this was decided${stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.`}
           </span>
         </div>
@@ -255,7 +311,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                 type="button"
                 className="btn btn-outline btn-sm"
                 onClick={() => onReEvaluate(decision)}
-                disabled={busy}
+                disabled={frozen}
               >
                 <RefreshCw size={14} strokeWidth={2.4} aria-hidden="true" />
                 Re-evaluate
@@ -269,7 +325,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                   type="button"
                   className="btn btn-outline btn-sm"
                   onClick={() => onAlternative(decision, alt)}
-                  disabled={busy}
+                  disabled={frozen}
                   title={alt.body}
                 >
                   <AltIcon size={14} strokeWidth={2} aria-hidden="true" />
@@ -277,12 +333,12 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                 </button>
               );
             })}
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => onTeach(decision)} disabled={busy}>
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => onTeach(decision)} disabled={frozen}>
               <Brain size={14} strokeWidth={2} aria-hidden="true" />
               Send back &amp; teach
             </button>
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSnooze(decision)} disabled={busy}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSnooze(decision)} disabled={frozen}>
             Snooze 1h
           </button>
         </div>
@@ -290,7 +346,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         <div className="home-empty" style={{ marginTop: 12 }}>
           {decision.status === 'approved' ? 'Approved — actions are read-only.'
             : decision.status === 'overridden' ? 'Overridden — actions are read-only.'
-              : `Decision is ${decision.status}.`}
+              : `Decision is ${String(decision.status || '').replace(/_/g, ' ')} — actions are read-only.`}
         </div>
       )}
     </section>

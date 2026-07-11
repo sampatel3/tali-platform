@@ -20,13 +20,35 @@ from app.services.role_brief_service import find_ref_code
 from tests.conftest import auth_headers
 
 
+# Publish now enforces the same "all required fields filled" gate the UI does,
+# so these bridge tests (which aren't about validation) fill every required
+# template field by default. Column-backed fields go at the top level;
+# template-only fields (domain / urgency / responsibilities) live in
+# custom_fields. Callers override any column field via **fields.
+_REQUIRED_COLUMN_FIELDS = {
+    "title": "Backend Engineer",
+    "seniority": "senior",
+    "summary": "Build and own the payments API.",
+    "workplace_type": "remote",
+    "employment_type": "full_time",
+    "openings": 1,
+    "must_haves": ["Python", "Postgres"],
+    "success_profile": "Ships reliable services end-to-end.",
+}
+_REQUIRED_CUSTOM_FIELDS = {
+    "domain": "Fintech",
+    "urgency": "high",
+    "responsibilities": ["Design APIs", "On-call rotation"],
+}
+
+
 def _make_requisition(client, headers, **fields):
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
-    if fields:
-        resp = client.patch(
-            f"/api/v1/requisitions/{brief_id}", json=fields, headers=headers
-        )
-        assert resp.status_code == 200, resp.text
+    payload = {**_REQUIRED_COLUMN_FIELDS, **fields, "custom_fields": _REQUIRED_CUSTOM_FIELDS}
+    resp = client.patch(
+        f"/api/v1/requisitions/{brief_id}", json=payload, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
     return brief_id
 
 
@@ -211,7 +233,12 @@ def _publish_for_client(client, headers, client_id, title):
     bid = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
     client.patch(
         f"/api/v1/requisitions/{bid}",
-        json={"title": title, "client_id": client_id},
+        json={
+            **_REQUIRED_COLUMN_FIELDS,
+            "title": title,
+            "client_id": client_id,
+            "custom_fields": _REQUIRED_CUSTOM_FIELDS,
+        },
         headers=headers,
     )
     return client.post(

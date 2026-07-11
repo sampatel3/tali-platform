@@ -30,7 +30,6 @@ const _NOW = Date.now();
 const _prov = (hoursAgo) => ({
   engine_version: '2.1.0',
   scored_at: new Date(_NOW - hoursAgo * 60 * 60 * 1000).toISOString(),
-  model: 'Sonnet',
 });
 const MARKETING_DECISION_FEED_ROWS = [
   {
@@ -45,7 +44,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     score_summary: { score_provenance: _prov(0.2) },
     confidence: 0.91,
     reasoning:
-      "Clears every must-have with strong AWS + Python evidence. Assessment 88/100 — top of this role's pipeline. Ready for the technical panel.",
+      "She clears every must-have — the AWS and Python evidence is strong, and she scored 88 on the task, top of this role's pipeline. I'd put her in front of the technical panel.",
     created_at: new Date(_NOW - 6 * 60 * 1000).toISOString(),
   },
   {
@@ -60,7 +59,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     score_summary: { score_provenance: _prov(0.6) },
     confidence: 0.5,
     reasoning:
-      "Sub-agents split on systems-design depth — two said advance, one said assess again. I can't call this one confidently. Over to you.",
+      "I'm split on her systems-design depth — two of my checks said advance, one said assess again. I don't want to call this one for you. Take a look?",
     created_at: new Date(_NOW - 23 * 60 * 1000).toISOString(),
   },
   {
@@ -73,7 +72,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     role_name: 'Data Engineer',
     taali_score: null,
     reasoning:
-      "Pre-screen: the must-have Spark / streaming experience isn't evidenced, and the AI-tooling claims have no supporting projects. Not worth an assessment seat.",
+      "On pre-screen I couldn't find the Spark or streaming experience the role needs, and the AI-tooling claims have no projects behind them. I wouldn't spend an assessment seat here.",
     created_at: new Date(_NOW - 38 * 60 * 1000).toISOString(),
   },
   {
@@ -113,11 +112,14 @@ const dashboardCandidates = [
   { name: 'More candidates', status: 'view all', avatar: '+' },
 ];
 
+// Every live task is authored from the role's JD under a validation
+// contract, human-approved, then battle-tested in a sandbox — its
+// baseline tests must fail meaningfully — before any candidate sees it.
 const questionBankRows = [
   ['AI.01', 'GenAI production readiness review', 'Medium', 'amber'],
-  ['AI.01A', 'Tighten safety defaults during moderation outages', 'Hard', 'red'],
-  ['DE.01', 'AWS Glue pipeline recovery', 'Medium', 'amber'],
-  ['DE.01A', 'Fix schema drift, dedupe, and bookmark trust', 'Hard', 'red'],
+  ['AI.02', 'RAG evaluation harness recovery', 'Hard', 'red'],
+  ['DE.01', 'Source-to-Bronze ingestion design', 'Medium', 'amber'],
+  ['DE.02', 'Pipeline DAG recovery & backfill', 'Hard', 'red'],
 ];
 
 const howItWorksSteps = [
@@ -154,7 +156,7 @@ const proofItems = [
   },
   {
     title: 'Real AI',
-    body: 'Claude, Cursor, Copilot in-browser. We do not block them - we score how they use them.',
+    body: 'Claude, Cursor, Copilot in-browser. We do not block them - we score how candidates use them.',
   },
   {
     title: 'Every keystroke',
@@ -182,7 +184,7 @@ const footerColumns = [
     title: 'Company',
     items: [
       { label: 'Manifesto', section: 'problem' },
-      { label: 'Careers', page: 'demo-lead' },
+      { label: 'Careers', href: 'mailto:hello@taali.ai?subject=Careers%20at%20Taali' },
       { label: 'Blog', page: 'blog' },
       { label: 'Contact', href: 'mailto:hello@taali.ai' },
     ],
@@ -381,8 +383,8 @@ export const LandingPage = ({ onNavigate }) => {
               <div className="agent-header-inner">
                 <div className="agent-header-left">
                   <div className="ah-headings">
-                    <div className="ah-kicker">JOBS · 5 ACTIVE ROLES</div>
-                    <div className="ah-title-row"><h1>5 active <em>roles</em></h1></div>
+                    <div className="ah-kicker">JOBS · 5 LIVE ROLES</div>
+                    <div className="ah-title-row"><h1>5 live <em>roles</em></h1></div>
                     <p className="ah-subtitle">You&apos;re hiring. Star a role to keep its candidates flowing in automatically.</p>
                   </div>
                 </div>
@@ -424,7 +426,10 @@ export const LandingPage = ({ onNavigate }) => {
               </div>
             </div>
             <div className="px-6 py-5 bg-[var(--bg-2)]">
-              <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+              {/* Use the existing responsive KPI grid (2 cols default, 4 at
+                  >=900px) instead of an inline 4-col grid that can't respond —
+                  4 cols was unreadable on phones. */}
+              <div className="mc-jobs-kpis">
                 {[
                   { k: 'CANDIDATES PROCESSED', v: '847', d: 'this week' },
                   { k: 'INVITATIONS SENT', v: '312', d: 'auto-paced' },
@@ -466,7 +471,7 @@ export const LandingPage = ({ onNavigate }) => {
               {
                 n: '02',
                 t: 'Assess — for the AI era',
-                d: "Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI.",
+                d: "Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI — and whether they verified before calling it done. Every task is battle-tested in a sandbox before a candidate ever sees it.",
               },
               {
                 n: '03',
@@ -525,15 +530,15 @@ export const LandingPage = ({ onNavigate }) => {
                 We&apos;re the only platform that measures it.
               </h2>
               <p className="mt-5 text-[1rem] leading-[1.6] text-[var(--ink-2)]">
-                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
+                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a sandboxed runtime around it — exactly the way engineers ship now.
                 Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
-                Those traces feed one scorecard — five dimensions anchored on Anthropic&apos;s AI-Fluency framework: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
+                Those traces feed one scorecard — five dimensions, the 5 Ds: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
               </p>
               <ul className="mt-7 flex flex-col gap-3.5">
                 {[
-                  { t: 'AI collaboration score', d: 'Did they prompt well? Catch a hallucination? Know when not to use it?' },
+                  { t: 'AI collaboration score', d: 'Did they prompt well? Catch the trap we planted? Know when not to use it?' },
                   { t: 'Prompt-by-prompt replay', d: 'See exactly how they worked the agent — not just the final code.' },
-                  { t: 'Full session telemetry', d: 'Edit timeline, test runs, terminal output, file opens — everything tied back to the final report.' },
+                  { t: 'Full session telemetry', d: 'Edit timeline, sandboxed test runs, file opens — everything tied back to the final report.' },
                   { t: 'Autopilot detection', d: 'We flag candidates who pasted without reading. Calibrated, not punitive.' },
                 ].map((bullet) => (
                   <li key={bullet.t} className="flex items-start gap-3">
@@ -552,12 +557,12 @@ export const LandingPage = ({ onNavigate }) => {
             {/* Standing report — the five recruiter-facing axes the live
                 CandidateStandingReportPage renders (computeScorecard rolls the
                 rubric grades — with a heuristic fallback — into these five: the
-                4 Ds + Deliverable). Verdict uses the production band vocabulary
+                5 Ds — Delegation, Description, Discernment, Diligence, Deliverable). Verdict uses the production band vocabulary
                 (Strong Hire ≥ 80). Mock scores. */}
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[0.71875rem] text-[var(--mute)]">
                 <span>MAYA CHEN · CANDIDATE REPORT</span>
-                <span className="font-semibold text-[var(--purple)]">Strong Hire · Tali 86</span>
+                <span className="font-semibold text-[var(--purple)]">Strong Hire · Taali 86</span>
               </div>
               <div className="space-y-4 px-5 py-6">
                 {[
@@ -594,7 +599,7 @@ export const LandingPage = ({ onNavigate }) => {
               scrollbar (the snapshot has no internal scroll). */}
           <p className="mt-12 mb-3 text-[0.875rem] text-[var(--ink-2)]">
             <strong className="text-[var(--ink)]">Candidates work here.</strong>{' '}
-            Claude sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a live terminal. We watch every prompt.
+            The AI assistant sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a sandboxed runtime. We watch every prompt.
           </p>
           <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
             <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[0.6875rem] text-[var(--mute)]">
@@ -604,15 +609,8 @@ export const LandingPage = ({ onNavigate }) => {
               <span className="ml-3">app.taali.ai/assess/preview</span>
               <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--mute)]">Locked preview</span>
             </div>
-            <div style={{ height: 740, overflow: 'hidden', position: 'relative' }}>
-              <div
-                style={{
-                  width: '140%',
-                  height: 'calc(100% / 0.714)',
-                  transform: 'scale(0.714)',
-                  transformOrigin: 'top left',
-                }}
-              >
+            <div className="mc-landing-ide">
+              <div className="mc-landing-ide-scale">
                 <AssessmentRuntimePreviewView
                   staticPreview
                   heightClass="h-full"
@@ -652,7 +650,7 @@ export const LandingPage = ({ onNavigate }) => {
                 </h2>
                 <p className="mt-3 max-w-[35rem] text-[1rem] leading-[1.55] opacity-85">
                   Take the full product walkthrough — pre-loaded with a real role, no card, no install.
-                  Or book a 20-minute demo with a founder and we&apos;ll run it on a role of yours.
+                  Or tell us what you&apos;re hiring for and we&apos;ll follow up by email.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
@@ -670,7 +668,7 @@ export const LandingPage = ({ onNavigate }) => {
                   style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
                   onClick={() => onNavigate('demo-lead')}
                 >
-                  Book a demo →
+                  Get in touch →
                 </button>
               </div>
             </div>

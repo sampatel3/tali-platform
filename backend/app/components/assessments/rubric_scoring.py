@@ -127,6 +127,10 @@ class ScoringArtifacts:
     # check the candidate caught. Each: {id, planted, tell, where?}. Empty =
     # the task declared none. See interrogation.validate_traps (PR-9).
     traps: List[Dict[str, Any]] = field(default_factory=list)
+    # Deterministic process counts (process_features.compute_process_features)
+    # — the loop skeleton (test runs, challenges, cadence) handed to the LLM
+    # judge so it doesn't have to infer counts from a truncated transcript.
+    process_features: Dict[str, Any] = field(default_factory=dict)
 
     def repo_files_excerpt(self) -> str:
         """Concatenated repo files for prompt embedding (bounded)."""
@@ -149,6 +153,12 @@ class ScoringArtifacts:
         if len(self.design_doc) > _MAX_DESIGN_DOC_CHARS:
             return self.design_doc[:_MAX_DESIGN_DOC_CHARS] + "\n... (truncated)"
         return self.design_doc
+
+    def process_features_excerpt(self) -> str:
+        """Deterministic process counts for the grader. Empty when absent."""
+        from .process_features import render_process_features
+
+        return render_process_features(self.process_features)
 
     def prompt_transcript_excerpt(self) -> str:
         if not self.prompt_transcript:
@@ -592,6 +602,15 @@ def _build_user_prompt(
             "whether the candidate CAUGHT and rejected these (strong signal) vs. "
             "accepted them uncritically (poor):\n"
             f"{traps_text}"
+        )
+    process_text = artifacts.process_features_excerpt()
+    if process_text:
+        sections.append(
+            f"{process_text}\n"
+            "Use these counts as ground truth over impressions from the excerpt "
+            "(the transcript above may be truncated). Session or prompt LENGTH "
+            "is not skill — do not reward verbosity; judge what the counts and "
+            "evidence show the candidate actually did."
         )
     sections.append(
         "Final repository state (candidate's submitted code):\n"

@@ -1,5 +1,15 @@
 import React from 'react';
 
+const SCORE_LABELS = {
+  taali: 'Taali',
+  pre_screen: 'Pre-screen',
+  rank: 'Rank',
+  cv_match: 'CV match',
+  workable: 'Workable',
+  assessment: 'Assessment',
+  role_fit: 'Role fit',
+};
+
 // Displays the result of `compare_applications`. Highlights the highest
 // score per row with a soft-purple wash (in-scheme — no traffic-light
 // green) so a recruiter can pick out leaders fast.
@@ -48,7 +58,7 @@ const ComparisonTable = ({ payload }) => {
             const best = bestForRow(key);
             return (
               <tr key={key}>
-                <td>{key}</td>
+                <td>{SCORE_LABELS[key] || key}</td>
                 {apps.map((a) => {
                   const v = a.scores?.[key];
                   const isBest = v != null && v === best && apps.length > 1;

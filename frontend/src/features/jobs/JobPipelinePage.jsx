@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   BriefcaseBusiness,
   ChevronDown,
@@ -13,16 +13,17 @@ import * as apiClient from '../../shared/api';
 import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
-import { Spinner, Dialog, Button } from '../../shared/ui/TaaliPrimitives';
+import { Dialog, Button } from '../../shared/ui/TaaliPrimitives';
+import { SkeletonTable } from '../../shared/ui/Skeleton';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
-import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
 import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
 import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import SubmittalPackDialog from './SubmittalPackDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
@@ -52,16 +53,49 @@ import { KpiStrip } from '../../shared/ui/KpiStrip';
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
 const EMPTY_PRE_SCREEN_PROGRESS = { status: 'idle', total: 0, processed: 0, errors: 0, refresh: false };
-const EMPTY_CONFIRM = { open: false, action: null, bullets: [], loading: false, dryRunLoading: false };
+
+// Mirror of backend settings.PRE_SCREEN_THRESHOLD (config.py). The agent's
+// auto-scoring pass (_auto_enqueue_scoring) skips unscored candidates whose
+// pre-screen score sits below this cutoff — they were screened OUT, and
+// re-scoring them just reproduces the same verdict.
+const PRE_SCREEN_FILTER_THRESHOLD = 30;
 // Kanban columns + segmented stage filters — keys are the shared funnel
 // buckets (applicationFunnelBucket) so they read identically to the funnel.
 const PIPELINE_STAGE_ORDER = [
   { key: 'applied', label: 'Applied', countLabel: 'new' },
-  { key: 'scored', label: 'Scored', countLabel: 'to send' },
-  { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
-  { key: 'completed', label: 'Completed', countLabel: 'decision' },
-  { key: 'advanced', label: 'Advanced', countLabel: 'recruiter' },
+  { key: 'scored', label: 'Scored', countLabel: 'ready to invite' },
+  { key: 'invited', label: 'Invited', countLabel: 'awaiting response' },
+  { key: 'completed', label: 'Completed', countLabel: 'need a decision' },
+  { key: 'advanced', label: 'Advanced', countLabel: 'with you' },
 ];
+
+// Hover-intent CV prefetch. A recruiter sweeping the cursor down a long table
+// would otherwise fire a presigned-S3 PDF download per row crossed — a burst
+// of parallel multi-MB requests they never asked for, competing with the
+// page's own traffic on the UAE link. Gate it: only prefetch when the pointer
+// rests on a row for HOVER_INTENT_MS, and cap concurrent hover prefetches so a
+// held-down scroll can't queue dozens at once.
+const HOVER_INTENT_MS = 200;
+const HOVER_PREFETCH_MAX = 3;
+let hoverPrefetchActive = 0;
+const makeHoverPrefetch = () => {
+  let timer = null;
+  const start = (applicationId) => {
+    if (timer) window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      timer = null;
+      if (hoverPrefetchActive >= HOVER_PREFETCH_MAX) return;
+      hoverPrefetchActive += 1;
+      Promise.resolve(prefetchDocumentBlob({ applicationId, docType: 'cv' }))
+        .catch(() => {})
+        .finally(() => { hoverPrefetchActive = Math.max(0, hoverPrefetchActive - 1); });
+    }, HOVER_INTENT_MS);
+  };
+  const cancel = () => {
+    if (timer) { window.clearTimeout(timer); timer = null; }
+  };
+  return { start, cancel };
+};
 
 const normalizeThreshold = (value) => {
   const numeric = Number(value);
@@ -151,11 +185,12 @@ const resolvePipelineCardFooterStatus = (application, pendingDecision = null) =>
     if (pendingDecision) return 'Decision ready';
     return resolveAssessmentId(application) ? 'Completed — your decision' : 'With recruiter';
   }
-  return resolveAssessmentId(application) ? 'Assessment linked' : 'No task yet';
+  return resolveAssessmentId(application) ? 'Assessment linked' : 'No assessment yet';
 };
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
+  const navigate = useNavigate();
   const rolesApi = apiClient.roles;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const { showToast } = useToast();
@@ -163,8 +198,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     jobs,
     processJobs,
     trackRole,
-    trackRoleFetchCvs,
-    trackRolePreScreen,
     trackRoleProcess,
   } = useJobStatus() ?? {};
   void onViewCandidate;
@@ -203,13 +236,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         limit: 50,
       });
       const list = Array.isArray(res?.data) ? res.data : [];
-      setPendingAgentDecisions(
-        list.reduce((acc, decision) => {
-          const appId = Number(decision?.application_id);
-          if (Number.isFinite(appId)) acc[appId] = decision;
-          return acc;
-        }, {}),
-      );
+      const next = list.reduce((acc, decision) => {
+        const appId = Number(decision?.application_id);
+        if (Number.isFinite(appId)) acc[appId] = decision;
+        return acc;
+      }, {});
+      // Bail out of setState when the poll returns the same decisions (same
+      // ids, same key set) so the 30s tick doesn't re-render + re-sort the
+      // whole table when nothing changed.
+      setPendingAgentDecisions((prev) => {
+        const prevKeys = Object.keys(prev);
+        const nextKeys = Object.keys(next);
+        if (prevKeys.length === nextKeys.length
+          && nextKeys.every((k) => prev[k]?.id === next[k]?.id)) {
+          return prev;
+        }
+        return next;
+      });
     } catch {
       // Quiet failure — the kanban cards just fall back to the
       // score-based decision verb until next poll succeeds.
@@ -228,7 +271,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setResolvingDecisionId(decisionId);
     try {
       await apiClient.agent.approveDecision(decisionId);
-      showToast(`Approved agent recommendation #${decisionId}`, 'success');
+      showToast('Recommendation approved.', 'success');
       setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
@@ -242,7 +285,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setResolvingDecisionId(decisionId);
     try {
       await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
-      showToast(`Overrode agent recommendation #${decisionId}`, 'info');
+      showToast('Recommendation overridden — the candidate stays in your queue for manual review.', 'info');
       setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
@@ -265,10 +308,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [roleApplications, setRoleApplications] = useState([]);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
-  const [confirmAction, setConfirmAction] = useState(EMPTY_CONFIRM);
   const [processDialogOpen, setProcessDialogOpen] = useState(false);
+  const [submittalDialogOpen, setSubmittalDialogOpen] = useState(false);
   const [syncingStages, setSyncingStages] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Set only on a cold-load failure with nothing cached to paint — drives the
+  // in-page error state (with Retry) instead of stranding an empty shell.
+  const [loadError, setLoadError] = useState('');
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [suggestedThreshold, setSuggestedThreshold] = useState(null);
@@ -372,6 +418,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // don't silently fire when the recruiter jumps tabs.
   const [selectedAppIds, setSelectedAppIds] = useState(() => new Set());
   useEffect(() => { setSelectedAppIds(new Set()); }, [tableStageFilter]);
+  // Table windowing — render the first PAGE_SIZE rows and reveal more on
+  // demand. A thousand-applicant role otherwise mounts thousands of <tr>
+  // (each with a ScoreProvenance subtree + hover prefetch), so every poll
+  // tick re-diffs the lot. Reset the window whenever the filter or sort
+  // changes so "Load more" always counts from the top of the fresh list.
+  const TABLE_PAGE_SIZE = 100;
+  const [tableVisibleCount, setTableVisibleCount] = useState(TABLE_PAGE_SIZE);
+  useEffect(() => {
+    setTableVisibleCount(TABLE_PAGE_SIZE);
+  }, [tableStageFilter, tableSortField, tableSortBy]);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
   const [candidateSheetError, setCandidateSheetError] = useState('');
@@ -389,6 +445,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // a warm revalidate skips the (stale) cache repaint.
   const loadSeqRef = useRef(0);
   const loadedRoleIdRef = useRef(null);
+  // One hover-intent controller for the whole page (rows + kanban cards share
+  // it, so moving between them cancels the prior pending prefetch).
+  const hoverPrefetchRef = useRef(null);
+  if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeHoverPrefetch();
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -400,6 +460,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     const cacheKey = `role-workspace:${numericRoleId}`;
     const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
     const cached = isColdForRole ? readCache(cacheKey) : null;
+    setLoadError('');
     if (cached?.data) {
       const c = cached.data;
       setRole(c.role || null);
@@ -481,12 +542,56 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         setRole(null);
         setRoleTasks([]);
         setRoleApplications([]);
+        setLoadError(getErrorMessage(error, 'Failed to load this job.'));
         showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
       }
     } finally {
       setLoading(false);
     }
   }, [numericRoleId, rolesApi, showToast, trackRole]);
+
+  // Patch a SINGLE application row after a single-candidate mutation instead
+  // of reloading the whole workspace (which refetches up to 2×2000 rows over
+  // the UAE→us-east4 link for one rejected/moved candidate). Refetches just
+  // that application AND the (cheap) role record so the FunnelBoard + KPI strip
+  // aggregates don't stay stale all session — the idle page has no periodic
+  // workspace reload to reconcile them. A missing id or a failed refetch is a
+  // no-op; the derived buckets (active/rejected) re-derive from the merged row.
+  const patchApplicationRow = useCallback(async (applicationId) => {
+    const numericId = Number(applicationId);
+    if (!Number.isFinite(numericId) || !rolesApi?.getApplication) return;
+    try {
+      const [appRes, roleRes] = await Promise.all([
+        rolesApi.getApplication(numericId),
+        Number.isFinite(numericRoleId) && rolesApi?.get
+          ? rolesApi.get(numericRoleId).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const fresh = appRes?.data;
+      if (fresh?.id) {
+        setRoleApplications((apps) => {
+          const exists = apps.some((a) => Number(a?.id) === numericId);
+          return exists
+            ? apps.map((a) => (Number(a?.id) === numericId ? fresh : a))
+            : [...apps, fresh];
+        });
+      }
+      // Merge ONLY the aggregate fields the funnel/KPIs read — a full setRole
+      // would revert optimistic role edits (agent on/off, budget) that the
+      // /agent/status poll hasn't caught up to yet.
+      const nextRole = roleRes?.data;
+      if (nextRole) {
+        setRole((cur) => (cur ? {
+          ...cur,
+          stage_counts: nextRole.stage_counts ?? cur.stage_counts,
+          active_candidates_count: nextRole.active_candidates_count ?? cur.active_candidates_count,
+          pending_decisions_by_type: nextRole.pending_decisions_by_type ?? cur.pending_decisions_by_type,
+        } : cur));
+      }
+    } catch {
+      // Quiet — the row keeps its last-known state until the next full load.
+    }
+  }, [rolesApi, numericRoleId]);
 
   // Pull this role's candidates' CURRENT Workable stages on demand — the manual
   // recovery for when the periodic sync lags or a Taali-side move raced a stale
@@ -574,6 +679,40 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     activeApplications.filter((application) => application?.cv_match_score == null)
   ), [activeApplications]);
 
+  // "New CVs" must reflect what the agent's auto-scoring pass would actually
+  // pick up (backend _auto_enqueue_scoring), not every null-score app —
+  // otherwise a pre-screen-filtered cohort reads as "35 ready to score" while
+  // the agent (correctly) touches none of them, and looks stuck. Held back:
+  // pre-screen-filtered (screened OUT below the global cutoff, no newer CV
+  // since that run) and no-CV (nothing to score). The backend's third skip —
+  // error backoff — isn't visible in the list payload, so it isn't mirrored.
+  const newCvBreakdown = useMemo(() => {
+    let scoreable = 0;
+    let preScreenFiltered = 0;
+    let noCv = 0;
+    for (const application of unscoredApplications) {
+      // has_cv_text mirrors the auto-scorer's exact cv_text filter (a CV file
+      // can exist while extraction produced nothing). Fall back to the file
+      // metadata for cached payloads written before the field existed.
+      const hasCvText = application?.has_cv_text
+        ?? Boolean(application?.cv_uploaded_at || application?.cv_filename);
+      if (!hasCvText) {
+        noCv += 1;
+        continue;
+      }
+      const cvAt = Date.parse(application?.cv_uploaded_at || '');
+      const runAt = Date.parse(application?.pre_screen_run_at || '');
+      const freshCv = Number.isFinite(cvAt) && Number.isFinite(runAt) && cvAt > runAt;
+      const preScreen = Number(application?.pre_screen_score);
+      if (Number.isFinite(preScreen) && preScreen < PRE_SCREEN_FILTER_THRESHOLD && !freshCv) {
+        preScreenFiltered += 1;
+      } else {
+        scoreable += 1;
+      }
+    }
+    return { scoreable, preScreenFiltered, noCv };
+  }, [unscoredApplications]);
+
   const thresholdValue = useMemo(
     () => resolveOptionalPercent(role?.score_threshold),
     [role?.score_threshold]
@@ -615,12 +754,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         value: formatCount(role?.active_candidates_count || activeApplications.length || 0),
         sub: `${formatCount(role?.stage_counts?.completed || 0)} completed`,
       },
-      {
-        key: 'unscored',
-        label: 'New CVs',
-        value: formatCount(unscoredApplications.length),
-        sub: unscoredApplications.length > 0 ? 'ready to score' : 'all visible CVs scored',
-      },
+      (() => {
+        const { scoreable, preScreenFiltered, noCv } = newCvBreakdown;
+        const held = [
+          preScreenFiltered > 0 ? `${formatCount(preScreenFiltered)} pre-screen filtered` : null,
+          noCv > 0 ? `${formatCount(noCv)} no CV` : null,
+        ].filter(Boolean);
+        return {
+          key: 'unscored',
+          label: 'New CVs',
+          value: formatCount(scoreable),
+          sub: held.length
+            ? [scoreable > 0 ? 'ready to score' : null, ...held].filter(Boolean).join(' · ')
+            : (scoreable > 0 ? 'ready to score' : 'all visible CVs scored'),
+          subTitle: held.length
+            ? 'Pre-screen filtered candidates scored below the pre-screen cutoff and are only re-run when a newer CV arrives; no-CV candidates have nothing to score. Neither is picked up by auto-scoring.'
+            : null,
+        };
+      })(),
       {
         key: 'below-threshold',
         label: 'Below threshold',
@@ -648,7 +799,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         sub: budget.sub,
       },
     ];
-  }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
+  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, role, thresholdValue]);
 
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
@@ -657,6 +808,36 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     })),
     { key: 'rejected', label: 'Rejected', countLabel: 'closed', items: rejectedApplications },
   ], [activeApplications, rejectedApplications]);
+
+  // Candidates-table rows: filter by the active stage segment, then sort by
+  // the chosen column. Memoized on the data + sort so the 30s decision/agent
+  // polls don't re-filter and re-sort thousands of rows on every tick (this
+  // used to run inline in render). Rendering is windowed via tableVisibleCount.
+  const sortedTableApplications = useMemo(() => {
+    const filtered = tableStageFilter === 'rejected'
+      ? rejectedApplications
+      : tableStageFilter === 'all'
+        ? activeApplications
+        : activeApplications.filter((a) => applicationFunnelBucket(a) === tableStageFilter);
+    const cmpScore = (a) => {
+      const raw = a?.score_summary?.taali_score
+        ?? a?.taali_score
+        ?? a?.assessment_score
+        ?? a?.cv_match_score;
+      // raw == null guard: Number(null) === 0 IS finite, so unscored sorts as a real zero without it.
+      return raw != null && Number.isFinite(Number(raw)) ? Number(raw) : -1;
+    };
+    // Last-activity sort key — server-computed last_activity_at, with fallbacks.
+    const cmpLastUpdated = (a) => {
+      const raw = a?.last_activity_at || a?.updated_at || a?.created_at;
+      const ms = raw ? new Date(raw).getTime() : NaN;
+      return Number.isFinite(ms) ? ms : -Infinity;
+    };
+    const sortKey = tableSortField === 'last_updated' ? cmpLastUpdated : cmpScore;
+    return [...filtered].sort((a, b) => (
+      tableSortBy === 'asc' ? sortKey(a) - sortKey(b) : sortKey(b) - sortKey(a)
+    ));
+  }, [activeApplications, rejectedApplications, tableStageFilter, tableSortField, tableSortBy]);
 
   // Recruiter chips on this role (excludes derived_from_spec entries — those
   // come from the job spec parser). Used for the read-view "Recruiter
@@ -705,160 +886,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     employment: role?.employment_type || parsedJobSpec.meta.employmentType || 'Full-time',
   }), [parsedJobSpec.meta.department, parsedJobSpec.meta.employmentType, parsedJobSpec.meta.location, role?.candidate_location, role?.department, role?.employment_type, role?.location, role?.organization_name]);
 
-  // ---------------------------------------------------------------------------
-  // Confirmation flow for batch actions
-  //
-  // Each batch action (fetch CVs, pre-screen, score, rescore, refresh
-  // pre-screen) goes through the same 3-step flow:
-  //   1. User clicks button → openConfirm({ action: 'pre_screen_new' })
-  //   2. We fire the action's dry_run, populate `bullets`, show the dialog
-  //   3. On confirm → call the action without dry_run, close the dialog
-  // ---------------------------------------------------------------------------
-  const openConfirm = async (action) => {
-    if (!Number.isFinite(numericRoleId)) return;
-    setConfirmAction({
-      open: true,
-      action,
-      bullets: [],
-      loading: false,
-      dryRunLoading: true,
-    });
-    try {
-      let bullets = [];
-      let title = '';
-      let description = '';
-      let warning = null;
-      let confirmLabel = 'Run';
-      let variant = 'primary';
-      if (action === 'fetch_cvs') {
-        const dr = await rolesApi.fetchCvs(numericRoleId, { dry_run: true });
-        const willFetch = Number(dr?.data?.will_fetch || 0);
-        title = 'Fetch CVs from Workable';
-        description = `Pull missing CVs for candidates in this role.`;
-        bullets = [{ label: 'Will fetch', value: willFetch }];
-        confirmLabel = `Fetch ${willFetch} CV${willFetch === 1 ? '' : 's'}`;
-        if (willFetch === 0) confirmLabel = 'Nothing to do';
-      } else if (action === 'pre_screen_new' || action === 'pre_screen_refresh') {
-        const refresh = action === 'pre_screen_refresh';
-        const dr = await rolesApi.batchPreScreen(numericRoleId, { dry_run: true, refresh });
-        const willProcess = Number(dr?.data?.will_process || 0);
-        const noCv = Number(dr?.data?.total_without_cv || 0);
-        title = refresh ? 'Refresh pre-screen' : 'Pre-screen new candidates';
-        description = refresh
-          ? 'Re-run pre-screen on every candidate with a CV. Existing scores remain.'
-          : 'Run pre-screen on candidates that have a CV but have not been pre-screened yet (or whose CV was uploaded after the last pre-screen).';
-        bullets = [
-          { label: 'Will pre-screen', value: willProcess },
-          ...(noCv ? [{ label: 'Skipped (no CV)', value: noCv }] : []),
-        ];
-        if (refresh) warning = 'Existing pre-screen results will be overwritten.';
-        confirmLabel = willProcess
-          ? `Pre-screen ${willProcess}`
-          : 'Nothing to do';
-      } else if (action === 'score_new' || action === 'score_rescore') {
-        const includeScored = action === 'score_rescore';
-        const dr = await rolesApi.batchScore(numericRoleId, { include_scored: includeScored, dry_run: true });
-        const willFetch = Number(dr?.data?.will_fetch_cv || 0);
-        const willPre = Number(dr?.data?.will_pre_screen || 0);
-        const willScore = Number(dr?.data?.will_score || 0);
-        title = includeScored ? 'Re-score all candidates' : 'Score new candidates';
-        description = includeScored
-          ? 'Re-score every candidate with a CV. Pre-screen runs again only for candidates whose CV has changed.'
-          : 'For each candidate: fetch CV if missing, pre-screen if not yet done, then score. Skips candidates already scored or marked Below threshold.';
-        bullets = [
-          { label: 'Will fetch CV', value: willFetch },
-          { label: 'Will pre-screen', value: willPre },
-          { label: 'Will score', value: willScore },
-        ];
-        if (includeScored) warning = 'Existing scores will be overwritten.';
-        variant = includeScored ? 'danger' : 'primary';
-        confirmLabel = willScore
-          ? (includeScored ? `Re-score ${willScore}` : `Score ${willScore}`)
-          : 'Nothing to do';
-      } else {
-        title = 'Confirm';
-        description = 'Confirm this action.';
-      }
-      setConfirmAction({
-        open: true,
-        action,
-        bullets,
-        title,
-        description,
-        warning,
-        confirmLabel,
-        variant,
-        loading: false,
-        dryRunLoading: false,
-      });
-    } catch (error) {
-      setConfirmAction(EMPTY_CONFIRM);
-      showToast(getErrorMessage(error, 'Failed to preview action.'), 'error');
-    }
-  };
-
-  const closeConfirm = () => setConfirmAction(EMPTY_CONFIRM);
-
-  const runConfirmedAction = async () => {
-    if (!Number.isFinite(numericRoleId)) return;
-    const action = confirmAction.action;
-    setConfirmAction((s) => ({ ...s, loading: true }));
-    try {
-      if (action === 'fetch_cvs') {
-        const res = await rolesApi.fetchCvs(numericRoleId);
-        const payload = res?.data || EMPTY_FETCH_PROGRESS;
-        setFetchCvsProgress({
-          status: payload.status || 'started',
-          total: Number(payload.total || 0),
-          fetched: Number(payload.fetched || 0),
-          errors: Number(payload.errors || 0),
-        });
-        if (payload.status !== 'already_running' && Number(payload.total || 0) > 0) {
-          // Hand off to the global toaster — it polls /fetch-cvs/status and
-          // shows the row in the bottom-right.
-          trackRoleFetchCvs?.(numericRoleId);
-        }
-      } else if (action === 'pre_screen_new' || action === 'pre_screen_refresh') {
-        const refresh = action === 'pre_screen_refresh';
-        const res = await rolesApi.batchPreScreen(numericRoleId, { refresh });
-        const payload = res?.data || EMPTY_PRE_SCREEN_PROGRESS;
-        setPreScreenProgress({
-          status: payload.status || 'started',
-          total: Number(payload.total || 0),
-          processed: Number(payload.processed || 0),
-          errors: Number(payload.errors || 0),
-          refresh: Boolean(payload.refresh || refresh),
-        });
-        if (payload.status === 'nothing_to_pre_screen') {
-          showToast('No candidates need pre-screening right now.', 'info');
-        } else {
-          trackRolePreScreen?.(numericRoleId);
-        }
-      } else if (action === 'score_new' || action === 'score_rescore') {
-        const includeScored = action === 'score_rescore';
-        const res = await rolesApi.batchScore(numericRoleId, includeScored ? { include_scored: true } : {});
-        const payload = res?.data || EMPTY_PROGRESS;
-        setBatchScoreProgress({
-          status: payload.status || 'started',
-          total: Number(payload.total || payload.total_target || 0),
-          scored: Number(payload.scored || 0),
-          errors: Number(payload.errors || 0),
-          include_scored: Boolean(payload.include_scored || includeScored),
-        });
-        if (payload.status === 'nothing_to_score') {
-          showToast(includeScored ? 'No CVs available to score.' : 'No newly added CVs need scoring.', 'info');
-        } else {
-          // Hand off to the global job-status context — it owns the polling
-          // and renders progress in the BackgroundJobsToaster.
-          trackRole?.(numericRoleId);
-        }
-      }
-      setConfirmAction(EMPTY_CONFIRM);
-    } catch (error) {
-      setConfirmAction((s) => ({ ...s, loading: false }));
-      showToast(getErrorMessage(error, 'Action failed.'), 'error');
-    }
-  };
+  // NOTE: the legacy 3-step batch-action confirm flow (openConfirm /
+  // runConfirmedAction / ConfirmActionDialog) was removed here — it was dead
+  // (nothing called openConfirm since ProcessCandidatesDialog took over) and
+  // its score branch referenced an undefined setBatchScoreProgress, a
+  // ReferenceError waiting for anyone who re-wired a button to it. Batch
+  // progress is owned by JobStatusContext; ProcessCandidatesDialog owns the
+  // cascade run.
 
   const handleSaveRoleConfig = async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1108,6 +1142,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     roleApplications,
     roleTasks,
     loadRoleWorkspace,
+    patchApplicationRow,
     showToast,
     rolesApi,
     viewCandidateReport,
@@ -1159,8 +1194,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       <div>
         {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
         <div className="page">
-          <div className="flex min-h-[17.5rem] items-center justify-center">
-            <Spinner size={22} />
+          <SkeletonTable rows={8} />
+        </div>
+      </div>
+    );
+  }
+
+  // Cold-load failure with nothing to paint — a real in-page error state with
+  // Retry and a way back to Jobs, instead of stranding an empty shell after
+  // the toast auto-dismisses. Routine for UAE users on a flaky link.
+  if (!loading && !role && loadError) {
+    return (
+      <div>
+        {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
+        <div className="page">
+          <div className="ctable-wrap" style={{ padding: '2rem', textAlign: 'center' }}>
+            <p style={{ marginBottom: '1rem', color: 'var(--ink-2)' }}>
+              {loadError} Check your connection and try again.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+              <Button type="button" variant="primary" onClick={() => { void loadRoleWorkspace(); }}>
+                Retry
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => onNavigate('jobs')}>
+                Back to Jobs
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -1293,11 +1352,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 className="btn btn-outline btn-sm"
                 title={`${roleAgent.pending} pending agent decisions for this role`}
                 onClick={() => {
+                  // SPA nav — a full document reload here re-downloads the JS
+                  // bundle and re-runs the auth/bootstrap chain (several extra
+                  // UAE round-trips) and discards in-memory state.
                   const params = new URLSearchParams({
                     role: String(role?.id || ''),
                     status: 'pending',
                   });
-                  window.location.assign(`/home?${params.toString()}`);
+                  navigate(`/home?${params.toString()}`);
                 }}
               >
                 {roleAgent.pending} pending → Home
@@ -1334,7 +1396,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
             <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
             <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-            <div className="f"><span className="k">{roleTasks.length > 1 ? 'Tasks · A/B' : 'Linked task'}</span><span className="v purple">{roleTasks.length ? roleTasks.map((t) => t.name).join(' · ') : 'Task not linked'}</span></div>
+            <div className="f"><span className="k">{roleTasks.length > 1 ? 'Tasks · A/B' : 'Linked task'}</span><span className="v purple">{roleTasks.length ? roleTasks.map((t) => t.name).join(' · ') : 'Not linked yet'}</span></div>
           </div>
         )}
         agent={roleAgent}
@@ -1401,7 +1463,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                           className={`kanban-card text-left ${isReview ? 'is-review' : ''}`}
                           href={candidateReportHref(application, numericRoleId)}
                           onClick={(event) => handlePipelineReportClick(event, application)}
-                          onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
+                          onMouseEnter={() => hoverPrefetchRef.current.start(application.id)}
+                          onMouseLeave={() => hoverPrefetchRef.current.cancel()}
                         >
                           <div className="cc-top">
                             <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
@@ -1547,14 +1610,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             }}
             onAutonomyChange={async (key, value) => {
               if (!Number.isFinite(numericRoleId)) return;
-              if (key !== 'auto_reject' && key !== 'auto_promote') return;
+              const labels = {
+                auto_reject: 'Auto-reject',
+                auto_reject_pre_screen: 'Auto-reject pre-screen only',
+                auto_promote: 'Auto-promote',
+                auto_skip_assessment: 'Auto skip assessment',
+              };
+              if (!labels[key]) return;
               setRole((cur) => (cur ? { ...cur, [key]: value } : cur));
               try {
                 await rolesApi.update(numericRoleId, { [key]: value });
                 showToast(
-                  value
-                    ? `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} on — agent will execute without approval.`
-                    : `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} off — every decision goes to the Decision Hub.`,
+                  key === 'auto_skip_assessment'
+                    ? (value
+                      ? 'Auto skip assessment on — strong candidates queue for advance instead of receiving an assessment.'
+                      : 'Auto skip assessment off — assessment invites resume for this role.')
+                    : (value
+                      ? `${labels[key]} on — agent will execute without approval.`
+                      : `${labels[key]} off — every decision goes to the Decision Hub.`),
                   'success',
                 );
               } catch (error) {
@@ -1759,6 +1832,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   )}
                 </button>
               ) : null}
+              {/* WS2 — curated multi-candidate client submittal. Only offered
+                  once the recruiter has ticked the candidates to include, so it
+                  reads as an action on the current selection. */}
+              {selectedAppIds.size > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => setSubmittalDialogOpen(true)}
+                  title="Share a curated, client-safe shortlist for this role as one link"
+                >
+                  <Share2 size={12} />Create submittal pack
+                </button>
+              ) : null}
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
                   recruiter action: cascade Process opened via
                   ProcessCandidatesDialog. Label flips live during runs. */}
@@ -1794,30 +1880,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 role detail page. The standalone /candidates route still
                 uses the directory. */}
             {(() => {
-              const activeStage = tableStageFilter;
-              const filteredApps = activeStage === 'rejected'
-                ? rejectedApplications
-                : activeStage === 'all'
-                  ? activeApplications
-                  : activeApplications.filter((a) => applicationFunnelBucket(a) === activeStage);
-              const cmpScore = (a) => {
-                const raw = a?.score_summary?.taali_score
-                  ?? a?.taali_score
-                  ?? a?.assessment_score
-                  ?? a?.cv_match_score;
-                // raw == null guard: Number(null) === 0 IS finite, so unscored sorts as a real zero without it.
-                return raw != null && Number.isFinite(Number(raw)) ? Number(raw) : -1;
-              };
-              // Last-activity sort key — server-computed last_activity_at, with fallbacks.
-              const cmpLastUpdated = (a) => {
-                const raw = a?.last_activity_at || a?.updated_at || a?.created_at;
-                const ms = raw ? new Date(raw).getTime() : NaN;
-                return Number.isFinite(ms) ? ms : -Infinity;
-              };
-              const sortKey = tableSortField === 'last_updated' ? cmpLastUpdated : cmpScore;
-              const sorted = [...filteredApps].sort((a, b) => (
-                tableSortBy === 'asc' ? sortKey(a) - sortKey(b) : sortKey(b) - sortKey(a)
-              ));
+              const sorted = sortedTableApplications;
               if (sorted.length === 0) {
                 return (
                   <div className="ctable-wrap">
@@ -1827,7 +1890,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </div>
                 );
               }
-              const visibleIds = sorted.map((a) => a.id);
+              // Window: only render the first tableVisibleCount rows. "Select
+              // all" and "Load more" both operate on the rendered window, so a
+              // recruiter never ticks rows they can't see.
+              const visible = sorted.slice(0, tableVisibleCount);
+              const hiddenCount = sorted.length - visible.length;
+              const visibleIds = visible.map((a) => a.id);
               const allSel = visibleIds.length > 0 && visibleIds.every((id) => selectedAppIds.has(id));
               const someSel = visibleIds.some((id) => selectedAppIds.has(id));
               const toggleAll = (checked) => { const next = new Set(selectedAppIds); visibleIds.forEach((id) => { if (checked) next.add(id); else next.delete(id); }); setSelectedAppIds(next); };
@@ -1851,7 +1919,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       </tr>
                     </thead>
                     <tbody>
-                      {sorted.map((application) => {
+                      {visible.map((application) => {
                         const stage = String(application?.pipeline_stage || '').toLowerCase();
                         const compositeRaw = application?.score_summary?.taali_score
                           ?? application?.taali_score
@@ -1879,7 +1947,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             <tr
                               className={isAgentRow ? 'agent-row' : ''}
                               onClick={(event) => handlePipelineReportClick(event, application)}
-                              onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
+                              onMouseEnter={() => hoverPrefetchRef.current.start(application.id)}
+                              onMouseLeave={() => hoverPrefetchRef.current.cancel()}
                               style={{ cursor: 'pointer' }}
                             >
                               <td onClick={(e) => e.stopPropagation()} style={{ width: 28 }}><input type="checkbox" aria-label={`Select ${buildApplicationTitle(application)}`} checked={isSelected} onChange={() => { const next = new Set(selectedAppIds); if (next.has(application.id)) next.delete(application.id); else next.add(application.id); setSelectedAppIds(next); }} /></td>
@@ -1939,6 +2008,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       })}
                     </tbody>
                   </table>
+                  {hiddenCount > 0 ? (
+                    <div className="ctable-more">
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={() => setTableVisibleCount((n) => n + TABLE_PAGE_SIZE)}
+                      >
+                        Show more — {formatCount(hiddenCount)} not shown
+                      </button>
+                      <span className="ctable-more-count">
+                        Showing {formatCount(visible.length)} of {formatCount(sorted.length)}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
               );
             })()}
@@ -1955,21 +2038,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           error={candidateSheetError}
           onClose={() => setCandidateSheetOpen(false)}
           onSubmit={handleCandidateSubmit}
-        />
-
-        <ConfirmActionDialog
-          open={confirmAction.open}
-          title={confirmAction.title}
-          description={confirmAction.description}
-          bullets={confirmAction.bullets}
-          warning={confirmAction.warning}
-          confirmLabel={confirmAction.confirmLabel || 'Confirm'}
-          variant={confirmAction.variant || 'primary'}
-          loading={confirmAction.loading}
-          loadingLabel={confirmAction.dryRunLoading ? 'Loading…' : 'Starting…'}
-          disabled={confirmAction.dryRunLoading}
-          onClose={closeConfirm}
-          onConfirm={runConfirmedAction}
         />
 
         <Dialog
@@ -2006,6 +2074,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             )}
           </div>
         </Dialog>
+
+        {/* Candidates in table order, not raw fetch order — the backend
+            freezes the submitted order into the pack, so the client sees the
+            same ranking the recruiter curated on screen. */}
+        <SubmittalPackDialog
+          open={submittalDialogOpen}
+          roleId={numericRoleId}
+          roleTitle={role?.name || ''}
+          applications={sortedTableApplications.filter((a) => selectedAppIds.has(a.id))}
+          onClose={() => setSubmittalDialogOpen(false)}
+        />
 
         <ProcessCandidatesDialog
           open={processDialogOpen}

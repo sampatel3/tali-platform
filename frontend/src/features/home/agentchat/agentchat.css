@@ -87,7 +87,7 @@
    off = grey dot. Amber here is icon-only on an amber-soft chip — never mixed
    into the ink. */
 .ac-stat { width: 24px; height: 24px; border-radius: 8px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
-.ac-stat-on { background: linear-gradient(150deg, #3a1d6e, #241147); color: #fff; box-shadow: 0 0 0 3px var(--purple-soft); }
+.ac-stat-on { background: var(--grad-agent-on); color: #fff; box-shadow: 0 0 0 3px var(--purple-soft); }
 .ac-stat-paused { background: var(--amber-soft); color: var(--amber); }
 .ac-stat-off { background: var(--bg-3); color: var(--mute); }
 .ac-stat-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }

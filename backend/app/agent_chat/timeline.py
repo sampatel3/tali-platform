@@ -26,6 +26,7 @@ from ..models.agent_conversation import (
     MESSAGE_KIND_ACTION,
     MESSAGE_KIND_CHAT,
 )
+from ..domains.agentic._reasoning_text import humanize_reasoning
 from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate import Candidate
@@ -94,7 +95,7 @@ def serialize_decision(
         "application_id": d.application_id,
         "decision_type": d.decision_type,
         "recommendation": d.recommendation,
-        "reasoning": d.reasoning,
+        "reasoning": humanize_reasoning(d.reasoning or ""),
         "confidence": float(d.confidence) if d.confidence is not None else None,
         "status": d.status,
         "candidate_name": candidate_name or "Unnamed candidate",

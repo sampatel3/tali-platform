@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from ...components.integrations.stripe.topup_service import (
     StripeTopupError,
+    create_billing_portal_session,
     create_topup_checkout_session,
 )
 from ...platform.database import get_db
@@ -829,4 +830,42 @@ def create_topup(
 
     org.billing_provider = "stripe"
     db.commit()
+    return {"url": url}
+
+
+class PortalSessionCreate(BaseModel):
+    return_url: str
+
+
+@router.post("/portal")
+def create_billing_portal(
+    body: PortalSessionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a Stripe Billing Portal session tied to the org's customer.
+
+    Returns ``{url}`` for the frontend to open. A 409 means the org has no
+    Stripe customer yet (nothing has been purchased), so there's no portal to
+    open — the UI hides the link in that case.
+    """
+    if not settings.STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if not org.stripe_customer_id:
+        raise HTTPException(
+            status_code=409,
+            detail="No billing account yet. Add credits first to set up billing.",
+        )
+    try:
+        url = create_billing_portal_session(
+            customer_id=str(org.stripe_customer_id),
+            return_url=body.return_url,
+        )
+    except StripeTopupError as exc:
+        import logging as _logging
+        _logging.getLogger("taali.billing").exception("Stripe portal error: %s", exc)
+        raise HTTPException(status_code=502, detail="Payment service error. Please try again.") from exc
     return {"url": url}

@@ -363,6 +363,16 @@
 @media (max-width: 1380px) {
   .kanban { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+/* Below 3-column width, the 6 pipeline stages must keep breaking down or the
+   cards (avatar + name + meta + Approve/Override) crush into unreadable
+   slivers. Two columns on tablet, a single stacked column on phones —
+   matching the candidates table's own ≤720px treatment. */
+@media (max-width: 900px) {
+  .kanban { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .kanban { grid-template-columns: 1fr; }
+}
 
 .kanban-col {
   background: var(--bg-2);
@@ -582,7 +592,7 @@
    Override = purple-lavender outline (in-scheme counter-action). This is the
    ONE agent-positive vocabulary reused on the header, chat rail, and cards. */
 .kanban-card .cc-agent-actions .btn-purple {
-  background: linear-gradient(180deg, #3a1d6e, #241147);
+  background: var(--grad-agent-on);
   border: 1px solid rgba(196, 165, 253, 0.5);
   color: #f1ecfb;
   box-shadow: 0 1px 10px rgba(94, 58, 168, 0.28);

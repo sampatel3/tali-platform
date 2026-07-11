@@ -3,18 +3,18 @@
   "name": "Source-to-Bronze Ingestion",
   "role": "data_engineer",
   "duration_minutes": 30,
-  "calibration_prompt": "You have 2 minutes. Ask Claude to help you specify ONE Iceberg partition transform for an orders table queried by date and by customer_id. State the column(s), the transform, the resulting S3 folder for one example row, and what query pattern it optimises \u2014 unambiguously enough to implement.",
-  "scenario": "A finance query on yesterday's orders scanned 2.1 TB of S3 and fired a cost\nalert at 08:05. The nightly on-prem -> Bronze ingestion is the cause.\n\nThree things are wrong at once, and `diagnostics/audit_findings.md` lists the\nstubbed primitives:\n\n* it full-extracts ~2 TB every night and hammers the on-prem OLTP source,\n* it writes the Bronze Iceberg table **unpartitioned**, so every downstream\n  query full-scans it,\n* it fans the write out to millions of tiny S3 objects.\n\nThe mechanical fix \u2014 implementing the five `ingestion/` primitives \u2014 is what\nthe model can help with. The judgment is what your team is hiring you for:\n\n**The partition design is yours.** Day-partitioning `created_at` makes the\nfinance-by-date queries prune nicely, but the data also gets filtered by\n`customer_id` (very high cardinality). Partition too finely (e.g. by hour, or\ndirectly by customer_id) and you get millions of tiny partitions + slow\nplanning; too coarsely and queries don't prune. You choose the transforms and\nthe target file size, and you name which query pattern you optimised for and\nwhich one pays. Justify it in `INGESTION_DESIGN.md`.\n\n**The extraction strategy is yours.** The on-prem OLTP source can't take a\nfull 2 TB pull during business hours without locking up. Incremental watermark\nextraction is cheap but risks missing late-arriving / back-dated updates; a\nfull extract in a maintenance window is complete but tight against the morning\nSLA; CDC is cleanest but the source's binlog retention is short. Pick one,\nstate the failure mode you accept, and say whether you'd confirm anything with\nthe source-system owners before shipping.\n\n**What the rubric grades:**\n1. Did you implement the five primitives correctly? (you ship working code)\n2. Did you choose a coherent partition + file-size design and name the query\n   pattern you sub-optimised? (you're paid for THIS)\n3. Did you pick an extraction strategy and own its failure mode? (THIS too)\n\n`INGESTION_DESIGN.md` is required. All tests passing with an empty or vague\ndesign doc scores in the *good* band, not *excellent* \u2014 the doc is 40% of the\ngrade (the design decisions).\n\n\n**How this is leveled \u2014 climb as far as you can; the report shows the highest level you reach, and the judgment (L3) is weighted most:**\n- **L1 \u2014 basics:** target_file_count + s3_partition_path right \u2014 the basics any data engineer ships in minutes.\n- **L2 \u2014 core:** partition spec, extraction mode, and the Spark write plan \u2014 most of the pipeline working.\n- **L3 \u2014 judgment:** own the partition-granularity and extraction-strategy decisions in INGESTION_DESIGN.md; name what's left (compaction, late-row reconciliation).\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
+  "calibration_prompt": "You have 2 minutes. Ask Claude to help you specify ONE Iceberg partition transform for an orders table queried by date and by customer_id. State the column(s), the transform, the resulting S3 folder for one example row, and what query pattern it optimises — unambiguously enough to implement.",
+  "scenario": "A finance query on yesterday's orders scanned 2.1 TB of S3 and fired a cost\nalert at 08:05. The nightly on-prem -> Bronze ingestion is the cause.\n\nThree things are wrong at once, and `diagnostics/audit_findings.md` lists the\nstubbed primitives:\n\n* it full-extracts ~2 TB every night and hammers the on-prem OLTP source,\n* it writes the Bronze Iceberg table **unpartitioned**, so every downstream\n  query full-scans it,\n* it fans the write out to millions of tiny S3 objects.\n\nThe mechanical fix — implementing the five `ingestion/` primitives — is what\nthe model can help with. The judgment is what your team is hiring you for:\n\n**The partition design is yours.** Day-partitioning `created_at` makes the\nfinance-by-date queries prune nicely, but the data also gets filtered by\n`customer_id` (very high cardinality). Partition too finely (e.g. by hour, or\ndirectly by customer_id) and you get millions of tiny partitions + slow\nplanning; too coarsely and queries don't prune. You choose the transforms and\nthe target file size, and you name which query pattern you optimised for and\nwhich one pays. Justify it in `INGESTION_DESIGN.md`.\n\n**The extraction strategy is yours.** The on-prem OLTP source can't take a\nfull 2 TB pull during business hours without locking up. Incremental watermark\nextraction is cheap but risks missing late-arriving / back-dated updates; a\nfull extract in a maintenance window is complete but tight against the morning\nSLA; CDC is cleanest but the source's binlog retention is short. Pick one,\nstate the failure mode you accept, and say whether you'd confirm anything with\nthe source-system owners before shipping.\n\n**What the rubric grades:**\n1. Did you implement the five primitives correctly? (you ship working code)\n2. Did you choose a coherent partition + file-size design and name the query\n   pattern you sub-optimised? (you're paid for THIS)\n3. Did you pick an extraction strategy and own its failure mode? (THIS too)\n\n`INGESTION_DESIGN.md` is required. All tests passing with an empty or vague\ndesign doc scores in the *good* band, not *excellent* — the doc is 40% of the\ngrade (the design decisions).\n\n\n**How this is leveled — climb as far as you can; the report shows the highest level you reach, and the judgment (L3) is weighted most:**\n- **L1 — basics:** target_file_count + s3_partition_path right — the basics any data engineer ships in minutes.\n- **L2 — core:** partition spec, extraction mode, and the Spark write plan — most of the pipeline working.\n- **L3 — judgment:** own the partition-granularity and extraction-strategy decisions in INGESTION_DESIGN.md; name what's left (compaction, late-row reconciliation).\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
   "repo_structure": {
     "name": "bronze-ingestion-pipeline",
     "files": {
       ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
       "requirements.txt": "pytest>=8.0.0\n",
-      "README.md": "# Bronze Ingestion Pipeline\n\nThe reusable job every source uses to land raw data into the Bronze layer\n(Iceberg on S3). It pulls from an on-prem OLTP source, writes partitioned\nIceberg data, and is supposed to do so efficiently \u2014 incremental where it\ncan, partitioned for pruning, and sized so we don't drown S3 in tiny files.\n\n## The problem\nRight now it full-extracts ~2 TB every night, writes everything unpartitioned\nas millions of tiny files, and downstream queries scan the whole table. See\n`diagnostics/job_run.log`. The primitives in `ingestion/` are stubbed.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the real Spark/Iceberg/S3 runtime \u2014 you implement the *decisions*\n(extraction mode, partition spec, S3 layout, file sizing, write plan) as plain\nPython the job would drive.\n",
+      "README.md": "# Bronze Ingestion Pipeline\n\nThe reusable job every source uses to land raw data into the Bronze layer\n(Iceberg on S3). It pulls from an on-prem OLTP source, writes partitioned\nIceberg data, and is supposed to do so efficiently — incremental where it\ncan, partitioned for pruning, and sized so we don't drown S3 in tiny files.\n\n## The problem\nRight now it full-extracts ~2 TB every night, writes everything unpartitioned\nas millions of tiny files, and downstream queries scan the whole table. See\n`diagnostics/job_run.log`. The primitives in `ingestion/` are stubbed.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the real Spark/Iceberg/S3 runtime — you implement the *decisions*\n(extraction mode, partition spec, S3 layout, file sizing, write plan) as plain\nPython the job would drive.\n\n## Working with the agent\n\nWork the way you genuinely work. If keeping a short `CLAUDE.md`/`AGENTS.md`\ncontext file, sketching a `PLAN.md` before building, or re-running the tests\nas you go is part of your practice, do it here — load-bearing practice is\nnoticed. Nothing here requires it, and ritual files written for show don't\nhelp you.\n",
       "ARCHITECTURE.md": "# Ingestion shape (source -> Bronze)\n\n1. **Extract** from on-prem (full vs incremental by watermark).\n2. **Partition**: pick the Iceberg partition transforms for the data + query\n   patterns (day-partition event time; bucket a high-cardinality filter key).\n3. **Layout**: write under the Hive-style Iceberg path `root/k=v/k=v`.\n4. **File sizing**: target ~128-512 MB files (avoid the small-file problem).\n5. **Optimise the Spark write**: repartition by partition cols, prune,\n   push predicates down.\n\nAll five are stubbed in `ingestion/`. `ingestion/pipeline.py` wires them\ntogether and is correct once the primitives are.\n",
-      "RUNBOOK.md": "# Ingestion incident\n\n## Immediate expectations\n- Stop the nightly full extract from hammering the on-prem OLTP DB.\n- Partition the Bronze table so downstream queries prune instead of full-scan.\n- Size output files so we stop writing millions of tiny objects to S3.\n- Keep the primitives composable \u2014 every source reuses this library.\n\n## Mental model\nCorrectness + query/cost efficiency first; clever Spark tuning second.\n",
+      "RUNBOOK.md": "# Ingestion incident\n\n## Immediate expectations\n- Stop the nightly full extract from hammering the on-prem OLTP DB.\n- Partition the Bronze table so downstream queries prune instead of full-scan.\n- Size output files so we stop writing millions of tiny objects to S3.\n- Keep the primitives composable — every source reuses this library.\n\n## Mental model\nCorrectness + query/cost efficiency first; clever Spark tuning second.\n",
       "diagnostics/job_run.log": "2026-02-27T01:10:02Z WARNING extract mode=full rows=2,140,889,201 (no watermark predicate applied)\n2026-02-27T01:48:55Z ERROR on-prem source p95 query latency 41s during extract window (OLTP contention)\n2026-02-27T03:22:10Z WARNING wrote 6,002,219 objects to s3://bronze/orders/ avg_object_size=180KB\n2026-02-27T03:22:11Z WARNING table has 0 partitions; downstream 'WHERE created_at = DATE' scans full table\n2026-02-27T08:05:33Z ERROR finance query on yesterday's orders scanned 2.1 TB, cost alert fired\n",
-      "diagnostics/audit_findings.md": "# Audit findings\n\n- `plan_extraction()` always returns full extract \u2014 ignores the watermark.\n- `iceberg_partition_spec()` returns `[]` \u2014 the table is unpartitioned.\n- `s3_partition_path()` returns the table root \u2014 no `k=v` partition folders.\n- `target_file_count()` returns 1 \u2014 but the writer then fans out to millions\n  of tiny files because nothing sizes the output.\n- `optimize_write()` returns `{}` \u2014 no repartition, no pruning, no pushdown.\n",
+      "diagnostics/audit_findings.md": "# Audit findings\n\n- `plan_extraction()` always returns full extract — ignores the watermark.\n- `iceberg_partition_spec()` returns `[]` — the table is unpartitioned.\n- `s3_partition_path()` returns the table root — no `k=v` partition folders.\n- `target_file_count()` returns 1 — but the writer then fans out to millions\n  of tiny files because nothing sizes the output.\n- `optimize_write()` returns `{}` — no repartition, no pruning, no pushdown.\n",
       "ingestion/__init__.py": "",
       "ingestion/extraction.py": "from __future__ import annotations\nfrom typing import Dict, Optional\n\ndef plan_extraction(*, watermark_column: str, last_watermark: Optional[str], full_reload: bool = False) -> Dict[str, object]:\n    \"\"\"Plan how to pull this run from the on-prem source.\n\n    Incremental (watermark predicate) when we have a prior watermark and are not\n    doing a full reload; otherwise a full extract. Returns\n    {\"mode\": \"incremental\"|\"full\", \"predicate\": str|None}.\n    \"\"\"\n\n    return {\"mode\": \"full\", \"predicate\": None}\n",
       "ingestion/partitioning.py": "from __future__ import annotations\nfrom typing import List, Dict, Optional\n\ndef iceberg_partition_spec(*, event_time_column: str, high_cardinality_filter_column: Optional[str] = None, bucket_count: int = 16) -> List[Dict[str, str]]:\n    \"\"\"Choose the Iceberg partition transforms.\n\n    Day-partition the event-time column; add a bucket transform for a\n    high-cardinality column that is filtered on. Each entry is\n    {\"column\": str, \"transform\": str} e.g. {\"column\":\"created_at\",\"transform\":\"day\"}.\n    \"\"\"\n\n    return []\n",
@@ -32,20 +32,44 @@
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.2,
+      "weight": 0.15,
       "lens": "decision",
       "criteria": {
-        "excellent": "The candidate diagnoses the three failures themselves \u2014 full extract hammering the source, the unpartitioned table forcing full scans, and the tiny-file fan-out \u2014 from the log + audit findings, and drives the fix rather than handing the whole repo to the agent.",
+        "excellent": "The candidate diagnoses the three failures themselves — full extract hammering the source, the unpartitioned table forcing full scans, and the tiny-file fan-out — from the log + audit findings, and drives the fix rather than handing the whole repo to the agent.",
         "good": "Grasps that the table is unpartitioned + over-scans but leans on the agent to surface the rest, or misses one of the three failures.",
         "poor": "Never engages the diagnosis ('make it efficient', 'fix the pipeline') and shows no grasp of why the finance query scanned 2 TB."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.4,
+      "weight": 0.3,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "weight": 0.1,
+      "lens": "discernment",
+      "criteria": {
+        "excellent": "Catches at least one materially wrong or risky agent proposal (e.g. a planted trap) and overrides it with reasoning — reads diffs and tool output critically instead of accepting on faith.",
+        "good": "Reviews the agent's output (re-reads diffs, questions a suggestion) but misses the planted pitfalls or challenges only cosmetic details.",
+        "poor": "Accepts the agent's proposals at face value; no evidence of reading the diff or questioning any output."
+      }
+    },
+    "verification_before_done": {
+      "weight": 0.1,
+      "lens": "diligence",
+      "criteria": {
+        "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
+        "good": "Runs tests at least once before submitting but doesn't chase failures, or verifies so late there is no time to act on the result.",
+        "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
+      }
+    },
+    "ai_native_practice": {
+      "weight": 0.1,
+      "grader": "practice_outcome",
+      "part": "applied",
+      "fluency": "description"
+    },
     "ingestion_correctness": {
-      "weight": 0.22,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped plan_extraction (watermark predicate vs full), iceberg_partition_spec (day + bucket), and s3_partition_path (Hive-style k=v layout) are correct against the spec/tests. Judge the artifact; directing the agent to a correct implementation counts fully.",
@@ -54,7 +78,7 @@
       }
     },
     "write_optimization_correctness": {
-      "weight": 0.18,
+      "weight": 0.1,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped target_file_count (correct sizing math + empty-batch edge) and optimize_write (repartition by partition cols, file count, pruning + pushdown) are correct. Credit the working artifact regardless of who typed it.",
@@ -139,12 +163,12 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Diagnose why ingestion is slow/expensive (full scans, tiny files, full extracts) under time pressure.",
-        "task_artifact": "Chat transcript + diagnostics \u2014 candidate identifies the unpartitioned table + full-extract + small-file failures themselves.",
+        "task_artifact": "Chat transcript + diagnostics — candidate identifies the unpartitioned table + full-extract + small-file failures themselves.",
         "rubric_dimension": "situational_assessment"
       },
       {
         "job_requirement": "Ingest large datasets from on-prem into the lakehouse Bronze layer.",
-        "task_artifact": "Chat transcript + plan_extraction \u2014 candidate owns the extraction strategy.",
+        "task_artifact": "Chat transcript + plan_extraction — candidate owns the extraction strategy.",
         "rubric_dimension": "design_decisions_articulated"
       },
       {
@@ -156,6 +180,21 @@
         "job_requirement": "Optimise Spark writes and file sizing on S3.",
         "task_artifact": "Shipped target_file_count + optimize_write + tests.",
         "rubric_dimension": "write_optimization_correctness"
+      },
+      {
+        "job_requirement": "Reviews automation and AI output critically before it reaches the lakehouse",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace (planted traps)",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns production data quality — validates pipeline changes before they ship",
+        "task_artifact": "Test runs and diff review captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },
@@ -231,19 +270,19 @@
   ],
   "tiers": {
     "L1": {
-      "label": "Competency baseline \u2014 the primitives",
+      "label": "Competency baseline — the primitives",
       "min_tests_ratio": 0.35,
       "assesses": [
         "python",
         "s3/iceberg path layout",
         "output file sizing"
       ],
-      "summary": "target_file_count + s3_partition_path right \u2014 the basics any data engineer ships in minutes."
+      "summary": "target_file_count + s3_partition_path right — the basics any data engineer ships in minutes."
     },
     "L2": {
       "label": "Core mechanical + the partition trade-off",
       "min_tests_ratio": 0.85,
-      "summary": "partition spec, extraction mode, and the Spark write plan \u2014 most of the pipeline working."
+      "summary": "partition spec, extraction mode, and the Spark write plan — most of the pipeline working."
     },
     "L3": {
       "label": "Judgment + stretch",
@@ -251,5 +290,19 @@
       "requires_design": true,
       "summary": "own the partition-granularity and extraction-strategy decisions in INGESTION_DESIGN.md; name what's left (compaction, late-row reconciliation)."
     }
-  }
+  },
+  "traps": [
+    {
+      "id": "hour_partitioning_small_files",
+      "planted": "Hour-granularity (or raw-timestamp) partitioning of the events table looks like it maximises pruning, and the agent will readily generate it — at this table's volume it recreates exactly the small-file blow-up behind the incident.",
+      "tell": "The candidate keeps the day + bucket spec or explicitly reasons partition granularity against file size; accepting an hour/identity partition spec without challenge is the trap taken.",
+      "where": "ingestion/partitioning.py (transform choice) + RUNBOOK.md volume figures"
+    },
+    {
+      "id": "single_file_coalesce",
+      "planted": "Forcing the writer to one output file (or a tiny constant) trivially 'fixes' the small-file problem and looks clean — it serialises the write and ignores target_file_bytes sizing entirely.",
+      "tell": "The candidate ties file count to ceil(total_bytes / target_file_bytes) and questions constant answers; shipping a constant file count is the trap taken.",
+      "where": "ingestion/filesizing.py"
+    }
+  ]
 }

@@ -209,6 +209,10 @@ class OrgResponse(BaseModel):
     plan: str
     billing_provider: str = "stripe"
     credits_balance: int = 0
+    # True when the org has a Stripe customer (something has been purchased) —
+    # gates the "Manage in Stripe" billing-portal button without exposing the
+    # raw customer id.
+    has_billing_account: bool = False
     default_assessment_duration_minutes: int = 30
     invite_email_template: Optional[str] = None
     # Settings → AI agent defaults (HANDOFF settings.md). New roles inherit

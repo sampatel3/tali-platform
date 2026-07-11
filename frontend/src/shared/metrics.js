@@ -31,7 +31,9 @@ export const PIPELINE_FUNNEL_STAGES = [
 // advance/send = purple (positive/action), reject/pre-screen = grey (terminal).
 // NOT traffic-light green/red — see TYPE_BADGE in features/home/atoms.jsx.
 export const FUNNEL_DECISION_GATES = [
-  { stage: 'applied', key: 'pre_screen', label: 'pre-screen reject', tone: 'prescreen', types: ['skip_assessment_reject'] },
+  // pre-screen rejects sit under Scored: a pre-screened candidate WAS
+  // evaluated (the cheap gate), and the stage counts bucket them as Scored.
+  { stage: 'scored', key: 'pre_screen', label: 'pre-screen reject', tone: 'prescreen', types: ['skip_assessment_reject'] },
   { stage: 'scored', key: 'send', label: 'send assessment', tone: 'send', types: ['send_assessment', 'resend_assessment_invite'] },
   { stage: 'scored', key: 'advance', label: 'advance', tone: 'advance', types: ['advance_to_interview'] },
   { stage: 'scored', key: 'reject', label: 'reject', tone: 'reject', types: ['reject'] },
@@ -136,7 +138,8 @@ export const isPostHandoverWorkableStage = (value) =>
 
 // Bucket a single application row into a funnel stage — mirrors the backend's
 // funnel_bucket_for so the kanban / stage filters group candidates the same
-// way the funnel counts them. "Scored" = stage `applied` with a CV score.
+// way the funnel counts them. "Scored" = stage `applied` and evaluated (a CV
+// score or a pre-screen score — filtered candidates included).
 export const applicationFunnelBucket = (application) => {
   const outcome = String(application?.application_outcome || '').toLowerCase();
   if (outcome === 'rejected') return 'rejected';
@@ -145,7 +148,16 @@ export const applicationFunnelBucket = (application) => {
   if (isPostHandoverWorkableStage(application?.workable_stage)) return 'advanced';
   const stage = String(application?.pipeline_stage || '').toLowerCase();
   if (stage === 'applied') {
-    const scored = application?.cv_match_score != null || application?.pre_screen_score_100 != null;
+    // Evaluated = real cv_match score OR a genuinely-RUN pre-screen (the list
+    // payload serializes the score as `pre_screen_score`; `pre_screen_score_100`
+    // is the raw column name kept for payloads that carry it). The
+    // pre_screen_run_at guard matches the backend's scored_expr: the pre-screen
+    // score field is also a display value derived from a full cv_match
+    // snapshot, and score invalidation nulls only cv_match_score — without the
+    // guard an invalidated candidate would keep reading as Scored.
+    const preScreened = (application?.pre_screen_score_100 != null || application?.pre_screen_score != null)
+      && application?.pre_screen_run_at != null;
+    const scored = application?.cv_match_score != null || preScreened;
     return scored ? 'scored' : 'applied';
   }
   if (stage === 'invited' || stage === 'in_assessment') return 'invited';
@@ -215,7 +227,7 @@ export const budgetTile = (spentCents, capCents) => {
     value: formatMoneyUsd(spent),
     unit: hasCap ? `/ ${formatMoneyUsd(cap)}` : null,
     pct: barPct,
-    sub: hasCap ? `${rawPct}% · proj ${formatMoneyUsd(projectedCents)} EOM` : 'no cap',
+    sub: hasCap ? `${rawPct}% used · projected ${formatMoneyUsd(projectedCents)} this month` : 'no cap set',
     over: rawPct != null && rawPct > 100,
   };
 };

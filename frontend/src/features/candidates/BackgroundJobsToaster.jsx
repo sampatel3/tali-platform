@@ -1,7 +1,30 @@
 import React from 'react';
-import { CheckCircle2, Loader2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, X } from 'lucide-react';
 
 import { useJobStatus } from '../../contexts/JobStatusContext';
+
+// Turn a raw backend job error_message (e.g. "v3_failed: rate_limit",
+// "missing_inputs", "cancelled_by_recruiter") into a short plain-English
+// reason. We never want a recruiter to see an internal error code with no
+// idea what to do next.
+const failureReason = (data) => {
+  const raw = String(data?.error_message || data?.error || '').trim().toLowerCase();
+  if (!raw) return 'Something went wrong. Try running it again.';
+  if (raw.includes('cancelled')) return 'Cancelled.';
+  if (raw.includes('missing_inputs') || raw.includes('missing inputs')) {
+    return "Some candidates were missing a CV or role details, so they couldn't be processed.";
+  }
+  if (raw.includes('rate') && raw.includes('limit')) {
+    return 'The AI service was busy. Wait a moment and run it again.';
+  }
+  if (raw.includes('timeout') || raw.includes('timed out')) {
+    return 'It took too long and stopped. Try running it again.';
+  }
+  if (raw.includes('client init') || raw.includes('unconfigured') || raw.includes('not configured')) {
+    return 'The service is temporarily unavailable. Try again shortly or contact support.';
+  }
+  return 'Something went wrong. Try running it again.';
+};
 
 /**
  * BackgroundJobsToaster
@@ -106,7 +129,7 @@ function JobRow({ entry, onCancel, onDismiss }) {
   const isTerminal = isCancelled || isComplete || isFailed;
 
   const errors = Number(data?.errors ?? 0);
-  const roleName = String(data?.role_name ?? '') || (kind === 'graph' ? 'Knowledge graph' : `Role #${roleId}`);
+  const roleName = String(data?.role_name ?? '') || (kind === 'graph' ? 'Candidate search' : `Role #${roleId}`);
 
   // Process (cascade) jobs report a multi-step progress structure.
   // We compute total/processed differently for them and surface per-step
@@ -147,12 +170,12 @@ function JobRow({ entry, onCancel, onDismiss }) {
         if (step === 'fetch') return 'Fetching CVs';
         if (step === 'pre_screen') return 'Pre-screening';
         if (step === 'score') return 'Scoring';
-        if (step === 'graph_sync') return 'Syncing to knowledge graph';
+        if (step === 'graph_sync') return 'Updating candidate search';
         return 'Processing';
       }
       if (kind === 'fetch') return 'Fetching CVs';
       if (kind === 'pre_screen') return data?.refresh ? 'Refreshing pre-screen' : 'Pre-screening';
-      if (kind === 'graph') return 'Syncing to graph';
+      if (kind === 'graph') return 'Updating candidate search';
       // score
       const preScreenEnabled = Boolean(data?.pre_screen_enabled);
       return preScreenEnabled && processed === 0 ? 'Pre-screening CVs' : 'Scoring CVs';
@@ -165,6 +188,9 @@ function JobRow({ entry, onCancel, onDismiss }) {
   })();
 
   const detail = (() => {
+    // A failed job's counts are meaningless — show the recruiter what went
+    // wrong and what to do next, for every job kind.
+    if (isFailed) return failureReason(data);
     if (kind === 'process') {
       // Render per-step counts so the user sees fetch, pre-screen, and
       // score progress at once. Each step shows "M/N" (processed/total).
@@ -187,20 +213,20 @@ function JobRow({ entry, onCancel, onDismiss }) {
         if (fetchFetched && fetchFetched < fetchAttempted) f += ` (${fetchFetched} got CV`;
         else if (fetchFetched) f += ` (${fetchFetched} got CV`;
         if (fetchUnavailable) f += `, ${fetchUnavailable} unavailable`;
-        if (fetchErrors) f += `, ${fetchErrors} err`;
+        if (fetchErrors) f += `, ${fetchErrors} errors`;
         if (fetchFetched || fetchUnavailable || fetchErrors) f += ')';
         parts.push(f);
       }
       if (preTotal > 0) {
         let p = `Pre-screen ${prePros}/${preTotal}`;
-        if (preErrors) p += ` (${preErrors} err)`;
+        if (preErrors) p += ` (${preErrors} errors)`;
         parts.push(p);
       }
       if (scoreTotal > 0) {
         let s = `Score ${scorePros}/${scoreTotal}`;
         const annot = [];
         if (scoreFiltered) annot.push(`${scoreFiltered} filtered`);
-        if (scoreErrors) annot.push(`${scoreErrors} err`);
+        if (scoreErrors) annot.push(`${scoreErrors} errors`);
         if (annot.length) s += ` (${annot.join(', ')})`;
         parts.push(s);
       }
@@ -208,8 +234,8 @@ function JobRow({ entry, onCancel, onDismiss }) {
       const graphPros = Number(data?.graph_sync?.synced ?? 0);
       const graphErrors = Number(data?.graph_sync?.errors ?? 0);
       if (graphTotal > 0) {
-        let g = `Graph ${graphPros}/${graphTotal}`;
-        if (graphErrors) g += ` (${graphErrors} err)`;
+        let g = `Search index ${graphPros}/${graphTotal}`;
+        if (graphErrors) g += ` (${graphErrors} errors)`;
         parts.push(g);
       }
       if (parts.length === 0) return 'starting…';
@@ -231,10 +257,12 @@ function JobRow({ entry, onCancel, onDismiss }) {
 
   return (
     <div className="bg-jobs-row">
-      <div className="bg-jobs-icon">
-        {isTerminal
-          ? <CheckCircle2 size={18} />
-          : <Loader2 size={18} className="animate-spin" />}
+      <div className={`bg-jobs-icon${isFailed ? ' bg-jobs-icon-failed' : ''}`}>
+        {isFailed
+          ? <AlertTriangle size={18} />
+          : isTerminal
+            ? <CheckCircle2 size={18} />
+            : <Loader2 size={18} className="animate-spin" />}
       </div>
       <div className="bg-jobs-body">
         <div className="bg-jobs-title">{title}</div>

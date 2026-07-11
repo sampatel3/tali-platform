@@ -25,10 +25,13 @@ const AgentLiveFeed = () => (
         <span
           className="mc-demo-feed-event"
           style={{
+            // Match the real Hub decision-feed vocabulary: purple tones on the
+            // dark panel, never traffic-light green/amber. Advance = bright
+            // lavender, pending = a dimmer lavender, everything else muted.
             color:
-              row.tone === 'good' ? '#7dd0a8'
-                : row.tone === 'pend' ? '#e8b167'
-                  : 'var(--purple-lav)',
+              row.tone === 'good' ? 'var(--purple-lav)'
+                : row.tone === 'pend' ? 'color-mix(in oklab, var(--purple-lav) 70%, rgba(255,255,255,0.4))'
+                  : 'rgba(255,255,255,0.5)',
           }}
         >
           {row.type}
@@ -47,12 +50,14 @@ const AgentLiveFeed = () => (
 const ROLE_OPTIONS = ['Backend', 'Frontend', 'Full-stack', 'ML / AI', 'Staff+', 'Other'];
 const VOLUME_OPTIONS = ['1–5', '6–20', '21–50', '50+'];
 
+const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
+
 // DemoLeadPage — pre-credentials capture before the demo sandbox spins
 // up. v4 spec: dark editorial pane left, streamlined form right.
 //
-// Submit currently routes into /demo (the demo experience). When the
-// sandbox-seeding API ships, the form payload should drive
-// /demo/sandbox?email=... etc.
+// Submit forwards the lead to the backend (which emails it to hello@)
+// and routes into /demo. The send is fire-and-forget — the visitor's
+// path into the walkthrough never blocks on it.
 export const DemoLeadPage = ({ onNavigate }) => {
   const [form, setForm] = useState({
     email: '',
@@ -75,6 +80,12 @@ export const DemoLeadPage = ({ onNavigate }) => {
     event.preventDefault();
     if (!form.email.trim()) return;
     setSubmitting(true);
+    // Empty API_URL means same-origin (matches httpClient) — still post.
+    fetch(`${API_URL}/api/v1/public/demo-lead`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    }).catch(() => {});
     window.setTimeout(() => {
       setSubmitting(false);
       onNavigate?.('demo');
@@ -135,11 +146,11 @@ export const DemoLeadPage = ({ onNavigate }) => {
           </span>
 
           <h2 className="mc-demo-lead-form-title">
-            See it run on <em>your</em> role.
+            See it run on a <em>realistic</em> role.
           </h2>
           <p className="mc-demo-lead-form-sub">
-            Tell us what you're hiring for. We'll preload realistic candidates and walk you through
-            the agent end-to-end — in the next two minutes.
+            Tell us what you're hiring for and we'll walk you through the agent end-to-end on a
+            realistic role — in the next two minutes. We'll follow up by email too.
           </p>
 
           <form className="mc-demo-lead-form" onSubmit={handleSubmit}>
@@ -153,7 +164,9 @@ export const DemoLeadPage = ({ onNavigate }) => {
                 value={form.email}
                 onChange={update('email')}
                 required
-                autoFocus
+                // Desktop only — on touch, autoFocus pops the keyboard on load
+                // and covers the pitch copy.
+                autoFocus={typeof window !== 'undefined' && !window.matchMedia?.('(pointer: coarse)').matches}
               />
             </label>
 

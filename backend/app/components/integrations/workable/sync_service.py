@@ -663,6 +663,12 @@ def _store_candidate_resume(
     app.cv_filename = sanitize_text_for_storage(filename)
     app.cv_text = extracted
     app.cv_uploaded_at = now
+    # Flag-only PDF-bytes hygiene scan; promoted at score time into
+    # integrity_signals.document_hygiene.pdf. Best-effort, never blocks the sync.
+    if ext == "pdf":
+        from ....services.document_hygiene import stash_pdf_hygiene_on_application
+
+        stash_pdf_hygiene_on_application(app, content, ext)
     candidate.cv_file_url = file_url
     candidate.cv_filename = sanitize_text_for_storage(filename)
     candidate.cv_text = extracted
@@ -2264,6 +2270,17 @@ class WorkableSyncService:
 
         # Extract application-level Workable fields
         app.workable_sourced = candidate_payload.get("sourced", None)
+        # Applied date: the payload's created_at is per JOB APPLICATION (the
+        # Workable candidate id is per-application), so it belongs here — the
+        # candidate-level copy is last-sync-wins across a person's applications.
+        applied_raw = candidate_payload.get("created_at")
+        if isinstance(applied_raw, str) and applied_raw.strip():
+            try:
+                app.workable_created_at = datetime.fromisoformat(
+                    applied_raw.replace("Z", "+00:00")
+                )
+            except (ValueError, TypeError):
+                pass
         profile_url = candidate_payload.get("profile_url") or candidate_payload.get("url")
         if isinstance(profile_url, str) and profile_url.strip():
             app.workable_profile_url = sanitize_text_for_storage(profile_url.strip())

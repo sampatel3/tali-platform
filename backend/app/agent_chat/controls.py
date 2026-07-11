@@ -35,7 +35,9 @@ def _state(role: Role) -> dict[str, Any]:
         "paused_reason": role.agent_paused_reason,
         "monthly_budget_cents": role.monthly_usd_budget_cents,
         "auto_reject": bool(role.auto_reject),
+        "auto_reject_pre_screen": bool(role.auto_reject_pre_screen),
         "auto_promote": bool(role.auto_promote),
+        "auto_skip_assessment": bool(role.auto_skip_assessment),
     }
 
 
@@ -108,11 +110,13 @@ def adjust_agent_settings(
     db: Session, role: Role, *,
     monthly_budget_cents: int | None = None,
     auto_reject: bool | None = None,
+    auto_reject_pre_screen: bool | None = None,
     auto_promote: bool | None = None,
+    auto_skip_assessment: bool | None = None,
 ) -> dict[str, Any]:
-    """Update budget / auto-reject / auto-promote. Only the fields passed are
-    changed. Raising the budget over month-to-date spend resumes a
-    budget-paused role (same helper as the settings UI)."""
+    """Update budget / auto-reject / auto-promote / auto-skip-assessment. Only
+    the fields passed are changed. Raising the budget over month-to-date spend
+    resumes a budget-paused role (same helper as the settings UI)."""
     changed: list[str] = []
     if monthly_budget_cents is not None:
         role.monthly_usd_budget_cents = max(0, int(monthly_budget_cents))
@@ -120,9 +124,19 @@ def adjust_agent_settings(
     if auto_reject is not None:
         role.auto_reject = bool(auto_reject)
         changed.append("auto_reject")
+    if auto_reject_pre_screen is not None:
+        role.auto_reject_pre_screen = bool(auto_reject_pre_screen)
+        changed.append("auto_reject_pre_screen")
     if auto_promote is not None:
         role.auto_promote = bool(auto_promote)
         changed.append("auto_promote")
+    skip_changed = (
+        auto_skip_assessment is not None
+        and bool(role.auto_skip_assessment) != bool(auto_skip_assessment)
+    )
+    if auto_skip_assessment is not None:
+        role.auto_skip_assessment = bool(auto_skip_assessment)
+        changed.append("auto_skip_assessment")
 
     resumed = False
     if monthly_budget_cents is not None:
@@ -134,6 +148,20 @@ def adjust_agent_settings(
             logger.exception("resume_if_under_budget failed for role_id=%s", role.id)
 
     db.commit()
+    # An assessment-stage flip re-flows already-pending send/advance cards
+    # right away — same reconcile the settings-UI PATCH runs (Codex #866).
+    if skip_changed:
+        try:
+            from ..services.bulk_decision_service import (
+                reconcile_pending_positive_decisions,
+            )
+
+            reconcile_pending_positive_decisions(db, role=role)
+            db.commit()
+        except Exception:  # pragma: no cover — never block the turn
+            logger.exception(
+                "assessment-stage reconcile failed for role_id=%s", role.id
+            )
     if resumed:
         _kick_cycle(role)
     return {

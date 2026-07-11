@@ -73,7 +73,7 @@
               {
                 "@type": "Question",
                 "name": "What does an AI-native assessment measure?",
-                "acceptedAnswer": { "@type": "Answer", "text": "Beyond whether the task works, an AI-native assessment scores AI collaboration as a first-class dimension across five axes — Anthropic's four Ds of AI fluency plus the deliverable: delegation, description, discernment, diligence, and the deliverable itself — each tied to the moment it happened in a session replay." }
+                "acceptedAnswer": { "@type": "Answer", "text": "Beyond whether the task works, an AI-native assessment scores AI collaboration as a first-class dimension across five dimensions — the 5 Ds of AI fluency: delegation, description, discernment, diligence, and the deliverable itself — each tied to the moment it happened in a session replay. Verification is scored, not assumed: every task plants a trap the candidate should catch, and diligence rewards verifying before calling the work done. Every task is battle-tested in a sandbox before a candidate sees it — authored from the role's job description and human-approved." }
               }
             ]
           }
@@ -155,15 +155,15 @@
           <ul>
             <li><strong>Every prompt</strong> — was it scoped and sequenced, or vague and hopeful?</li>
             <li><strong>Error recovery</strong> — did the candidate catch and correct a wrong AI suggestion before it shipped?</li>
-            <li><strong>Edits, tests, and terminal output</strong> — the real working timeline, not just the end state.</li>
+            <li><strong>Edits and sandboxed test runs</strong> — the real working timeline, not just the end state.</li>
             <li><strong>Autopilot signals</strong> — pasting AI output without reading or verifying it.</li>
           </ul>
 
           <h2>The five dimensions of AI fluency</h2>
           <p>
             AI-native assessments treat working with AI as a measurable skill.
-            Taali scores it across five dimensions — Anthropic's four "D"s of AI
-            fluency, plus the deliverable itself:
+            Taali scores it across five dimensions — the 5 Ds of AI
+            fluency:
           </p>
           <div class="grid2">
             <div class="card"><h3>Delegation</h3><p>Knowing what to hand to AI and what to own — where they delegate vs. drive the reasoning themselves.</p></div>
@@ -173,11 +173,14 @@
             <div class="card"><h3>Deliverable</h3><p>The shipped result itself — does it actually work: code quality, tests, completeness, graceful failure.</p></div>
           </div>
 
+          <p><strong>Verification is scored, not assumed.</strong> Every task plants a trap the candidate should catch, and the assessment scores whether they verified their work before calling it done — Diligence rewards verified-before-done, not confident-and-wrong.</p>
+          <p><strong>Every task is battle-tested before a candidate sees it.</strong> Each task is authored from the role's job description under a validation contract and human-approved, then run in a sandbox to confirm its baseline tests fail meaningfully — so the work sample is real, not a toy.</p>
+
           <p class="product-cap"><strong>The result: a candidate standing report.</strong> Each dimension is scored from the captured session, and every score links back to the moment it happened in the prompt-by-prompt replay.</p>
           <div class="product">
             <div class="report-head">
               <span>Maya Chen · Candidate report</span>
-              <span class="verdict">Strong Hire · Tali 86</span>
+              <span class="verdict">Strong Hire · Taali 86</span>
             </div>
             <div class="report-body">
               <div class="axis"><span class="lab">Delegation</span><span class="track"><span class="fill" style="width:86%"></span></span></div>
@@ -192,7 +195,7 @@
           <p>
             Allowing AI does not mean anything goes. A good AI-native assessment
             distinguishes genuine fluency from blind copying — flagging
-            autopilot behaviour calibratedly rather than punitively — and keeps
+            autopilot behaviour in a measured way, not punitively — and keeps
             scoring tied to evidence a human can review. Because the full session
             is captured, every score can be explained and audited.
           </p>
@@ -201,8 +204,8 @@
           <p>
             On <a href="/">Taali</a>, every assessment opens a chat-first
             workspace — Claude at the centre, your repo, a live editor, and a
-            terminal — and the runtime captures every prompt, paste, edit, and
-            test. Those traces feed the six-axis rubric above, producing a
+            sandboxed runtime — and the runtime captures every prompt, paste, edit,
+            and test. Those traces feed the five dimensions above, producing a
             candidate standing report with a prompt-by-prompt replay. It is the
             assessment half of <a href="/ai-native-hiring">AI-native hiring</a>,
             and it feeds the recommendations made by Taali's
@@ -232,8 +235,11 @@
               <p>
                 Beyond whether the task works, it scores AI collaboration across
                 five dimensions — delegation, description, discernment, diligence,
-                and the deliverable itself (Anthropic's four Ds of AI fluency,
-                plus the outcome).
+                and the deliverable itself. Verification is scored, not assumed:
+                every task plants a trap the candidate should catch, and diligence
+                rewards verifying before calling the work done. Every task is
+                battle-tested in a sandbox before a candidate sees it — authored
+                from the role's job description and human-approved.
               </p>
             </details>
           </div>

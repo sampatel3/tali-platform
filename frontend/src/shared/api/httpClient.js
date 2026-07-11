@@ -4,6 +4,13 @@ const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').t
 
 const api = axios.create({
   baseURL: `${API_URL}/api/v1`,
+  // A dropped connection (common on the UAE→us-east4 hop) would otherwise hang
+  // a request forever — the browser waits on OS TCP retransmission and the
+  // promise never rejects, freezing "Working…" states with locked composers.
+  // 60s is a sane default for normal reads/writes; long-poll or streaming
+  // callers (e.g. the assessment Claude chat) pass their own larger per-request
+  // `timeout` to override this. axios rejects with code 'ECONNABORTED' on hit.
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -20,6 +27,12 @@ export const viewShareLink = (token) =>
 // Public unauth "top candidates report" — same pattern as the share link.
 export const viewTopReport = (token) =>
   axios.get(`${API_URL}/report/${encodeURIComponent(token)}`);
+
+// Public unauth curated client submittal pack — same pattern: a role-scoped
+// shortlist frozen at mint time, served read-only by token. Bare axios so the
+// recruiter's JWT is never attached — anyone with the link can read it.
+export const viewSubmittalPack = (token) =>
+  axios.get(`${API_URL}/submittal/${encodeURIComponent(token)}`);
 
 // Public unauth job posting — the careers-style page a published requisition
 // links to. Lives UNDER /api/v1 (unlike the share/report endpoints), but we
@@ -73,6 +86,7 @@ const isAuthEndpoint = (url = '') => (
   || url.includes('/auth/register')
   || url.includes('/auth/forgot-password')
   || url.includes('/auth/reset-password')
+  || url.includes('/auth/accept-invite')
   || url.includes('/auth/verify')
   || url.includes('/auth/request-verify-token')
   || url.includes('/auth/sso-')
@@ -88,12 +102,14 @@ export const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/forgot-password')
     || pathname.startsWith('/reset-password')
     || pathname.startsWith('/verify-email')
+    || pathname.startsWith('/accept-invite')
     || pathname.startsWith('/demo')
     || pathname.startsWith('/blog')
     || pathname.startsWith('/developers')
     || pathname.startsWith('/c/')
     || pathname.startsWith('/share/')
     || pathname.startsWith('/report/')
+    || pathname.startsWith('/submittal/')
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
     || pathname.startsWith('/job/')

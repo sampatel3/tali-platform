@@ -30,6 +30,9 @@ from ...actions import override_decision as override_decision_action
 from ...actions.types import Actor
 from ...agent_runtime import budget_guard
 from ...deps import get_current_user
+from ...domains.assessments_runtime.pipeline_service import (
+    is_post_handover_workable_stage,
+)
 from ...domains.assessments_runtime.role_support import is_resolved
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
@@ -46,6 +49,7 @@ from ._activity_feed import (
     build_activity_feed,
     confidence_to_float,
 )
+from ._reasoning_text import humanize_reasoning
 
 
 router = APIRouter(tags=["agentic"])
@@ -119,6 +123,10 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
+    # When the candidate applied to this role — application-level Workable
+    # created_at, falling back to the candidate-level copy (legacy rows), then
+    # to the local application created_at. Freshness signal on decision cards.
+    applied_at: Optional[datetime] = None
     # The candidate's headline Tali score, 0–100. Resolved by preferring the
     # score the agent stamped on this decision's evidence (frozen at decision
     # time, present even when the application's score cache is still "pending"),
@@ -141,6 +149,14 @@ class AgentDecisionPayload(BaseModel):
     # can fetch this role's Workable stages for the Advance / Skip & advance
     # stage <select> without a second round-trip.
     workable_job_id: Optional[str] = None
+    # The candidate's LIVE Workable stage + whether it is post-handover
+    # (phone/technical/final interview, offer, hired). Approve surfaces use it
+    # to warn before a reject is approved for a candidate a human recruiter
+    # already advanced in Workable — advice, never a block. Read from the
+    # application at serialization time (not frozen on the decision) so a
+    # stage move after the card was queued still warns correctly.
+    candidate_workable_stage: Optional[str] = None
+    candidate_post_handover: bool = False
     # A2 + C5: trust signals computed on every read so recruiters see
     # input freshness, confidence, age and cost without opening the
     # expand-out. ``is_stale`` is the boolean gate the Hub uses to
@@ -157,6 +173,12 @@ class AgentDecisionPayload(BaseModel):
     age_seconds: int = 0
     confidence_band: Optional[str] = None
     cost_usd_cents: int = 0
+    # A score job (CvScoreJob pending/running) is currently re-computing this
+    # candidate's score — e.g. the recruiter pressed Re-evaluate on an
+    # old-engine score, or an agent-chat bulk re-score touched them. The queue
+    # greys the row + card and disables actions until the fresh score lands,
+    # so nothing is approved on a score that's being replaced mid-flight.
+    rescore_in_flight: bool = False
 
 
 class AgentRunPayload(BaseModel):
@@ -276,6 +298,7 @@ def _decision_to_payload(
     is_stale: bool = False,
     staleness_reasons: Optional[list[str]] = None,
     staleness_summary: Optional[str] = None,
+    rescore_in_flight: bool = False,
 ) -> AgentDecisionPayload:
     # C5: derive presentational fields here so the API answers "is this
     # safe to approve, how old is it, how expensive was it" without
@@ -364,7 +387,7 @@ def _decision_to_payload(
         decision_type=str(decision.decision_type),
         recommendation=str(decision.recommendation),
         status=str(decision.status),
-        reasoning=str(decision.reasoning),
+        reasoning=humanize_reasoning(str(decision.reasoning)),
         evidence=decision.evidence,
         confidence=confidence_value,
         model_version=str(decision.model_version),
@@ -377,6 +400,20 @@ def _decision_to_payload(
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
+        applied_at=(
+            (getattr(application, "workable_created_at", None) if application else None)
+            # Candidate-level copy only for Workable rows — a manual application
+            # on a person who ALSO applied via Workable must not inherit the
+            # other application's date.
+            or (
+                getattr(candidate, "workable_created_at", None)
+                if candidate is not None
+                and application is not None
+                and getattr(application, "source", None) == "workable"
+                else None
+            )
+            or (getattr(application, "created_at", None) if application else None)
+        ),
         taali_score=taali_score,
         score_summary=(
             {"score_provenance": score_provenance, "integrity": integrity}
@@ -385,9 +422,19 @@ def _decision_to_payload(
         ),
         requirements=requirements,
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
+        candidate_workable_stage=(
+            getattr(application, "workable_stage", None) if application else None
+        ),
+        candidate_post_handover=bool(
+            application is not None
+            and is_post_handover_workable_stage(
+                getattr(application, "workable_stage", None)
+            )
+        ),
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],
         staleness_summary=staleness_summary,
+        rescore_in_flight=rescore_in_flight,
         age_seconds=age_seconds,
         confidence_band=_confidence_band(confidence_value),
         cost_usd_cents=cost_cents,
@@ -430,7 +477,7 @@ def list_agent_decisions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved"):
+    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved", "decided"):
         raise HTTPException(status_code=422, detail=f"unsupported status={status!r}")
 
     query = (
@@ -461,6 +508,16 @@ def list_agent_decisions(
             # (pending, processing) which are still actionable elsewhere.
             query = query.filter(
                 AgentDecision.status.notin_(("pending", "processing"))
+            )
+        elif status == "decided":
+            # Calls a human actually made — approved or overridden — and
+            # nothing else. Narrower than ``resolved`` on purpose: the Hub's
+            # "Recent decisions" panel shows these under a row limit, and
+            # folding in bulk discarded/expired rows (a purged queue can
+            # produce hundreds at once) would push genuine decisions out of
+            # the window and blank the panel.
+            query = query.filter(
+                AgentDecision.status.in_(("approved", "overridden"))
             )
         else:
             query = query.filter(AgentDecision.status == status)
@@ -519,6 +576,29 @@ def list_agent_decisions(
         ):
             apps_by_id[int(app.id)] = app
 
+    # One query: which of these candidates have a score job in flight right
+    # now (Re-evaluate on an old-engine score, agent-chat bulk re-score, …)?
+    # The queue greys those rows and disables their actions until the fresh
+    # score lands, so a recruiter never approves a score being replaced.
+    rescoring_app_ids: set[int] = set()
+    if all_app_ids:
+        from ...models.cv_score_job import (
+            SCORE_JOB_PENDING,
+            SCORE_JOB_RUNNING,
+            CvScoreJob,
+        )
+
+        rescoring_app_ids = {
+            int(row[0])
+            for row in db.query(CvScoreJob.application_id)
+            .filter(
+                CvScoreJob.application_id.in_(all_app_ids),
+                CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
+            )
+            .distinct()
+            .all()
+        }
+
     # One cache for the whole page: pending rows in a queue typically share
     # a handful of roles, so this collapses the per-role criteria/note
     # lookups from O(rows) to O(distinct roles).
@@ -548,6 +628,7 @@ def list_agent_decisions(
                 is_stale=is_stale,
                 staleness_reasons=reasons,
                 staleness_summary=summary,
+                rescore_in_flight=int(decision.application_id) in rescoring_app_ids,
             )
         )
     return payloads
@@ -879,7 +960,8 @@ def re_evaluate(
             db.commit()
         except Exception as exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"re-score failed: {exc}")
+            logger.exception("re-score failed decision_id=%s", decision_id)
+            raise HTTPException(status_code=500, detail="Re-score failed. Please try again.")
         return ReEvaluateResult(
             decision_id=decision_id,
             role_id=int(decision.role_id),

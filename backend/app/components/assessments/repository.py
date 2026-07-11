@@ -300,7 +300,9 @@ def _score_mode_for_assessment(assessment: Assessment) -> str | None:
     return "assessment_plus_role_fit"
 
 
-def assessment_to_response(assessment: Assessment, db: Optional[Session] = None) -> Dict[str, Any]:
+def assessment_to_response(
+    assessment: Assessment, db: Optional[Session] = None, *, summary: bool = False
+) -> Dict[str, Any]:
     """Serialize assessment to response dict.
 
     SECURITY POLICY:
@@ -308,6 +310,13 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
     - Expose `assessment.token` only to authenticated recruiter/admin APIs so
       they can generate candidate assessment links.
     - Candidate runtime endpoints continue validating token possession.
+
+    ``summary`` is the list serialization: the /assessments list renders only
+    name/status/score columns and never reads the multi-KB session blobs
+    (cli_transcript, final_repo_state, git_evidence, prompt_analytics,
+    score_breakdown) — a single completed transcript can be hundreds of KB, so
+    a 50-row page ships tens of MB otherwise. Those blobs stay on the
+    /assessments/{id} detail path.
     """
     candidate_name = ""
     candidate_email = ""
@@ -423,6 +432,11 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "posted_to_workable_at": assessment.posted_to_workable_at,
         "invite_channel": getattr(assessment, "invite_channel", None),
         "invite_sent_at": getattr(assessment, "invite_sent_at", None),
+        # Resend delivery lifecycle so the inbox can surface a bounced invite
+        # instead of showing "Invited" forever. Populated by the Resend webhook.
+        "invite_email_status": getattr(assessment, "invite_email_status", None),
+        "invite_delivered_at": getattr(assessment, "invite_delivered_at", None),
+        "invite_bounced_at": getattr(assessment, "invite_bounced_at", None),
         "credit_consumed_at": getattr(assessment, "credit_consumed_at", None),
         "candidate_cv_filename": (
             assessment.application.cv_filename if getattr(assessment, "application", None) and assessment.application.cv_filename
@@ -461,4 +475,15 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "demo_track": getattr(assessment, "demo_track", None),
         "demo_profile": getattr(assessment, "demo_profile", None),
     }
+    if summary:
+        # Drop the heavy session blobs from list rows; the detail endpoint keeps
+        # them. Keys stay present (nulled) so the response shape is unchanged.
+        for _heavy in (
+            "cli_transcript",
+            "final_repo_state",
+            "git_evidence",
+            "prompt_analytics",
+            "score_breakdown",
+        ):
+            data[_heavy] = None
     return data

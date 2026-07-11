@@ -7,6 +7,17 @@
   padding: 12px var(--pad-x) 0;
 }
 
+/* Track the same gutter overrides the nav + page use at each breakpoint so the
+   agent bar lines up with the header above and content below (it defaults to
+   the 48px --pad-x, which is never overridden here otherwise — on a 375px phone
+   that burned 26% of the width). */
+@media (max-width: 1024px) {
+  .mc-agent-bar-wrap { padding-left: 24px; padding-right: 24px; }
+}
+@media (max-width: 720px) {
+  .mc-agent-bar-wrap { padding-left: 16px; padding-right: 16px; }
+}
+
 .mc-agent-bar {
   position: relative;
   border-radius: 14px;

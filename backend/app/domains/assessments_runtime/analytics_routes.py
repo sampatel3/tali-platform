@@ -29,7 +29,12 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.user import User
-from .pipeline_service import normalize_pipeline_key
+from .pipeline_service import (
+    FUNNEL_BUCKETS,
+    funnel_bucket_for,
+    normalize_pipeline_key,
+    _post_handover_sql,
+)
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -144,6 +149,7 @@ def get_analytics(
             "total_candidates": 0,
             "total_tasks": 0,
             "completed_count": 0,
+            "timed_out_count": 0,
             "completion_rate": 0,
             "top_score": None,
             "avg_score": None,
@@ -174,6 +180,15 @@ def get_analytics(
     total = len(assessments)
     completed = [assessment for assessment in assessments if _is_completed(assessment) and assessment.completed_at]
     completed_count = len(completed)
+    # Timeout-completions are a distinct engagement outcome (the candidate
+    # walked away and the server finalized their work) — surface them
+    # separately instead of hiding them inside completed_count.
+    timed_out_count = sum(
+        1
+        for assessment in completed
+        if str(getattr(assessment.status, "value", assessment.status) or "").lower()
+        == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value
+    )
 
     weekly_completion: list[dict] = []
     now = datetime.now(timezone.utc)
@@ -217,6 +232,7 @@ def get_analytics(
         "total_candidates": unique_candidate_count,
         "total_tasks": unique_task_count,
         "completed_count": completed_count,
+        "timed_out_count": timed_out_count,
         "completion_rate": completion_rate,
         "top_score": top_score,
         "avg_score": avg_score,
@@ -346,17 +362,19 @@ def get_task_benchmarks(
 # - Score distribution buckets (re-uses the existing decile binning)
 # ----------------------------------------------------------------------------
 
-# Pipeline stages map to the canvas's funnel rows. We display "DONE" as the
-# label for `in_assessment` since the funnel narrates *what was scored*, not
-# *what is in flight*; and "HIRED" as the terminal step from
-# application_outcome rather than pipeline_stage. APPLIED + INVITED + DONE
-# map directly from pipeline_stage; REVIEW maps to pipeline_stage="review".
-_FUNNEL_STAGES = (
-    ("APPLIED", "applied"),
-    ("INVITED", "invited"),
-    ("DONE", "in_assessment"),
-    ("REVIEW", "review"),
-    ("HIRED", "_hired"),
+# Canonical funnel stages (locked Option B2) — the SAME vocabulary and
+# bucketing every other funnel surface uses (shared/metrics.js
+# PIPELINE_FUNNEL_STAGES and pipeline_service.role_pipeline_counts). Analytics
+# previously invented its own APPLIED/INVITED/DONE/REVIEW/HIRED labels, so the
+# same org saw contradictory funnels on Home vs Analytics. Labels here are the
+# display strings; bucket keys come from funnel_bucket_for().
+_FUNNEL_STAGE_LABELS = (
+    ("applied", "Applied"),
+    ("scored", "Scored"),
+    ("invited", "Invited"),
+    ("completed", "Completed"),
+    ("advanced", "Advanced"),
+    ("rejected", "Rejected"),
 )
 
 
@@ -374,9 +392,19 @@ def _decisions_in_window(
     role_id: Optional[int],
     parsed_from: Optional[datetime],
     parsed_to: Optional[datetime],
-) -> List[AgentDecision]:
+) -> List[Any]:
+    # Select only the scalar columns the KPI aggregation reads — the full
+    # AgentDecision row carries reasoning (Text) + several JSON blobs
+    # (evidence, token_spend, input_fingerprint …) that this endpoint never
+    # touches. The returned Rows still expose .decision_type/.status/
+    # .human_disposition/.confidence for the helpers below.
     q = (
-        db.query(AgentDecision)
+        db.query(
+            AgentDecision.decision_type,
+            AgentDecision.status,
+            AgentDecision.human_disposition,
+            AgentDecision.confidence,
+        )
         .filter(AgentDecision.organization_id == org_id)
     )
     if role_id is not None:
@@ -386,6 +414,26 @@ def _decisions_in_window(
     if parsed_to is not None:
         q = q.filter(AgentDecision.created_at <= parsed_to)
     return q.order_by(desc(AgentDecision.created_at)).all()
+
+
+def _count_decisions_in_window(
+    db: Session,
+    org_id: int,
+    *,
+    role_id: Optional[int],
+    parsed_from: Optional[datetime],
+    parsed_to: Optional[datetime],
+) -> int:
+    q = db.query(func.count(AgentDecision.id)).filter(
+        AgentDecision.organization_id == org_id
+    )
+    if role_id is not None:
+        q = q.filter(AgentDecision.role_id == role_id)
+    if parsed_from is not None:
+        q = q.filter(AgentDecision.created_at >= parsed_from)
+    if parsed_to is not None:
+        q = q.filter(AgentDecision.created_at <= parsed_to)
+    return int(q.scalar() or 0)
 
 
 # Decision statuses that mean the decision is still in the recruiter's
@@ -487,7 +535,7 @@ def get_reporting_summary(
     decisions = _decisions_in_window(
         db, org_id, role_id=role_id, parsed_from=parsed_from, parsed_to=parsed_to,
     )
-    prior_decisions = _decisions_in_window(
+    prior_decisions_count = _count_decisions_in_window(
         db, org_id, role_id=role_id, parsed_from=prior_from, parsed_to=prior_to,
     )
 
@@ -553,7 +601,7 @@ def get_reporting_summary(
     if task_id is not None:
         prior_asmnt_q = prior_asmnt_q.filter(Assessment.task_id == task_id)
     prior_assessments = prior_asmnt_q.count()
-    prior_decisions_made = len(prior_decisions) + prior_assessments
+    prior_decisions_made = prior_decisions_count + prior_assessments
 
     # ── Org spend rollup across agent-enabled roles ────────────────────
     agent_roles = (
@@ -565,17 +613,17 @@ def get_reporting_summary(
         )
         .all()
     )
+    # One batched GROUP BY for MTD spend across the org (same helper the Hub
+    # uses) instead of a per-role month_to_date_spend_cents N+1.
+    spend_map = budget_guard.spend_by_role_map(db, organization_id=org_id)
     spent_total = 0
     budget_total = 0
     role_spend: List[Tuple[Role, int]] = []
     for role in agent_roles:
-        try:
-            spent = budget_guard.month_to_date_spend_cents(db, role=role)
-        except Exception:
-            spent = 0
-        spent_total += int(spent or 0)
+        spent = int(spend_map.get(role.id, 0) or 0)
+        spent_total += spent
         budget_total += int(role.monthly_usd_budget_cents or 0)
-        role_spend.append((role, int(spent or 0)))
+        role_spend.append((role, spent))
 
     over_pct: Optional[float] = None
     top_role_name: Optional[str] = None
@@ -588,25 +636,64 @@ def get_reporting_summary(
             top_role_name = top[0].name
 
     # ── Funnel counts (org-wide or role-scoped) ────────────────────────
-    app_q = db.query(CandidateApplication).filter(
+    # One GROUP BY over pipeline_stage + a single hired count, instead of
+    # hydrating every CandidateApplication row (cv_text etc.) just to bucket
+    # them in Python. total_applied is every application in scope.
+    # Canonical bucketing: mirror role_pipeline_counts so Analytics agrees with
+    # Home/Jobs. "Scored" = evaluated (real cv_match score OR a genuine
+    # pre-screen run); post-handover candidates (advanced in Workable) roll into
+    # "advanced"; "rejected" is an application_outcome counted separately.
+    scored_expr = or_(
+        CandidateApplication.cv_match_score.isnot(None),
+        and_(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.pre_screen_run_at.isnot(None),
+        ),
+    )
+    ph_expr = _post_handover_sql()
+    funnel_base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == org_id,
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.application_outcome == "open",
     )
     if role_id is not None:
-        app_q = app_q.filter(CandidateApplication.role_id == role_id)
-    applications = app_q.all()
+        funnel_base = funnel_base.filter(CandidateApplication.role_id == role_id)
+    bucket_rows = (
+        funnel_base.with_entities(
+            CandidateApplication.pipeline_stage,
+            scored_expr,
+            ph_expr,
+            func.count(CandidateApplication.id),
+        )
+        .group_by(CandidateApplication.pipeline_stage, scored_expr, ph_expr)
+        .all()
+    )
+    bucket_counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
+    for stage, is_scored, is_post_handover, total in bucket_rows:
+        n = int(total or 0)
+        if is_post_handover:
+            bucket_counts["advanced"] += n
+            continue
+        bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        if bucket:
+            bucket_counts[bucket] += n
+    # rejected is orthogonal to pipeline_stage (an outcome), counted across all
+    # stages — same as role_pipeline_counts.
+    rejected_base = db.query(func.count(CandidateApplication.id)).filter(
+        CandidateApplication.organization_id == org_id,
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.application_outcome == "rejected",
+    )
+    if role_id is not None:
+        rejected_base = rejected_base.filter(CandidateApplication.role_id == role_id)
+    bucket_counts["rejected"] = int(rejected_base.scalar() or 0)
+
+    # Percentage is share-of-applied-cohort; "applied" here is the total across
+    # active buckets (everyone who entered the pipeline).
+    total_applied = sum(bucket_counts[b] for b in FUNNEL_BUCKETS if b != "rejected")
     funnel: List[Dict[str, Any]] = []
-    total_applied = len(applications)
-    for label, key in _FUNNEL_STAGES:
-        if key == "_hired":
-            count = sum(
-                1 for a in applications
-                if str(a.application_outcome or "").lower() == "hired"
-            )
-        else:
-            count = sum(
-                1 for a in applications
-                if str(a.pipeline_stage or "").lower() == key
-            )
+    for key, label in _FUNNEL_STAGE_LABELS:
+        count = bucket_counts.get(key, 0)
         pct = round((count / total_applied) * 100.0, 1) if total_applied else 0.0
         funnel.append({"label": label, "key": key, "count": count, "percentage": pct})
 

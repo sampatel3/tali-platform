@@ -97,6 +97,14 @@
   --grad-dark-vert: linear-gradient(180deg, #111a24 0%, #0b1116 100%);
   --grad-dark-diag: linear-gradient(135deg, #111a24 0%, #0b1116 100%);
   --grad-dark-card: linear-gradient(160deg, #111a24 0%, #1f2a38 100%);
+  /* The single dark-purple "agent-ON" visual vocabulary (PR #518). Both stops
+     are constant across brands — the same slab/strip wherever the agent is on.
+     ``--grad-agent-on`` is the static 2-stop fill (stat pills, slabs, chips);
+     ``--grad-agent-on-animated`` is the 5-stop variant the .abar strip + report
+     agent bands animate (background-size:300%). Extracted from 10 copy-pasted
+     literals with 5 different angles — one angle per variant now. */
+  --grad-agent-on: linear-gradient(150deg, #3a1d6e, #241147);
+  --grad-agent-on-animated: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
 
   /* Decorative + semantic */
   --lime: #c8f169;

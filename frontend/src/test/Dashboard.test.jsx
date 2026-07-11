@@ -345,7 +345,7 @@ describe('AssessmentsPage', () => {
     renderAppAt('/jobs');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /live roles/i })).toBeInTheDocument();
     }, { timeout: 5000 });
 
     fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
@@ -431,7 +431,7 @@ describe('AssessmentsPage', () => {
     renderAppAt('/jobs');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /live roles/i })).toBeInTheDocument();
     });
     fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
 
@@ -786,7 +786,7 @@ describe('AssessmentsPage', () => {
     });
   });
 
-  it('does not render New Assessment button and points to Candidates page', async () => {
+  it('does not render New Assessment button and points to the Jobs page', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
     renderAppAt('/assessments');
 
@@ -796,7 +796,7 @@ describe('AssessmentsPage', () => {
 
     expect(screen.queryByText('New Assessment')).not.toBeInTheDocument();
     expect(
-      await screen.findByText('No assessments yet. Create an assessment from the Candidates page.')
+      await screen.findByText(/Create an assessment from a candidate.s row on the Jobs page\./)
     ).toBeInTheDocument();
   });
 
@@ -876,7 +876,7 @@ describe('AssessmentsPage', () => {
       expect(screen.getAllByText('Role').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Task').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Status').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('TAALI Score').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Taali Score').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Assessment Score').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Sent').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1);

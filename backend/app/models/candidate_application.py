@@ -90,6 +90,12 @@ class CandidateApplication(Base):
     bullhorn_job_submission_id = Column(String, nullable=True, index=True)
     bullhorn_status = Column(String, nullable=True)
     bullhorn_status_local_write_at = Column(DateTime(timezone=True), nullable=True)
+    # When THIS application was created in Workable (= when the candidate
+    # applied to this job). Candidate.workable_created_at is the shared
+    # candidate-level copy, kept as fallback for rows synced before this column.
+    # For Bullhorn orgs this column carries the remote-ATS applied date
+    # (JobSubmission.dateAdded), so decision surfaces show a real applied date.
+    workable_created_at = Column(DateTime(timezone=True), nullable=True)
     rank_score = Column(Float, nullable=True)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
 

@@ -21,18 +21,19 @@ import {
 import { pathForPage } from './app/routing';
 import { mapAssessmentToCandidateView } from './features/candidates/assessmentViewModels';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
+import { Button, Panel } from './shared/ui/TaaliPrimitives';
 import { ScrollToTop } from './shared/ui/ScrollToTop';
 import { RouteMeta } from './shared/seo/RouteMeta';
 import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
 import { useKeyboardShortcut } from './shared/hooks/useKeyboardShortcut';
 
-import { LandingPage } from './features/marketing/LandingPage';
 import {
   ForgotPasswordPage,
   LoginPage,
   RegisterPage,
   ResetPasswordPage,
   VerifyEmailPage,
+  AcceptInvitePage,
 } from './features/auth';
 import { Shell as DashboardNav } from './shared/layout/Shell';
 import { PreviewNavGuard } from './shared/layout/PreviewNavGuard';
@@ -42,6 +43,12 @@ import {
 } from './features/integrations/WorkableConnection';
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 
+const LandingPage = lazy(() =>
+  import('./features/marketing/LandingPage').then((m) => ({ default: m.LandingPage }))
+);
+const NotFoundPage = lazy(() =>
+  import('./features/marketing/NotFoundPage').then((m) => ({ default: m.NotFoundPage }))
+);
 const HomePage = lazy(() =>
   import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
 );
@@ -68,6 +75,11 @@ const DemoLeadPage = lazy(() =>
 const DemoShowcasePage = lazy(() =>
   import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
 );
+// Internal, no-auth landing-design preview (/landing-preview?v=a|b). Two
+// value-led landing variants Sam eyeballs in prod; fixture data only, no APIs.
+const LandingPreviewPage = lazy(() =>
+  import('./features/marketing/landing_preview/LandingPreviewPage').then((m) => ({ default: m.LandingPreviewPage }))
+);
 const DeveloperPortalPage = lazy(() =>
   import('./features/developers/DeveloperPortalPage').then((m) => ({ default: m.DeveloperPortalPage }))
 );
@@ -84,6 +96,7 @@ const HomeShowcaseView = lazy(() =>
   import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
 );
 const TopReportPage = lazy(() => import('./features/chat/TopReportPage'));
+const SubmittalPackPage = lazy(() => import('./features/jobs/SubmittalPackPage'));
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
 );
@@ -138,6 +151,7 @@ const BlogPostPage = lazy(() =>
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
+  if (pathname.startsWith('/submittal/')) return true;
   const params = new URLSearchParams(search || '');
   const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
   if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
@@ -186,6 +200,12 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
     || pathname.startsWith('/settings')
+    // Recruiter-only routes that render full chrome before any API call, so a
+    // logged-out visit must be caught here rather than by the httpClient's 401
+    // hard-reload bounce. Keep in sync with isPublicPath in httpClient.js.
+    || pathname.startsWith('/chat')
+    || pathname.startsWith('/tasks/')
+    || pathname.startsWith('/admin')
   );
 };
 
@@ -204,8 +224,11 @@ function AppContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [selectedCandidate, setSelectedCandidate] = useState(null);
-  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
+  // Only show the "Assessment unavailable" panel after a CONFIRMED fetch
+  // failure — otherwise every deep link flashes the error for a frame before
+  // the spinner appears.
+  const [candidateDetailFetchFailed, setCandidateDetailFetchFailed] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
 
@@ -254,6 +277,9 @@ function AppContent() {
     ? (searchParams.get('token') || '')
     : '';
   const verifyEmailToken = location.pathname === '/verify-email'
+    ? (searchParams.get('token') || '')
+    : '';
+  const acceptInviteToken = location.pathname === '/accept-invite'
     ? (searchParams.get('token') || '')
     : '';
 
@@ -341,15 +367,11 @@ function AppContent() {
     setStartedAssessmentData(startData);
   };
 
-  const navigateToCandidate = (candidate, sourcePage = 'assessments') => {
+  const navigateToCandidate = (candidate) => {
+    // Back navigation now lives in the ?from= breadcrumb model in
+    // CandidateStandingReportPage — the old candidateDetailBackTo state was
+    // written here but never read, so it (and its setters) are gone.
     setSelectedCandidate(candidate);
-    if (sourcePage === 'candidates') {
-      setCandidateDetailBackTo({ page: 'candidates', label: 'Back to Candidates' });
-    } else if (sourcePage === 'jobs') {
-      setCandidateDetailBackTo({ page: 'jobs', label: 'Back to Jobs' });
-    } else {
-      setCandidateDetailBackTo({ page: 'assessments', label: 'Back to Assessments' });
-    }
     navigateToPage('candidate-detail', {
       candidateDetailAssessmentId: candidate?.id || candidate?._raw?.id || null,
     });
@@ -367,6 +389,7 @@ function AppContent() {
 
     let cancelled = false;
     setLoadingCandidateDetail(true);
+    setCandidateDetailFetchFailed(false);
     assessmentsApi.get(candidateDetailAssessmentId)
       .then((res) => {
         if (cancelled) return;
@@ -376,6 +399,7 @@ function AppContent() {
       .catch(() => {
         if (cancelled) return;
         setSelectedCandidate(null);
+        setCandidateDetailFetchFailed(true);
         setLoadingCandidateDetail(false);
       });
 
@@ -477,7 +501,14 @@ function AppContent() {
         onClose={() => setShortcutsModalOpen(false)}
       />
       <Routes>
-      <Route path="/" element={<LandingPage onNavigate={navigateToPage} />} />
+      <Route
+        path="/"
+        element={
+          <Suspense fallback={lazyFallback}>
+            <LandingPage onNavigate={navigateToPage} />
+          </Suspense>
+        }
+      />
       {/* /demo is the showcase. /showcase kept as an alias. The legacy
           DemoExperiencePage walkthrough lives at /demo-walkthrough until
           we decide to retire it entirely. */}
@@ -502,6 +533,17 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DemoExperiencePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      {/* Internal landing-design preview. Public, no-auth — not in
+          isProtectedRecruiterPath, and it calls no APIs so no httpClient
+          isPublicPath entry is needed. ?v=a|b picks the variant. */}
+      <Route
+        path="/landing-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <LandingPreviewPage onNavigate={navigateToPage} />
           </Suspense>
         )}
       />
@@ -542,6 +584,7 @@ function AppContent() {
       <Route path="/forgot-password" element={<ForgotPasswordPage onNavigate={navigateToPage} />} />
       <Route path="/reset-password" element={<ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} />} />
       <Route path="/verify-email" element={<VerifyEmailPage onNavigate={navigateToPage} token={verifyEmailToken} />} />
+      <Route path="/accept-invite" element={<AcceptInvitePage onNavigate={navigateToPage} token={acceptInviteToken} />} />
 
       <Route
         path="/dashboard"
@@ -740,6 +783,18 @@ function AppContent() {
         )}
       />
 
+      {/* Public, no-auth curated client submittal — renders a persisted,
+          role-scoped shortlist snapshot (client-safe candidate cards) by
+          token. No /api/v1 prefix and no recruiter session required. */}
+      <Route
+        path="/submittal/:submittalToken"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <SubmittalPackPage />
+          </Suspense>
+        )}
+      />
+
       <Route
         path="/candidate-detail"
         element={<Navigate replace to={candidateDetailAssessmentId ? `/assessments/${candidateDetailAssessmentId}` : '/assessments'} />}
@@ -753,29 +808,33 @@ function AppContent() {
       <Route
         path="/assessments/:assessmentId"
         element={
-          loadingCandidateDetail ? (
-            <div className="min-h-screen flex items-center justify-center">
-              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
-            </div>
-          ) : selectedCandidate?._raw?.application_id ? (
+          selectedCandidate?._raw?.application_id ? (
             <Navigate
               replace
               to={`/candidates/${selectedCandidate._raw.application_id}?tab=assessment`}
             />
+          ) : (loadingCandidateDetail || (selectedCandidate == null && !candidateDetailFetchFailed)) ? (
+            // Still fetching (nothing loaded yet and no failure) is a loading
+            // state, not an error — so a deep link doesn't flash the panel on
+            // first paint. Once the fetch resolves (a legacy assessment with no
+            // application, or a confirmed failure) we fall through to the panel.
+            <div className="min-h-screen flex items-center justify-center">
+              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
+            </div>
           ) : (
             <div>
-              <DashboardNavWithMode currentPage="candidates" onNavigate={navigateToPage} />
+              <DashboardNavWithMode currentPage="jobs" onNavigate={navigateToPage} />
               <div className="page">
-                <div className="panel" style={{ padding: 24, marginTop: 16 }}>
-                  <h2>Assessment unavailable</h2>
-                  <p>
+                <Panel style={{ padding: 24, marginTop: 16 }}>
+                  <h2 className="taali-display text-xl font-semibold text-[var(--taali-text)]">Assessment unavailable</h2>
+                  <p className="mt-2 text-sm text-[var(--taali-muted)]">
                     This assessment couldn’t be opened in the candidate file — it isn’t linked to a
                     candidate application, or it no longer exists.
                   </p>
-                  <button type="button" className="btn btn-outline btn-sm" onClick={() => navigateToPage('jobs')}>
+                  <Button type="button" variant="secondary" className="mt-4" onClick={() => navigateToPage('jobs')}>
                     Back to Jobs
-                  </button>
-                </div>
+                  </Button>
+                </Panel>
               </div>
             </div>
           )
@@ -954,7 +1013,18 @@ function AppContent() {
       <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
       <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      {/* Unknown URL → a real 404 with a way back, instead of silently
+          teleporting to "/" (which then bounced authed users to /home and hid
+          the fact that the link was broken). Legacy aliases are individually
+          routed above, so they never reach this. */}
+      <Route
+        path="*"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <NotFoundPage />
+          </Suspense>
+        )}
+      />
       </Routes>
     </>
   );

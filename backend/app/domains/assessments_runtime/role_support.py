@@ -253,6 +253,7 @@ def _loaded_relationship_items(entity: Any, relationship_name: str) -> list[Any]
 def role_to_response(
     role: Role,
     *,
+    summary: bool = False,
     tasks_count: int | None = None,
     applications_count: int | None = None,
     stage_counts: dict[str, int] | None = None,
@@ -262,6 +263,12 @@ def role_to_response(
     requisition: dict | None = None,
     client: dict | None = None,
 ) -> RoleResponse:
+    # ``summary`` is the list serialization: the /roles list carries dozens of
+    # roles, and no list consumer (Jobs, Dashboard, AgentBar, GlobalSearch) reads
+    # the job spec, interview-pack templates, description or criteria — those are
+    # detail-only. Nulling them here keeps the list response small (a multi-KB
+    # spec + two generated packs per role otherwise dominates the payload) and
+    # lets the list query skip hydrating the criteria relationship entirely.
     if tasks_count is None:
         loaded_tasks = _loaded_relationship_items(role, "tasks")
         tasks_count = len(loaded_tasks or [])
@@ -271,34 +278,39 @@ def role_to_response(
             [a for a in loaded_applications if getattr(a, "deleted_at", None) is None]
         )
 
-    role_templates = build_role_interview_pack_templates(role)
-    screening_pack_template = (
-        role.screening_pack_template
-        if isinstance(role.screening_pack_template, dict)
-        else role_templates.get("screening")
-    )
-    tech_interview_pack_template = (
-        role.tech_interview_pack_template
-        if isinstance(role.tech_interview_pack_template, dict)
-        else role_templates.get("tech_stage_2")
-    )
-    loaded_criteria = _loaded_relationship_items(role, "criteria")
-    if loaded_criteria is None:
-        # Bounded fan-out (≤32 per role) makes lazy load acceptable here.
-        try:
-            loaded_criteria = list(role.criteria or [])
-        except Exception:
-            loaded_criteria = []
-    criteria = [
-        RoleCriterionResponse.model_validate(c)
-        for c in loaded_criteria
-        if getattr(c, "deleted_at", None) is None
-    ]
+    if summary:
+        screening_pack_template = None
+        tech_interview_pack_template = None
+        criteria: list[RoleCriterionResponse] = []
+    else:
+        role_templates = build_role_interview_pack_templates(role)
+        screening_pack_template = (
+            role.screening_pack_template
+            if isinstance(role.screening_pack_template, dict)
+            else role_templates.get("screening")
+        )
+        tech_interview_pack_template = (
+            role.tech_interview_pack_template
+            if isinstance(role.tech_interview_pack_template, dict)
+            else role_templates.get("tech_stage_2")
+        )
+        loaded_criteria = _loaded_relationship_items(role, "criteria")
+        if loaded_criteria is None:
+            # Bounded fan-out (≤32 per role) makes lazy load acceptable here.
+            try:
+                loaded_criteria = list(role.criteria or [])
+            except Exception:
+                loaded_criteria = []
+        criteria = [
+            RoleCriterionResponse.model_validate(c)
+            for c in loaded_criteria
+            if getattr(c, "deleted_at", None) is None
+        ]
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,
         name=role.name,
-        description=role.description,
+        description=None if summary else role.description,
         criteria=criteria,
         source=role.source,
         workable_job_id=role.workable_job_id,
@@ -313,16 +325,18 @@ def role_to_response(
         ),
         workable_job_live=workable_job_syncable(role),
         job_spec_filename=role.job_spec_filename,
-        job_spec_text=role.job_spec_text,
+        job_spec_text=None if summary else role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,
         job_spec_present=role_has_job_spec(role),
-        interview_focus=role.interview_focus,
+        interview_focus=None if summary else role.interview_focus,
         interview_focus_generated_at=role.interview_focus_generated_at,
         screening_pack_template=screening_pack_template,
         tech_interview_pack_template=tech_interview_pack_template,
         auto_reject_threshold_mode=getattr(role, "auto_reject_threshold_mode", "manual") or "manual",
         auto_reject=bool(getattr(role, "auto_reject", False)),
+        auto_reject_pre_screen=bool(getattr(role, "auto_reject_pre_screen", False)),
         auto_promote=bool(getattr(role, "auto_promote", False)),
+        auto_skip_assessment=bool(getattr(role, "auto_skip_assessment", False)),
         workable_actor_member_id=role.workable_actor_member_id,
         starred_for_auto_sync=bool(getattr(role, "starred_for_auto_sync", False)),
         agentic_mode_enabled=bool(getattr(role, "agentic_mode_enabled", False)),
@@ -609,14 +623,10 @@ def _score_provenance(app: CandidateApplication) -> dict[str, Any]:
 
     details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
     scored_at = getattr(app, "cv_match_scored_at", None)
-    model = details.get("model_version") or None
-    tier = None
-    if model:
-        tier = "Sonnet" if "sonnet" in model else "Haiku" if "haiku" in model else model
     return {
         "engine_version": resolve_engine_version(details) or None,
         "scored_at": scored_at.isoformat() if scored_at else None,
-        "model": tier,
+        "model": None,
     }
 
 
@@ -964,6 +974,33 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
     ]
 
 
+def _interview_feedback_for_application(app: CandidateApplication) -> list[dict[str, Any]]:
+    """Structured interview feedback for the detail payload, newest-first.
+
+    Reads via the app's own session so the recruiter detail view and the
+    recruiter share-link view (both attach ``app`` to a session) surface the
+    same rows without threading ``db`` through the payload signature.
+    """
+    from sqlalchemy.orm import Session as _Session
+
+    from ...models.interview_feedback import InterviewFeedback
+    from .interview_feedback_routes import interview_feedback_to_dict
+
+    session = _Session.object_session(app)
+    if session is None:
+        return []
+    rows = (
+        session.query(InterviewFeedback)
+        .filter(
+            InterviewFeedback.application_id == app.id,
+            InterviewFeedback.organization_id == app.organization_id,
+        )
+        .order_by(InterviewFeedback.created_at.desc(), InterviewFeedback.id.desc())
+        .all()
+    )
+    return [interview_feedback_to_dict(fb) for fb in rows]
+
+
 # Sentinel so callers can pass an explicit ``score_status`` (including
 # ``None``) and be distinguished from "not supplied — compute it yourself".
 _UNSET = object()
@@ -1082,6 +1119,9 @@ def application_to_response(
         role_name=(getattr(app.role, "name", None) if getattr(app, "role", None) else None),
         cv_filename=app.cv_filename or (candidate.cv_filename if candidate else None),
         cv_uploaded_at=app.cv_uploaded_at or (candidate.cv_uploaded_at if candidate else None),
+        # Application-level cv_text only (no candidate fallback) — this is the
+        # exact column the auto-scorer filters on.
+        has_cv_text=bool(app.cv_text),
         cv_match_score=cv_match_score,
         cv_match_details=cv_match_details or None,
         cv_match_scored_at=app.cv_match_scored_at,
@@ -1107,6 +1147,18 @@ def application_to_response(
         candidate_experience=(candidate.experience_entries if candidate else None),
         candidate_summary=(candidate.summary if candidate else None),
         candidate_workable_created_at=(candidate.workable_created_at if candidate else None),
+        applied_at=(
+            app.workable_created_at
+            # Candidate-level copy only for Workable rows — a manual application
+            # on a person who ALSO applied via Workable must not inherit the
+            # other application's date.
+            or (
+                candidate.workable_created_at
+                if candidate is not None and app.source == "workable"
+                else None
+            )
+            or app.created_at
+        ),
         workable_sourced=app.workable_sourced,
         workable_profile_url=app.workable_profile_url,
         workable_enriched=(candidate.workable_enriched if candidate else None),
@@ -1214,6 +1266,10 @@ def application_detail_payload(
     payload["workable_questionnaire_answers"] = workable_questionnaire_answers(candidate, app)
     payload["workable_activity_log"] = workable_activity_log(candidate, app)
 
+    # Recruiter-internal structured interview feedback, newest-first. Detail-only
+    # and stripped from client shares below (same treatment as notes / prep).
+    payload["interview_feedback"] = _interview_feedback_for_application(app)
+
     if client_safe:
         # Strip recruiter-internal fields so an external client share
         # (e.g. a hiring-manager-at-a-customer link) cannot read recruiter
@@ -1222,6 +1278,7 @@ def application_detail_payload(
         # frontend client view also hides these tabs.
         payload["notes"] = None
         payload["candidate_interview_kit"] = None
+        payload["interview_feedback"] = None
         payload["assessment_history"] = []
         # Recruiter-internal interview prep / transcripts must never reach an
         # external client share.
@@ -1243,9 +1300,30 @@ def application_detail_payload(
                 "internal_notes",
                 "claude_chat_log",
                 "judge_rationale",
+                # Integrity/fraud readout (trust band, warnings, corroborations)
+                # is a recruiter-only "verify before deciding" signal — an
+                # external client share must never see who we flagged or why.
+                "integrity",
             ):
                 ss.pop(k, None)
             payload["score_summary"] = ss
+        # The raw scoring blobs also carry the integrity/fraud readout
+        # (integrity_signals incl. document-hygiene scans, timeline flags,
+        # claims to verify) and pre-screen fraud signals (copy-paste,
+        # duplicate-identity). The UI never renders them client-side, but the
+        # payload itself must not expose who we flagged or why.
+        if isinstance(payload.get("cv_match_details"), dict):
+            cvd = dict(payload["cv_match_details"])
+            for k in (
+                "integrity_signals",
+                "timeline_flags",
+                "claims_to_verify",
+                "integrity_penalty",
+                "pending_document_hygiene_pdf",
+            ):
+                cvd.pop(k, None)
+            payload["cv_match_details"] = cvd
+        payload["pre_screen_evidence"] = None
         payload["recruiter_notes"] = None
         payload["client_share_summary"] = _build_client_share_summary(app, payload)
     return payload

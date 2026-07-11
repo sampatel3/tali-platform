@@ -26,8 +26,13 @@ vi.mock('../../shared/api/httpClient', () => ({
 vi.mock('../../shared/api', () => ({
   roles: {
     get: vi.fn(),
+    getApplication: vi.fn(),
     listTasks: vi.fn(),
     listApplications: vi.fn(),
+    updateApplicationOutcome: vi.fn(),
+    updateApplicationStage: vi.fn(),
+    createAssessment: vi.fn(),
+    moveApplicationToWorkableStage: vi.fn(),
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
     batchPreScreenStatus: vi.fn(),
@@ -241,6 +246,41 @@ describe('JobPipelinePage', () => {
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-report', expect.anything());
   });
 
+  it('patches just the rejected row instead of re-downloading the whole workspace', async () => {
+    apiClient.roles.updateApplicationOutcome.mockResolvedValue({ data: null });
+    // The single-row patch refetches ONLY the affected application.
+    apiClient.roles.getApplication.mockResolvedValue({
+      data: { ...baseApplications[0], application_outcome: 'rejected' },
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    // Open the triage drawer for Sam, then reject.
+    const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    fireEvent.click(appliedCard);
+    await screen.findByText(/Closes the application/i);
+
+    // listApplications ran twice on cold load (open + rejected). Rejecting must
+    // NOT trigger a third/fourth call — the row is patched via getApplication.
+    const beforeRejectCalls = apiClient.roles.listApplications.mock.calls.length;
+    // Select the Reject option card, then confirm.
+    fireEvent.click((await screen.findByText('Closes the application')).closest('button'));
+    fireEvent.click(screen.getByRole('button', { name: /Reject candidate/i }));
+
+    await waitFor(() => {
+      expect(apiClient.roles.updateApplicationOutcome).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ application_outcome: 'rejected' }),
+      );
+    });
+    await waitFor(() => {
+      expect(apiClient.roles.getApplication).toHaveBeenCalledWith(1);
+    });
+    // No full-workspace refetch: the 2×2000-row listApplications call count is
+    // unchanged after the reject.
+    expect(apiClient.roles.listApplications.mock.calls.length).toBe(beforeRejectCalls);
+  });
+
   it('formats Workable job specs instead of showing flattened markdown', async () => {
     apiClient.roles.get.mockResolvedValueOnce({
       data: {
@@ -287,7 +327,7 @@ Banking transformation experience
     // role description is now edited inline via <RoleSpecEditPanel>; the
     // formatted, non-flattened spec body lives in the "Read full description"
     // section below — asserted next.)
-    fireEvent.click(screen.getByRole('link', { name: /^Job Specification$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
 
     expect(screen.queryByText(/keeps recruiter scoring/i)).not.toBeInTheDocument();
 
@@ -447,7 +487,7 @@ Banking transformation experience
     // the formatted Workable-ingested description + "At a glance" sidebar.
     // The pipeline-activity timeline that previously lived under this label
     // was a leftover from the v1 5-tab layout and is gone in v2.
-    fireEvent.click(screen.getByRole('link', { name: /^Job Specification$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
     expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();
@@ -556,6 +596,61 @@ Banking transformation experience
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
     expect(apiClient.agent.discardPending).not.toHaveBeenCalled();
+  });
+
+  it('New CVs tile counts only auto-scorable candidates, breaking out held-back ones', async () => {
+    // Mirrors backend _auto_enqueue_scoring: unscored apps that were
+    // pre-screened OUT (below the pre-screen cutoff, no newer CV) or have no
+    // CV are NOT "ready to score" — showing them as such made a fully
+    // filtered cohort look like the agent was stuck.
+    const base = {
+      candidate_email: 'x@example.com', pipeline_stage: 'applied',
+      application_outcome: 'open', status: 'applied',
+      created_at: '2026-04-26T01:00:00Z', updated_at: '2026-04-26T01:00:00Z',
+    };
+    apiClient.roles.listApplications.mockResolvedValue({ data: [
+      // Pre-screen filtered: score 12 < 30 cutoff, CV predates the run.
+      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', has_cv_text: true, pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      // CV file exists but extraction produced no text — the auto-scorer
+      // filters on cv_text, so this is held back, not "ready to score".
+      { ...base, id: 2, candidate_id: 2, candidate_name: 'Nocv Ned', has_cv_text: false, cv_filename: 'ned.pdf', cv_uploaded_at: '2026-04-01T00:00:00Z' },
+      // Never pre-screened, has CV text → scoreable.
+      { ...base, id: 3, candidate_id: 3, candidate_name: 'Ready Ria', has_cv_text: true, cv_uploaded_at: '2026-04-01T00:00:00Z' },
+      // Screened out BUT uploaded a newer CV since the run → scoreable again.
+      { ...base, id: 4, candidate_id: 4, candidate_name: 'Fresh Finn', has_cv_text: true, pre_screen_score: 12, cv_uploaded_at: '2026-04-03T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+    ] });
+
+    renderPipeline();
+
+    const tile = (await screen.findByText('New CVs')).closest('.kpi-tile');
+    expect(tile).toBeTruthy();
+    // Value = the 2 genuinely scoreable candidates, not all 4 unscored.
+    expect(within(tile).getByText('2')).toBeInTheDocument();
+    expect(within(tile).getByText('ready to score · 1 pre-screen filtered · 1 no CV')).toBeInTheDocument();
+  });
+
+  it('New CVs tile reads 0 with a breakdown when every unscored candidate is held back', async () => {
+    // The prod role-26 shape: "35 ready to score" with zero the agent would
+    // touch. Must read 0 + the reason, not a big number.
+    const base = {
+      candidate_email: 'x@example.com', pipeline_stage: 'applied',
+      application_outcome: 'open', status: 'applied',
+      created_at: '2026-04-26T01:00:00Z', updated_at: '2026-04-26T01:00:00Z',
+    };
+    apiClient.roles.listApplications.mockResolvedValue({ data: [
+      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', has_cv_text: true, pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      { ...base, id: 2, candidate_id: 2, candidate_name: 'Filtered Flo', has_cv_text: true, pre_screen_score: 8, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      // No has_cv_text field at all (stale cached payload) and no CV file
+      // metadata → falls back to the proxy and reads as no-CV.
+      { ...base, id: 3, candidate_id: 3, candidate_name: 'Nocv Ned' },
+    ] });
+
+    renderPipeline();
+
+    const tile = (await screen.findByText('New CVs')).closest('.kpi-tile');
+    expect(within(tile).getByText('0')).toBeInTheDocument();
+    expect(within(tile).getByText('2 pre-screen filtered · 1 no CV')).toBeInTheDocument();
+    expect(within(tile).queryByText(/ready to score/)).not.toBeInTheDocument();
   });
 
   it('Turn off with "also discard" ticked disables AND discards the queue', async () => {

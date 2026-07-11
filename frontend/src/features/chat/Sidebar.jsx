@@ -70,7 +70,7 @@ const ModeToggle = ({ mode, onModeChange, agentAttention = 0 }) => (
   </div>
 );
 
-const AskList = ({ conversations, activeId, onSelect, onNew, onDelete }) => {
+const AskList = ({ conversations, activeId, onSelect, onNew, onDelete, listError = false }) => {
   const groups = groupByRecency(conversations);
   const Group = ({ label, rows }) => {
     if (!rows.length) return null;
@@ -86,7 +86,7 @@ const AskList = ({ conversations, activeId, onSelect, onNew, onDelete }) => {
             >
               <div className="cp-conv-q">{r.title || 'New conversation'}</div>
               <div className="cp-conv-meta">
-                {r.message_count} msg · {formatTime(r.updated_at || r.created_at)}
+                {r.message_count} message{r.message_count === 1 ? '' : 's'} · {formatTime(r.updated_at || r.created_at)}
               </div>
             </button>
             <button
@@ -121,7 +121,14 @@ const AskList = ({ conversations, activeId, onSelect, onNew, onDelete }) => {
         <Group label="Yesterday" rows={groups.yesterday} />
         <Group label="This week" rows={groups.week} />
         <Group label="Older" rows={groups.older} />
-        {!conversations?.length ? (
+        {!conversations?.length && listError ? (
+          // Only show the "get started" empty state after a *successful*
+          // fetch returns zero rows — a failed fetch keeps whatever we had
+          // and shows a quiet retry note instead.
+          <div className="cp-group">
+            <div className="cp-side-hint">Couldn’t load your conversations — retrying.</div>
+          </div>
+        ) : !conversations?.length ? (
           <div className="cp-group">
             <div className="cp-group-h">Get started</div>
             <div className="cp-side-hint">Your conversations will show up here.</div>
@@ -239,6 +246,7 @@ const Sidebar = ({
   onNew,
   onDelete,
   // Agents mode
+  conversationsError = false,
   agents = [],
   activeRoleId,
   onSelectAgent,
@@ -258,6 +266,7 @@ const Sidebar = ({
         onSelect={onSelect}
         onNew={onNew}
         onDelete={onDelete}
+        listError={conversationsError}
       />
     )}
   </aside>

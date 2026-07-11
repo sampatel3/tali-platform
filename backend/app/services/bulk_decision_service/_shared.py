@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ...agent_runtime.decision_translation import (
     QUEUEABLE_VERDICTS,
     resolve_persisted_decision_type,
+    role_has_assessment_stage,
 )
 from ...decision_policy.engine import DecisionInputs, evaluate
 from ...models.candidate_application import CandidateApplication
@@ -38,6 +39,16 @@ def _recruiter_reasoning(app: CandidateApplication) -> str | None:
     ``queue_decision``) so a card reads the same regardless of producer."""
     from ..decision_reasoning import recruiter_decision_reasoning
     return recruiter_decision_reasoning(app)
+
+
+def _no_assessment_note(role, has_task: bool) -> str:
+    """Policy-basis suffix explaining why send→advance fired: the role either
+    has no assessment task, or the recruiter toggled auto_skip_assessment."""
+    if has_task:
+        return ""
+    if bool(getattr(role, "auto_skip_assessment", False)):
+        return "; assessments skipped for this role (auto-skip), advancing directly"
+    return "; role has no assessment task, advancing directly"
 
 
 def _inputs_for(app, *, role_id, org_id, eff, has_task):
@@ -91,7 +102,7 @@ def recompute_persisted_verdict(
     "don't claim the verdict still holds" (fail safe, keep the banner)."""
     try:
         eff = resolve_role_fit_threshold(db, role=role)
-        has_task = bool(getattr(role, "tasks", None))
+        has_task = role_has_assessment_stage(role)
         inputs = _inputs_for(
             app,
             role_id=int(role.id),

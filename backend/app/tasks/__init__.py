@@ -10,6 +10,7 @@ from .assessment_tasks import (
     sync_workable_daily_candidates,
     reap_stuck_workable_sync_runs,
     generate_assessment_task_for_role,
+    battle_test_generated_task,
 )
 # Eager-import the canonical email-task module so Celery registers
 # send_assessment_email / send_results_email on the worker. (Taali never
@@ -40,6 +41,12 @@ from .automation_tasks import (
     generate_role_interview_focus,
     parse_application_cv_sections,
     run_application_auto_reject,
+)
+# Eager-import anthropic_batch_tasks so the worker registers the Message
+# Batches submit/poll beat tasks — same unregistered-drop trap as above.
+from .anthropic_batch_tasks import (
+    poll_cv_parse_batches,
+    submit_cv_parse_batches,
 )
 # Eager-import workable_tasks so the worker registers the sync runner AND the
 # disqualify-retry task. Without this, the retry enqueued from the reject path
@@ -148,6 +155,7 @@ __all__ = [
     "sync_agent_mode_roles",
     "sync_workable_daily_candidates",
     "reap_stuck_workable_sync_runs",
+    "battle_test_generated_task",
     "score_application_job",
     "batch_score_role",
     "rescore_pool_against_requirement",
@@ -155,6 +163,8 @@ __all__ = [
     "generate_application_interview_pack",
     "parse_application_cv_sections",
     "run_application_auto_reject",
+    "submit_cv_parse_batches",
+    "poll_cv_parse_batches",
     "run_workable_sync_run_task",
     "retry_workable_disqualify_task",
     "run_workable_op_task",

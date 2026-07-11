@@ -5,6 +5,7 @@ from .candidate import Candidate
 from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
+from .interview_feedback import INTERVIEW_RECOMMENDATIONS, InterviewFeedback
 from .role import Role, role_tasks
 from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
 from .client import (
@@ -68,6 +69,7 @@ from .billing_credit_ledger import BillingCreditLedger
 from .usage_event import UsageEvent
 from .claude_call_log import ClaudeCallLog
 from .anthropic_wire_log import AnthropicWireLog
+from .anthropic_batch_job import AnthropicBatchJob
 from .usage_grant import (
     GRANT_FREE_TIER,
     GRANT_MANUAL,
@@ -164,6 +166,7 @@ from .share_link import (
     ShareLink,
 )
 from .top_candidates_report import TopCandidatesReport
+from .submittal_pack import SubmittalPack
 from .threshold_calibration import ThresholdCalibration
 from .api_key import (
     API_KEY_SCOPES,
@@ -185,6 +188,8 @@ __all__ = [
     "CandidateApplication",
     "CandidateApplicationEvent",
     "ApplicationInterview",
+    "InterviewFeedback",
+    "INTERVIEW_RECOMMENDATIONS",
     "Role",
     "role_tasks",
     "RoleBrief",
@@ -239,6 +244,7 @@ __all__ = [
     "UsageEvent",
     "ClaudeCallLog",
     "AnthropicWireLog",
+    "AnthropicBatchJob",
     "UsageGrant",
     "GRANT_FREE_TIER",
     "GRANT_PROMO",
@@ -303,6 +309,7 @@ __all__ = [
     "BRAIN_FEED_STATUSES",
     "ShareLink",
     "TopCandidatesReport",
+    "SubmittalPack",
     "ThresholdCalibration",
     "SHARE_LINK_MODE_RECRUITER",
     "SHARE_LINK_MODE_CLIENT",

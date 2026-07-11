@@ -686,6 +686,20 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
         )
 
     monkeypatch.setattr(cv_match_runner, "run_cv_match", _stub_run)
+    # The holistic Sonnet engine is default-on for every org
+    # (HOLISTIC_SCORING_ENABLED=True, allowlist "*"), so scoring routes
+    # through run_holistic_match, not run_cv_match — stub it too so no
+    # live Anthropic call escapes the test.
+    from app.cv_matching import holistic as cv_match_holistic
+
+    monkeypatch.setattr(cv_match_holistic, "run_holistic_match", _stub_run)
+    # upload-cv also enqueues the async CV-sections parse (eager in tests);
+    # stub its entry point so that path stays offline as well.
+    from app.cv_parsing import apply as cv_parse_apply
+
+    monkeypatch.setattr(
+        cv_parse_apply, "parse_and_store_cv_sections", lambda *a, **k: False
+    )
 
     cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 python sql backend api"), "application/pdf")}
     upload_resp = client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers)
@@ -832,14 +846,19 @@ def test_job_spec_upload_generates_interview_focus(client, db, monkeypatch):
     assert payload["interview_focus_pending"] is True
 
     # The stubbed handler ran inline before the response, so the next
-    # listing call should already see the populated focus.
+    # listing call should already see the focus was generated.
     list_resp = client.get("/api/v1/roles", headers=headers)
     assert list_resp.status_code == 200, list_resp.text
     roles = list_resp.json()
     assert len(roles) >= 1
     role_payload = next(r for r in roles if r["id"] == role["id"])
-    assert role_payload["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
+    # The list is a slim serialization — interview_focus is detail-only — but the
+    # generated-at timestamp stays so the list can show a "focus ready" badge.
     assert role_payload["interview_focus_generated_at"] is not None
+    # The full interview_focus is served by the role detail endpoint.
+    detail = client.get(f"/api/v1/roles/{role['id']}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
 
 
 def test_job_spec_upload_succeeds_when_interview_focus_cannot_run(client, monkeypatch):
@@ -894,6 +913,7 @@ def test_list_role_applications_supports_score_sort_and_source_filter(client, db
     row_manual.source = "manual"
     row_manual.cv_match_score = 6.2
     row_manual.rank_score = 6.2
+    row_manual.cv_text = "Manual Rank\nPython backend engineer"
     row_workable.source = "workable"
     row_workable.workable_score = 8.7
     row_workable.rank_score = 8.7
@@ -908,6 +928,10 @@ def test_list_role_applications_supports_score_sort_and_source_filter(client, db
     assert len(data) == 2
     assert data[0]["rank_score"] >= data[1]["rank_score"]
     assert data[0]["source"] == "workable"
+    # has_cv_text tracks the application-level cv_text column (what the
+    # auto-scorer filters on) — True only for the row we gave text.
+    assert data[0]["has_cv_text"] is False
+    assert data[1]["has_cv_text"] is True
 
     workable_only = client.get(
         f"/api/v1/roles/{role['id']}/applications?source=workable&min_workable_score=8",
