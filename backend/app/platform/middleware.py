@@ -7,7 +7,9 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from .request_context import set_client_meta, set_request_id
+from .config import settings
 from ..domains.identity_access.access_policy import evaluate_login_access
+from ..models.api_key import KEY_PREFIX_LIVE, KEY_PREFIX_TEST
 
 logger = logging.getLogger("tali.middleware")
 
@@ -15,12 +17,46 @@ logger = logging.getLogger("tali.middleware")
 _rate_limit_store = defaultdict(list)
 _RATE_WINDOW_SEC = 60
 
+_API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
+# Bucket a tali_* key on a stable slice of the token (never the whole secret,
+# which we do NOT verify here). Mirrors the displayed key prefix length in
+# api_key_service (prefix label + 6 chars) so a bucket maps to one key.
+_MCP_KEY_BUCKET_LEN = len(KEY_PREFIX_LIVE) + 6
+
 
 def _get_client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _mcp_buckets(request: Request, ip: str) -> list[tuple[str, int]]:
+    """(key, max) rate buckets for one /mcp request.
+
+    The token prefix is UNVERIFIED here, so it can never be the sole bucket:
+    a spoofer rotating prefixes would mint a fresh bucket per request (limit
+    bypass + unbounded store growth), and a known display prefix could burn a
+    real key's bucket. So the key bucket is scoped by IP, and every request
+    also counts against a per-IP guard at 4x the key limit (allows a few keys
+    behind one NAT at full rate while bounding spoof rotation and memory).
+    """
+    per_key = settings.MCP_RATE_LIMIT_PER_MINUTE
+    candidates = []
+    authz = request.headers.get("authorization")
+    if authz:
+        parts = authz.split()
+        candidates.append(parts[1] if len(parts) == 2 else authz)
+    x_api_key = request.headers.get("x-api-key")
+    if x_api_key:
+        candidates.append(x_api_key)
+    for token in candidates:
+        if token.startswith(_API_KEY_PREFIXES):
+            return [
+                (f"mcp:key:{token[:_MCP_KEY_BUCKET_LEN]}:{ip}", per_key),
+                (f"mcp:ip:{ip}", per_key * 4),
+            ]
+    return [(f"mcp:ip:{ip}", per_key)]
 
 
 def _rate_limit_key(ip: str, path: str) -> str:
@@ -56,22 +92,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         ip = _get_client_ip(request)
         path = request.url.path
-        key = _rate_limit_key(ip, path)
-        if not key:
-            return await call_next(request)
+        if path == "/mcp" or path.startswith("/mcp/"):
+            # Public MCP mount (JWT or tali_* API key). Multi-bucket: per
+            # unverified-key-prefix scoped by IP, plus a per-IP guard.
+            buckets = _mcp_buckets(request, ip)
+        else:
+            key = _rate_limit_key(ip, path)
+            buckets = [(key, _rate_limit_max(key))] if key else []
 
         now = time.time()
         window_start = now - _RATE_WINDOW_SEC
-        store = _rate_limit_store[key]
-        store[:] = [t for t in store if t > window_start]
-        max_allowed = _rate_limit_max(key)
-        if len(store) >= max_allowed:
-            logger.warning("Rate limit exceeded key=%s path=%s", key, path)
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Too many requests. Please try again later."},
-            )
-        store.append(now)
+        counted = []
+        for key, max_allowed in buckets:
+            if max_allowed <= 0:
+                # Disabled bucket (e.g. MCP_RATE_LIMIT_PER_MINUTE=0).
+                continue
+            store = _rate_limit_store[key]
+            store[:] = [t for t in store if t > window_start]
+            if len(store) >= max_allowed:
+                logger.warning("Rate limit exceeded key=%s path=%s", key, path)
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please try again later."},
+                )
+            counted.append(store)
+        for store in counted:
+            store.append(now)
         return await call_next(request)
 
 
