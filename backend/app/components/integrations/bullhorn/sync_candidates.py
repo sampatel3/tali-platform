@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -96,6 +96,21 @@ def _candidate_name(candidate_payload: dict, *, fallback: str) -> str:
 
 def _submission_status(submission: dict) -> str:
     return str(submission.get("status") or "").strip()
+
+
+def _submission_applied_at(submission: dict) -> datetime | None:
+    """JobSubmission.dateAdded (epoch MILLISECONDS) → aware UTC datetime, or None.
+
+    This is the remote-ATS applied date; we store it on
+    ``CandidateApplication.workable_created_at`` so the applied-date decision
+    surfaces have a real date for Bullhorn apps."""
+    raw = submission.get("dateAdded")
+    if raw in (None, "", 0):
+        return None
+    try:
+        return datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
 
 
 def _resolve_candidate(
@@ -407,6 +422,13 @@ def sync_submission(
     app.deleted_at = None
     app.source = "bullhorn"
     app.bullhorn_job_submission_id = sanitize_text_for_storage(submission_id)
+    # Remote-ATS applied date → workable_created_at (the shared applied-date
+    # column read by the decision surfaces). Backfill legacy rows too, but never
+    # overwrite an existing value.
+    if app.workable_created_at is None:
+        applied_at = _submission_applied_at(submission)
+        if applied_at is not None:
+            app.workable_created_at = applied_at
     ensure_pipeline_fields(app, source="sync" if created_application else "system")
     db.flush()
     if created_application:

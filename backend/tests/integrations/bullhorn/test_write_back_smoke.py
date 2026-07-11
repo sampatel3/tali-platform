@@ -156,6 +156,31 @@ def test_move_reject_note_round_trip(db):
         assert notes[0]["personReference"]["id"] == cand["id"]
 
 
+def test_post_note_html_escapes_body(db):
+    """Bullhorn's Note.comments is an HTML field: angle brackets / ampersands
+    must be escaped and newlines turned into <br /> so recruiter text renders
+    literally (never as markup) and keeps its line breaks."""
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("wbhtml", status_list=["New Lead"])
+    cand = state.make_candidate(bh_org, name="HTML Candidate", email="html@example.com")
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        raw = "Strong <b>C++</b> & Rust\nSecond line"
+        note = write_back.post_note(
+            db, org=org, client=client, candidate_id=str(cand["id"]), body=raw
+        )
+        assert note["success"] is True
+        stored = [r for r in state.orgs["wbhtml"].entities.get("Note", {}).values()]
+        assert len(stored) == 1
+        comments = stored[0]["comments"]
+        # Angle brackets and ampersand escaped; newline -> <br />.
+        assert comments == "Strong &lt;b&gt;C++&lt;/b&gt; &amp; Rust<br />Second line"
+        # No raw markup survives.
+        assert "<b>" not in comments
+
+
 # --- advance never resolves to the placed/confirmed status -------------------
 
 
@@ -498,3 +523,61 @@ def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monk
             )
         assert exc.value.code == "needs_mapping"
         assert exc.value.retriable is False
+
+
+# --- automated-reject paths write back to Bullhorn (drift fix B2) -------------
+
+
+def test_reject_for_cv_gap_writes_back_to_bullhorn(db, monkeypatch):
+    """The CV-gap auto-reject path (added on main after this branch's base) must
+    write back to Bullhorn for a Bullhorn org, not silently reject locally."""
+    from app.platform import config as config_mod
+    from app.services import application_automation_service as automation
+
+    monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
+    org = _connected_org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("cvgap", status_list=["New Lead", "Client Rejected"])
+    cand = state.make_candidate(bh_org, name="Gap Candidate", email="gap@example.com")
+    job = state.make_job_order(bh_org, title="Eng", is_open=True)
+    sub = state.make_job_submission(
+        bh_org, candidate_id=cand["id"], job_order_id=job["id"], status="New Lead"
+    )
+    _seed_map(db, org, remote_status="Client Rejected", taali_stage="review", is_reject=True)
+    app = _linked_app(db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"]))
+    role = db.query(Role).filter(Role.id == app.role_id).first()
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        monkeypatch.setattr(BullhornProvider, "_client", lambda self: client)
+
+        result = automation.reject_for_cv_gap(
+            db=db,
+            org=org,
+            app=app,
+            role=role,
+            actor_type="agent",
+            actor_id=None,
+            reason="No CV on file",
+        )
+        assert result["performed"] is True
+        assert result.get("bullhorn_written") is True
+        # Wrote the org's rejected-category status to the JobSubmission.
+        assert state.orgs["cvgap"].entities["JobSubmission"][sub["id"]]["status"] == "Client Rejected"
+        # The helper writes in-session (the caller owns the commit, matching the
+        # Workable path); commit + reload proves both changes persist.
+        db.commit()
+        db.refresh(app)
+        assert app.application_outcome == "rejected"
+        assert app.bullhorn_status == "Client Rejected"
+        from app.models.candidate_application_event import CandidateApplicationEvent
+
+        assert (
+            db.query(CandidateApplicationEvent)
+            .filter(
+                CandidateApplicationEvent.application_id == app.id,
+                CandidateApplicationEvent.event_type == "bullhorn_rejected",
+            )
+            .count()
+            == 1
+        )

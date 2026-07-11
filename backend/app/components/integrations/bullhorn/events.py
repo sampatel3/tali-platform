@@ -184,6 +184,16 @@ def poll_and_process_events(
             org.bullhorn_event_request_id = request_id
             db.add(org)
             db.commit()
+        else:
+            # No requestId on a non-empty batch: we cannot checkpoint, so a crash
+            # mid-batch would replay via the gap sweep rather than exact replay.
+            # Process anyway (losing events is worse) but flag the missing anchor.
+            logger.warning(
+                "Bullhorn event batch has no requestId org_id=%s events=%d — "
+                "processing without a replay checkpoint",
+                org.id,
+                len(events),
+            )
         _process_batch(db, org, events, client=client, counters=counters)
         _clear_checkpoint(db, org)
         counters["batches"] += 1

@@ -36,6 +36,7 @@ status string. This is the write-side twin of the sync's needs-mapping rule.
 
 from __future__ import annotations
 
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -355,9 +356,13 @@ def post_note(
         )
     action = _note_action(org)
     config["note_action"] = action
+    # Bullhorn's Note.comments is an HTML field: escape the recruiter's raw text
+    # so angle brackets / ampersands render literally (never as markup), then
+    # turn newlines into <br /> so multi-line notes keep their line breaks.
+    html_body = html.escape(clean_body).replace("\n", "<br />")
     try:
         response = client.create_note(
-            comments=clean_body,
+            comments=html_body,
             person_reference_id=clean_candidate_id,
             job_order_id=str(job_order_id).strip() if job_order_id not in (None, "") else None,
             action=action,

@@ -51,7 +51,10 @@ JOB_ORDER_FIELDS = (
 # as ``{"id": N}``; we resolve the full Candidate separately (a to-one expand via
 # ``candidate(...)`` would nest the fields, but keeping the read simple + always
 # resolving the candidate by id is what the importer's dedup ladder needs).
-JOB_SUBMISSION_FIELDS = "id,status,isDeleted,dateLastModified,jobOrder,candidate"
+# ``dateAdded`` is the JobSubmission's remote-ATS applied date (epoch millis);
+# we map it onto ``CandidateApplication.workable_created_at`` so the applied-date
+# decision surfaces (main #900) have a real date for Bullhorn apps.
+JOB_SUBMISSION_FIELDS = "id,status,isDeleted,dateAdded,dateLastModified,jobOrder,candidate"
 
 
 class BullhornSyncCancelled(Exception):

@@ -76,8 +76,14 @@ def test_full_sync_maps_status_and_imports_candidate_history_and_notes(db):
 
     job = state.make_job_order(bh_org, title="Senior Engineer", is_open=True)
     cand = state.make_candidate(bh_org, name="Ada Lovelace", email="ada@example.com")
+    # dateAdded = the remote-ATS applied date (epoch millis). 2026-01-02 00:00 UTC.
+    applied_millis = 1767312000000
     sub = state.make_job_submission(
-        bh_org, candidate_id=cand["id"], job_order_id=job["id"], status="Interview Scheduled"
+        bh_org,
+        candidate_id=cand["id"],
+        job_order_id=job["id"],
+        status="Interview Scheduled",
+        dateAdded=applied_millis,
     )
     # History trail + two notes about the candidate.
     state.make_job_submission_history(bh_org, job_submission_id=sub["id"], status="New Lead")
@@ -112,6 +118,10 @@ def test_full_sync_maps_status_and_imports_candidate_history_and_notes(db):
     assert app.source == "bullhorn"
     # raw remote status preserved
     assert app.bullhorn_status == "Interview Scheduled"
+    # remote-ATS applied date (dateAdded) mapped onto workable_created_at so the
+    # applied-date decision surfaces have a real date for Bullhorn apps.
+    assert app.workable_created_at is not None
+    assert app.workable_created_at.year == 2026 and app.workable_created_at.month == 1
     # "Interview Scheduled" was mapped (categorization → advanced) so the Taali
     # stage moved off the funnel top.
     assert app.pipeline_stage == "advanced"
