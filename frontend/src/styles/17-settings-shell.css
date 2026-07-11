@@ -151,6 +151,16 @@
 }
 .settings-subcard.settings-top-gap { margin-top: 0; }
 
+/* A divider-led subcard must not sit flush against the element before it.
+   Two cases hug at 0px: a save-row's button pins to the next section's
+   divider, and the embedded clients list touches the Role-template divider.
+   Give the divider breathing room above (overrides settings-top-gap:0 by
+   source order — this rule is later in the same file). */
+.settings-save-row + .settings-subcard,
+.cl-embed + .settings-subcard {
+  margin-top: 22px;
+}
+
 /* one bordered toggle list instead of a card per row */
 .settings-toggle-list {
   gap: 0;
