@@ -9,7 +9,7 @@ Behaviour matrix (from the 2026-05-07 restructure):
   * org.workable_connected + access_token + subdomain are set
   * assessment.workable_candidate_id is set
   * config.invite_stage_name is non-empty
-  * config.email_mode != "manual_taali"  (legacy opt-out)
+  * config.workable_writeback is true  (read-only opt-out honored)
 - invite_channel records what happened: manual | workable_hybrid | workable_partial
 """
 
@@ -39,11 +39,11 @@ def _make_org(
     name: str = "Acme",
     workable_connected: bool = False,
     invite_stage_name: str = "",
-    email_mode: str = "manual_taali",
+    workable_writeback: bool = False,
     workflow_mode: str = "manual",
 ) -> Organization:
     config = {
-        "email_mode": email_mode,
+        "workable_writeback": workable_writeback,
         "workflow_mode": workflow_mode,
         "invite_stage_name": invite_stage_name,
         "granted_scopes": ["r_candidates", "r_jobs", "w_candidates"],
@@ -161,7 +161,7 @@ def test_taali_email_fires_even_when_workable_connected(db, patched_email, patch
         db,
         workable_connected=True,
         invite_stage_name="Phone Screen",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
         workflow_mode="workable_hybrid",
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_001")
@@ -197,7 +197,7 @@ def test_workable_handoff_skipped_when_invite_stage_blank(db, patched_email, pat
         db,
         workable_connected=True,
         invite_stage_name="",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_002")
 
@@ -225,7 +225,7 @@ def test_workable_handoff_skipped_when_candidate_not_linked(db, patched_email, p
         db,
         workable_connected=True,
         invite_stage_name="Invited",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
     )
     a = _make_assessment(db, org=org, workable_candidate_id=None)
 
@@ -242,10 +242,10 @@ def test_workable_handoff_skipped_when_candidate_not_linked(db, patched_email, p
     assert channel == "manual"
 
 
-def test_workable_handoff_skipped_when_email_mode_is_manual_taali(db, patched_email, patched_workable, monkeypatch):
-    """Legacy ``manual_taali`` config = explicit recruiter opt-out from
-    Workable side effects on assessment send. Honor it even when everything
-    else is wired."""
+def test_workable_handoff_skipped_when_writeback_disabled(db, patched_email, patched_workable, monkeypatch):
+    """Read-only mode (``workable_writeback`` False) = explicit recruiter
+    opt-out from Workable side effects on assessment send. Honor it even
+    when everything else is wired (incl. the w_candidates scope)."""
     from app.platform.config import settings as cfg
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
@@ -254,7 +254,7 @@ def test_workable_handoff_skipped_when_email_mode_is_manual_taali(db, patched_em
         db,
         workable_connected=True,
         invite_stage_name="Invited",
-        email_mode="manual_taali",  # opt-out
+        workable_writeback=False,
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_003")
 
@@ -281,7 +281,7 @@ def test_workable_handoff_skipped_when_globally_disabled(db, patched_email, patc
         db,
         workable_connected=True,
         invite_stage_name="Invited",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_004")
 
@@ -314,7 +314,7 @@ def test_workable_partial_when_stage_move_fails(db, patched_email, monkeypatch):
         db,
         workable_connected=True,
         invite_stage_name="Invited",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_005")
 
@@ -350,7 +350,7 @@ def test_workable_partial_when_activity_post_fails(db, patched_email, monkeypatc
         db,
         workable_connected=True,
         invite_stage_name="Invited",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_006")
 
@@ -384,7 +384,7 @@ def test_workable_exception_does_not_break_email_dispatch(db, patched_email, mon
         db,
         workable_connected=True,
         invite_stage_name="Invited",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_007")
 
@@ -422,7 +422,7 @@ def test_workable_activity_note_contains_assessment_link(db, patched_email, monk
         db,
         workable_connected=True,
         invite_stage_name="Invited",
-        email_mode="workable_preferred_fallback_manual",
+        workable_writeback=True,
     )
     a = _make_assessment(db, org=org, workable_candidate_id="wkbl_008")
 

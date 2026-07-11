@@ -138,6 +138,27 @@ def _try_workable_disqualify(
         )
         return "fallback"
 
+    if result.get("skipped"):
+        # Read-only mode: the disqualify is a benign no-op. The local reject
+        # (transition_outcome in run()) stands and Taali sends no candidate
+        # email — job comms belong to the ATS. Don't log a failure or schedule
+        # a retry.
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_writeback_skipped",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason="read-only mode — rejected in Taali only",
+            metadata={
+                "action": result.get("action"),
+                "code": result.get("code"),
+                "workable_candidate_id": workable_candidate_id,
+                "source": "reject_application",
+            },
+        )
+        return "fallback"
+
     if result.get("success"):
         config = result.get("config") or {}
         append_application_event(

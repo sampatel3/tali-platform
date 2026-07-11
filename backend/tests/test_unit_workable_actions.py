@@ -16,7 +16,7 @@ from app.services.workable_actions_service import (
 
 def _org(**overrides):
     config = {
-        "email_mode": "manual_taali",
+        "workable_writeback": True,
         "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
         "workable_actor_member_id": "member-1",
         "workable_disqualify_reason_id": "reason-1",

@@ -423,7 +423,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     accessToken: '',
   });
   const [workableForm, setWorkableForm] = useState({
-    emailMode: 'manual_taali',
+    workableWriteback: false,
     defaultSyncMode: 'full',
     inviteStageName: '',
     autoRejectEnabled: false,
@@ -754,7 +754,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const workableConfig = orgData.workable_config || {};
     const grantedScopes = Array.isArray(workableConfig.granted_scopes) ? workableConfig.granted_scopes : [];
     setWorkableForm({
-      emailMode: workableConfig.email_mode || 'manual_taali',
+      workableWriteback: Boolean(workableConfig.workable_writeback),
       defaultSyncMode: workableConfig.default_sync_mode || 'full',
       inviteStageName: workableConfig.invite_stage_name || '',
       autoRejectEnabled: Boolean(workableConfig.auto_reject_enabled),
@@ -768,7 +768,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         : {
           r_jobs: true,
           r_candidates: true,
-          w_candidates: Boolean(workableConfig.auto_reject_enabled) || workableConfig.email_mode === 'workable_preferred_fallback_manual',
+          w_candidates: Boolean(workableConfig.auto_reject_enabled) || Boolean(workableConfig.workable_writeback),
         }
     );
     setWorkableTokenForm((prev) => ({
@@ -1076,7 +1076,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       const hasWriteScope = selectedWorkableScopes.includes('w_candidates');
       await orgsApi.update({
         workable_config: {
-          email_mode: hasWriteScope ? 'workable_preferred_fallback_manual' : 'manual_taali',
+          workable_writeback: hasWriteScope,
           default_sync_mode: 'full',
         },
       });
@@ -1121,7 +1121,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         workable_config: {
           ...((prev && prev.workable_config) || {}),
           workflow_mode: 'workable_hybrid',
-          email_mode: readOnly ? 'manual_taali' : 'workable_preferred_fallback_manual',
+          workable_writeback: !readOnly,
           sync_model: 'scheduled_pull_only',
           sync_scope: 'open_jobs_active_candidates',
           default_sync_mode: 'full',
@@ -1139,7 +1139,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleSaveWorkable = async () => {
-    const emailMode = workableForm.emailMode || 'manual_taali';
+    const workableWriteback = Boolean(workableForm.workableWriteback);
     const defaultSyncMode = workableForm.defaultSyncMode || 'full';
     const inviteStageName = String(workableForm.inviteStageName || '').trim();
     const autoRejectEnabled = Boolean(workableForm.autoRejectEnabled);
@@ -1151,11 +1151,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const workableDisqualifyReasonId = String(workableForm.workableDisqualifyReasonId || '').trim();
     const autoRejectNoteTemplate = String(workableForm.autoRejectNoteTemplate || '').trim();
 
-    if ((emailMode === 'workable_preferred_fallback_manual' || autoRejectEnabled) && !hasWriteScope) {
+    if ((workableWriteback || autoRejectEnabled) && !hasWriteScope) {
       showToast('Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, reject, and reopen actions.', 'error');
       return;
     }
-    if (emailMode === 'workable_preferred_fallback_manual' && !inviteStageName) {
+    if (workableWriteback && !inviteStageName) {
       showToast('Enter the exact Workable stage name for automated invite mode.', 'error');
       return;
     }
@@ -1168,12 +1168,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     try {
       const res = await orgsApi.update({
         workable_config: {
-          email_mode: emailMode,
+          workable_writeback: workableWriteback,
           sync_model: 'scheduled_pull_only',
           sync_scope: 'open_jobs_active_candidates',
           score_precedence: 'workable_first',
           default_sync_mode: defaultSyncMode,
-          invite_stage_name: emailMode === 'workable_preferred_fallback_manual' ? inviteStageName : '',
+          invite_stage_name: workableWriteback ? inviteStageName : '',
           auto_reject_enabled: autoRejectEnabled,
           workable_actor_member_id: workableActorMemberId || null,
           workable_disqualify_reason_id: workableDisqualifyReasonId || null,
@@ -1637,33 +1637,29 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </div>
                   ) : null}
 
-                  {/* HANDOFF settings.md — sync mode renamed
-                      hybrid|manual → two_way|read_only for clarity in
-                      copy. The underlying email_mode + granted_scopes
-                      stay the same so existing roles keep working. */}
                   <div className="wk-grid settings-top-gap">
-                    <div className={`wk-mode-card ${workableForm.emailMode === 'workable_preferred_fallback_manual' ? 'selected' : ''}`}>
+                    <div className={`wk-mode-card ${workableForm.workableWriteback === true ? 'selected' : ''}`}>
                       <div>
-                        <h5>Two-way</h5>
-                        <p>Taali invites, scores, and writes candidate activity back as private notes or stage actions. Requires the <code>w_candidates</code> scope.</p>
+                        <h5>Write back to Workable</h5>
+                        <p>Taali writes candidate activity back — invites, stage moves, disqualify, and notes. Requires the <code>w_candidates</code> scope.</p>
                       </div>
                       <button
                         type="button"
-                        className={`sw ${workableForm.emailMode === 'workable_preferred_fallback_manual' ? 'on' : ''}`}
-                        aria-label="Two-way"
-                        onClick={() => setWorkableForm((prev) => ({ ...prev, emailMode: 'workable_preferred_fallback_manual' }))}
+                        className={`sw ${workableForm.workableWriteback === true ? 'on' : ''}`}
+                        aria-label="Write back to Workable"
+                        onClick={() => setWorkableForm((prev) => ({ ...prev, workableWriteback: true }))}
                       />
                     </div>
-                    <div className={`wk-mode-card ${workableForm.emailMode === 'manual_taali' ? 'selected' : ''}`}>
+                    <div className={`wk-mode-card ${workableForm.workableWriteback === false ? 'selected' : ''}`}>
                       <div>
-                        <h5>Read-only</h5>
-                        <p>Workable stays read-only while Taali manages invites and review locally. No write-backs.</p>
+                        <h5>Read-only (Taali only)</h5>
+                        <p>Workable stays read-only. Taali manages invites, review, and decisions locally — no write-backs.</p>
                       </div>
                       <button
                         type="button"
-                        className={`sw ${workableForm.emailMode === 'manual_taali' ? 'on' : ''}`}
-                        aria-label="Read-only"
-                        onClick={() => setWorkableForm((prev) => ({ ...prev, emailMode: 'manual_taali', inviteStageName: '' }))}
+                        className={`sw ${workableForm.workableWriteback === false ? 'on' : ''}`}
+                        aria-label="Read-only (Taali only)"
+                        onClick={() => setWorkableForm((prev) => ({ ...prev, workableWriteback: false, inviteStageName: '' }))}
                       />
                     </div>
                   </div>

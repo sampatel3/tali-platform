@@ -82,8 +82,7 @@ def _normalized_workable_subdomain(value: str) -> str:
 
 def _workable_oauth_scope(org: Organization) -> str:
     config = resolved_workable_config(org)
-    email_mode = str(config.get("email_mode") or "manual_taali")
-    if email_mode == "workable_preferred_fallback_manual":
+    if bool(config.get("workable_writeback")):
         return "r_jobs r_candidates w_candidates"
     return "r_jobs r_candidates"
 
@@ -377,11 +376,7 @@ def connect_workable(
     config["sync_model"] = "scheduled_pull_only"
     config["sync_scope"] = "open_jobs_active_candidates"
     config["granted_scopes"] = scope_tokens
-    config["email_mode"] = (
-        "workable_preferred_fallback_manual"
-        if "w_candidates" in scope_tokens
-        else "manual_taali"
-    )
+    config["workable_writeback"] = "w_candidates" in scope_tokens
 
     org.workable_access_token = token_data.get("access_token")
     org.workable_refresh_token = token_data.get("refresh_token")
@@ -432,11 +427,7 @@ def connect_workable_token(
     config["sync_model"] = "scheduled_pull_only"
     config["sync_scope"] = "open_jobs_active_candidates"
     config["granted_scopes"] = ["r_jobs", "r_candidates"] + ([] if data.read_only else ["w_candidates"])
-    config["email_mode"] = (
-        "manual_taali"
-        if data.read_only
-        else "workable_preferred_fallback_manual"
-    )
+    config["workable_writeback"] = not data.read_only
 
     org.workable_access_token = access_token
     org.workable_refresh_token = None
