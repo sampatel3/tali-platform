@@ -1,6 +1,8 @@
-import React from 'react';
-import { Pause, Play, Power, Sparkles } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
+import { Sparkles } from 'lucide-react';
+import { stagger, useAnimate, useInView } from 'motion/react';
 
+import { useReducedMotion } from './motion';
 import { ActivityFeed } from '../../../home/ActivityFeed';
 import { AgentDecisionCard } from '../../../../shared/decisions/AgentDecisionCard';
 import { AssessmentScorecard } from '../../../candidates/AssessmentScorecard';
@@ -169,6 +171,54 @@ const FUNNEL_FEED_ROWS = [
   },
 ];
 
+// (2b) SCREEN band — a screening cohort for the real <ActivityFeed>: two clears
+// and one gated-out, each carrying the evidence the agent found against the
+// role's must-haves.
+const SCREEN_FEED_ROWS = [
+  {
+    id: 71,
+    status: 'pending',
+    decision_type: 'advance_to_interview',
+    candidate_name: 'Maya Chen',
+    application_id: 1042,
+    role_id: 109,
+    role_name: 'Senior Backend Engineer',
+    taali_score: 88,
+    score_summary: { score_provenance: _prov(0.2) },
+    confidence: 0.92,
+    reasoning: 'Clears all six must-haves — Python, AWS and distributed-systems evidence on the CV, corroborated across two projects.',
+    created_at: new Date(_NOW - 12 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 70,
+    status: 'pending',
+    decision_type: 'advance_to_interview',
+    candidate_name: 'Jordan Patel',
+    application_id: 1039,
+    role_id: 109,
+    role_name: 'Senior Backend Engineer',
+    taali_score: 84,
+    score_summary: { score_provenance: _prov(0.3) },
+    confidence: 0.86,
+    reasoning: 'Five of six must-haves with strong backend depth; one AWS service named but not demonstrated — flagged for the panel.',
+    created_at: new Date(_NOW - 26 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 69,
+    status: 'pending',
+    decision_type: 'reject',
+    candidate_name: 'Tariq Al-Ahmad',
+    application_id: 1018,
+    role_id: 109,
+    role_name: 'Senior Backend Engineer',
+    taali_score: 41,
+    score_summary: { score_provenance: _prov(0.5) },
+    confidence: 0.81,
+    reasoning: 'Two of six must-haves. No distributed-systems evidence anywhere in the CV; below the bar you set for this role.',
+    created_at: new Date(_NOW - 38 * 60 * 1000).toISOString(),
+  },
+];
+
 // (3) ASSESS — a fixture assessment whose score_breakdown.rubric_grading drives
 // the real 5-Ds <AssessmentScorecard> (computeScorecard reads it rubric-first).
 const SCORECARD_ASSESSMENT = {
@@ -246,61 +296,39 @@ export const ArtifactFrame = ({ browserPath, children, className = '' }) => (
   </div>
 );
 
-// ── FIX 1 — the REAL agent-ON strip (.abar), OFF → ON. ──────────────────────
-// Faithful replica of AgentStrip's markup so the real 13-page-hero CSS lights
-// it up: the animated dark-purple gradient (.abar-on::before / abarFlow), the
-// pulsing spark, the pending pill and the live budget meter. The single ON/OFF
-// control keeps role="switch" so it toggles the hero product card alongside it.
-export const HeroAgentStrip = ({ on, pressing, onToggle }) => {
-  const status = on ? 'on' : 'off';
-  return (
-    <div className="lve-hero-abar">
-      <div className={`abar abar-${status}`}>
-        <span className="ab-spark">
-          <Sparkles size={15} strokeWidth={2} />
-          {on ? <span className="ab-pulse" aria-hidden="true" /> : null}
+// ── FIX 1 — variant-D's clean pill toggle (grey OFF → purple ON). ───────────
+// The standout hero moment: a simple switch, not the in-app .abar chrome. Same
+// markup + vocabulary as variant D (lvd-switch → lve-switch), keeping role=
+// "switch" so it flips the hero product card + brings the purple alive. The
+// "AGENT: ON/OFF" mono caption sits alongside.
+export const HeroAgentSwitch = ({ on, pressing, onToggle }) => (
+  <div className="lve-switch-wrap">
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={on ? 'Agent on. Turn the agent off.' : 'Agent off. Turn the agent on.'}
+      className={`lve-switch${on ? ' is-on' : ''}${pressing ? ' is-pressing' : ''}`}
+      onClick={onToggle}
+    >
+      <span className="lve-switch-track" aria-hidden="true">
+        <span className="lve-switch-glow" />
+        <span className="lve-switch-knob">
+          <span className="lve-switch-ring" />
         </span>
-        <span className="ab-label">{on ? 'Agent on' : 'Agent off'}</span>
-        {on ? <span className="ab-pending" title="3 awaiting your review">3</span> : null}
-        <span className="ab-tick" title={on ? 'Advanced Maya Chen to Review · 2m ago' : 'Turn the agent on to work this role.'}>
-          {on ? 'Advanced Maya Chen to Review · 2m ago' : 'Turn the agent on to work this role.'}
-        </span>
-        {on ? (
-          <span className="ab-budget" title="Covers pre-screen, scoring, search, assessments and the agent on this role.">
-            <span className="ab-budget-amt">$18<span className="of"> / $50</span></span>
-            <span className="ab-budget-bar"><i style={{ width: '36%' }} /></span>
-          </span>
-        ) : null}
-        <span className="ab-actions">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={on}
-            aria-label={on ? 'Agent on. Turn the agent off.' : 'Agent off. Turn the agent on.'}
-            className={`ab-btn primary${pressing ? ' is-pressing' : ''}`}
-            onClick={onToggle}
-          >
-            {on ? <Pause size={11} strokeWidth={2} /> : <Play size={11} strokeWidth={2} fill="currentColor" />}
-            {on ? 'Pause' : 'Turn on'}
-          </button>
-          {on ? (
-            <button
-              type="button"
-              className="ab-btn ic"
-              title="Turn off agent for this role"
-              aria-label="Turn off agent"
-              onClick={onToggle}
-            >
-              <Power size={13} strokeWidth={2} />
-            </button>
-          ) : null}
-        </span>
-      </div>
-    </div>
-  );
-};
+      </span>
+    </button>
+    <span className="lve-switch-caption" aria-hidden="true">
+      agent: <b>{on ? 'on' : 'off'}</b>
+    </span>
+  </div>
+);
 
-// ── FIX 2 — the three embedded real product surfaces. ───────────────────────
+// ── FIX 2 — the hero product card: the REAL AgentDecisionCard, contained. ────
+// `hideDecisionParts` drops the reasoning paragraph, evidence grid, decision
+// trace and action bar — leaving the compact glimpse the founder asked for:
+// ScoreRing + name/role, the agent-recommends verdict slab, and the three
+// requirement bars. Constrained further to ~400px in CSS (.lve-frame--hero).
 export const HeroDecisionArtifact = () => (
   <ArtifactFrame browserPath="app.taali.ai/home" className="lve-frame--hero">
     <AgentDecisionCard
@@ -310,6 +338,7 @@ export const HeroDecisionArtifact = () => (
       onTeach={noop}
       onSnooze={noop}
       onNavigate={noop}
+      hideDecisionParts
     />
   </ArtifactFrame>
 );
@@ -328,11 +357,82 @@ export const FunnelFeedArtifact = () => (
   </ArtifactFrame>
 );
 
-export const ScorecardArtifact = () => (
-  <ArtifactFrame browserPath="app.taali.ai/candidates/1042">
-    <AssessmentScorecard assessment={SCORECARD_ASSESSMENT} />
+// ── FIX 3 — the SCREEN band is now the REAL <ActivityFeed>, not hand-drawn
+// bars. A screening cohort: each CV gated against the role's requirements, with
+// the real ScoreChip / VerdictPill / evidence the product renders. ────────────
+export const ScreenFeedArtifact = () => (
+  <ArtifactFrame browserPath="app.taali.ai/roles/109" className="lve-frame--screen">
+    <ActivityFeed
+      rows={SCREEN_FEED_ROWS}
+      selectedId={null}
+      onSelect={noop}
+      onNavigate={noop}
+      kicker="SCREENED · AGAINST REQUIREMENTS"
+      title="Every CV, gated with evidence"
+      subtitle="The agent checked each candidate against the role's real must-haves — and shows what it found, or didn't."
+    />
   </ArtifactFrame>
 );
+
+// ── FIX 4 — animate the real 5-Ds scorecard's reveal. On enter (once) the five
+// D rows stagger in (fade + rise), each score bar fills 0 → value, and the
+// score number ticks up. The AssessmentScorecard itself is untouched; we drive
+// its DOM via a scoped Motion timeline + a light rAF number tween, and arm the
+// hidden initial state through the `data-lve-sc` CSS contract. ────────────────
+const EASE = [0.16, 1, 0.3, 1];
+
+export const ScorecardArtifact = () => {
+  const [scope, animate] = useAnimate();
+  const inView = useInView(scope, { amount: 0.35 });
+  const reduced = useReducedMotion();
+  const playedRef = useRef(false);
+
+  useEffect(() => {
+    const root = scope.current;
+    if (!root) return undefined;
+
+    if (reduced) {
+      root.removeAttribute('data-lve-sc'); // show the final composed scorecard
+      return undefined;
+    }
+    root.setAttribute('data-lve-sc', 'true'); // CSS hides rows + zeroes the bars
+    if (!inView || playedRef.current) return undefined;
+    playedRef.current = true;
+
+    animate('.sc5-row', { opacity: [0, 1], y: [14, 0] }, { duration: 0.5, delay: stagger(0.09), ease: EASE });
+    animate('.sc5-bar > i', { scaleX: [0, 1] }, { duration: 0.7, delay: stagger(0.09), ease: EASE });
+
+    // Tick each score number 0 → target with a light rAF loop (mirrors Ticker),
+    // so it counts up alongside its bar without touching React state.
+    const rafs = [];
+    root.querySelectorAll('.sc5-score').forEach((el, i) => {
+      const node = el.firstChild; // text node holding the "88" before <em>/100</em>
+      if (!node) return;
+      const target = parseInt(node.textContent, 10);
+      if (!Number.isFinite(target)) return;
+      const start = performance.now() + i * 90;
+      const dur = 900;
+      const step = (now) => {
+        const t = Math.max(0, Math.min(1, (now - start) / dur));
+        const eased = 1 - Math.pow(1 - t, 3);
+        node.textContent = String(Math.round(target * eased));
+        if (t < 1) rafs.push(requestAnimationFrame(step));
+      };
+      rafs.push(requestAnimationFrame(step));
+    });
+    return () => rafs.forEach((r) => cancelAnimationFrame(r));
+  }, [inView, reduced, animate, scope]);
+
+  return (
+    <ArtifactFrame browserPath="app.taali.ai/candidates/1042">
+      {/* Seed the armed (hidden) state on first paint when a reveal will run, so
+          the scorecard doesn't flash full before the timeline starts. */}
+      <div ref={scope} data-lve-scorecard {...(reduced ? {} : { 'data-lve-sc': 'true' })}>
+        <AssessmentScorecard assessment={SCORECARD_ASSESSMENT} />
+      </div>
+    </ArtifactFrame>
+  );
+};
 
 // ── FIX 3 — bespoke pillar micro-visuals, built from the REAL product atoms. ─
 

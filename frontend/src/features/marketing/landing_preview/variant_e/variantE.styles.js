@@ -195,20 +195,72 @@ export const VARIANT_E_CSS = `
 .lve-hero-sub { max-width: 40ch; margin: 0 0 28px; font-size: clamp(15px, 1.7vw, 18px); line-height: 1.55; color: var(--lve-ink-2); }
 .lve-hero-cta { display: flex; flex-wrap: wrap; gap: 12px; }
 
-/* FIX 1 — the REAL agent-ON strip (.abar) in the hero. The strip's own look /
-   animation comes from the global 13-page-hero-agentheader.css + the Taali
-   tokens (resolved via data-brand="taali" on the .lve root); we only re-size it
-   to fill the hero column instead of the header's fixed clamp width. */
-.lve-hero-abar { margin-top: 28px; max-width: 520px; }
-.lve-hero-abar .abar { width: 100%; }
+/* FIX 1 — variant-D's clean pill toggle (grey OFF → purple ON). Ported from
+   variantD.styles (lvd-switch → lve-switch); laid out inline in the hero copy
+   column. The single control is the standout moment; flipping it reveals +
+   lights the hero product card. */
+.lve-switch-wrap {
+  position: relative; z-index: 3; margin-top: 30px;
+  display: flex; flex-direction: row; align-items: center; gap: 16px;
+}
+.lve-switch {
+  appearance: none; border: 0; padding: 0; cursor: pointer; background: none;
+  border-radius: 999px; transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1);
+}
+.lve-switch:focus-visible { outline: 2px solid var(--lve-purple); outline-offset: 6px; }
+.lve-switch.is-pressing { transform: scale(0.94); }
+.lve-switch-track {
+  position: relative; display: block; width: 116px; height: 56px; border-radius: 999px;
+  background: linear-gradient(180deg, #e9e4f0, #d9d2e2); border: 1px solid var(--lve-line);
+  box-shadow: inset 0 2px 6px rgba(21,18,26,0.14), inset 0 -1px 0 rgba(255,255,255,0.6);
+  transition: border-color 0.5s ease, box-shadow 0.5s ease, background 0.6s ease;
+}
+.lve-switch.is-on .lve-switch-track {
+  background: linear-gradient(120deg, var(--lve-purple-2), var(--lve-lav), var(--lve-purple), var(--lve-purple-2));
+  background-size: 300% 300%; border-color: rgba(196,165,253,0.7);
+  box-shadow: inset 0 2px 6px rgba(74,45,128,0.3), 0 0 26px rgba(124,77,255,0.35), 0 0 0 1px rgba(196,165,253,0.4);
+  animation: lveSwitchFlow 6s ease-in-out infinite;
+}
+.lve-switch-glow {
+  position: absolute; inset: -18px; border-radius: 999px;
+  background: radial-gradient(closest-side, rgba(124,77,255,0.35), transparent 75%);
+  opacity: 0; transition: opacity 0.8s ease; filter: blur(8px);
+}
+.lve-switch.is-on .lve-switch-glow { opacity: 1; }
+.lve-switch-knob {
+  position: absolute; top: 5px; left: 5px; width: 46px; height: 46px; border-radius: 50%;
+  background: linear-gradient(160deg, #ffffff, #f0ecf7);
+  box-shadow: 0 5px 14px rgba(21,18,26,0.22), inset 0 -2px 4px rgba(21,18,26,0.06);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.34s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.4s ease;
+}
+.lve-switch.is-on .lve-switch-knob {
+  transform: translateX(60px);
+  box-shadow: 0 8px 20px rgba(124,77,255,0.4), inset 0 -2px 4px rgba(94,58,168,0.08);
+}
+.lve-switch.is-pressing .lve-switch-knob { width: 54px; }
+.lve-switch-ring { width: 15px; height: 15px; border-radius: 50%; border: 2px solid rgba(139,133,149,0.4); }
+.lve-switch.is-on .lve-switch-ring { border-color: rgba(124,77,255,0.8); animation: lveRing 1.8s ease-out infinite; }
+.lve-switch-caption {
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--lve-mute); transition: color 0.5s ease;
+}
+.lve-switch-caption b { color: var(--lve-mute); font-weight: 600; transition: color 0.5s ease; }
+.lve-switch.is-on + .lve-switch-caption b { color: var(--lve-purple); }
+@keyframes lveSwitchFlow { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes lveRing { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.4); opacity: 0; } }
 
-/* Hero product card frame — reveals + lifts a touch the moment the agent flips
-   ON (the frame itself is always mounted; ON is the "populated" beat). */
+/* Hero product card frame — quiet/desaturated while the agent is OFF; reveals,
+   lifts and comes to full colour the moment the toggle flips ON. */
 .lve-hero-mock-wrap { position: relative; z-index: 1; }
 .lve-hero-mock-wrap .lve-frame {
-  transition: box-shadow 0.55s ease, transform 0.55s ease, border-color 0.55s ease;
+  transition: box-shadow 0.55s ease, transform 0.55s ease, border-color 0.55s ease,
+    filter 0.55s ease, opacity 0.55s ease;
+  filter: grayscale(0.85) opacity(0.72);
+  transform: translateY(6px) scale(0.985);
 }
 .lve-hero-mock-wrap.is-on .lve-frame {
+  filter: none; opacity: 1; transform: none;
   box-shadow: 0 48px 100px -46px rgba(94,58,168,0.6), 0 2px 8px -4px rgba(21,18,26,0.06);
   border-color: rgba(196,165,253,0.6);
 }
@@ -290,6 +342,16 @@ export const VARIANT_E_CSS = `
 .lve-mock[data-animated] .lve-anim { opacity: 0; }
 .lve-mock[data-animated] .lve-anim-bar { transform: scaleX(0); }
 
+/* FIX 4 — 5-Ds scorecard reveal contract. While armed ([data-lve-sc], set only
+   when JS is mounted and motion is allowed) the five rows are hidden and every
+   score bar is zeroed; the scoped Motion timeline reveals the rows (fade+rise),
+   fills the bars 0→value, and a rAF loop ticks each score number up. The inline
+   styles the timeline leaves behind win afterwards, so the final composed
+   scorecard persists (and, under reduced motion, no attribute is ever set — the
+   scorecard renders complete). */
+.lve [data-lve-sc] .sc5-row { opacity: 0; }
+.lve [data-lve-sc] .sc5-bar > i { transform-origin: left center; transform: scaleX(0); }
+
 /* ── FIX 2 — "live component" frame around embedded real product surfaces. ── */
 .lve-frame {
   overflow: hidden; border-radius: 16px; background: var(--lve-bg-2);
@@ -311,6 +373,29 @@ export const VARIANT_E_CSS = `
 /* The embedded real components self-size; keep them from forcing sideways
    scroll inside the frame on narrow viewports. */
 .lve-frame-body > * { max-width: 100%; }
+
+/* FIX 2 — the hero card is a tasteful GLIMPSE, not a giant panel. Cap its width
+   and drop the inner card's own chrome (border/bg/pad) so the real component
+   sits flush in the browser frame, then hide the deep-link row so only the
+   glimpse remains: ScoreRing + name/role, the agent-recommends verdict slab and
+   the requirement bars (evidence grid / trace / action bar are already dropped
+   via hideDecisionParts). */
+.lve-frame--hero { max-width: 408px; }
+.lve-frame--hero .lve-frame-body { padding: 16px 18px 18px; }
+.lve-frame--hero .rq-hybrid-detail { border: 0; background: transparent; border-radius: 0; padding: 0; }
+.lve-frame--hero .rq-detail-links { display: none !important; }
+.lve-frame--hero .rq-rec { margin-top: 14px; }
+@media (min-width: 940px) {
+  .lve-frame--hero { margin-left: auto; } /* balance it to the right of the headline */
+}
+
+/* FIX 3 — the SCREEN band's real <ActivityFeed> sits in its frame; trim the
+   feed's own outer card chrome so it reads as one clean surface, and cap the
+   reasoning lines so the rows stay compact. */
+.lve-frame--screen .home-section { border: 0; background: transparent; padding: 0; box-shadow: none; }
+.lve-frame--screen .rq-stream-reason {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 
 /* ── VALUE PILLARS — FIX 3: bespoke, backed by real product micro-visuals. ── */
 .lve-pillars-grid { margin-top: 44px; display: grid; grid-template-columns: 1fr; gap: 18px; }
@@ -375,17 +460,6 @@ export const VARIANT_E_CSS = `
 .lve-mini-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--lve-mute); }
 .lve-mini-head-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lve-purple); box-shadow: 0 0 8px rgba(124,77,255,0.6); }
 
-/* Screen mock — CV rows gated with evidence chips */
-.lve-cvrow { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 11px; border: 1px solid var(--lve-line); background: var(--lve-bg-2); margin-bottom: 9px; }
-.lve-cvrow:last-child { margin-bottom: 0; }
-.lve-cvrow.reject { opacity: 0.5; }
-.lve-cvrow-body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.lve-cvrow-name { height: 8px; width: 44%; border-radius: 4px; background: var(--lve-purple); opacity: 0.8; }
-.lve-cvrow-line { height: 6px; width: 80%; border-radius: 4px; background: rgba(21,18,26,0.10); }
-.lve-cvrow-chip { flex-shrink: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 9px; letter-spacing: 0.02em; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
-.lve-cvrow-chip.pass { color: var(--lve-purple); background: var(--lve-purple-soft); border: 1px solid rgba(196,165,253,0.6); }
-.lve-cvrow-chip.fail { color: var(--lve-mute); background: rgba(21,18,26,0.04); border: 1px solid var(--lve-line); }
-
 /* Assess mock — 5-Ds scorecard filling */
 .lve-ds { display: flex; flex-direction: column; gap: 12px; }
 .lve-ds-row { display: grid; grid-template-columns: 96px 1fr 30px; gap: 12px; align-items: center; }
@@ -406,13 +480,30 @@ export const VARIANT_E_CSS = `
 .lve-lane.active .lve-lane-dot { background: var(--lve-purple); box-shadow: 0 0 8px rgba(124,77,255,0.6); }
 .lve-audit-line { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10.5px; line-height: 1.7; color: var(--lve-ink-2); border-top: 1px solid var(--lve-line); padding-top: 12px; }
 
-/* ── HOW IT WORKS ────────────────────────────────────────────────────── */
-.lve-steps { margin-top: 44px; display: grid; grid-template-columns: 1fr; gap: 18px; }
-.lve-step { position: relative; border-radius: 16px; background: var(--lve-bg-2); border: 1px solid var(--lve-line); padding: 24px; box-shadow: 0 16px 44px -36px rgba(21,18,26,0.35); }
-.lve-step-n { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.1em; color: var(--lve-purple); }
-.lve-step-h { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; margin: 10px 0 7px; color: var(--lve-ink); }
+/* ── HOW IT WORKS — a connected 3-step flow, not three loose boxes. ────── */
+.lve-steps { margin-top: 48px; display: grid; grid-template-columns: 1fr; gap: 18px; }
+.lve-step {
+  position: relative; border-radius: 16px; background: var(--lve-bg-2);
+  border: 1px solid var(--lve-line); padding: 28px 24px 24px;
+  box-shadow: 0 16px 44px -36px rgba(21,18,26,0.35);
+}
+.lve-step-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 12px; margin-bottom: 14px; position: relative; z-index: 2;
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-weight: 600;
+  color: #fff; background: linear-gradient(135deg, var(--lve-purple), var(--lve-purple-2));
+  box-shadow: 0 10px 22px -12px rgba(94,58,168,0.8), inset 0 1px 0 rgba(255,255,255,0.25);
+}
+.lve-step-h { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; margin: 0 0 7px; color: var(--lve-ink); }
 .lve-step-p { font-size: 13.5px; line-height: 1.55; color: var(--lve-ink-2); margin: 0; }
-@media (min-width: 820px) { .lve-steps { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 820px) {
+  .lve-steps { grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  /* Lavender connector links the numbered badges into one left-to-right flow. */
+  .lve-step:not(:last-child)::after {
+    content: ''; position: absolute; top: 47px; right: -22px; width: 22px; height: 2px; z-index: 1;
+    background: linear-gradient(90deg, rgba(196,165,253,0.95), rgba(196,165,253,0.2));
+  }
+}
 
 /* ── TRUST / CONTROL ─────────────────────────────────────────────────── */
 .lve-control { border-radius: 24px; background: color-mix(in oklab, var(--lve-purple-soft) 55%, var(--lve-bg-2)); border: 1px solid var(--lve-line); padding: clamp(32px, 5vw, 56px); }
@@ -434,15 +525,19 @@ export const VARIANT_E_CSS = `
 .lve-stat-cap { margin-top: 10px; font-size: 12.5px; line-height: 1.5; color: color-mix(in oklab, var(--lve-bg) 70%, transparent); }
 @media (min-width: 760px) { .lve-stats-grid { grid-template-columns: repeat(4, 1fr); } }
 
-/* ── INTEGRATIONS ────────────────────────────────────────────────────── */
+/* ── INTEGRATIONS — grounded connector cards (two-way sync + live status). ─ */
 .lve-integrations-row { margin-top: 40px; display: grid; grid-template-columns: 1fr; gap: 16px; }
 .lve-integration { display: flex; align-items: center; gap: 14px; border-radius: 14px; background: var(--lve-bg-2); border: 1px solid var(--lve-line); padding: 18px 20px; box-shadow: 0 14px 40px -34px rgba(21,18,26,0.35); }
 .lve-integration-glyph { width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; background: var(--lve-purple-soft); position: relative; }
 .lve-integration-glyph::after { content: ''; position: absolute; inset: 11px; border-radius: 5px; background: var(--lve-purple); opacity: 0.85; }
 .lve-integration-glyph.round::after { border-radius: 50%; }
 .lve-integration-glyph.diamond::after { border-radius: 3px; transform: rotate(45deg); }
+.lve-integration-body { flex: 1; min-width: 0; }
 .lve-integration-name { font-weight: 600; font-size: 15px; color: var(--lve-ink); }
-.lve-integration-sub { font-size: 12.5px; color: var(--lve-mute); margin-top: 1px; }
+.lve-integration-sub { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--lve-mute); margin-top: 2px; }
+.lve-integration-sync { color: var(--lve-purple); font-weight: 700; font-size: 13px; }
+.lve-integration-status { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--lve-purple); }
+.lve-integration-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lve-purple); box-shadow: 0 0 0 3px rgba(124,77,255,0.15), 0 0 8px rgba(124,77,255,0.7); }
 @media (min-width: 760px) { .lve-integrations-row { grid-template-columns: repeat(3, 1fr); } }
 
 /* ── CLOSING CTA + FOOTER (reused production treatment) ───────────────── */

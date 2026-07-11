@@ -3,15 +3,15 @@ import { m, useScroll, useTransform } from 'motion/react';
 
 import { Reveal, Stagger, StaggerItem, Ticker } from './motion';
 import {
-  ScreenMock,
   DecideMock,
   HandBackMock,
   LogoMarquee,
 } from './VariantEMocks';
 import {
-  HeroAgentStrip,
+  HeroAgentSwitch,
   HeroDecisionArtifact,
   FunnelFeedArtifact,
+  ScreenFeedArtifact,
   ScorecardArtifact,
   ScreenPillarVisual,
   AssessPillarVisual,
@@ -41,9 +41,9 @@ const SectionHead = ({ eyebrow, children, sub, center = true }) => (
 );
 
 // ── HERO ────────────────────────────────────────────────────────────────
-// The signature beat: the REAL agent-ON strip (.abar) flips OFF → ON — its
-// animated dark-purple gradient lights up — and the hero product card (the real
-// AgentDecisionCard) populates alongside it. Simple and bold, like variant D.
+// The signature beat: variant-D's clean pill toggle flips OFF → ON — grey knob
+// slides purple — and the hero product card (the real, compact AgentDecisionCard)
+// reveals + comes alive alongside it. Simple and bold, like variant D.
 export const HeroSection = ({ on, pressing, onToggle, onNavigate }) => {
   const ref = useRef(null);
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
@@ -73,7 +73,7 @@ export const HeroSection = ({ on, pressing, onToggle, onNavigate }) => {
                 Book a demo
               </button>
             </div>
-            <HeroAgentStrip on={on} pressing={pressing} onToggle={onToggle} />
+            <HeroAgentSwitch on={on} pressing={pressing} onToggle={onToggle} />
           </Reveal>
 
           <Reveal className={`lve-hero-mock-wrap${on ? ' is-on' : ''}`} amount={0.2} delay={0.1} y={26}>
@@ -177,7 +177,7 @@ const BANDS = [
     eyebrow: 'SCREEN',
     h: "Screen every CV against the role's real requirements.",
     p: "The agent checks each requirement and shows the evidence it found — or didn't. You never wonder why someone was passed over.",
-    Mock: ScreenMock,
+    Mock: ScreenFeedArtifact,
     flip: false,
   },
   {
@@ -254,7 +254,7 @@ export const HowItWorks = () => (
       <Stagger className="lve-steps">
         {STEPS.map((step) => (
           <StaggerItem className="lve-step" key={step.n}>
-            <span className="lve-step-n">{step.n}</span>
+            <span className="lve-step-badge">{step.n}</span>
             <h3 className="lve-step-h">{step.h}</h3>
             <p className="lve-step-p">{step.p}</p>
           </StaggerItem>
@@ -380,10 +380,15 @@ export const Integrations = () => (
         {INTEGRATIONS.map((it) => (
           <StaggerItem className="lve-integration" key={it.name}>
             <span className={`lve-integration-glyph ${it.shape}`} aria-hidden="true" />
-            <div>
+            <div className="lve-integration-body">
               <div className="lve-integration-name">{it.name}</div>
-              <div className="lve-integration-sub">{it.sub}</div>
+              <div className="lve-integration-sub">
+                <span className="lve-integration-sync" aria-hidden="true">⇄</span> {it.sub}
+              </div>
             </div>
+            <span className="lve-integration-status">
+              <span className="lve-integration-dot" aria-hidden="true" /> Connected
+            </span>
           </StaggerItem>
         ))}
       </Stagger>
