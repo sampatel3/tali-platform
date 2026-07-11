@@ -173,6 +173,28 @@ except Exception:  # pragma: no cover — model import shouldn't fail
     pass
 
 
+# Same BigInteger-PK workaround for agent_needs_input. Rows are written by
+# the ask_recruiter action from many code paths (data-readiness sync, the
+# orchestrator survey, route-level reject flows), so register globally here —
+# some test modules also register a local listener, but relying on that
+# creates an import-order coupling (files fail when run in isolation).
+_AGENT_NEEDS_INPUT_PK_COUNTER = {"n": 0}
+
+
+def _assign_agent_needs_input_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _AGENT_NEEDS_INPUT_PK_COUNTER["n"] += 1
+        target.id = _AGENT_NEEDS_INPUT_PK_COUNTER["n"]
+
+
+try:
+    from app.models.agent_needs_input import AgentNeedsInput as _AgentNeedsInput
+
+    event.listen(_AgentNeedsInput, "before_insert", _assign_agent_needs_input_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
+
 # Same BigInteger-PK workaround for decision_feedback (teach-loop rows).
 _DECISION_FEEDBACK_PK_COUNTER = {"n": 0}
 
