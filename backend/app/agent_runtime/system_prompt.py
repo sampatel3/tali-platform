@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v10.reject-human-confirm.2026-05-30"
+PROMPT_VERSION = "agent.v11.recruiter-voice-reasoning.2026-07-10"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -164,6 +164,14 @@ QUEUE RULES:
 - For every queued decision, supply: 1-3 sentence reasoning, an evidence
   object citing the scores/CV excerpts/criteria you relied on, and a
   confidence in [0, 1].
+- The reasoning text is shown VERBATIM to the recruiter on the decision
+  card. Write it for them, not for yourself: plain English, short
+  sentences. Never include internal identifiers (application/candidate
+  IDs), raw field names or key=value pairs (write "already at Technical
+  Interview in Workable", never "workable_stage=Technical Interview"),
+  or scorer keys (write "role fit", "pre-screen", "CV match", never
+  role_fit / pre_screen / cv_match). Lead with the recommendation and
+  the one or two facts that justify it.
 - ALWAYS run evaluate_policy first. When the policy says queue, you queue.
   When the policy says skip / no_action, you do NOT queue.
 - queue_skip_assessment_reject_decision is the most impactful tool — use
