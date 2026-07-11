@@ -177,6 +177,24 @@ def test_last_owner_cannot_be_demoted(client):
     assert "at least one owner" in resp.json()["detail"]
 
 
+def test_owner_can_remove_co_owner_but_caller_remains(client):
+    """Removing another owner is fine — the caller stays as an active owner."""
+    owner_headers, _ = auth_headers(client)
+    invited = _invite_member(client, owner_headers, "co-owner@example.com")
+    client.patch(
+        f"/api/v1/users/{invited['id']}/role",
+        json={"role": "owner"},
+        headers=owner_headers,
+    )
+
+    resp = client.delete(f"/api/v1/users/{invited['id']}", headers=owner_headers)
+    assert resp.status_code == 204
+
+    listing = client.get("/api/v1/users/", headers=owner_headers)
+    emails = [row["email"] for row in listing.json()]
+    assert "co-owner@example.com" not in emails
+
+
 def test_role_change_scoped_to_own_org(client):
     owner_a_headers, _ = auth_headers(client)
     owner_b_headers, _ = auth_headers(client, organization_name="OtherOrg")

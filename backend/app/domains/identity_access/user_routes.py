@@ -180,6 +180,8 @@ def remove_team_member(
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="CANNOT_REMOVE_SELF")
     target = _get_org_member(db, user_id, current_user)
+    if target.role == "owner":
+        _ensure_another_active_owner(db, current_user.organization_id, excluding_user_id=target.id)
     # Soft-remove only — other tables reference users; never hard-delete.
     target.is_active = False
     db.commit()
@@ -196,23 +198,8 @@ def update_team_user_role(
     target = _get_org_member(db, user_id, current_user)
     if target.role == data.role:
         return target
-    # Never leave the org without an owner. Lock the org's active owner rows
-    # so two concurrent demotions can't both observe "another owner exists"
-    # and commit a zero-owner workspace (FOR UPDATE on Postgres; no-op on
-    # SQLite).
     if target.role == "owner" and data.role == "member":
-        owners = (
-            db.query(User)
-            .filter(
-                User.organization_id == current_user.organization_id,
-                User.role == "owner",
-                User.is_active == True,  # noqa: E712 — inactive owners can't act
-            )
-            .with_for_update()
-            .all()
-        )
-        if not any(owner.id != target.id for owner in owners):
-            raise HTTPException(status_code=400, detail="An organization needs at least one owner")
+        _ensure_another_active_owner(db, current_user.organization_id, excluding_user_id=target.id)
     target.role = data.role
     try:
         db.commit()
@@ -221,6 +208,25 @@ def update_team_user_role(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update member role")
     return target
+
+
+def _ensure_another_active_owner(db: Session, organization_id: int, *, excluding_user_id: int) -> None:
+    """Never leave the org without an active owner. Locks the org's active
+    owner rows so two concurrent demotions/removals can't both observe
+    "another owner exists" and commit a zero-owner workspace (FOR UPDATE on
+    Postgres; no-op on SQLite)."""
+    owners = (
+        db.query(User)
+        .filter(
+            User.organization_id == organization_id,
+            User.role == "owner",
+            User.is_active == True,  # noqa: E712 — inactive owners can't act
+        )
+        .with_for_update()
+        .all()
+    )
+    if not any(owner.id != excluding_user_id for owner in owners):
+        raise HTTPException(status_code=400, detail="An organization needs at least one owner")
 
 
 def _get_org_member(db: Session, user_id: int, current_user: User) -> User:
