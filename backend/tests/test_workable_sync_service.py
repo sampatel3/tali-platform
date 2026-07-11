@@ -623,6 +623,29 @@ def test_post_handover_workable_stage_does_not_advance_tali(db):
     assert (app.workable_stage or "").lower().startswith("technical")
 
 
+def test_sync_stores_per_application_workable_created_at(db):
+    """The payload's created_at is per JOB APPLICATION (Workable candidate ids
+    are per-application), so the applied date must land on the application row
+    — the candidate-level copy is last-sync-wins across a person's roles."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "applied-at-org")
+    MockClient, _ = _client_returning([
+        [{"id": "cand_aa", "email": "aa@example.com", "name": "Applied At",
+          "stage": "Screening", "created_at": "2026-06-12T09:30:00Z"}],
+    ])
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_aa",
+    ).first()
+    assert app is not None
+    assert app.workable_created_at is not None
+    assert app.workable_created_at.strftime("%Y-%m-%d %H:%M") == "2026-06-12 09:30"
+
+
 def test_disqualified_candidate_is_flagged_and_advanced(db):
     """When Workable disqualifies an existing candidate, sync records the flag,
     refreshes the Workable stage, and parks them in Tali's terminal stage."""

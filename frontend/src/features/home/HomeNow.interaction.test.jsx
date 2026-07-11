@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 
 import { HomeNow } from './HomeNow';
@@ -39,6 +39,7 @@ const mkAdvance = (id, name) => ({
   role_name: 'Data Engineer',
   workable_job_id: 'de-shortcode',
   created_at: '2026-06-07T10:00:00Z',
+  applied_at: '2026-06-01T10:00:00Z',
   reasoning: 'Strong fit.',
   taali_score: 80,
 });
@@ -64,6 +65,18 @@ const renderHome = (overrides = {}) => {
   );
   return { ...utils, reload };
 };
+
+describe('HomeNow — applied-date freshness', () => {
+  it('shows when the candidate applied on the queue row and the detail card', () => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+    renderHome();
+    // Queue row: relative applied age next to the role · queue-age line.
+    expect(screen.getAllByText(/applied .+ ago/i).length).toBeGreaterThan(0);
+    // Detail card: absolute date line under the score provenance
+    // (locale-agnostic — toLocaleDateString varies by environment).
+    expect(screen.getByText(/Applied .*2026/)).toBeInTheDocument();
+  });
+});
 
 describe('HomeNow — bulk-approve Enter gate', () => {
   beforeEach(() => {

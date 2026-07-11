@@ -328,6 +328,11 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                   score-provenance/version chip. */}
               <div className="rq-qsub">
                 {p.role_name || `Role #${p.role_id}`} · {formatRelativeAge(p.created_at)}
+                {p.applied_at ? (
+                  <span title="When this application was submitted — how fresh the candidate is">
+                    · applied {formatRelativeAge(p.applied_at)} ago
+                  </span>
+                ) : null}
               </div>
               <div className="rq-qverdict">
                 <VerdictPill type={p.decision_type} />

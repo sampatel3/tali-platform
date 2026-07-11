@@ -39,6 +39,17 @@ import { IntegrityFlags } from './IntegrityFlags';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from './decisionActions';
 import '../../features/home/home.css';
 
+// Absolute applied date ("12 Jun 2026") — same format as the ScoreProvenance
+// date pill so the two provenance lines read consistently.
+const fmtAppliedDate = (v) => {
+  if (!v) return null;
+  try {
+    return new Date(v).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return null;
+  }
+};
+
 // `middleSlot` / `hideDecisionParts` / `statusPill` let a non-decision surface
 // reuse this card VERBATIM. The invited-candidate tracker passes the assessment
 // stage tracker as `middleSlot` (it sits exactly where the agent-recommendation
@@ -112,6 +123,14 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             {[decision.role_name, decision.candidate_email].filter(Boolean).join(' · ')}
           </div>
           <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
+          {decision.applied_at ? (
+            <div
+              style={{ fontSize: 11, color: 'var(--mute)', marginTop: 2 }}
+              title="When this application was submitted — how fresh the candidate is"
+            >
+              Applied {fmtAppliedDate(decision.applied_at)} · {formatRelativeAge(decision.applied_at)} ago
+            </div>
+          ) : null}
         </div>
         {statusPill || (decision.status === 'pending' ? (
           <span className="rq-stream-pendpill" style={{ alignSelf: 'flex-start' }}>NEEDS YOU</span>

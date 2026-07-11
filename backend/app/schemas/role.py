@@ -331,6 +331,10 @@ class ApplicationResponse(BaseModel):
     candidate_experience: Optional[list] = None
     candidate_summary: Optional[str] = None
     candidate_workable_created_at: Optional[datetime] = None
+    # When the candidate applied to THIS role: per-application Workable
+    # created_at, falling back to the candidate-level copy (legacy rows), then
+    # to the local application created_at (manual/non-Workable sources).
+    applied_at: Optional[datetime] = None
     workable_sourced: Optional[bool] = None
     workable_profile_url: Optional[str] = None
     workable_enriched: Optional[bool] = None
