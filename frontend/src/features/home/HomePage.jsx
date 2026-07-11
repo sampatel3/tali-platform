@@ -228,7 +228,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       const pending = [...pendingRows].sort((a, b) => {
         const byScore = scoreOf(b) - scoreOf(a);
         if (byScore !== 0) return byScore;
-        return new Date(a.created_at) - new Date(b.created_at);
+        const byTime = new Date(a.created_at) - new Date(b.created_at);
+        if (byTime) return byTime;
+        // Bulk-scored rows share created_at; fall back to the unique id so the
+        // final order is fully deterministic instead of leaking backend order.
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
       });
       setPendingOrdered(pending);
       setDecisions(feedRows);
