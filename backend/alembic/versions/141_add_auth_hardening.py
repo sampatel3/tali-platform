@@ -1,14 +1,14 @@
 """Auth hardening: auth_events audit table + per-account login lockout columns.
 
-Revision ID: 140_add_auth_hardening
-Revises: 139_add_application_workable_created_at
+Revision ID: 141_add_auth_hardening
+Revises: 140_add_user_role
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "140_add_auth_hardening"
-down_revision = "139_add_application_workable_created_at"
+revision = "141_add_auth_hardening"
+down_revision = "140_add_user_role"
 branch_labels = None
 depends_on = None
 
