@@ -22,7 +22,8 @@ _TERM_MAP = [
 ]
 
 # "Aiazuddin (52407) scores…" — parenthesized internal application IDs.
-_PAREN_ID = re.compile(r"\s*\(\d{3,}\)")
+# 4+ digits: scores/thresholds top out at 100 and must survive, e.g. "(100)".
+_PAREN_ID = re.compile(r"\s*\(\d{4,}\)")
 
 # "workable_stage=Technical Interview" / 'pipeline_stage="advanced"' —
 # value runs to the next delimiter so multi-word stages survive.
