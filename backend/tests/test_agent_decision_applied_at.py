@@ -21,7 +21,7 @@ APP_APPLIED = datetime(2026, 6, 12, 9, 0, tzinfo=timezone.utc)
 CAND_APPLIED = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
 
 
-def _seed(db, org_id, role_id, email, *, app_workable=None, cand_workable=None):
+def _seed(db, org_id, role_id, email, *, app_workable=None, cand_workable=None, source="workable"):
     cand = Candidate(
         organization_id=org_id,
         email=email,
@@ -38,7 +38,7 @@ def _seed(db, org_id, role_id, email, *, app_workable=None, cand_workable=None):
         pipeline_stage="review",
         pipeline_stage_source="recruiter",
         application_outcome="open",
-        source="manual",
+        source=source,
         workable_created_at=app_workable,
     )
     db.add(app)
@@ -85,8 +85,14 @@ def test_applied_at_fallback_chain(client, db):
     )
     # 2. Legacy row: only the candidate-level copy exists.
     app_b, _ = _seed(db, org_id, role.id, "b@x.test", cand_workable=CAND_APPLIED)
-    # 3. Manual source: falls back to the local application created_at.
+    # 3. Workable row with no dates anywhere: local application created_at.
     app_c, _ = _seed(db, org_id, role.id, "c@x.test")
+    # 4. MANUAL application on a candidate who ALSO applied via Workable —
+    #    must NOT inherit the other application's Workable date (Codex P2).
+    app_d, _ = _seed(
+        db, org_id, role.id, "d@x.test",
+        cand_workable=CAND_APPLIED, source="manual",
+    )
     db.commit()
 
     row_a = _fetch(client, headers, app_a.id)
@@ -100,3 +106,9 @@ def test_applied_at_fallback_chain(client, db):
     row_c = _fetch(client, headers, app_c.id)
     # created_at is stamped by the DB at insert; just prove the fallback fires.
     assert row_c["applied_at"] is not None
+
+    row_d = _fetch(client, headers, app_d.id)
+    assert row_d["applied_at"] is not None
+    # The candidate-level Workable date (2026-05-01) belongs to a DIFFERENT
+    # application; the manual app reports its own created_at instead.
+    assert not row_d["applied_at"].startswith("2026-05-01")

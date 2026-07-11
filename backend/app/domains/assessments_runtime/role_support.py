@@ -1149,7 +1149,14 @@ def application_to_response(
         candidate_workable_created_at=(candidate.workable_created_at if candidate else None),
         applied_at=(
             app.workable_created_at
-            or (candidate.workable_created_at if candidate else None)
+            # Candidate-level copy only for Workable rows — a manual application
+            # on a person who ALSO applied via Workable must not inherit the
+            # other application's date.
+            or (
+                candidate.workable_created_at
+                if candidate is not None and app.source == "workable"
+                else None
+            )
             or app.created_at
         ),
         workable_sourced=app.workable_sourced,

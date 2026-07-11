@@ -401,7 +401,16 @@ def _decision_to_payload(
         role_name=getattr(role, "name", None) if role else None,
         applied_at=(
             (getattr(application, "workable_created_at", None) if application else None)
-            or (getattr(candidate, "workable_created_at", None) if candidate else None)
+            # Candidate-level copy only for Workable rows — a manual application
+            # on a person who ALSO applied via Workable must not inherit the
+            # other application's date.
+            or (
+                getattr(candidate, "workable_created_at", None)
+                if candidate is not None
+                and application is not None
+                and getattr(application, "source", None) == "workable"
+                else None
+            )
             or (getattr(application, "created_at", None) if application else None)
         ),
         taali_score=taali_score,
