@@ -20,10 +20,12 @@ from ...schemas.user import (
 )
 from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...platform.config import settings
+from ...models.auth_event import AUTH_EVENT_MEMBER_INVITED, AUTH_EVENT_MEMBER_REMOVED
 from .access_policy import (
     is_email_allowed_for_domains,
     normalize_allowed_domains,
 )
+from .auth_events import record_auth_event
 
 logger = logging.getLogger("taali.users")
 
@@ -152,6 +154,16 @@ def invite_team_user(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to invite team member")
 
+    record_auth_event(
+        db,
+        AUTH_EVENT_MEMBER_INVITED,
+        user_id=invited.id,
+        actor_user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        email=invited.email,
+        metadata={"restored": bool(existing)} if existing else None,
+    )
+
     email_sent = False if restored_verified else _send_invite_email(invited, current_user, org)
     return _invite_response(invited, email_sent)
 
@@ -205,6 +217,16 @@ def remove_team_member(
     # Soft-remove only — other tables reference users; never hard-delete.
     target.is_active = False
     db.commit()
+    record_auth_event(
+        db,
+        AUTH_EVENT_MEMBER_REMOVED,
+        user_id=target.id,
+        actor_user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        email=target.email,
+        # A pending (unverified) target means this was an invite revocation.
+        metadata={"was_pending_invite": not target.is_verified},
+    )
     return None
 
 

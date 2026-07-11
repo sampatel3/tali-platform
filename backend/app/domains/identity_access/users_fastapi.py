@@ -4,16 +4,25 @@ FastAPI-Users configuration: user manager, auth backend, schemas, Resend hooks.
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import BaseUserManager, FastAPIUsers, IntegerIDMixin, InvalidPasswordException
+from fastapi_users import exceptions as fu_exceptions
 from fastapi_users.authentication import AuthenticationBackend, BearerTransport, JWTStrategy
 from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from ...models.auth_event import (
+    AUTH_EVENT_ACCOUNT_LOCKED,
+    AUTH_EVENT_LOGIN_FAILED,
+    AUTH_EVENT_LOGIN_SUCCESS,
+    AUTH_EVENT_PASSWORD_RESET_COMPLETED,
+    AUTH_EVENT_PASSWORD_RESET_REQUESTED,
+)
 from ...models.billing_credit_ledger import BillingCreditLedger
 from ...models.user import User
 from ...models.organization import Organization
@@ -22,6 +31,7 @@ from ...platform.config import settings
 from ...platform.database import get_async_db
 from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...services.pricing_service import FREE_TIER
+from .auth_events import record_auth_event_async
 from .password_policy import check_password_strength
 
 logger = logging.getLogger("taali.auth")
@@ -49,6 +59,13 @@ class UserUpdate(schemas.BaseUserUpdate):
     full_name: Optional[str] = None
 
 
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Postgres returns tz-aware datetimes, SQLite (tests) naive UTC — normalize."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 # ---- User Manager ----
 class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
     reset_password_token_secret = settings.SECRET_KEY
@@ -63,6 +80,93 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
         reason = check_password_strength(password, email=email)
         if reason is not None:
             raise InvalidPasswordException(reason=reason)
+
+    async def authenticate(self, credentials: OAuth2PasswordRequestForm) -> Optional[User]:
+        """Base authenticate + per-account lockout + audit trail.
+
+        Lockout: AUTH_LOCKOUT_THRESHOLD consecutive failures locks the account
+        for AUTH_LOCKOUT_MINUTES (429, checked BEFORE password verification so
+        a locked account can't be brute-forced during the window). Counter
+        resets on successful login or first failure after the lock expires.
+        """
+        session: AsyncSession = self.user_db.session
+        try:
+            user = await self.get_by_email(credentials.username)
+        except fu_exceptions.UserNotExists:
+            # Run the hasher to mitigate timing attack (same as base class)
+            self.password_helper.hash(credentials.password)
+            await record_auth_event_async(
+                session,
+                AUTH_EVENT_LOGIN_FAILED,
+                email=credentials.username,
+                metadata={"reason": "unknown_email"},
+            )
+            return None
+
+        now = datetime.now(timezone.utc)
+        locked_until = _as_utc(user.locked_until)
+        if locked_until and locked_until > now:
+            remaining_min = max(1, int((locked_until - now).total_seconds() // 60) + 1)
+            await record_auth_event_async(
+                session,
+                AUTH_EVENT_LOGIN_FAILED,
+                user_id=user.id,
+                organization_id=user.organization_id,
+                email=user.email,
+                metadata={"reason": "account_locked"},
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts. Try again in {remaining_min} minute(s).",
+            )
+
+        verified, updated_password_hash = self.password_helper.verify_and_update(
+            credentials.password, user.hashed_password
+        )
+        if not verified:
+            # A lock that already expired starts a fresh count
+            attempts = 1 if locked_until else user.failed_login_attempts + 1
+            update_dict = {"failed_login_attempts": attempts, "locked_until": None}
+            event_type = AUTH_EVENT_LOGIN_FAILED
+            metadata = {"reason": "bad_password", "failed_attempts": attempts}
+            if attempts >= settings.AUTH_LOCKOUT_THRESHOLD:
+                update_dict["locked_until"] = now + timedelta(minutes=settings.AUTH_LOCKOUT_MINUTES)
+                event_type = AUTH_EVENT_ACCOUNT_LOCKED
+                metadata["lock_minutes"] = settings.AUTH_LOCKOUT_MINUTES
+            await self.user_db.update(user, update_dict)
+            await record_auth_event_async(
+                session,
+                event_type,
+                user_id=user.id,
+                organization_id=user.organization_id,
+                email=user.email,
+                metadata=metadata,
+            )
+            return None
+
+        update_dict = {}
+        if updated_password_hash is not None:
+            update_dict["hashed_password"] = updated_password_hash
+        if user.failed_login_attempts or user.locked_until is not None:
+            update_dict["failed_login_attempts"] = 0
+            update_dict["locked_until"] = None
+        if update_dict:
+            await self.user_db.update(user, update_dict)
+        return user
+
+    async def on_after_login(
+        self,
+        user: User,
+        request: Optional[Request] = None,
+        response=None,
+    ) -> None:
+        await record_auth_event_async(
+            self.user_db.session,
+            AUTH_EVENT_LOGIN_SUCCESS,
+            user_id=user.id,
+            organization_id=user.organization_id,
+            email=user.email,
+        )
 
     async def _create_signup_org(self, session: AsyncSession, organization_name: str) -> Organization:
         """Always create a fresh organization for self-signup with a unique slug."""
@@ -167,6 +271,13 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
     ) -> None:
+        await record_auth_event_async(
+            self.user_db.session,
+            AUTH_EVENT_PASSWORD_RESET_REQUESTED,
+            user_id=user.id,
+            organization_id=user.organization_id,
+            email=user.email,
+        )
         key = (settings.RESEND_API_KEY or "").strip()
         if not key or key.lower() == "skip":
             logger.warning("RESEND_API_KEY not set or 'skip' — not sending password reset email to %s", user.email)
@@ -180,6 +291,19 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
                 logger.error("Resend rejected password reset email for %s — check Resend dashboard and domain verification", user.email)
         except Exception:
             logger.exception("Failed to send password reset email to %s", user.email)
+
+    async def on_after_reset_password(self, user: User, request: Optional[Request] = None) -> None:
+        # A completed reset also clears any active lockout — the user just
+        # proved account ownership via the emailed token.
+        if user.failed_login_attempts or user.locked_until is not None:
+            await self.user_db.update(user, {"failed_login_attempts": 0, "locked_until": None})
+        await record_auth_event_async(
+            self.user_db.session,
+            AUTH_EVENT_PASSWORD_RESET_COMPLETED,
+            user_id=user.id,
+            organization_id=user.organization_id,
+            email=user.email,
+        )
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Optional[Request] = None

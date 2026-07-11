@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
-import api, { isPublicPath } from './httpClient';
+import api, {
+  isPublicPath,
+  shouldRefreshToken,
+  setAccessToken,
+  clearAccessToken,
+  REFRESH_TOKEN_AFTER_MS,
+} from './httpClient';
 
 // Regression: a stale/expired JWT in localStorage + the auth bootstrap 401
 // used to hard-redirect PUBLIC marketing pages to /login, because the 401
@@ -50,5 +56,40 @@ describe('httpClient isPublicPath (401 interceptor guard)', () => {
 describe('httpClient default timeout', () => {
   it('sets a 60s default request timeout', () => {
     expect(api.defaults.timeout).toBe(60000);
+  });
+});
+
+// Sliding session: active users must not be silently logged out when the
+// 30-minute access token expires — the client swaps the token for a fresh one
+// once it's REFRESH_TOKEN_AFTER_MS old.
+describe('httpClient sliding token refresh', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('refreshes once the token is older than the threshold', () => {
+    const now = Date.now();
+    expect(shouldRefreshToken(String(now), now)).toBe(false);
+    expect(shouldRefreshToken(String(now - REFRESH_TOKEN_AFTER_MS + 1000), now)).toBe(false);
+    expect(shouldRefreshToken(String(now - REFRESH_TOKEN_AFTER_MS - 1000), now)).toBe(true);
+  });
+
+  it('treats a missing or garbled issued-at stamp as stale (pre-feature sessions)', () => {
+    expect(shouldRefreshToken(null)).toBe(true);
+    expect(shouldRefreshToken(undefined)).toBe(true);
+    expect(shouldRefreshToken('')).toBe(true);
+    expect(shouldRefreshToken('not-a-number')).toBe(true);
+  });
+
+  it('setAccessToken stamps the issue time; clearAccessToken removes both keys', () => {
+    setAccessToken('tok-123');
+    expect(localStorage.getItem('taali_access_token')).toBe('tok-123');
+    const issuedAt = Number(localStorage.getItem('taali_token_issued_at'));
+    expect(Number.isFinite(issuedAt)).toBe(true);
+    expect(Math.abs(Date.now() - issuedAt)).toBeLessThan(5000);
+
+    clearAccessToken();
+    expect(localStorage.getItem('taali_access_token')).toBe(null);
+    expect(localStorage.getItem('taali_token_issued_at')).toBe(null);
   });
 });

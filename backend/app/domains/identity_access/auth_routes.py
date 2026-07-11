@@ -14,7 +14,7 @@ from ...schemas.user import AcceptInviteRequest, Token
 from .access_policy import email_domain, normalize_allowed_domains
 from .password_policy import check_password_strength
 from .user_routes import decode_invite_token
-from .users_fastapi import auth_backend
+from .users_fastapi import auth_backend, current_active_user, get_jwt_strategy
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -28,6 +28,20 @@ def _mint_login_token(user: User) -> str:
         settings.SECRET_KEY,
         settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
+
+
+@router.post("/jwt/refresh")
+async def refresh_jwt(user: User = Depends(current_active_user)):
+    """Sliding session: exchange a still-valid access token for a fresh one.
+
+    The frontend calls this in the background once the stored token is ~10
+    minutes old, so active users are never logged out by the 30-minute JWT
+    expiry. An idle session still dies when the last token expires — there is
+    deliberately no long-lived refresh token.
+    """
+    strategy = get_jwt_strategy()
+    token = await strategy.write_token(user)
+    return {"access_token": token, "token_type": "bearer"}
 
 
 class SsoCheckRequest(BaseModel):
