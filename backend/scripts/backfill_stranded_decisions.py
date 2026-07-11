@@ -41,18 +41,25 @@ from app.services.bulk_decision_service import ensure_deterministic_decision
 from app.services.pre_screen_decision_emitter import backfill_existing_below_threshold
 
 
-def _stranded_real_score(db, organization_id):
-    """Open, scored, agent-on candidates with NO active agent decision — the
-    exact population the funnel counts as 'not yet decided'."""
+def _stranded_real_score(db, organization_id, include_agent_off=False):
+    """Open, scored candidates with NO active agent decision. Agent-ON only by
+    default — the exact population the funnel counts as 'not yet decided'. With
+    ``include_agent_off`` the agent-off roles are included too (a deliberate
+    choice to give EVERY scored candidate a deterministic verdict, even on roles
+    where the agent is toggled off)."""
+    filters = [
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.application_outcome == "open",
+        CandidateApplication.cv_match_score.isnot(None),
+        _not_post_handover_sql(),
+    ]
+    if not include_agent_off:
+        filters.append(Role.agentic_mode_enabled.is_(True))
     q = (
         db.query(CandidateApplication, Role)
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.cv_match_score.isnot(None),
-            Role.agentic_mode_enabled.is_(True),
-            _not_post_handover_sql(),
+            *filters,
             ~(
                 db.query(AgentDecision.id)
                 .filter(
@@ -80,21 +87,29 @@ def main() -> None:
     # separately once deployed.
     ap.add_argument("--skip-prescreen", action="store_true", help="real-score pass only")
     ap.add_argument("--only-prescreen", action="store_true", help="pre-screen pass only")
+    # By default the real-score pass is agent-ON only (the 'not yet decided'
+    # metric population). --include-agent-off also emits deterministic verdicts
+    # for scored candidates on agent-OFF roles.
+    ap.add_argument("--include-agent-off", action="store_true", help="also emit for agent-off roles")
     args = ap.parse_args()
 
     db = SessionLocal()
     try:
         if not args.only_prescreen:
-            rows = _stranded_real_score(db, args.org)
-            print(f"real-score stranded (open, scored, agent-on, no active decision): {len(rows)}")
+            rows = _stranded_real_score(db, args.org, include_agent_off=args.include_agent_off)
+            scope = "agent-on+off" if args.include_agent_off else "agent-on"
+            print(f"real-score stranded (open, scored, {scope}, no active decision): {len(rows)}")
             if args.execute:
                 emitted = 0
                 by_type: dict[str, int] = {}
-                for app, role in rows:
+                for i, (app, role) in enumerate(rows, 1):
                     dt = ensure_deterministic_decision(db, app=app, role=role)
                     if dt:
                         emitted += 1
                         by_type[dt] = by_type.get(dt, 0) + 1
+                    if i % 200 == 0:
+                        db.commit()
+                        print(f"  ...{i}/{len(rows)} processed, {emitted} emitted")
                 db.commit()
                 print(f"real-score: emitted {emitted} verdict(s)  by_type={by_type}")
 
