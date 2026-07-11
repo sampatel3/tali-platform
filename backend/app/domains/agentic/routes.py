@@ -49,6 +49,7 @@ from ._activity_feed import (
     build_activity_feed,
     confidence_to_float,
 )
+from ._reasoning_text import humanize_reasoning
 
 
 router = APIRouter(tags=["agentic"])
@@ -382,7 +383,7 @@ def _decision_to_payload(
         decision_type=str(decision.decision_type),
         recommendation=str(decision.recommendation),
         status=str(decision.status),
-        reasoning=str(decision.reasoning),
+        reasoning=humanize_reasoning(str(decision.reasoning)),
         evidence=decision.evidence,
         confidence=confidence_value,
         model_version=str(decision.model_version),
