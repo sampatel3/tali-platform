@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal, Optional
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 
 
 class UserCreate(BaseModel):
@@ -15,7 +15,12 @@ class UserResponse(BaseModel):
     email: str
     full_name: Optional[str] = None
     is_active: bool
-    is_email_verified: bool = False
+    # The ORM stores this as FastAPI-Users' `is_verified`; keep the public
+    # field name but read whichever attribute is present.
+    is_email_verified: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_email_verified", "is_verified"),
+    )
     organization_id: Optional[int] = None
     role: str = "member"
     created_at: datetime

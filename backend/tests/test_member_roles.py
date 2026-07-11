@@ -57,6 +57,17 @@ def test_invited_user_is_member_and_role_listed(client):
     assert "owner" in roles.values()
 
 
+def test_verified_flag_serialized_from_orm(client):
+    """is_email_verified must mirror the ORM's is_verified, not default to False."""
+    headers, owner_email = auth_headers(client)  # auth_headers verifies the owner
+    _invite_member(client, headers, "unverified@example.com")
+
+    listing = client.get("/api/v1/users/", headers=headers)
+    verified = {row["email"]: row["is_email_verified"] for row in listing.json()}
+    assert verified[owner_email] is True
+    assert verified["unverified@example.com"] is False
+
+
 def test_member_cannot_invite(client):
     owner_headers, _ = auth_headers(client)
     _invite_member(client, owner_headers, "no-invite-rights@example.com")
