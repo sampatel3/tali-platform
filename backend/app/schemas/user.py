@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -17,6 +17,7 @@ class UserResponse(BaseModel):
     is_active: bool
     is_email_verified: bool = False
     organization_id: Optional[int] = None
+    role: str = "member"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -43,3 +44,7 @@ class ResetPasswordRequest(BaseModel):
 class TeamInviteRequest(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=1, max_length=200)
+
+
+class TeamRoleUpdateRequest(BaseModel):
+    role: Literal["owner", "member"]

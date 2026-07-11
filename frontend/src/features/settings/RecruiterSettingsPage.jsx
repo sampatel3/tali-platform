@@ -369,6 +369,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [roleSavingId, setRoleSavingId] = useState(null);
+  // Owners manage members and access settings; members get a read-only view.
+  const isOwner = String(user?.role || '') === 'owner';
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingCosts, setBillingCosts] = useState(null);
   const [billingCredits, setBillingCredits] = useState(null);
@@ -1076,6 +1079,22 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
+  const handleSetRole = async (member, nextRole) => {
+    setRoleSavingId(member.id);
+    try {
+      const res = await teamApi.setRole(member.id, nextRole);
+      const updated = res?.data;
+      setTeamMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, ...(updated || { role: nextRole }) } : m)));
+      showToast(nextRole === 'owner'
+        ? `${member.full_name || member.email} is now an owner.`
+        : `${member.full_name || member.email} is now a member.`, 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to update member role.'), 'error');
+    } finally {
+      setRoleSavingId(null);
+    }
+  };
+
   const handleAddCredits = async (packId) => {
     const base = `${window.location.origin}/settings/billing`;
     setCheckoutLoading(true);
@@ -1578,39 +1597,38 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Members"
                   subtitle={`${teamMembers.length} ${teamMembers.length === 1 ? 'person' : 'people'} in this workspace.`}
                 >
-                  <form className="settings-invite-form" onSubmit={handleInvite}>
-                    <label className="field">
-                      <span className="k">Full name</span>
-                      <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Alex Weston" />
-                    </label>
-                    <label className="field">
-                      <span className="k">Email</span>
-                      <input type="email" required value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="alex@company.com" />
-                    </label>
-                    <div className="settings-member-actions">
-                      <button type="submit" className="btn btn-purple btn-sm" disabled={inviteLoading}>
-                        {inviteLoading ? 'Inviting...' : '+ Invite member'}
-                      </button>
+                  {isOwner ? (
+                    <form className="settings-invite-form" onSubmit={handleInvite}>
+                      <label className="field">
+                        <span className="k">Full name</span>
+                        <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Alex Weston" />
+                      </label>
+                      <label className="field">
+                        <span className="k">Email</span>
+                        <input type="email" required value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="alex@company.com" />
+                      </label>
+                      <div className="settings-member-actions">
+                        <button type="submit" className="btn btn-purple btn-sm" disabled={inviteLoading}>
+                          {inviteLoading ? 'Inviting...' : '+ Invite member'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="settings-inline-note">
+                      Only a workspace owner can invite members.
                     </div>
-                  </form>
-                  {/* HANDOFF settings.md — role assignment moved off the
-                      removed "Roles & access" tab onto a column on this
-                      table. We default to Owner / Admin / Recruiter /
-                      Hiring manager, with Owner/Admin able to manage
-                      others. */}
-                  {/* Preview `.member` — flat divider list: avatar · name/email ·
-                      role chip. Active roles read purple, an unverified
-                      "Invited" member greys out the avatar + chip. No per-row
-                      action button (the preview omits it). */}
+                  )}
+                  {/* Two roles, deliberately simple: Owner (manages members +
+                      access settings) and Member. Unverified members render as
+                      "Invited". Owners get a per-row promote/demote action. */}
                   <div className="members">
                     {teamMembers.map((member) => {
                       const isSelf = member?.email === user?.email;
-                      // Derive every row's role from member.role (falling back to
-                      // Recruiter/Invited) — never hardcode the self row to Owner,
-                      // which mislabelled every recruiter as Owner.
-                      const role = String(member?.role || '').trim()
-                        || (member?.is_email_verified ? 'Recruiter' : 'Invited');
-                      const invited = role === 'Invited';
+                      const memberRole = String(member?.role || '').toLowerCase();
+                      const label = memberRole === 'owner'
+                        ? 'Owner'
+                        : (member?.is_email_verified ? 'Member' : 'Invited');
+                      const invited = label === 'Invited';
                       return (
                         <div key={member.id} className="mb">
                           <div className={`av${invited ? ' inv' : ''}`}>{initialsFor(member.full_name || member.email)}</div>
@@ -1618,7 +1636,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             <b>{member.full_name || member.email}</b>
                             <div>{isSelf ? 'you' : (member?.email || '—')}</div>
                           </div>
-                          <span className={`chip${invited ? '' : ' purple'}`}>{role}</span>
+                          {isOwner && !isSelf ? (
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-sm"
+                              disabled={roleSavingId === member.id}
+                              onClick={() => handleSetRole(member, memberRole === 'owner' ? 'member' : 'owner')}
+                            >
+                              {roleSavingId === member.id
+                                ? 'Saving...'
+                                : memberRole === 'owner' ? 'Make member' : 'Make owner'}
+                            </button>
+                          ) : null}
+                          <span className={`chip${invited ? '' : ' purple'}`}>{label}</span>
                         </div>
                       );
                     })}
@@ -1660,8 +1690,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </div>
                     </div>
                     <div className="settings-save-row">
-                      <div className="settings-inline-note">Team invites respect the allowed domain list immediately.</div>
-                      <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAccess} disabled={accessSaving}>
+                      <div className="settings-inline-note">
+                        {isOwner
+                          ? 'Team invites respect the allowed domain list immediately.'
+                          : 'Only a workspace owner can change access settings.'}
+                      </div>
+                      <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAccess} disabled={accessSaving || !isOwner}>
                         {accessSaving ? 'Saving...' : 'Save access settings'}
                       </button>
                     </div>
@@ -2087,8 +2121,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
 
                   <div className="settings-save-row">
-                    <div className="settings-inline-note">SAML metadata is required when SAML is enabled.</div>
-                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveSso} disabled={ssoSaving}>
+                    <div className="settings-inline-note">
+                      {isOwner
+                        ? 'SAML metadata is required when SAML is enabled.'
+                        : 'Only a workspace owner can change security settings.'}
+                    </div>
+                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveSso} disabled={ssoSaving || !isOwner}>
                       {ssoSaving ? 'Saving...' : 'Save security settings'}
                     </button>
                   </div>

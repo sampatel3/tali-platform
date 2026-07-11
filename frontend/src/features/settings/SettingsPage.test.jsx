@@ -33,20 +33,18 @@ vi.mock('../../shared/api', () => ({
   team: {
     list: vi.fn(),
     invite: vi.fn(),
+    setRole: vi.fn(),
   },
 }));
 
 const showToast = vi.fn();
 
+// Mutable so individual tests can flip the signed-in user between owner and
+// member; beforeEach resets it to the owner default.
+const authState = vi.hoisted(() => ({ user: null }));
+
 vi.mock('../../context/AuthContext', () => ({
-  useAuth: () => ({
-    user: {
-      id: 1,
-      email: 'admin@taali.ai',
-      full_name: 'Sam Patel',
-      organization: { name: 'DeepLight AI' },
-    },
-  }),
+  useAuth: () => ({ user: authState.user }),
 }));
 
 vi.mock('../../context/ToastContext', () => ({
@@ -109,6 +107,13 @@ const renderSettingsRoute = (initialPath = '/settings/email') => render(
 describe('SettingsPage recruiter surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.user = {
+      id: 1,
+      email: 'admin@taali.ai',
+      full_name: 'Sam Patel',
+      role: 'owner',
+      organization: { name: 'DeepLight AI' },
+    };
     orgsApi.get.mockResolvedValue({ data: baseOrgData });
     orgsApi.update.mockResolvedValue({ data: baseOrgData });
     orgsApi.getWorkableSyncStatus.mockResolvedValue({ data: { sync_in_progress: false } });
@@ -170,7 +175,8 @@ describe('SettingsPage recruiter surface', () => {
   it('renders the new Members tab heading and role chips', async () => {
     teamApi.list.mockResolvedValue({
       data: [
-        { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'Recruiter' },
+        { id: 1, email: 'admin@taali.ai', full_name: 'Sam Patel', is_email_verified: true, role: 'owner' },
+        { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'member' },
       ],
     });
     renderSettingsRoute('/settings/members');
@@ -181,7 +187,53 @@ describe('SettingsPage recruiter surface', () => {
     await waitFor(() => {
       expect(screen.getByText('Iris Park')).toBeInTheDocument();
     });
-    expect(screen.getByText('Recruiter')).toBeInTheDocument();
+    expect(screen.getByText('Owner')).toBeInTheDocument();
+    expect(screen.getByText('Member')).toBeInTheDocument();
+  });
+
+  it('lets an owner promote a member to owner', async () => {
+    teamApi.list.mockResolvedValue({
+      data: [
+        { id: 1, email: 'admin@taali.ai', full_name: 'Sam Patel', is_email_verified: true, role: 'owner' },
+        { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'member' },
+      ],
+    });
+    teamApi.setRole.mockResolvedValue({
+      data: { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'owner' },
+    });
+    renderSettingsRoute('/settings/members');
+
+    const promoteButton = await screen.findByRole('button', { name: 'Make owner' });
+    fireEvent.click(promoteButton);
+
+    await waitFor(() => {
+      expect(teamApi.setRole).toHaveBeenCalledWith(7, 'owner');
+    });
+    await waitFor(() => {
+      expect(showToast).toHaveBeenCalledWith('Iris Park is now an owner.', 'success');
+    });
+    // Chip flips to Owner and the row action becomes a demote.
+    expect(await screen.findByRole('button', { name: 'Make member' })).toBeInTheDocument();
+  });
+
+  it('hides invite + member management from non-owners', async () => {
+    authState.user = { ...authState.user, role: 'member' };
+    teamApi.list.mockResolvedValue({
+      data: [
+        { id: 1, email: 'owner@deeplight.ai', full_name: 'Org Owner', is_email_verified: true, role: 'owner' },
+        { id: 2, email: 'admin@taali.ai', full_name: 'Sam Patel', is_email_verified: true, role: 'member' },
+      ],
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getByText('Only a workspace owner can invite members.')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /Invite member/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Make owner|Make member/i })).not.toBeInTheDocument();
+    // Access settings save is owner-only too.
+    expect(screen.getByRole('button', { name: 'Save access settings' })).toBeDisabled();
+    expect(screen.getByText('Only a workspace owner can change access settings.')).toBeInTheDocument();
   });
 
   it('shows write-back settings from granted scopes and requires an actor member before saving', async () => {

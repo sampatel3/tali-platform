@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 import secrets
 
 from ...platform.database import get_db
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
 from ...platform.security import get_password_hash
 from ...models.user import User
 from ...models.organization import Organization
-from ...schemas.user import UserResponse, TeamInviteRequest
+from ...schemas.user import UserResponse, TeamInviteRequest, TeamRoleUpdateRequest
 from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...platform.config import settings
 from .access_policy import (
@@ -32,7 +32,7 @@ def list_team_users(
 def invite_team_user(
     data: TeamInviteRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     if not current_user.organization_id:
         raise HTTPException(status_code=400, detail="You are not in an organization")
@@ -57,6 +57,7 @@ def invite_team_user(
         full_name=data.full_name,
         hashed_password=get_password_hash(temp_password),
         organization_id=current_user.organization_id,
+        role="member",
     )
     db.add(invited)
     try:
@@ -74,3 +75,44 @@ def invite_team_user(
         except Exception:
             pass
     return invited
+
+
+@router.patch("/{user_id}/role", response_model=UserResponse)
+def update_team_user_role(
+    user_id: int,
+    data: TeamRoleUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    if not current_user.organization_id:
+        raise HTTPException(status_code=400, detail="You are not in an organization")
+    target = (
+        db.query(User)
+        .filter(User.id == user_id, User.organization_id == current_user.organization_id)
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.role == data.role:
+        return target
+    # Never leave the org without an owner.
+    if target.role == "owner" and data.role == "member":
+        other_owners = (
+            db.query(User)
+            .filter(
+                User.organization_id == current_user.organization_id,
+                User.role == "owner",
+                User.id != target.id,
+            )
+            .count()
+        )
+        if other_owners == 0:
+            raise HTTPException(status_code=400, detail="An organization needs at least one owner")
+    target.role = data.role
+    try:
+        db.commit()
+        db.refresh(target)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update member role")
+    return target
