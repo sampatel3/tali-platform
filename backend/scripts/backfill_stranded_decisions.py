@@ -74,35 +74,40 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--org", type=int, default=None, help="limit to one org (default: all)")
     ap.add_argument("--execute", action="store_true", help="write (default: dry-run)")
+    # The pre-screen pass scans every below-threshold app (thousands), so it's
+    # only practical server-side (low latency to the internal DB). These flags
+    # let the fast real-score pass run on its own, and the pre-screen pass run
+    # separately once deployed.
+    ap.add_argument("--skip-prescreen", action="store_true", help="real-score pass only")
+    ap.add_argument("--only-prescreen", action="store_true", help="pre-screen pass only")
     args = ap.parse_args()
 
     db = SessionLocal()
     try:
-        rows = _stranded_real_score(db, args.org)
-        print(f"real-score stranded (open, scored, agent-on, no active decision): {len(rows)}")
+        if not args.only_prescreen:
+            rows = _stranded_real_score(db, args.org)
+            print(f"real-score stranded (open, scored, agent-on, no active decision): {len(rows)}")
+            if args.execute:
+                emitted = 0
+                by_type: dict[str, int] = {}
+                for app, role in rows:
+                    dt = ensure_deterministic_decision(db, app=app, role=role)
+                    if dt:
+                        emitted += 1
+                        by_type[dt] = by_type.get(dt, 0) + 1
+                db.commit()
+                print(f"real-score: emitted {emitted} verdict(s)  by_type={by_type}")
+
+        if not args.skip_prescreen:
+            if args.execute:
+                ps = backfill_existing_below_threshold(db, organization_id=args.org)
+                db.commit()
+                print(f"pre-screen: {ps}")
+            else:
+                print("pre-screen: (dry-run) would revive expired/system-discarded below-threshold cards")
 
         if not args.execute:
             print("\nDRY-RUN — no writes. Re-run with --execute to apply.")
-            print(
-                "  real-score → ensure_deterministic_decision() per candidate\n"
-                "  pre-screen → backfill_existing_below_threshold() "
-                "(revives expired/system-discarded below-threshold cards)"
-            )
-            return
-
-        emitted = 0
-        by_type: dict[str, int] = {}
-        for app, role in rows:
-            dt = ensure_deterministic_decision(db, app=app, role=role)
-            if dt:
-                emitted += 1
-                by_type[dt] = by_type.get(dt, 0) + 1
-        db.commit()
-        print(f"real-score: emitted {emitted} verdict(s)  by_type={by_type}")
-
-        ps = backfill_existing_below_threshold(db, organization_id=args.org)
-        db.commit()
-        print(f"pre-screen: {ps}")
     finally:
         db.close()
 
