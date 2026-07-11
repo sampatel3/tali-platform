@@ -275,6 +275,14 @@ class Settings(BaseSettings):
     # mounted (inert until the flag flips); the frontend surfaces it only then.
     ATS_CONFIGURABLE_STAGES_ENABLED: bool = False
 
+    # ATS: native public apply on published job pages. Off by default — the
+    # public apply endpoint returns 503 until deliberately enabled, so the live
+    # platform is unaffected. The screening-question management API and the
+    # public-safe payload fields are always mounted (inert until the flag flips).
+    ATS_PUBLIC_APPLY_ENABLED: bool = False
+    # Per client-IP + role fixed-window cap on public applications (1 hour).
+    ATS_APPLY_RATE_LIMIT_PER_HOUR: int = 20
+
     # Workable
     WORKABLE_CLIENT_ID: str = ""
     WORKABLE_CLIENT_SECRET: str = ""

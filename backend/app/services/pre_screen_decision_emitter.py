@@ -44,9 +44,21 @@ _DECISION_TYPE = "skip_assessment_reject"
 _PROMPT_VERSION = "pre_screen_threshold.v1"
 _MODEL_VERSION = "pre_screen_v1"  # deterministic; not an LLM
 
+# Native apply knockout gate — a distinct deterministic source that reuses the
+# SAME decision type / card / event shape as the pre-screen reject (so the
+# Decision Hub and downstream handlers are unchanged) but is keyed off the
+# application-form knockout answers, which are evaluated at apply time BEFORE any
+# pre-screen has run.
+_KNOCKOUT_PROMPT_VERSION = "knockout_screening.v1"
+_KNOCKOUT_MODEL_VERSION = "knockout_v1"  # deterministic; not an LLM
+
 
 def _idempotency_key(application_id: int) -> str:
     return f"pre_screen_reject:{int(application_id)}"
+
+
+def _knockout_idempotency_key(application_id: int) -> str:
+    return f"knockout_reject:{int(application_id)}"
 
 
 def _below_threshold(
@@ -309,6 +321,138 @@ def queue_pre_screen_reject(
     except Exception:
         logger.exception(
             "queue_pre_screen_reject failed for application_id=%s",
+            getattr(application, "id", None),
+        )
+        return None
+
+
+def queue_knockout_reject(
+    db: Session,
+    *,
+    organization_id: int,
+    role: Role,
+    application: CandidateApplication,
+    reason: str,
+    failed_question_ids: list[int] | None = None,
+    disqualification_reason_id: int | None = None,
+) -> AgentDecision | None:
+    """Create a pending ``skip_assessment_reject`` ``AgentDecision`` for an
+    application that failed the native apply knockout gate — the same card +
+    ``agent_decision_queued`` event a pre-screen reject emits, so it surfaces on
+    the Decision Hub identically and resolves through the same approve path.
+
+    Unlike ``queue_pre_screen_reject`` this carries NONE of the pre-screen guards
+    (cv_match / pre_screen_run_at / verdict): the knockout gate runs at apply
+    time, before any scoring, so those signals don't exist yet. ``reason`` is a
+    recruiter-facing string sourced from the org's disqualification-reason
+    catalog; ``failed_question_ids`` / ``disqualification_reason_id`` are stored
+    in the decision evidence for the audit trail (never surfaced to the
+    applicant). Idempotent per application; returns the existing pending card if
+    one exists. Never raises.
+    """
+    try:
+        # One pending decision per app — never double-card a candidate.
+        existing_pending = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.application_id == int(application.id),
+                AgentDecision.status == "pending",
+            )
+            .order_by(AgentDecision.created_at.desc())
+            .first()
+        )
+        if existing_pending is not None:
+            return existing_pending
+
+        clean_reason = (reason or "").strip() or "Did not meet the role's required screening criteria."
+        reasoning = (
+            f"{clean_reason if clean_reason[-1:] in '.!?' else clean_reason + '.'} "
+            f"Surfaced for recruiter review — approve to reject, override to keep in pipeline."
+        )
+        body: dict[str, Any] = {
+            "source": "knockout_screening",
+            "failed_question_ids": list(failed_question_ids or []),
+        }
+        if disqualification_reason_id is not None:
+            body["disqualification_reason_id"] = int(disqualification_reason_id)
+
+        key = _knockout_idempotency_key(int(application.id))
+
+        # A prior card can exist NON-pending under this app's knockout key — a
+        # re-application over a soft-deleted row whose earlier card was
+        # discarded/expired. Revive it (fresh knockout verdict, same card)
+        # unless a HUMAN resolved it; a recruiter resolution is never reopened
+        # (the reject still surfaces via the app's auto_reject_* stamps).
+        prior = (
+            db.query(AgentDecision)
+            .filter(AgentDecision.idempotency_key == key)
+            .first()
+        )
+        if prior is not None:
+            if prior.resolved_by_user_id is None:
+                prior.status = "pending"
+                prior.resolved_at = None
+                prior.resolution_note = None
+                prior.reasoning = reasoning
+                prior.evidence = body
+                db.flush()
+            return prior
+
+        decision = AgentDecision(
+            organization_id=int(organization_id),
+            role_id=int(role.id),
+            application_id=int(application.id),
+            agent_run_id=None,  # system-emitted; no agent cycle ran
+            decision_type=_DECISION_TYPE,
+            recommendation=_DECISION_TYPE,
+            status="pending",
+            reasoning=reasoning,
+            evidence=body,
+            confidence=None,
+            model_version=_KNOCKOUT_MODEL_VERSION,
+            prompt_version=_KNOCKOUT_PROMPT_VERSION,
+            idempotency_key=key,
+            active_capabilities={},
+            token_spend={},
+        )
+        try:
+            # SAVEPOINT, not a session rollback: the caller's transaction also
+            # carries the just-created application (and, on re-apply, its
+            # restore) — a full rollback on an idempotency-key race would
+            # strand the applicant with no application at all.
+            with db.begin_nested():
+                db.add(decision)
+                db.flush()
+        except IntegrityError:
+            # A concurrent request inserted the card between the pre-check and
+            # this flush. Return the winning row rather than duplicating.
+            return (
+                db.query(AgentDecision)
+                .filter(AgentDecision.idempotency_key == key)
+                .first()
+            )
+
+        db.add(
+            CandidateApplicationEvent(
+                application_id=int(application.id),
+                organization_id=int(organization_id),
+                event_type="agent_decision_queued",
+                actor_type="system",
+                actor_id=None,
+                reason="Queued screening knockout reject",
+                idempotency_key=f"agent_decision_queued:knockout:{decision.id}",
+                event_metadata={
+                    "decision_id": int(decision.id),
+                    "decision_type": _DECISION_TYPE,
+                    "source": "knockout_screening",
+                    "failed_question_ids": list(failed_question_ids or []),
+                },
+            )
+        )
+        return decision
+    except Exception:
+        logger.exception(
+            "queue_knockout_reject failed for application_id=%s",
             getattr(application, "id", None),
         )
         return None

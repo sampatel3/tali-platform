@@ -143,7 +143,7 @@ _NON_USER_AUTH_PREFIXES = (
     "/api/v1/users",       # fastapi-users self / superuser management (own guard)
     "/api/v1/webhooks/",   # provider webhooks — verified by signature
     "/public/v1/",         # public API — authenticated by API key
-    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake)
+    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake; native job-page apply — flag-gated off, rate-limited per IP+job)
     "/careers/",           # public careers pages
 )
 

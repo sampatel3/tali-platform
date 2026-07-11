@@ -68,6 +68,10 @@ class CandidateApplication(Base):
         Integer, ForeignKey("disqualification_reasons.id"), nullable=True
     )
     disposition_category = Column(String, nullable=True)
+    # Candidate answers to the role's screening questions ({question_id: answer}
+    # JSON map), captured at native apply time. The deterministic knockout
+    # verdict is stashed under the ``_knockout`` key. Added in migration 154.
+    screening_answers = Column(JSON, nullable=True)
     # Denormalized coarse category of the current pipeline_stage (see
     # PipelineStage.kind / STAGE_KINDS). Backfilled from the canonical stage
     # mapping in migration 151. Lets analytics/automation group by ATS-generic
