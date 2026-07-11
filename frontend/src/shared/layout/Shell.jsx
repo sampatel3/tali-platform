@@ -11,6 +11,7 @@ import {
   Moon,
   Settings as SettingsIcon,
   Sun,
+  UserPlus,
   X,
 } from 'lucide-react';
 
@@ -37,6 +38,7 @@ import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 const NAV_TABS = [
   { id: 'home',     label: 'Home',     Icon: Home },
   { id: 'jobs',     label: 'Jobs',     Icon: Briefcase },
+  { id: 'sourcing', label: 'Sourcing', Icon: UserPlus },
   { id: 'chat',     label: 'Chat',     Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
   { id: 'analytics', label: 'Analytics', Icon: LineChart },

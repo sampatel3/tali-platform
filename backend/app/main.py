@@ -307,6 +307,10 @@ from .domains.submittal_packs import (
     public_router as submittal_packs_public_router,
     router as submittal_packs_router,
 )
+from .domains.outreach import (
+    prospects_router,
+    unsubscribe_public_router,
+)
 from .domains.assessments_runtime.pool_rescore_routes import router as pool_rescore_router
 from .domains.outreach import router as sourcing_assist_router
 from .domains.assessments_runtime.offer_routes import router as offers_router
@@ -368,6 +372,7 @@ app.include_router(bullhorn_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
 app.include_router(submittal_packs_router, prefix="/api/v1")
+app.include_router(prospects_router, prefix="/api/v1")
 app.include_router(sourcing_assist_router, prefix="/api/v1")
 app.include_router(offers_router, prefix="/api/v1")
 app.include_router(offer_templates_router, prefix="/api/v1")
@@ -418,6 +423,10 @@ app.include_router(client_intake_public_router)
 from .domains.marketing_leads import public_router as marketing_leads_public_router  # noqa: E402
 
 app.include_router(marketing_leads_public_router)
+
+# Public one-click unsubscribe: GET/POST /api/v1/public/unsubscribe/{token}
+# (no auth) — the outreach opt-out. GET is read-only; POST records suppression.
+app.include_router(unsubscribe_public_router)
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (
