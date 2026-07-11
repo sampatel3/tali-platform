@@ -31,11 +31,13 @@ describe('httpClient isPublicPath (401 interceptor guard)', () => {
     expect(isPublicPath('/careers/acme')).toBe(true);
     expect(isPublicPath('/assess/tok123')).toBe(true);
     expect(isPublicPath('/submittal/sub_abc')).toBe(true);
+    expect(isPublicPath('/unsubscribe/tok_abc')).toBe(true);
   });
 
   it('still bounces recruiter routes', () => {
     expect(isPublicPath('/jobs')).toBe(false);
     expect(isPublicPath('/home')).toBe(false);
+    expect(isPublicPath('/sourcing')).toBe(false);
     expect(isPublicPath('/settings/billing')).toBe(false);
   });
 

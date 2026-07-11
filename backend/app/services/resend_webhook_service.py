@@ -109,6 +109,52 @@ def _event_email_id(payload: dict[str, Any]) -> Optional[str]:
     return str(val).strip() if val else None
 
 
+def _event_recipient(payload: dict[str, Any]) -> Optional[str]:
+    """Recipient address from a Resend event payload.
+
+    Resend puts recipients in ``data.to`` (a list, or occasionally a bare
+    string). We suppress the first recipient — invites are single-recipient.
+    """
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    to = data.get("to")
+    if isinstance(to, list) and to:
+        first = to[0]
+        return str(first).strip() if first else None
+    if isinstance(to, str) and to.strip():
+        return to.strip()
+    return None
+
+
+def _maybe_suppress_global(db: Session, status: str, payload: dict[str, Any]) -> None:
+    """On a hard bounce / complaint, add a platform-global suppression.
+
+    Best-effort and non-fatal: a failure here must never break the invite
+    delivery tracking that ``apply_resend_event`` performs. Global (org NULL)
+    rows protect the shared sender domain across every org.
+    """
+    if status not in ("bounced", "complained"):
+        return
+    recipient = _event_recipient(payload)
+    if not recipient:
+        return
+    try:
+        # Imported lazily so the webhook service doesn't pull the suppression
+        # service (and its settings/config) at module import time.
+        from .email_suppression_service import suppress
+
+        suppress(
+            db,
+            email=recipient,
+            reason=status,
+            source="webhook",
+            organization_id=None,
+        )
+    except Exception:  # pragma: no cover — never break invite tracking
+        logger.warning("Failed to record global suppression for a %s event", status)
+
+
 def apply_resend_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """Apply one Resend event to its assessment. Best-effort, idempotent.
 
@@ -116,6 +162,12 @@ def apply_resend_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """
     event_type = str(payload.get("type") or "").strip()  # e.g. "email.delivered"
     status = event_type.split(".", 1)[1] if "." in event_type else event_type
+
+    # Deliverability guardrail: a hard bounce / complaint suppresses the address
+    # globally regardless of whether we can correlate it to a tracked invite —
+    # it protects the shared sender domain. Best-effort; never raises.
+    _maybe_suppress_global(db, status, payload)
+
     email_id = _event_email_id(payload)
     if not email_id:
         return {"status": "ignored", "reason": "no_email_id", "event": event_type}

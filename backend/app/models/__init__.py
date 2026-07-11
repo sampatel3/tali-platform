@@ -178,6 +178,15 @@ from .workable_webhook_outbox import (
     WORKABLE_OUTBOX_STATUSES,
     WorkableWebhookOutbox,
 )
+from .email_suppression import (
+    SUPPRESSION_REASONS,
+    SUPPRESSION_REASON_RANK,
+    EmailSuppression,
+)
+from .prospect import (
+    PROSPECT_STATUSES,
+    Prospect,
+)
 
 __all__ = [
     "User",
@@ -320,4 +329,9 @@ __all__ = [
     "WorkableWebhookOutbox",
     "WORKABLE_OUTBOX_KINDS",
     "WORKABLE_OUTBOX_STATUSES",
+    "EmailSuppression",
+    "SUPPRESSION_REASONS",
+    "SUPPRESSION_REASON_RANK",
+    "Prospect",
+    "PROSPECT_STATUSES",
 ]

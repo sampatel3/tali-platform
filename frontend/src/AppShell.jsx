@@ -103,6 +103,12 @@ const CandidateStandingReportPage = lazy(() =>
 const JobsPage = lazy(() =>
   import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
 );
+const SourcingPage = lazy(() =>
+  import('./features/sourcing/SourcingPage')
+);
+const UnsubscribePage = lazy(() =>
+  import('./features/outreach/UnsubscribePage')
+);
 const RequisitionsPage = lazy(() =>
   import('./features/requisitions/RequisitionsPage').then((m) => ({ default: m.RequisitionsPage }))
 );
@@ -152,6 +158,7 @@ const BlogPostPage = lazy(() =>
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
   if (pathname.startsWith('/submittal/')) return true;
+  if (pathname.startsWith('/unsubscribe/')) return true;
   const params = new URLSearchParams(search || '');
   const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
   if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
@@ -188,6 +195,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/home',
     '/jobs',
     '/requisitions',
+    '/sourcing',
     '/assessments',
     '/candidates',
     '/analytics',
@@ -627,6 +635,20 @@ function AppContent() {
         )}
       />
 
+      {/* Outreach foundations — sourced-prospect list + CSV import. Protected
+          recruiter surface (see isProtectedRecruiterPath). */}
+      <Route
+        path="/sourcing"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <SourcingPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
       {/* Clients are managed directly in Settings → Clients (embedded
           ClientsManager); there is no standalone /clients page. Per-client
           pipeline lives on the Jobs page's client filter. */}
@@ -791,6 +813,18 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <SubmittalPackPage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth one-click unsubscribe. GET validates + shows the org
+          name and masked email; the Unsubscribe button POSTs the opt-out. No
+          /api/v1 prefix path here and no recruiter session required. */}
+      <Route
+        path="/unsubscribe/:token"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <UnsubscribePage />
           </Suspense>
         )}
       />
