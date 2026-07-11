@@ -44,7 +44,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     score_summary: { score_provenance: _prov(0.2) },
     confidence: 0.91,
     reasoning:
-      "Clears every must-have with strong AWS + Python evidence. Assessment 88/100 — top of this role's pipeline. Ready for the technical panel.",
+      "She clears every must-have — the AWS and Python evidence is strong, and she scored 88 on the task, top of this role's pipeline. I'd put her in front of the technical panel.",
     created_at: new Date(_NOW - 6 * 60 * 1000).toISOString(),
   },
   {
@@ -59,7 +59,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     score_summary: { score_provenance: _prov(0.6) },
     confidence: 0.5,
     reasoning:
-      "Sub-agents split on systems-design depth — two said advance, one said assess again. I can't call this one confidently. Over to you.",
+      "I'm split on her systems-design depth — two of my checks said advance, one said assess again. I don't want to call this one for you. Take a look?",
     created_at: new Date(_NOW - 23 * 60 * 1000).toISOString(),
   },
   {
@@ -72,7 +72,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     role_name: 'Data Engineer',
     taali_score: null,
     reasoning:
-      "Pre-screen: the must-have Spark / streaming experience isn't evidenced, and the AI-tooling claims have no supporting projects. Not worth an assessment seat.",
+      "On pre-screen I couldn't find the Spark or streaming experience the role needs, and the AI-tooling claims have no projects behind them. I wouldn't spend an assessment seat here.",
     created_at: new Date(_NOW - 38 * 60 * 1000).toISOString(),
   },
   {
@@ -112,11 +112,14 @@ const dashboardCandidates = [
   { name: 'More candidates', status: 'view all', avatar: '+' },
 ];
 
+// Every live task is authored from the role's JD under a validation
+// contract, human-approved, then battle-tested in a sandbox — its
+// baseline tests must fail meaningfully — before any candidate sees it.
 const questionBankRows = [
   ['AI.01', 'GenAI production readiness review', 'Medium', 'amber'],
-  ['AI.01A', 'Tighten safety defaults during moderation outages', 'Hard', 'red'],
-  ['DE.01', 'AWS Glue pipeline recovery', 'Medium', 'amber'],
-  ['DE.01A', 'Fix schema drift, dedupe, and bookmark trust', 'Hard', 'red'],
+  ['AI.02', 'RAG evaluation harness recovery', 'Hard', 'red'],
+  ['DE.01', 'Source-to-Bronze ingestion design', 'Medium', 'amber'],
+  ['DE.02', 'Pipeline DAG recovery & backfill', 'Hard', 'red'],
 ];
 
 const howItWorksSteps = [
@@ -468,7 +471,7 @@ export const LandingPage = ({ onNavigate }) => {
               {
                 n: '02',
                 t: 'Assess — for the AI era',
-                d: "Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI.",
+                d: "Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI — and whether they verified before calling it done. Every task is battle-tested in a sandbox before a candidate ever sees it.",
               },
               {
                 n: '03',
@@ -527,15 +530,15 @@ export const LandingPage = ({ onNavigate }) => {
                 We&apos;re the only platform that measures it.
               </h2>
               <p className="mt-5 text-[1rem] leading-[1.6] text-[var(--ink-2)]">
-                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
+                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a sandboxed runtime around it — exactly the way engineers ship now.
                 Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
                 Those traces feed one scorecard — five dimensions, the 5 Ds: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
               </p>
               <ul className="mt-7 flex flex-col gap-3.5">
                 {[
-                  { t: 'AI collaboration score', d: 'Did they prompt well? Catch a hallucination? Know when not to use it?' },
+                  { t: 'AI collaboration score', d: 'Did they prompt well? Catch the trap we planted? Know when not to use it?' },
                   { t: 'Prompt-by-prompt replay', d: 'See exactly how they worked the agent — not just the final code.' },
-                  { t: 'Full session telemetry', d: 'Edit timeline, test runs, terminal output, file opens — everything tied back to the final report.' },
+                  { t: 'Full session telemetry', d: 'Edit timeline, sandboxed test runs, file opens — everything tied back to the final report.' },
                   { t: 'Autopilot detection', d: 'We flag candidates who pasted without reading. Calibrated, not punitive.' },
                 ].map((bullet) => (
                   <li key={bullet.t} className="flex items-start gap-3">
@@ -554,7 +557,7 @@ export const LandingPage = ({ onNavigate }) => {
             {/* Standing report — the five recruiter-facing axes the live
                 CandidateStandingReportPage renders (computeScorecard rolls the
                 rubric grades — with a heuristic fallback — into these five: the
-                4 Ds + Deliverable). Verdict uses the production band vocabulary
+                5 Ds — Delegation, Description, Discernment, Diligence, Deliverable). Verdict uses the production band vocabulary
                 (Strong Hire ≥ 80). Mock scores. */}
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[0.71875rem] text-[var(--mute)]">
@@ -596,7 +599,7 @@ export const LandingPage = ({ onNavigate }) => {
               scrollbar (the snapshot has no internal scroll). */}
           <p className="mt-12 mb-3 text-[0.875rem] text-[var(--ink-2)]">
             <strong className="text-[var(--ink)]">Candidates work here.</strong>{' '}
-            The AI assistant sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a live terminal. We watch every prompt.
+            The AI assistant sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a sandboxed runtime. We watch every prompt.
           </p>
           <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
             <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[0.6875rem] text-[var(--mute)]">
