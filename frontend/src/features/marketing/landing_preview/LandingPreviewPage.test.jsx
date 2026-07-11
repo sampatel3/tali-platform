@@ -213,8 +213,8 @@ describe('LandingPreviewPage', () => {
     expect(screen.getByText(/synced to Workable/i)).toBeTruthy();
   });
 
-  // ── Variant E · "Watch it work" (autoplay-on-enter, conventional B2B) ────
-  it('renders variant E as the default (?v empty) with its nav, hero and mocks', () => {
+  // ── Variant E · v4 — rebuilt to the narrative spine (job-on hero, no repeat) ─
+  it('renders variant E as the default (?v empty) with its nav, hero scene and six-section spine', () => {
     const { container } = renderAt('');
     // Scoped `.lve` root + the E switcher chip is active by default.
     expect(container.querySelector('.lve')).toBeTruthy();
@@ -231,11 +231,22 @@ describe('LandingPreviewPage', () => {
     // min-width media query), so query it with `hidden: true`.
     expect(screen.getAllByRole('button', { name: /See it live/i, hidden: true }).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /^Log in$/i, hidden: true })).toBeTruthy();
-    // The subtle agent switch mounts as role="switch".
-    expect(screen.getByRole('switch')).toBeTruthy();
-    // Signature autoplay mock + a feature band are present.
-    expect(screen.getByText(/Watch the agent run your/i)).toBeTruthy();
+    // HERO SCENE — the real jobs-board role card + the Taali agent-ON vocabulary.
+    expect(container.querySelector('.lve-hs .job-card')).toBeTruthy();
+    expect(screen.getByText('AI Engineer')).toBeTruthy();
+    expect(screen.getByText(/AGENT ON/i)).toBeTruthy();
+    // PROBLEM — the wedge-setting beat, said once.
+    expect(screen.getByText(/Everyone works with AI now\./i)).toBeTruthy();
+    expect(screen.getByText(/The CV can't prove it\./i)).toBeTruthy();
+    // FUNNEL — shown once: one agent, the five funnel steps.
+    expect(screen.getByText(/One agent, your/i)).toBeTruthy();
+    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
+      expect(screen.getByText(step)).toBeTruthy();
+    });
+    // WEDGE + CONTROL headers.
+    expect(screen.getByText(/Measure how people/i)).toBeTruthy();
     expect(screen.getByText(/The agent advises\./i)).toBeTruthy();
+    expect(screen.getByText(/You decide\./i)).toBeTruthy();
     // Broadened copy: "works with AI", never "ship/build with AI".
     expect(container.textContent).not.toMatch(/ship with AI/i);
     expect(container.textContent).not.toMatch(/build with AI/i);
@@ -245,56 +256,48 @@ describe('LandingPreviewPage', () => {
     expect(screen.getAllByRole('button', { name: /Book a demo/i }).length).toBeGreaterThan(0);
   });
 
-  it('renders variant E at the explicit ?v=e and flips the agent switch off → on', () => {
-    vi.useFakeTimers();
-    try {
-      const { container } = renderAt('?v=e');
-      expect(container.querySelector('.lve')).toBeTruthy();
-      const toggle = screen.getByRole('switch');
-      expect(toggle.getAttribute('aria-checked')).toBe('false');
-      act(() => {
-        fireEvent.click(toggle);
-      });
-      // Press animation is 180ms, then state flips.
-      act(() => {
-        vi.advanceTimersByTime(240);
-      });
-      expect(toggle.getAttribute('aria-checked')).toBe('true');
-    } finally {
-      vi.useRealTimers();
-    }
+  it('renders variant E at ?v=e with the live job-on hero scene and no manual toggle', () => {
+    const { container } = renderAt('?v=e');
+    expect(container.querySelector('.lve')).toBeTruthy();
+    // v4 replaces the old hero agent toggle with an autoplay scene — no
+    // role="switch", no ported pill toggle, and never the in-app `.abar` strip.
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(container.querySelector('.lve-switch')).toBeNull();
+    expect(container.querySelector('.abar')).toBeNull();
+    // The hero scene mounts the real role card + agent-ON pill.
+    expect(container.querySelector('.lve-hs')).toBeTruthy();
+    expect(container.querySelector('.lve-hs .job-agent-pill.is-on')).toBeTruthy();
   });
 
-  it('grounds variant E in the real product components (v3 — D-style toggle, live feeds, 5-Ds scorecard)', () => {
+  it('grounds variant E in the real product components (job card, atoms, 5-Ds scorecard, decision card)', () => {
     const { container } = renderAt('?v=e');
-    // FIX 1 (v3) — the clean variant-D pill toggle REPLACES the in-app .abar
-    // strip in the hero; its ON/OFF control is still the role="switch" the hero
-    // flips to reveal the product card.
-    expect(container.querySelector('.lve-switch')).toBeTruthy();
-    expect(container.querySelector('.abar')).toBeNull();
-    expect(screen.getByRole('switch')).toBeTruthy();
-    // FIX 2 / FIX 3 — the embedded real surfaces render, each in a "Live
-    // component" frame. The compact AgentDecisionCard (hero) keeps its verdict
-    // slab; the real ActivityFeed backs both the morning queue and the screening
-    // cohort; the real 5-Ds AssessmentScorecard renders its spine.
+    // Maya Chen threads the hero lane, the funnel scene and the control glimpse.
     expect(screen.getAllByText('Maya Chen').length).toBeGreaterThan(0);
+    // The control section embeds the REAL AgentDecisionCard (its recommendation
+    // slab), and the wedge embeds the REAL 5-Ds AssessmentScorecard — each in a
+    // "Live component" frame.
     expect(screen.getAllByText(/Agent recommends/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Your morning queue/i)).toBeTruthy();
-    expect(screen.getByText(/Every CV, gated with evidence/i)).toBeTruthy();
     expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeTruthy();
     expect(screen.getAllByText('Delegation').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Live component/i).length).toBeGreaterThan(0);
+    // Real decision-outcome atoms (VerdictPill "Advance") appear in the scenes.
+    expect(screen.getAllByText('Advance').length).toBeGreaterThan(0);
   });
 
-  it('renders variant E with final mock states and no autoplay under reduced-motion', () => {
+  it('renders variant E with final scene states (never armed) under reduced-motion', () => {
     stubMatchMedia(true);
     const { container } = renderAt('?v=e');
-    // Reduced motion → switch loads already ON, no auto-flip.
-    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
-    // Mocks render their FINAL composed state: the `[data-animated]` arming
-    // attribute (which hides children for the loop) must be absent everywhere,
-    // so every mock is legible without any animation running.
-    expect(container.querySelector('.lve-mock')).toBeTruthy();
-    expect(container.querySelector('.lve-mock[data-animated]')).toBeNull();
+    // No manual switch in v4.
+    expect(screen.queryByRole('switch')).toBeNull();
+    // Scenes render their FINAL composed state: the `data-armed` arming attribute
+    // (which hides the animatable children for the timeline) is never set under
+    // reduced motion, so every scene is legible without any animation running.
+    expect(container.querySelector('.lve-hs')).toBeTruthy();
+    expect(container.querySelector('.lve-hs[data-armed]')).toBeNull();
+    expect(container.querySelector('.lve-fn[data-armed]')).toBeNull();
+    // The hero role card sits in its settled agent-ON state; the replay
+    // affordance is suppressed under reduced motion.
+    expect(container.querySelector('.lve-hs-card.agent-on')).toBeTruthy();
+    expect(container.querySelector('.lve-hs-replay')).toBeNull();
   });
 });

@@ -10,11 +10,10 @@ import React, { useEffect, useState } from 'react';
 // ---------------------------------------------------------------------------
 
 const NAV_LINKS = [
-  { label: 'Product', section: 'lve-product' },
-  { label: 'Solutions', section: 'lve-pillars' },
-  { label: 'Pricing', section: 'lve-stats' },
-  { label: 'Resources', section: 'lve-how' },
-  { label: 'Enterprise', section: 'lve-control' },
+  { label: 'The funnel', section: 'lve-funnel' },
+  { label: 'AI fluency', section: 'lve-wedge' },
+  { label: 'Control', section: 'lve-control' },
+  { label: 'Proof', section: 'lve-proof' },
 ];
 
 const Brand = ({ onNavigate }) => (

@@ -19,9 +19,8 @@ const FOOTER_COLUMNS = [
     title: 'Product',
     items: [
       { label: 'Book a demo', page: 'demo-lead' },
-      { label: 'AI collab score', section: 'lve-pillars' },
-      { label: 'Question bank', section: 'lve-bands' },
-      { label: 'Integrations', section: 'lve-integrations' },
+      { label: 'AI-fluency score', section: 'lve-wedge' },
+      { label: 'The funnel', section: 'lve-funnel' },
       { label: 'Developers / API', page: 'developers' },
       { label: 'Product walkthrough', page: 'showcase' },
     ],

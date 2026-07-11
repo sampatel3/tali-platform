@@ -1,27 +1,18 @@
-import React, { useRef } from 'react';
-import { m, useScroll, useTransform } from 'motion/react';
+import React from 'react';
 
-import { Reveal, Stagger, StaggerItem, Ticker } from './motion';
-import {
-  DecideMock,
-  HandBackMock,
-  LogoMarquee,
-} from './VariantEMocks';
-import {
-  HeroAgentSwitch,
-  HeroDecisionArtifact,
-  FunnelFeedArtifact,
-  ScreenFeedArtifact,
-  ScorecardArtifact,
-  ScreenPillarVisual,
-  AssessPillarVisual,
-  DecidePillarVisual,
-} from './VariantERealMocks';
+import { Reveal, NumberTicker, useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { HeroScene } from './VariantEHeroScene';
+import { FunnelScene } from './VariantEFunnelScene';
+import { ScorecardArtifact, ControlDecisionArtifact } from './VariantERealMocks';
 
 // ---------------------------------------------------------------------------
-// Content sections for landing variant E. Each carries the section-header triad
-// (mono eyebrow → short verb-led H2 → one-line sub) and a <Reveal>/<Stagger>
-// entrance. The signature autoplay mocks live in VariantEMocks.jsx.
+// The six-section narrative spine for landing variant E. One story, told once:
+// turn a job on, the agent works your whole funnel — and it's the only one that
+// measures how people actually work with AI. Every section-header triad (mono
+// eyebrow → short verb-led H2 → one-line sub) enters via the shared, one-shot
+// CSS <Reveal> (can't get stuck the way a Motion whileInView wrapper can). The
+// two autoplay SCENES — the hero job-on loop and the funnel advance — own their
+// own useAnimate/useInView timelines in their component files.
 // ---------------------------------------------------------------------------
 
 const CheckIcon = () => (
@@ -30,31 +21,25 @@ const CheckIcon = () => (
   </svg>
 );
 
-const SectionHead = ({ eyebrow, children, sub, center = true }) => (
-  <div className={center ? 'lve-sechead' : undefined}>
+const SectionHead = ({ eyebrow, children, sub, center = true, reduced }) => (
+  <Reveal className={center ? 'lve-sechead' : undefined} reduced={reduced}>
     <div className="lve-eyebrow">
       <span className="lve-eyebrow-dot" /> {eyebrow}
     </div>
     <h2 className="lve-h2">{children}</h2>
     {sub ? <p className="lve-sub">{sub}</p> : null}
-  </div>
+  </Reveal>
 );
 
-// ── HERO ────────────────────────────────────────────────────────────────
-// The signature beat: variant-D's clean pill toggle flips OFF → ON — grey knob
-// slides purple — and the hero product card (the real, compact AgentDecisionCard)
-// reveals + comes alive alongside it. Simple and bold, like variant D.
-export const HeroSection = ({ on, pressing, onToggle, onNavigate }) => {
-  const ref = useRef(null);
-  const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
-  const glowY = useTransform(scrollYProgress, [0, 1], [0, 90]);
-
+// ── 1 · HERO — the product's core loop, live ─────────────────────────────
+export const HeroSection = ({ onNavigate }) => {
+  const reduced = useReducedMotionSync();
   return (
-    <section className="lve-hero" ref={ref}>
-      <m.div className="lve-hero-glow" style={{ y: glowY }} aria-hidden="true" />
+    <section className="lve-hero">
+      <span className="lve-hero-glow" aria-hidden="true" />
       <div className="lve-wrap">
         <div className="lve-hero-grid">
-          <Reveal className="lve-hero-copy" amount={0.2}>
+          <Reveal className="lve-hero-copy" reduced={reduced}>
             <div className="lve-hero-kicker">
               <span className="lve-hero-kicker-dot" /> AGENT-NATIVE HIRING
             </div>
@@ -73,11 +58,10 @@ export const HeroSection = ({ on, pressing, onToggle, onNavigate }) => {
                 Book a demo
               </button>
             </div>
-            <HeroAgentSwitch on={on} pressing={pressing} onToggle={onToggle} />
           </Reveal>
 
-          <Reveal className={`lve-hero-mock-wrap${on ? ' is-on' : ''}`} amount={0.2} delay={0.1} y={26}>
-            <HeroDecisionArtifact />
+          <Reveal className="lve-hero-scene-wrap" delay={0.12} y={26} reduced={reduced}>
+            <HeroScene />
           </Reveal>
         </div>
       </div>
@@ -85,313 +69,166 @@ export const HeroSection = ({ on, pressing, onToggle, onNavigate }) => {
   );
 };
 
-// ── TRUST STRIP ──────────────────────────────────────────────────────────
-export const TrustStrip = () => (
-  <section className="lve-trust">
-    <div className="lve-wrap">
-      <div className="lve-trust-label">Built for modern talent teams</div>
-      <LogoMarquee />
-    </div>
-  </section>
-);
+// ── 2 · THE PROBLEM — one tight beat, mostly type ────────────────────────
+export const ProblemSection = () => {
+  const reduced = useReducedMotionSync();
+  return (
+    <section className="lve-section lve-problem" id="lve-problem">
+      <div className="lve-wrap">
+        <Reveal className="lve-problem-inner" reduced={reduced}>
+          <div className="lve-eyebrow">
+            <span className="lve-eyebrow-dot" /> THE PROBLEM
+          </div>
+          <p className="lve-problem-lead">
+            Everyone works with AI now. <em>The CV can&apos;t prove it. The interview can&apos;t catch it.</em>
+          </p>
+          <p className="lve-problem-tail">
+            Hiring still screens for the old job. The one skill that decides output today — how well a
+            person actually works with AI — goes unmeasured, and slips straight past you.
+          </p>
+        </Reveal>
+      </div>
+    </section>
+  );
+};
 
-// ── PRODUCT IN ACTION ─────────────────────────────────────────────────────
-export const ProductInAction = () => (
-  <section className="lve-section lve-run" id="lve-product">
-    <div className="lve-wrap">
-      <Reveal>
+// ── 3 · THE FUNNEL — shown once ──────────────────────────────────────────
+export const FunnelSection = () => {
+  const reduced = useReducedMotionSync();
+  return (
+    <section className="lve-section lve-funnel" id="lve-funnel">
+      <div className="lve-wrap">
         <SectionHead
           eyebrow="WATCH IT WORK"
-          sub="Applicants come in, weak fits drop with evidence, the strong ones get assessed, and a decision lands in your ATS. You approve every one."
+          reduced={reduced}
+          sub="Sourced from your ATS, screened against the role's real requirements, assessed on AI fluency, decided with evidence, and handed back — one candidate, one continuous pass."
         >
-          Watch the agent run your <em>funnel</em>.
+          One agent, your <em>whole funnel</em>.
         </SectionHead>
-      </Reveal>
-      <Reveal amount={0.2} y={26}>
-        <FunnelFeedArtifact />
-        <p className="lve-run-caption">
-          The real Home queue — every call the agent made overnight, waiting for your approval. Nothing moves without you.
-        </p>
-      </Reveal>
-    </div>
-  </section>
-);
-
-// ── VALUE PILLARS ─────────────────────────────────────────────────────────
-// Each pillar is backed by a real product MICRO-VISUAL built from the live
-// atoms (feed rows, the 5-Ds axes, a decision-card header) — not a stock
-// icon+heading card. Unmistakably Taali.
-const PILLARS = [
-  {
-    eyebrow: 'SCREEN',
-    h: 'Screen every applicant in hours',
-    p: "The agent reads every CV against the role's real requirements and gates weak fits with evidence. You review the shortlist.",
-    Visual: ScreenPillarVisual,
-  },
-  {
-    eyebrow: 'ASSESS',
-    h: 'Measure how they work with AI',
-    p: 'A 30-minute assessment scores candidates across the 5 Ds from the actual transcript. You read the same rubric every time.',
-    Visual: AssessPillarVisual,
-  },
-  {
-    eyebrow: 'DECIDE',
-    h: 'Defensible decisions, evidence attached',
-    p: 'Every verdict is deterministic and cites the evidence behind it. You approve, override, or teach it back.',
-    Visual: DecidePillarVisual,
-  },
-];
-
-export const ValuePillars = () => (
-  <section className="lve-section" id="lve-pillars">
-    <div className="lve-wrap">
-      <Reveal>
-        <SectionHead
-          eyebrow="WHAT YOU GET"
-          sub="Put the busywork on the agent — every applicant screened, every candidate assessed, every decision backed by evidence, with you signing off."
-        >
-          Give the agent the <em>busywork</em>.
-        </SectionHead>
-      </Reveal>
-      <Stagger className="lve-pillars-grid">
-        {PILLARS.map(({ eyebrow, h, p, Visual }) => (
-          <StaggerItem className="lve-pillar" key={h}>
-            <div className="lve-pillar-visual">
-              <Visual />
-            </div>
-            <div className="lve-pillar-eyebrow">
-              <span className="lve-eyebrow-dot" /> {eyebrow}
-            </div>
-            <h3 className="lve-pillar-h">{h}</h3>
-            <p className="lve-pillar-p">{p}</p>
-          </StaggerItem>
-        ))}
-      </Stagger>
-    </div>
-  </section>
-);
-
-// ── DEEP FEATURE BANDS ─────────────────────────────────────────────────────
-const BANDS = [
-  {
-    eyebrow: 'SCREEN',
-    h: "Screen every CV against the role's real requirements.",
-    p: "The agent checks each requirement and shows the evidence it found — or didn't. You never wonder why someone was passed over.",
-    Mock: ScreenFeedArtifact,
-    flip: false,
-  },
-  {
-    eyebrow: 'ASSESS AI FLUENCY',
-    h: 'Measure how candidates work with AI — engineering or knowledge work.',
-    p: 'A task authored from your role, scored across five dimensions from the actual transcript. You read the same rubric for every candidate.',
-    Mock: ScorecardArtifact,
-    flip: true,
-  },
-  {
-    eyebrow: 'DECIDE',
-    h: 'A deterministic verdict on every candidate, evidence attached.',
-    p: 'Same inputs, same decision, every time — with the requirement scores and transcript behind it. You make the final call.',
-    Mock: DecideMock,
-    flip: false,
-  },
-  {
-    eyebrow: 'HAND BACK',
-    h: 'Written back to your ATS. The audit trail comes free.',
-    p: 'Decisions, notes and reports sync to Workable, Bullhorn or Greenhouse. Every move is logged for you to review.',
-    Mock: HandBackMock,
-    flip: true,
-  },
-];
-
-export const FeatureBands = () => (
-  <section className="lve-section" id="lve-bands">
-    <div className="lve-wrap">
-      <div className="lve-bands">
-        {BANDS.map(({ eyebrow, h, p, Mock, flip }) => (
-          <div className={`lve-band${flip ? ' flip' : ''}`} key={eyebrow}>
-            <Reveal className="lve-band-copy" amount={0.4}>
-              <SectionHead eyebrow={eyebrow} sub={p} center={false}>
-                {h}
-              </SectionHead>
-            </Reveal>
-            <Reveal className="lve-band-visual" amount={0.3} y={26} delay={0.05}>
-              <Mock />
-            </Reveal>
-          </div>
-        ))}
+        <Reveal className="lve-funnel-stage" delay={0.08} y={26} reduced={reduced}>
+          <FunnelScene />
+        </Reveal>
       </div>
-    </div>
-  </section>
-);
+    </section>
+  );
+};
 
-// ── HOW IT WORKS ───────────────────────────────────────────────────────────
-const STEPS = [
-  {
-    n: '01',
-    h: 'Connect your ATS',
-    p: 'Plug into Workable, Bullhorn or Greenhouse. Candidates, roles and briefs sync in. Nothing to set up.',
-  },
-  {
-    n: '02',
-    h: 'The agent screens & assesses',
-    p: 'It reads every CV, sends the assessment, and scores how each candidate works with AI.',
-  },
-  {
-    n: '03',
-    h: 'You approve with evidence',
-    p: 'A decision lands for every candidate with the evidence attached. You approve, override, or teach it back.',
-  },
-];
-
-export const HowItWorks = () => (
-  <section className="lve-section" id="lve-how">
-    <div className="lve-wrap">
-      <Reveal>
-        <SectionHead eyebrow="HOW IT WORKS" sub="Three steps from connecting your ATS to approving your first shortlist.">
-          Live in an <em>afternoon</em>.
+// ── 4 · THE WEDGE — AI fluency (the differentiator) ──────────────────────
+export const WedgeSection = () => {
+  const reduced = useReducedMotionSync();
+  return (
+    <section className="lve-section lve-wedge" id="lve-wedge">
+      <div className="lve-wrap">
+        <SectionHead
+          eyebrow="THE DIFFERENTIATOR"
+          reduced={reduced}
+          sub="Five dimensions, planted traps, scored from the actual transcript — real verification of how someone works with AI on engineering or knowledge work. No one else measures this."
+        >
+          Measure how people <em>actually work with AI</em>.
         </SectionHead>
-      </Reveal>
-      <Stagger className="lve-steps">
-        {STEPS.map((step) => (
-          <StaggerItem className="lve-step" key={step.n}>
-            <span className="lve-step-badge">{step.n}</span>
-            <h3 className="lve-step-h">{step.h}</h3>
-            <p className="lve-step-p">{step.p}</p>
-          </StaggerItem>
-        ))}
-      </Stagger>
-    </div>
-  </section>
-);
+        <Reveal className="lve-wedge-stage" delay={0.08} y={26} reduced={reduced}>
+          <ScorecardArtifact />
+        </Reveal>
+      </div>
+    </section>
+  );
+};
 
-// ── TRUST / CONTROL ────────────────────────────────────────────────────────
+// ── 5 · YOU STAY IN CONTROL — the credibility keystone ───────────────────
 const CONTROL_POINTS = [
   {
-    h: 'It advises, never acts alone',
-    p: 'The agent surfaces a recommendation and the evidence. Advancing, rejecting and hiring stay your call.',
+    h: 'Deterministic and evidence-linked',
+    p: 'Same inputs, same call, every time — each one citing the requirements, transcript and rubric behind it.',
   },
   {
-    h: 'Evidence behind every score',
-    p: "Each verdict cites the requirements, transcript and rubric it's built on. Nothing is a black box.",
-  },
-  {
-    h: 'Fair by design',
-    p: 'The same task and rubric for every candidate. The agent never scores on protected characteristics.',
+    h: 'Yours to approve, override, or teach',
+    p: 'Every consequential call waits for you. Override it and your call becomes the agent’s next training signal.',
   },
   {
     h: 'A full audit trail',
     p: 'Every decision, note and stage move is logged and written back to your ATS for review.',
   },
+  {
+    h: 'Never on protected characteristics',
+    p: 'The same task and rubric for every candidate. The agent advises on evidence, never on who someone is.',
+  },
 ];
 
-export const TrustControl = () => (
-  <section className="lve-section" id="lve-control">
-    <div className="lve-wrap">
-      <Reveal className="lve-control" amount={0.2}>
-        <div className="lve-control-grid">
-          <div>
-            <SectionHead
-              eyebrow="HUMAN IN THE LOOP"
-              sub="Every recommendation is yours to accept or reject, and every one shows its work."
-              center={false}
-            >
-              The agent advises. <em>You decide.</em>
-            </SectionHead>
+export const ControlSection = () => {
+  const reduced = useReducedMotionSync();
+  return (
+    <section className="lve-section lve-control-sec" id="lve-control">
+      <div className="lve-wrap">
+        <Reveal className="lve-control" reduced={reduced}>
+          <div className="lve-control-grid">
+            <div>
+              <div className="lve-eyebrow">
+                <span className="lve-eyebrow-dot" /> HUMAN IN THE LOOP
+              </div>
+              <h2 className="lve-h2">The agent advises. <em>You decide.</em></h2>
+              <p className="lve-sub">
+                Every consequential call is deterministic, evidence-linked, and yours to approve, override, or
+                teach. Pair every AI claim with human control.
+              </p>
+              <div className="lve-control-points">
+                {CONTROL_POINTS.map((point) => (
+                  <div className="lve-control-point" key={point.h}>
+                    <span className="lve-control-check">
+                      <CheckIcon />
+                    </span>
+                    <div>
+                      <div className="lve-control-point-h">{point.h}</div>
+                      <div className="lve-control-point-p">{point.p}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="lve-control-artifact">
+              <ControlDecisionArtifact />
+            </div>
           </div>
-          <Stagger className="lve-control-points" amount={0.3}>
-            {CONTROL_POINTS.map((point) => (
-              <StaggerItem className="lve-control-point" key={point.h}>
-                <span className="lve-control-check">
-                  <CheckIcon />
-                </span>
-                <div>
-                  <div className="lve-control-point-h">{point.h}</div>
-                  <div className="lve-control-point-p">{point.p}</div>
-                </div>
-              </StaggerItem>
-            ))}
-          </Stagger>
-        </div>
-      </Reveal>
-    </div>
-  </section>
-);
+        </Reveal>
+      </div>
+    </section>
+  );
+};
 
-// ── STATS BAND (number tickers) ─────────────────────────────────────────────
-export const StatsBand = () => (
-  <section className="lve-section" id="lve-stats">
-    <div className="lve-wrap">
-      <Reveal>
+// ── 6 · PROOF + CLOSE — a tight stats row (the ClosingCta + footer follow) ─
+const STATS = [
+  { to: 5, suffix: '', cap: 'dimensions scored on every assessment' },
+  { to: 30, suffix: ' min', cap: 'assessment — every task battle-tested before use' },
+  { to: 100, suffix: '%', cap: 'of decisions evidence-linked' },
+  { word: 'Zero', cap: 'webcams or lockdown browsers' },
+];
+
+export const ProofSection = () => {
+  const reduced = useReducedMotionSync();
+  return (
+    <section className="lve-section lve-proof" id="lve-proof">
+      <div className="lve-wrap">
         <SectionHead
           eyebrow="BY THE NUMBERS"
+          reduced={reduced}
           sub="Capability, not vanity metrics — what every assessment and decision guarantees."
         >
           Built to be <em>defensible</em>.
         </SectionHead>
-      </Reveal>
-      <Reveal className="lve-stats" amount={0.3} y={26}>
-        <div className="lve-stats-grid">
-          <div className="lve-stat">
-            <div className="lve-stat-big">
-              <Ticker value={5} />
-            </div>
-            <div className="lve-stat-cap">dimensions scored on every assessment</div>
-          </div>
-          <div className="lve-stat">
-            <div className="lve-stat-big">
-              <Ticker value={30} />
-              <em> min</em>
-            </div>
-            <div className="lve-stat-cap">assessment — no take-home marathon</div>
-          </div>
-          <div className="lve-stat">
-            <div className="lve-stat-big">
-              <Ticker value={100} />
-              <em>%</em>
-            </div>
-            <div className="lve-stat-cap">of decisions linked to evidence</div>
-          </div>
-          <div className="lve-stat">
-            <div className="lve-stat-big">Zero</div>
-            <div className="lve-stat-cap">webcams or lockdown browsers</div>
-          </div>
-        </div>
-      </Reveal>
-    </div>
-  </section>
-);
-
-// ── INTEGRATIONS ────────────────────────────────────────────────────────────
-const INTEGRATIONS = [
-  { name: 'Workable', sub: 'Two-way candidate & decision sync', shape: '' },
-  { name: 'Bullhorn', sub: 'Two-way candidate & decision sync', shape: 'round' },
-  { name: 'Greenhouse', sub: 'Two-way candidate & decision sync', shape: 'diamond' },
-];
-
-export const Integrations = () => (
-  <section className="lve-section" id="lve-integrations">
-    <div className="lve-wrap">
-      <Reveal>
-        <SectionHead eyebrow="INTEGRATIONS" sub="Two-way sync with the systems your team already runs.">
-          Works with your <em>ATS</em>.
-        </SectionHead>
-      </Reveal>
-      <Stagger className="lve-integrations-row">
-        {INTEGRATIONS.map((it) => (
-          <StaggerItem className="lve-integration" key={it.name}>
-            <span className={`lve-integration-glyph ${it.shape}`} aria-hidden="true" />
-            <div className="lve-integration-body">
-              <div className="lve-integration-name">{it.name}</div>
-              <div className="lve-integration-sub">
-                <span className="lve-integration-sync" aria-hidden="true">⇄</span> {it.sub}
+        <Reveal className="lve-proof-band" delay={0.08} y={26} reduced={reduced}>
+          <div className="lve-proof-grid">
+            {STATS.map((s) => (
+              <div className="lve-stat" key={s.cap}>
+                <div className="lve-stat-big">
+                  {s.word
+                    ? s.word
+                    : <><NumberTicker to={s.to} reduced={reduced} />{s.suffix ? <em>{s.suffix}</em> : null}</>}
+                </div>
+                <div className="lve-stat-cap">{s.cap}</div>
               </div>
-            </div>
-            <span className="lve-integration-status">
-              <span className="lve-integration-dot" aria-hidden="true" /> Connected
-            </span>
-          </StaggerItem>
-        ))}
-      </Stagger>
-    </div>
-  </section>
-);
+            ))}
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+};
