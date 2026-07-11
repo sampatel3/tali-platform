@@ -9,45 +9,12 @@ import { useAutoplay } from './motion';
 // animatable children only while a loop will run, and Motion reveals them. None
 // are scroll-scrubbed.
 //
-// The hero, product-in-action and assess-band surfaces now embed the REAL
-// production components (see VariantERealMocks.jsx). These remaining autoplay
-// mocks back the SCREEN / DECIDE / HAND BACK feature bands.
+// The hero, product-in-action, SCREEN and assess-band surfaces now embed the
+// REAL production components (see VariantERealMocks.jsx). These remaining
+// autoplay mocks back the DECIDE / HAND BACK feature bands.
 // ---------------------------------------------------------------------------
 
 // ── FEATURE-BAND MINI MOCKS ─────────────────────────────────────────────────
-const SCREEN_ROWS = [
-  { reject: false, chip: 'evidence: 4/4', pass: true },
-  { reject: false, chip: 'evidence: 3/4', pass: true },
-  { reject: true, chip: 'no evidence', pass: false },
-  { reject: true, chip: 'gaps', pass: false },
-];
-
-export const ScreenMock = () => {
-  const { scope } = useAutoplay(
-    () => [
-      ['.lve-cvrow', { opacity: [0, 1], x: [-14, 0] }, { duration: 0.4, delay: stagger(0.12) }],
-      ['.lve-cvrow-chip', { opacity: [0, 1], scale: [0.7, 1] }, { duration: 0.3, delay: stagger(0.1), at: '-0.1' }],
-    ],
-    { amount: 0.5, loopDelay: 2 },
-  );
-  return (
-    <div className="lve-mini lve-mock" ref={scope} aria-hidden="true">
-      <div className="lve-mini-head">
-        <span className="lve-mini-head-dot" /> cv · gated by requirement
-      </div>
-      {SCREEN_ROWS.map((r, i) => (
-        <div className={`lve-cvrow lve-anim${r.reject ? ' reject' : ''}`} key={i}>
-          <div className="lve-cvrow-body">
-            <span className="lve-cvrow-name" />
-            <span className="lve-cvrow-line" />
-          </div>
-          <span className={`lve-cvrow-chip lve-anim ${r.pass ? 'pass' : 'fail'}`}>{r.chip}</span>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 const DECIDE_BARS = [
   { label: 'Requirements', w: 90 },
   { label: 'Verification', w: 76 },
