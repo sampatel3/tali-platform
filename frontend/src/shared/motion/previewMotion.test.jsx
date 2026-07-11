@@ -1,32 +1,15 @@
-import React, { useRef } from 'react';
+import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { useRevealOnView, Reveal } from './previewMotion';
+import { Reveal } from './previewMotion';
 
-// The preview reveal trigger must fire on MOUNT when the element is already in
-// the viewport — not only on scroll. This is the regression the live review
-// caught: above-the-fold sections (report scorecard, analytics pulse) loaded
-// hidden because the initial in-view IntersectionObserver callback was missed.
-// jsdom's stubbed getBoundingClientRect reports a non-zero in-view box, so the
-// mount-in-view branch resolves deterministically here.
+// The preview reveal wrapper must render its content on MOUNT (a one-shot CSS
+// entrance, `.pv-reveal`), never gated behind a scroll — the regression the
+// live review caught was above-the-fold sections (report scorecard, analytics
+// pulse) loading hidden. A plain CSS animation with fill:both can't get stuck.
 
-const Harness = () => {
-  const ref = useRef(null);
-  const shown = useRevealOnView(ref);
-  return <div ref={ref} data-testid="probe">{shown ? 'revealed' : 'hidden'}</div>;
-};
-
-describe('useRevealOnView', () => {
-  it('returns true on mount when the element is already in view', () => {
-    render(<Harness />);
-    // No scroll happened — the IO mock never fires — yet the mount-in-view
-    // check reveals it, so it is never stuck hidden above the fold.
-    expect(screen.getByTestId('probe')).toHaveTextContent('revealed');
-  });
-});
-
-describe('Reveal (mount-in-view)', () => {
+describe('Reveal (mount entrance)', () => {
   it('renders its children on mount in view', () => {
     render(
       <Reveal className="rev-probe">

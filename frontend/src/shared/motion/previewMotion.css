@@ -1,3 +1,18 @@
+/* One-shot fade+rise entrance for the shared Reveal wrapper. A plain CSS
+   animation (fill: both, runs once on mount) — can't get stuck the way a
+   Motion state-gated wrapper can around the heavy real components these
+   previews embed. Gated behind prefers-reduced-motion so reduced-motion users
+   get the final state with no movement. */
+@media (prefers-reduced-motion: no-preference) {
+  .pv-reveal {
+    animation: pvFadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+@keyframes pvFadeUp {
+  from { opacity: 0; transform: translateY(var(--pv-y, 16px)); }
+  to { opacity: 1; transform: none; }
+}
+
 /* Floating preview-switcher chip shared by /jobs-preview, /report-preview and
    /analytics-preview. Same visual language as HomeMotionPreview's .hmp-badge so
    the whole tour feels like one thing. Preview-only chrome. */

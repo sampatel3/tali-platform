@@ -12,7 +12,7 @@
 // decisions-per-day line + area draw in (pathLength / fade). Reduced motion →
 // final state via <MotionConfig reducedMotion="user"> + the reduced flag.
 
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { LazyMotion, domMax, MotionConfig, m } from 'motion/react';
 import { Bot, Brain, FlaskConical, History, TrendingUp } from 'lucide-react';
 
@@ -24,7 +24,6 @@ import {
   Reveal,
   PreviewSwitcher,
   useReducedMotionSync,
-  useRevealOnView,
 } from '../../shared/motion/previewMotion';
 import './AnalyticsMotionPreview.css';
 
@@ -158,10 +157,6 @@ const DecisionsChart = ({ data, reduced }) => {
 export const AnalyticsMotionPreview = () => {
   const reduced = useReducedMotionSync();
   const [tab, setTab] = useState('outcomes');
-  // The pulse band is above the fold, so it must reveal on mount — driven by
-  // the same single reveal trigger as every other section.
-  const pulseRef = useRef(null);
-  const pulseShown = useRevealOnView(pulseRef);
 
   const { summary, breakdown, trend, rolesBreakdown } = ANALYTICS_SHOWCASE;
   const k = summary.kpis;
@@ -188,13 +183,7 @@ export const AnalyticsMotionPreview = () => {
             {/* 6-stat pulse band — reproduced markup, values tick up. Gated on
                 the shared reveal trigger so it fills on mount (above the fold),
                 never only on scroll. */}
-            <m.div
-              ref={pulseRef}
-              className="an-pulse"
-              initial={reduced ? 'show' : 'hidden'}
-              animate={(reduced || pulseShown) ? 'show' : 'hidden'}
-              variants={{ hidden: {}, show: { transition: { delayChildren: 0.1, staggerChildren: 0.06 } } }}
-            >
+            <div className={reduced ? 'an-pulse' : 'an-pulse pv-reveal'}>
               {[
                 { k: 'Decisions', v: <NumberTicker to={k.decisions_made.current} reduced={reduced} />, s: `${hr.approved.toLocaleString()} approved` },
                 { k: 'Auto-advanced', v: <NumberTicker to={k.auto_advanced.current} reduced={reduced} />, s: `${k.auto_rejected.current.toLocaleString()} auto-rejected` },
@@ -203,17 +192,13 @@ export const AnalyticsMotionPreview = () => {
                 { k: 'Taught', v: <NumberTicker to={hr.teach_rate_pct} reduced={reduced} format={(n) => `${Math.round(n)}%`} />, s: `${hr.taught} teaching events` },
                 { k: 'Spend · MTD', v: <NumberTicker to={spend.spent_cents} reduced={reduced} format={(n) => usd(n)} />, s: budgetPct != null ? `${budgetPct}% of ${usd(spend.budget_cents)}` : 'no cap set' },
               ].map((cell) => (
-                <m.div
-                  key={cell.k}
-                  className="an-pcell"
-                  variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE_OUT } } }}
-                >
+                <div key={cell.k} className="an-pcell">
                   <div className="k">{cell.k}</div>
                   <div className={`v${cell.attn ? ' attn' : ''}`}>{cell.v}</div>
                   <div className="s">{cell.s}</div>
-                </m.div>
+                </div>
               ))}
-            </m.div>
+            </div>
 
             {/* Underline tabs — the active underline slides between tabs (layout). */}
             <div className="vtabs" role="tablist" aria-label="Analytics sections">
