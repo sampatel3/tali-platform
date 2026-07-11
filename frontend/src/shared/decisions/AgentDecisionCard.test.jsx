@@ -85,7 +85,7 @@ describe('AgentDecisionCard reject consequence copy', () => {
   it('shows the shared reject consequence under the recommendation', () => {
     renderCard(baseDecision);
     expect(
-      screen.getByText(/Disqualifies them in Workable — the ATS handles any candidate email, not Taali\./i),
+      screen.getByText(/Disqualifies them in Workable\./i),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /reject/i }))
       .toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));

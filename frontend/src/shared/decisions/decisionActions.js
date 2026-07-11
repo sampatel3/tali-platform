@@ -173,11 +173,8 @@ export const isRejectDecisionType = (decisionType) =>
 
 // Consequence surfaced beside every one-click reject — the candidate report
 // rail AND the Home hub card — so a recruiter always sees what confirming does.
-// Single source so the surfaces never drift. Attribution-accurate: Taali
-// disqualifies the candidate in Workable and the ATS — never Taali — handles
-// any candidate-facing email (see backend actions/reject_application.py: "We
-// never send a Taali-branded rejection email"; Workable's own disqualify-stage
-// workflow is what notifies the candidate, when the recruiter has configured
-// it). A locally-rejected candidate with no Workable link is simply not emailed.
-export const REJECT_CONSEQUENCE_COPY =
-  'Disqualifies them in Workable — the ATS handles any candidate email, not Taali.';
+// Single source so the surfaces never drift. Deliberately says nothing about a
+// candidate email: Taali never emails candidates about the job (see backend
+// actions/reject_application.py); any candidate-facing message is the ATS's own
+// disqualify workflow, so we don't claim one on Taali's behalf.
+export const REJECT_CONSEQUENCE_COPY = 'Disqualifies them in Workable.';
