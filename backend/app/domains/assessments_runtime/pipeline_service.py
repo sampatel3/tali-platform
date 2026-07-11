@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from ...models.agent_decision import AgentDecision
 from ...models.assessment import Assessment
@@ -231,6 +231,26 @@ def _configurable_stage_slugs(
     return resolve_stage_slugs(db, app.organization_id)
 
 
+def _resolve_allowed_slugs_for_app(
+    app: CandidateApplication,
+) -> tuple[str, ...] | None:
+    """Org-configured slugs for a session-attached application when the flag is
+    ON; ``None`` otherwise (legacy ``PIPELINE_STAGES``). The in-normalization
+    resolver for the many ``ensure_pipeline_fields`` callers that don't thread
+    ``allowed_slugs`` — without it, any touch of an application sitting in a
+    custom stage (e.g. ``transition_outcome`` closing it) would treat that stage
+    as invalid and remap it from ``status``, clobbering the recruiter's move.
+    Detached instances fall back to the legacy tuple (flag-off-identical
+    behaviour for objects with no session to query). Flag OFF short-circuits
+    before any session access, keeping the legacy path byte-identical."""
+    if not settings.ATS_CONFIGURABLE_STAGES_ENABLED:
+        return None
+    session = object_session(app)
+    if session is None:
+        return None
+    return resolve_stage_slugs(session, app.organization_id)
+
+
 def map_legacy_status_to_pipeline(status: str | None) -> tuple[str, str]:
     key = normalize_pipeline_key(status)
     if key in {"invited", "pending", "assessment_sent"}:
@@ -340,6 +360,12 @@ def ensure_pipeline_fields(
     normalized_source = normalize_stage_source(source)
     stage = normalize_pipeline_key(app.pipeline_stage)
     outcome = normalize_pipeline_key(app.application_outcome)
+    if allowed_slugs is None:
+        # Callers that don't thread the org's slugs (transition_outcome, the
+        # event helpers, external ensure_pipeline_fields callers) still get
+        # org-aware validation under the flag — a custom stage must survive
+        # these paths. No-op when the flag is off.
+        allowed_slugs = _resolve_allowed_slugs_for_app(app)
     valid_stages = allowed_slugs if allowed_slugs is not None else PIPELINE_STAGES
     if stage not in valid_stages or outcome not in APPLICATION_OUTCOMES:
         mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(app.status)

@@ -10,7 +10,9 @@ from fastapi import HTTPException
 
 from app.domains.assessments_runtime import pipeline_service
 from app.domains.assessments_runtime.pipeline_service import (
+    ensure_pipeline_fields,
     role_pipeline_counts,
+    transition_outcome,
     transition_stage,
 )
 from app.domains.assessments_runtime.pipeline_stages_service import (
@@ -75,6 +77,22 @@ def test_flag_off_allows_legacy_edge(db):
     assert app.pipeline_stage == "invited"
 
 
+def test_flag_off_unknown_stage_still_remapped_from_status(db):
+    # Legacy repair path, byte-identical with the flag off: a stage outside
+    # PIPELINE_STAGES is treated as invalid and remapped from `status` by
+    # ensure_pipeline_fields — both directly and via transition_outcome.
+    _org, app = _seed_app(db, stage="mystery_stage")
+    ensure_pipeline_fields(app)
+    assert app.pipeline_stage == "applied"  # remapped from status='applied'
+
+    _org2, app2 = _seed_app(db, stage="another_mystery")
+    transition_outcome(
+        db, app=app2, to_outcome="rejected", actor_type="recruiter"
+    )
+    assert app2.pipeline_stage == "applied"  # remapped, legacy behaviour
+    assert app2.application_outcome == "rejected"
+
+
 # --- Flag ON: org-aware, free recruiter movement ---------------------------
 
 def test_flag_on_allows_free_recruiter_move(db, monkeypatch):
@@ -119,6 +137,42 @@ def test_flag_on_accepts_custom_stage(db, monkeypatch):
         db, app=app, to_stage="sourced", source="recruiter", actor_type="recruiter"
     )
     assert app.pipeline_stage == "sourced"
+
+
+def test_flag_on_custom_stage_survives_non_transition_paths(db, monkeypatch):
+    # Codex P2: callers that don't thread allowed_slugs (transition_outcome,
+    # direct ensure_pipeline_fields) must not clobber a custom stage under the
+    # flag — normalization resolves the org's slugs via the app's session.
+    _enable_flag(monkeypatch)
+    org, app = _seed_app(db, stage="applied")
+    ensure_org_stages_seeded(db, org.id)
+    db.add(
+        PipelineStage(
+            organization_id=org.id,
+            slug="onsite",
+            name="Onsite",
+            kind="interview",
+            position=10,
+            is_default=False,
+            is_active=True,
+        )
+    )
+    db.flush()
+    transition_stage(
+        db, app=app, to_stage="onsite", source="recruiter", actor_type="recruiter"
+    )
+    db.flush()
+    assert app.pipeline_stage == "onsite"
+
+    # Direct ensure_pipeline_fields (no allowed_slugs threaded) keeps the stage.
+    ensure_pipeline_fields(app)
+    assert app.pipeline_stage == "onsite"
+
+    # Closing the application via transition_outcome keeps the stage too —
+    # previously it was remapped from status before the outcome was recorded.
+    transition_outcome(db, app=app, to_outcome="rejected", actor_type="recruiter")
+    assert app.pipeline_stage == "onsite"
+    assert app.application_outcome == "rejected"
 
 
 def test_flag_on_funnel_buckets_custom_stage_by_kind(db, monkeypatch):

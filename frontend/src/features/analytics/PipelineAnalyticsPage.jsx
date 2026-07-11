@@ -44,7 +44,9 @@ export const PipelineAnalyticsPage = ({ onNavigate, NavComponent }) => {
     let cancelled = false;
     setLoading(true);
     Promise.all([analyticsApi.pipelineFunnel(), analyticsApi.timeToFill()])
-      .then(([f, t]) => { if (!cancelled) { setFunnel(f); setTtf(t); setLoading(false); } })
+      // The shared api client resolves with the full Axios response — read
+      // `.data`, matching every other analyticsClient consumer.
+      .then(([f, t]) => { if (!cancelled) { setFunnel(f?.data); setTtf(t?.data); setLoading(false); } })
       .catch(() => { if (!cancelled) { setError('Failed to load analytics.'); setLoading(false); } });
     return () => { cancelled = true; };
   }, []);
