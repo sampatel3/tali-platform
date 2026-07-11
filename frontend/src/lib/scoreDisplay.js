@@ -1,4 +1,8 @@
 export const normalizeScore = (value, scaleHint = '') => {
+  // Number(null) === 0 passes Number.isFinite, so an explicit JSON null would
+  // normalise to 0 (unscored candidates reading as a genuine 0/100). Guard the
+  // nullish case first — same pattern as fluency4d's num().
+  if (value == null) return null;
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
 

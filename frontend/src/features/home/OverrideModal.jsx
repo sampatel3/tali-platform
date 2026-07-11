@@ -15,10 +15,15 @@
 // Jobs). The selected stage is sent as ``workable_target_stage`` on both
 // endpoints.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, X } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
+// The rq-* / home-title-md classes (and .rq-spin) live in home.css — imported
+// here so any consumer outside the home chunk (the candidate report statically
+// imports this modal) gets them without depending on load order. Duplicate CSS
+// imports are deduped by the bundler.
+import './home.css';
 
 export const normalizeWorkableStages = (stages) => {
   if (!Array.isArray(stages)) return [];
@@ -76,6 +81,7 @@ export const OverrideModal = ({
   const [targetStage, setTargetStage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const dialogRef = useRef(null);
 
   // Advance pickers only ever offer forward stages — never Sourced/Applied.
   const stageOptions = useMemo(() => advanceableWorkableStages(workableStages), [workableStages]);
@@ -87,6 +93,22 @@ export const OverrideModal = ({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose, submitting]);
+
+  // Lock body scroll while mounted — the long candidate report scrolls behind
+  // the backdrop otherwise. Restore the prior value on unmount.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Restore focus to whatever was focused before the modal opened, on unmount.
+  useEffect(() => {
+    const prevFocus = document.activeElement;
+    return () => {
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+    };
+  }, []);
 
   // Reset when a different alternative opens.
   useEffect(() => {
@@ -145,18 +167,40 @@ export const OverrideModal = ({
 
   const KickerIcon = mode === 'approve' ? ArrowRight : AlertTriangle;
 
+  // Minimal, dependency-free focus trap: wrap Tab / Shift+Tab at the dialog's
+  // focusable boundaries so keyboard focus can't escape behind the backdrop.
+  const onTrapKeyDown = (e) => {
+    if (e.key !== 'Tab' || !dialogRef.current) return;
+    const focusable = dialogRef.current.querySelectorAll(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div className="rq-modal-backdrop" onClick={() => !submitting && onClose?.()}>
       <div
         className="rq-modal"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="rq-override-title"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onTrapKeyDown}
         tabIndex={-1}
         // When a stage pick is required the textarea isn't autofocused, so focus
         // would otherwise stay on the trigger behind the backdrop — move it into
         // the dialog on open. (When the textarea IS autofocused this is a no-op.)
         ref={(el) => {
+          dialogRef.current = el;
           if (el && requireStagePick && !el.contains(document.activeElement)) el.focus();
         }}
       >
@@ -166,7 +210,7 @@ export const OverrideModal = ({
               <KickerIcon size={11} aria-hidden="true" />
               {alternative.kicker || (mode === 'approve' ? 'ADVANCE' : 'OVERRIDE')}
             </span>
-            <h3 className="home-title-md" style={{ margin: '6px 0 2px' }}>
+            <h3 id="rq-override-title" className="home-title-md" style={{ margin: '6px 0 2px' }}>
               {alternative.headline.replace('{name}', candidateName)}
             </h3>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>

@@ -87,6 +87,14 @@ export const DecisionRail = ({
       : undefined;
   const spec = isActionable ? (DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS) : null;
   const PrimaryIcon = spec?.primaryIcon || Check;
+  // Reject verdicts act on the ATS the instant they're approved — disqualify in
+  // Workable + send the rejection email. Surface that consequence on the one-click
+  // primary button (the copy previously lived only in the alt-reject modal). The
+  // stale/old-engine warning still takes precedence in the tooltip.
+  const isRejectDecision = isActionable
+    && (decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject');
+  const rejectConsequence = 'Disqualifies them in Workable and sends the rejection email.';
+  const primaryButtonTitle = primaryTitle ?? (isRejectDecision ? rejectConsequence : undefined);
   const confPct = decision?.confidence != null && !Number.isNaN(Number(decision.confidence))
     ? Math.round(Number(decision.confidence) * 100)
     : null;
@@ -110,7 +118,16 @@ export const DecisionRail = ({
         </div>
       ) : null}
       <div className="dr-score">
-        <ScoreRing score={Number(taaliScore) || 0} label="" size={104} strokeWidth={9} />
+        {/* Unscored candidates have a null Taali score — read "—", not a
+            genuine-looking 0/100 ring. ScoreRing's `display` override renders
+            the centre text (and stays 0-arc). */}
+        <ScoreRing
+          score={taaliScore == null ? 0 : Number(taaliScore)}
+          display={taaliScore == null ? '—' : null}
+          label=""
+          size={104}
+          strokeWidth={9}
+        />
         <div className="dr-score-label">Taali score</div>
       </div>
 
@@ -135,10 +152,13 @@ export const DecisionRail = ({
               className="dr-rec-btn"
               onClick={() => onApprove?.(decision)}
               disabled={frozen}
-              title={primaryTitle}
+              title={primaryButtonTitle}
             >
               <PrimaryIcon size={16} strokeWidth={2.2} aria-hidden="true" /> {spec.primaryLabel}
             </button>
+            {isRejectDecision ? (
+              <div className="dr-rec-conf">{rejectConsequence}</div>
+            ) : null}
             <div className="dr-rec-kl">
               <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> Agent recommends
               {confPct != null ? ` · Confidence ${confPct}%` : ''}

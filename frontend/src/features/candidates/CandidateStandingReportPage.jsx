@@ -148,7 +148,12 @@ export const IntegrityChip = ({ verdict, trustBand, warnings, corroborations, un
   if (verdict !== 'review' && verdict !== 'strong_review') return null;
   const strong = verdict === 'strong_review';
   const count = (warnings?.length || 0) + (unverifiedEmployers?.length || 0);
-  const bandLabel = trustBand === 'low' ? 'Low' : (trustBand === 'medium' ? 'Medium' : 'High');
+  // Only render the trust-band pill for a KNOWN band. A `review` verdict can
+  // arrive with a null/unknown band; defaulting to "High trust" beside a
+  // warning chip was a false reassurance, so omit the pill instead.
+  const bandLabel = trustBand === 'low'
+    ? 'Low'
+    : (trustBand === 'medium' ? 'Medium' : (trustBand === 'high' ? 'High' : null));
   return (
     <section className={`mc-integrity ${strong ? 'mc-integrity-strong' : ''}`.trim()} aria-label="Integrity check">
       <button
@@ -159,7 +164,7 @@ export const IntegrityChip = ({ verdict, trustBand, warnings, corroborations, un
       >
         <ShieldAlert size={14} aria-hidden="true" />
         <span className="mc-integrity-label">Integrity</span>
-        <span className="mc-integrity-band">{bandLabel} trust</span>
+        {bandLabel ? <span className="mc-integrity-band">{bandLabel} trust</span> : null}
         {count > 0 ? <span className="mc-integrity-count">{count} to verify</span> : null}
       </button>
       {open ? (
@@ -320,8 +325,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   useEffect(() => {
     const nextTab = REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview';
-    setActiveTab(availableTabIds.has(nextTab) ? nextTab : 'overview');
-  }, [availableTabIds, requestedTab]);
+    const safeTab = availableTabIds.has(nextTab) ? nextTab : 'overview';
+    setActiveTab(safeTab);
+    // If the URL asked for a tab that isn't available (e.g. ?tab=assessment on
+    // a candidate with no completed assessment), rewrite the search param so a
+    // shared link doesn't keep advertising a tab the recipient can't see.
+    // Only write when the param actually differs (guards against an effect
+    // loop) and preserve other params like ?from.
+    const currentTabParam = searchParams.get('tab');
+    const desiredTabParam = safeTab === 'overview' ? null : safeTab;
+    if (currentTabParam !== desiredTabParam) {
+      const nextParams = new URLSearchParams(searchParams);
+      if (desiredTabParam) nextParams.set('tab', desiredTabParam);
+      else nextParams.delete('tab');
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [availableTabIds, requestedTab, searchParams, setSearchParams]);
 
   const activateTab = useCallback((tabId) => {
     const safeTab = availableTabIds.has(tabId) ? tabId : 'overview';
@@ -1232,22 +1251,53 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           />
           <main className="dossier-main">
         <div className="vtabs report-tabs" role="tablist" aria-label="Candidate report sections">
-          {REPORT_TABS.filter((tab) => availableTabIds.has(tab.id)).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={`vtab ${activeTab === tab.id ? 'on' : ''}`.trim()}
-              data-internal-only={tab.internalOnly ? '' : undefined}
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              onClick={() => activateTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
+          {(() => {
+            const visibleTabs = REPORT_TABS.filter((tab) => availableTabIds.has(tab.id));
+            // Roving-tabindex tablist: only the active tab is in the tab order;
+            // Arrow/Home/End move focus AND activate (activateTab). Focus is
+            // moved to the sibling <button> so the keyboard user lands on it.
+            const onTabKeyDown = (event, index) => {
+              const { key } = event;
+              let nextIndex = null;
+              if (key === 'ArrowRight' || key === 'ArrowDown') nextIndex = (index + 1) % visibleTabs.length;
+              else if (key === 'ArrowLeft' || key === 'ArrowUp') nextIndex = (index - 1 + visibleTabs.length) % visibleTabs.length;
+              else if (key === 'Home') nextIndex = 0;
+              else if (key === 'End') nextIndex = visibleTabs.length - 1;
+              if (nextIndex == null) return;
+              event.preventDefault();
+              const nextTab = visibleTabs[nextIndex];
+              activateTab(nextTab.id);
+              event.currentTarget.parentElement
+                ?.querySelector(`#report-tab-${nextTab.id}`)
+                ?.focus();
+            };
+            return visibleTabs.map((tab, index) => (
+              <button
+                key={tab.id}
+                id={`report-tab-${tab.id}`}
+                type="button"
+                className={`vtab ${activeTab === tab.id ? 'on' : ''}`.trim()}
+                data-internal-only={tab.internalOnly ? '' : undefined}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`report-pane-${tab.id}`}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                onClick={() => activateTab(tab.id)}
+                onKeyDown={(event) => onTabKeyDown(event, index)}
+              >
+                {tab.label}
+              </button>
+            ));
+          })()}
         </div>
 
-        <div className={`pane ${activeTab === 'overview' ? 'active' : ''}`} data-p="overview">
+        <div
+          className={`pane ${activeTab === 'overview' ? 'active' : ''}`}
+          data-p="overview"
+          id="report-pane-overview"
+          role="tabpanel"
+          aria-labelledby="report-tab-overview"
+        >
         {/* HANDOFF v2 §5.1 / canvas cand-overview — Overview tab is:
             (1) hero band: ScoreRing | RECOMMENDATION + body | SIGNAL list,
             (2) two-up: STRONGEST SIGNAL · WORTH PROBING,
@@ -1325,14 +1375,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   report-preview's 6-tab layout). The Overview keeps the verdict,
                   flags and scorecard; the per-requirement breakdown lives one
                   click away. A compact "jump to Requirements" cue keeps it
-                  discoverable from the verdict. */}
-              <button
-                type="button"
-                className="mc-overview-reqjump"
-                onClick={() => activateTab('requirements')}
-              >
-                See the full requirement breakdown · {matchedRequirements.length} of {matchedRequirements.length + missingRequirements.length} met →
-              </button>
+                  discoverable from the verdict. Only render once there are
+                  requirements to break down — "0 of 0 met" is noise pre-score. */}
+              {(matchedRequirements.length + missingRequirements.length) > 0 ? (
+                <button
+                  type="button"
+                  className="mc-overview-reqjump"
+                  onClick={() => activateTab('requirements')}
+                >
+                  See the full requirement breakdown · {matchedRequirements.length} of {matchedRequirements.length + missingRequirements.length} met →
+                </button>
+              ) : null}
 
               {/* (3) Scorecard — the ONE canonical scorecard: the 5 axes
                   (Anthropic's 4 Ds + Deliverable). Rubric-first with a
@@ -1367,24 +1420,34 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     })}
                   </div>
                 </div>
-              ) : (
-                <div className="mc-overview-dimensions mc-overview-dimensions-empty">
-                  <div className="mc-kicker">SCORECARD · THE 5 Ds</div>
+              ) : !completedAssessment ? (
+                // Pre-assessment: the scorecard AND the two assessment-gated
+                // evidence cards (AI USAGE, CODE & GIT) all say the same "appears
+                // once completed" thing. Collapse them into ONE compact line so
+                // the Overview isn't three stacked placeholders. TIMELINE and
+                // DOCUMENTS still render below with real CV-on-file content.
+                <div className="mc-overview-dimensions-empty">
+                  <div className="mc-kicker">ASSESSMENT EVIDENCE</div>
                   <p className="mc-overview-dim-empty">
-                    The 5-dimension scorecard (Delegation, Description, Discernment, Diligence,
-                    Deliverable) appears once the candidate completes the assessment.
+                    The 5-Ds scorecard, AI usage, and code &amp; git evidence appear once the
+                    candidate completes the assessment.
                   </p>
                 </div>
-              )}
+              ) : null}
 
-              {/* (4) Evidence row — four cards */}
+              {/* (4) Evidence row. Once an assessment exists all four cards
+                  carry signal; before then the two assessment-gated cards
+                  (AI USAGE, CODE & GIT) collapse into the compact card above,
+                  leaving TIMELINE + DOCUMENTS (which can carry pre-assessment
+                  CV-on-file content). */}
               <div className="mc-overview-evidence">
                 {[
-                  { kicker: 'AI USAGE', section: reportModel?.evidenceSections?.aiUsage },
-                  { kicker: 'CODE & GIT', section: reportModel?.evidenceSections?.codeAndGit },
+                  { kicker: 'AI USAGE', section: reportModel?.evidenceSections?.aiUsage, assessmentGated: true },
+                  { kicker: 'CODE & GIT', section: reportModel?.evidenceSections?.codeAndGit, assessmentGated: true },
                   { kicker: 'TIMELINE', section: reportModel?.evidenceSections?.timeline },
                   { kicker: 'DOCUMENTS', section: reportModel?.evidenceSections?.documents },
-                ].map(({ kicker, section }) => {
+                ].filter(({ assessmentGated }) => completedAssessment || !assessmentGated)
+                  .map(({ kicker, section }) => {
                   const headline = section?.items?.[0]
                     || section?.title
                     || 'Evidence pending';
@@ -1405,7 +1468,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         })()}
         </div>
 
-        <div className={`pane ${activeTab === 'requirements' ? 'active' : ''}`} data-p="requirements">
+        <div
+          className={`pane ${activeTab === 'requirements' ? 'active' : ''}`}
+          data-p="requirements"
+          id="report-pane-requirements"
+          role="tabpanel"
+          aria-labelledby="report-tab-requirements"
+        >
           {/* Requirements & fit — per-requirement match confidence (0–100) with
               expandable evidence rows. Moved out of Overview to match the
               report-preview 6-tab layout. */}
@@ -1419,7 +1488,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           />
         </div>
 
-        <div className={`pane ${activeTab === 'assessment' ? 'active' : ''}`} data-p="assessment">
+        <div
+          className={`pane ${activeTab === 'assessment' ? 'active' : ''}`}
+          data-p="assessment"
+          id="report-pane-assessment"
+          role="tabpanel"
+          aria-labelledby="report-tab-assessment"
+        >
           {/* THE 5 Ds scorecard is the spine of this pane — each axis expands
               into the graded rubric criteria (score_breakdown.rubric_grading
               .dimensions) that produced it. Admin actions (resend / request CV
@@ -1555,11 +1630,25 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ) : null}
         </div>
 
-        <div className={`pane ${activeTab === 'cv' ? 'active' : ''}`} data-p="cv">
+        <div
+          className={`pane ${activeTab === 'cv' ? 'active' : ''}`}
+          data-p="cv"
+          id="report-pane-cv"
+          role="tabpanel"
+          aria-labelledby="report-tab-cv"
+        >
           <div className="cv-doc-actions">
             <span className="name">
               {(application?.candidate_name || application?.candidate_email || 'Candidate')} · CV
-              {application?.cv_uploaded_at ? ` · uploaded ${new Date(application.cv_uploaded_at).toLocaleDateString()}` : ''}
+              {(() => {
+                // Guard on validity, not just truthiness — a malformed date
+                // string rendered "uploaded Invalid Date". Omit the segment
+                // when the parse fails (see fmtDate in ScoreProvenance.jsx).
+                const uploaded = application?.cv_uploaded_at ? new Date(application.cv_uploaded_at) : null;
+                return uploaded && !Number.isNaN(uploaded.getTime())
+                  ? ` · uploaded ${uploaded.toLocaleDateString()}`
+                  : '';
+              })()}
             </span>
             {application?.workable_profile_url ? (
               <button
@@ -1589,7 +1678,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
         </div>
 
-        <div className={`pane ${activeTab === 'prep' ? 'active' : ''}`} data-p="prep">
+        <div
+          className={`pane ${activeTab === 'prep' ? 'active' : ''}`}
+          data-p="prep"
+          id="report-pane-prep"
+          role="tabpanel"
+          aria-labelledby="report-tab-prep"
+        >
           {/* HANDOFF v2 §5.1 / canvas cand-prep — Interview prep is:
               (1) purple-soft hero banner: READY FOR YOUR PANEL · {N} questions,
                   anchored in {candidate}'s actual evidence
@@ -1600,18 +1695,26 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           {(() => {
             const totalQs = (interviewQuestions.stageOne?.length || 0) + (interviewQuestions.stageTwo?.length || 0);
             const candidateFirstName = String(application?.candidate_name || '').trim().split(/\s+/)[0] || 'this candidate';
+            // The stage-1/stage-2 arrays ALWAYS carry hardcoded template
+            // questions, so totalQs is never 0 — the old "builds after scoring"
+            // branch was dead AND the hero falsely claimed every question was
+            // "anchored in evidence" / "cites the assessment" even for wholly
+            // unscored candidates. Gate the confident copy on real evidence.
+            const hasEvidence = Boolean(application?.interview_prep)
+              || riskItems.length > 0
+              || strengthItems.length > 0;
             return (
               <div className="mc-prep-hero">
                 <div className="mc-kicker">READY FOR YOUR PANEL</div>
                 <div className="mc-prep-hero-title">
-                  {totalQs > 0
+                  {hasEvidence
                     ? <>{totalQs} questions, anchored in {candidateFirstName}'s actual <em>evidence</em>.</>
-                    : <>Interview prep <em>builds</em> after the candidate is scored.</>}
+                    : <>Starter questions — evidence-anchored prep <em>builds</em> after scoring.</>}
                 </div>
                 <p className="mc-prep-hero-body">
-                  {totalQs > 0
+                  {hasEvidence
                     ? 'Each question cites the moment in the assessment it came from. Listen-for and concerning-if are calibrated to your role rubric.'
-                    : 'Once the assessment is scored, this tab populates with stage-1 screen and stage-2 panel questions tied to evidence.'}
+                    : 'These are role-level starters. Once the candidate is scored, they’re replaced with questions tied to their evidence and calibrated to your role rubric.'}
                 </p>
               </div>
             );
@@ -1667,7 +1770,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ) : null}
         </div>
 
-        <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only={isClientView ? '' : undefined}>
+        <div
+          className={`pane ${activeTab === 'notes' ? 'active' : ''}`}
+          data-p="notes"
+          data-internal-only={isClientView ? '' : undefined}
+          id="report-pane-notes"
+          role="tabpanel"
+          aria-labelledby="report-tab-notes"
+        >
           {/* HANDOFF v2 §5.1 / canvas cand-notes — "Notes & context" is the
               unified add-info surface (PR3):
               (1) HIRING TEAM NOTES column — note cards (who · role · time + body),
@@ -1703,7 +1813,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   return Boolean((entry?.text || entry?.prompt || '').trim());
                 })
                 .map((entry, idx) => ({
-                  key: `tl-note-${entry.timestamp || entry.time || idx}`,
+                  key: `tl-note-${entry.timestamp || entry.time || idx}-${idx}`,
                   who: entry?.author || 'Recruiter',
                   role: 'Hiring team',
                   time: entry?.timestamp || entry?.time,
@@ -2012,7 +2122,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         if (!body) return null;
                         const author = String(comment?.author || '').trim() || 'Workable';
                         return (
-                          <div key={`wk-comment-${comment?.created_at || idx}`} className="mc-notes-card">
+                          <div key={`wk-comment-${comment?.created_at || idx}-${idx}`} className="mc-notes-card">
                             <div className="mc-notes-card-head">
                               <span className="mc-notes-card-who">
                                 {author}

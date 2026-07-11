@@ -195,6 +195,40 @@ describe('OverrideModal', () => {
     expect(screen.getByRole('radio', { name: /Technical Interview/i })).toBeInTheDocument();
   });
 
+  it('locks body scroll while mounted and restores it on unmount', () => {
+    document.body.style.overflow = 'auto';
+    const { unmount } = render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={advanceInsteadAlt}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+    expect(document.body.style.overflow).toBe('hidden');
+    unmount();
+    expect(document.body.style.overflow).toBe('auto');
+  });
+
+  it('labels the dialog via aria-labelledby pointing at the headline', () => {
+    render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={advanceInsteadAlt}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole('dialog');
+    const labelId = dialog.getAttribute('aria-labelledby');
+    expect(labelId).toBeTruthy();
+    const heading = document.getElementById(labelId);
+    expect(heading).toBeTruthy();
+    expect(heading).toHaveTextContent(/Advance Tarig Elamin instead\?/i);
+  });
+
   it('shows the "no advance stages" hint for a job that only has Sourced/Applied', () => {
     render(
       <OverrideModal

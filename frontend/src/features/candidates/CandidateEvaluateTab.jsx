@@ -159,7 +159,7 @@ export const CandidateEvaluateTab = ({
                     </div>
                     <div className={`text-xs font-semibold ${meta.toneClass}`}>{meta.label}</div>
                   </div>
-                  <div className="mt-2 h-2 rounded-full bg-[var(--taali-border)]/70">
+                  <div className="mt-2 h-2 rounded-full bg-[var(--taali-border-soft)]">
                     <div
                       className={`h-2 rounded-full ${meta.barClass}`}
                       style={{ width: `${meta.percent}%` }}
@@ -180,7 +180,7 @@ export const CandidateEvaluateTab = ({
           </div>
 
           {(recommendation?.label || recruiterSummary) ? (
-            <div className="mt-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-purple)]/25 bg-[var(--taali-purple-soft)] p-4">
+            <div className="mt-5 rounded-[var(--taali-radius-card)] border border-[color-mix(in_srgb,var(--taali-purple)_25%,transparent)] bg-[var(--taali-purple-soft)] p-4">
               <div className="font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--taali-purple)]">
                 Taali recommends
               </div>

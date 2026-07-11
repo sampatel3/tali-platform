@@ -8,8 +8,11 @@ export const ScoreRing = ({ score = 0, size = 110, label = 'SCORE', strokeWidth 
   const r = size / 2 - strokeWidth - 2;
   const c = 2 * Math.PI * r;
   const dash = (safeScore / 100) * c;
+  // When a caller overrides the centre text (e.g. "—" for an unscored ring),
+  // the score-of-100 aria-label would be misleading — mirror the override.
+  const ariaLabel = display != null ? `${label} ${centerText}`.trim() : `${label} ${Math.round(safeScore)} of 100`;
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-label={`${label} ${Math.round(safeScore)} of 100`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-label={ariaLabel}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg-3)" strokeWidth={strokeWidth} />
       <circle
         cx={size / 2}

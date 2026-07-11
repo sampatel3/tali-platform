@@ -265,7 +265,7 @@ export const CandidateStageOneScreeningTab = ({
       </Panel>
 
       {fraudTriggered ? (
-        <Panel className="p-4 border border-[var(--taali-danger)]/40 bg-[var(--taali-danger)]/5">
+        <Panel className="p-4 border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)]">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-danger)]">
@@ -287,7 +287,7 @@ export const CandidateStageOneScreeningTab = ({
               {fraudCopyPaste.evidence.slice(0, 5).map((snippet, idx) => (
                 <li
                   key={`${snippet.cv_word_offset}-${idx}`}
-                  className="rounded border border-[var(--taali-danger)]/30 bg-white/60 p-2 text-xs leading-5 text-[var(--taali-text)]"
+                  className="rounded border border-[var(--taali-danger-border)] bg-white/60 p-2 text-xs leading-5 text-[var(--taali-text)]"
                 >
                   &ldquo;{snippet.text}&rdquo;
                   <span className="ml-2 text-[var(--taali-muted)]">

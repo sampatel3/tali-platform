@@ -39,8 +39,8 @@ function SnapshotReport({ snapshot }) {
           <div className={yearsLabel ? 'mt-4' : ''}>
             <div className="snapshot-compact-sk">Tech stack</div>
             <div className="snapshot-compact-chips">
-              {topSkills.map((skill) => (
-                <span key={skill} className="snapshot-compact-chip">{skill}</span>
+              {topSkills.map((skill, idx) => (
+                <span key={`${skill}-${idx}`} className="snapshot-compact-chip">{skill}</span>
               ))}
             </div>
           </div>
@@ -138,8 +138,8 @@ export function CandidateSnapshotCard({ snapshot, variant = 'page', className = 
           <div className="flex min-w-0 flex-col gap-2">
             <SectionLabel>Tech stack</SectionLabel>
             <div className="flex flex-wrap gap-1.5">
-              {topSkills.map((skill) => (
-                <Badge key={skill} variant="purple" className="text-[0.6875rem]">{skill}</Badge>
+              {topSkills.map((skill, idx) => (
+                <Badge key={`${skill}-${idx}`} variant="purple" className="text-[0.6875rem]">{skill}</Badge>
               ))}
             </div>
           </div>

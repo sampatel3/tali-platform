@@ -71,7 +71,15 @@ const weightedAverage100 = (...weightedValues) => {
   let denominator = 0;
 
   weightedValues.forEach(([value, weight]) => {
-    const numericValue = toFiniteNumber(normalizeScore(value, '0-100'));
+    // A null/absent component is skipped entirely — its weight never enters the
+    // denominator, so the average renormalises over the components that are
+    // present (computeRoleFitScore(80, null) === 80, not 40). All-null → null.
+    // NB: normalizeScore returns null for a null component, but toFiniteNumber
+    // would coerce that back to 0 (Number(null) === 0) — so guard on the
+    // normalized null BEFORE toFiniteNumber, or the component counts as a zero.
+    const normalized = normalizeScore(value, '0-100');
+    if (normalized == null) return;
+    const numericValue = toFiniteNumber(normalized);
     const numericWeight = Number(weight);
     if (!Number.isFinite(numericValue) || !Number.isFinite(numericWeight) || numericWeight <= 0) return;
     numerator += numericValue * numericWeight;
@@ -579,10 +587,17 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
       || ''
     ).trim());
 
-    const assessmentScore = normalizeScore(
-      completedAssessment.assessment_score ?? completedAssessment.final_score ?? completedAssessment.score,
+    // Each source carries its OWN scale, so normalise per-value BEFORE the
+    // ??-chain rather than picking one hint for the whole chain — a single hint
+    // keyed off `completedAssessment.score` (legacy 0-10) would clamp a real
+    // 0-100 assessment_score to 10. Only the legacy `score` field is 0-10.
+    const legacyScore100 = normalizeScore(
+      completedAssessment.score,
       completedAssessment.score != null && Number(completedAssessment.score) <= 10 ? '0-10' : '0-100'
     );
+    const assessmentScore = normalizeScore(completedAssessment.assessment_score, '0-100')
+      ?? normalizeScore(completedAssessment.final_score, '0-100')
+      ?? legacyScore100;
     const roleFitScore = normalizeScore(
       completedAssessment.role_fit_score
       ?? scoreBreakdown.score_components?.role_fit_score
@@ -590,15 +605,12 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
       ?? computeRoleFitScore(roleFitModel.cvFitScore, roleFitModel.requirementsFitScore),
       '0-100'
     );
-    const taaliScore = normalizeScore(
-      completedAssessment.taali_score
-      ?? scoreBreakdown.score_components?.taali_score
-      ?? scoreSummary.taali_score
-      ?? computeTaaliScore(assessmentScore, roleFitScore)
-      ?? completedAssessment.final_score
-      ?? completedAssessment.score,
-      completedAssessment.taali_score != null || completedAssessment.final_score != null ? '0-100' : '0-10'
-    );
+    const taaliScore = normalizeScore(completedAssessment.taali_score, '0-100')
+      ?? normalizeScore(scoreBreakdown.score_components?.taali_score, '0-100')
+      ?? normalizeScore(scoreSummary.taali_score, '0-100')
+      ?? normalizeScore(computeTaaliScore(assessmentScore, roleFitScore), '0-100')
+      ?? normalizeScore(completedAssessment.final_score, '0-100')
+      ?? legacyScore100;
 
     return {
       source,
@@ -652,6 +664,10 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
 };
 
 const getRecommendation = (score100, rejectThreshold100 = null) => {
+  // An unscored candidate is Pending — not "No Hire". toFiniteNumber(null) === 0
+  // (Number(null) === 0), which is finite, so the nullish check must precede the
+  // coercion or a null score falls through to the below-threshold bucket.
+  if (score100 == null) return { label: 'Pending', variant: 'muted' };
   const numeric = toFiniteNumber(score100);
   if (!Number.isFinite(numeric)) return { label: 'Pending', variant: 'muted' };
 

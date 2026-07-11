@@ -63,3 +63,73 @@ describe('DecisionRail re-score / staleness guarding', () => {
     expect(approve).not.toBeDisabled();
   });
 });
+
+describe('DecisionRail score ring', () => {
+  it('reads "—" (not 0/100) when the Taali score is unscored', () => {
+    render(
+      <DecisionRail candidateName="Sam Patel" candidateInitials="SP" taaliScore={null} />,
+    );
+    // The ring's accessible label mirrors the "—" override, not "0 of 100".
+    expect(screen.getByLabelText(/—/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/0 of 100/)).not.toBeInTheDocument();
+  });
+});
+
+describe('DecisionRail reject consequence copy', () => {
+  const rejectDecision = {
+    id: 9,
+    status: 'pending',
+    decision_type: 'reject',
+    confidence: 0.8,
+  };
+
+  it('shows the consequence note under the primary reject button', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={40}
+        decision={rejectDecision}
+        application={{ cv_match_score: 40, workable_stage: null }}
+        canDecide
+        onApprove={vi.fn()}
+      />,
+    );
+    const reject = screen.getByRole('button', { name: /Reject/i });
+    expect(reject).toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));
+    expect(screen.getByText(/Disqualifies them in Workable and sends the rejection email\./i)).toBeInTheDocument();
+  });
+
+  it('does not show the consequence note for a non-reject decision', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={72}
+        decision={{ ...rejectDecision, decision_type: 'advance_to_interview' }}
+        application={{ cv_match_score: 72, workable_stage: null }}
+        canDecide
+        onApprove={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Disqualifies them in Workable/i)).not.toBeInTheDocument();
+  });
+
+  it('lets the stale warning take precedence over the reject note in the button title', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={40}
+        decision={{ ...rejectDecision, is_stale: true }}
+        application={{ cv_match_score: 40, workable_stage: null }}
+        canDecide
+        onApprove={vi.fn()}
+      />,
+    );
+    const reject = screen.getByRole('button', { name: /Reject/i });
+    expect(reject).toHaveAttribute('title', expect.stringMatching(/Inputs changed since this was decided/i));
+    // The visible consequence note still renders under the button.
+    expect(screen.getByText(/Disqualifies them in Workable/i)).toBeInTheDocument();
+  });
+});
