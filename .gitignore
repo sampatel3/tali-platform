@@ -12,7 +12,7 @@ Thumbs.db
 .env.production
 
 # Dependencies
-node_modules/
+node_modules
 __pycache__/
 *.py[cod]
 .pytest_cache/
