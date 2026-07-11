@@ -30,8 +30,8 @@ describe('LandingPreviewPage', () => {
     stubMatchMedia(false);
   });
 
-  it('renders variant C (the light switch) by default without crashing', () => {
-    const { container } = renderAt('');
+  it('renders variant C (the light switch) at ?v=c without crashing', () => {
+    const { container } = renderAt('?v=c');
     // Variant C OFF-state hero copy.
     expect(screen.getByText(/Hiring runs on guesswork\./i)).toBeTruthy();
     // The agent switch is present as a role="switch".
@@ -51,7 +51,7 @@ describe('LandingPreviewPage', () => {
   });
 
   it('carries the denser variant-C content and the "How it works" CTA (vision removed)', () => {
-    const { container } = renderAt('');
+    const { container } = renderAt('?v=c');
     // Secondary hero CTA is now "How it works" (was "Read the vision").
     expect(screen.getByRole('button', { name: /How it works/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Read the vision/i })).toBeNull();
@@ -89,10 +89,10 @@ describe('LandingPreviewPage', () => {
     expect(screen.queryByText(/LeetCode/i)).toBeNull();
   });
 
-  it('flips the agent switch from off to on when clicked', () => {
+  it('flips the variant-C agent switch from off to on when clicked', () => {
     vi.useFakeTimers();
     try {
-      renderAt('');
+      renderAt('?v=c');
       const toggle = screen.getByRole('switch');
       expect(toggle.getAttribute('aria-checked')).toBe('false');
       act(() => {
@@ -141,14 +141,73 @@ describe('LandingPreviewPage', () => {
     ).toBe('true');
   });
 
-  it('falls back to variant C for an unknown ?v value', () => {
-    renderAt('?v=zzz');
-    expect(screen.getByText(/Hiring runs on guesswork\./i)).toBeTruthy();
+  it('falls back to variant D (the default) for an unknown ?v value', () => {
+    const { container } = renderAt('?v=zzz');
+    // Variant D is now the default; its scrubbed scene mounts.
+    expect(container.querySelector('.lvd')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Watch it work$/i })).toBeTruthy();
   });
 
   it('switches variants when a chip is clicked', () => {
     renderAt('');
     fireEvent.click(screen.getByRole('button', { name: /B · One live artifact/i }));
     expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeTruthy();
+  });
+
+  // ── Variant D · "Watch it work" ────────────────────────────────────────
+  it('renders variant D (the pinned "watch it work" scene) by default', () => {
+    const { container } = renderAt('');
+    // Scoped root + the agent switch mount.
+    expect(container.querySelector('.lvd')).toBeTruthy();
+    expect(screen.getByRole('switch')).toBeTruthy();
+    // D-unique hero CTA + the sourcing counter caption from beat 1.
+    expect(screen.getByRole('button', { name: /^Watch it work$/i })).toBeTruthy();
+    expect(screen.getByText(/candidates sourced/i)).toBeTruthy();
+    // The scene lays out five beats.
+    expect(container.querySelectorAll('.lvd-beat').length).toBe(5);
+    // Switcher chip renders with D active.
+    expect(
+      screen.getByRole('button', { name: /D · Watch it work/i }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    // Broadened copy: "works with AI", never "ship/build with AI".
+    expect(screen.getByText(/how well\s+this person actually works with AI/i)).toBeTruthy();
+    expect(container.textContent).not.toMatch(/ship with AI/i);
+    expect(container.textContent).not.toMatch(/build with AI/i);
+    // Production closing + footer reused.
+    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Book a demo/i })).toBeTruthy();
+  });
+
+  it('flips the variant-D agent switch from off to on when clicked', () => {
+    vi.useFakeTimers();
+    try {
+      renderAt('');
+      const toggle = screen.getByRole('switch');
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      act(() => {
+        fireEvent.click(toggle);
+      });
+      act(() => {
+        vi.advanceTimersByTime(260);
+      });
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders variant D as stacked static beats (no pin/scrub) under reduced-motion', () => {
+    stubMatchMedia(true);
+    const { container } = renderAt('');
+    // Reduced-motion → static mode: switch loads already on, no scrub.
+    const toggle = screen.getByRole('switch');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(container.querySelector('.lvd.is-static')).toBeTruthy();
+    // All five beats render as static panels with their caption copy.
+    expect(container.querySelectorAll('.lvd-beat').length).toBe(5);
+    expect(screen.getByText(/Every candidate, role and JD flows in\./i)).toBeTruthy();
+    // Final-state values are shown statically (counter, audit line).
+    expect(screen.getByText(/1,240/)).toBeTruthy();
+    expect(screen.getByText(/synced to Workable/i)).toBeTruthy();
   });
 });

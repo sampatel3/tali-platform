@@ -78,9 +78,9 @@ const DemoLeadPage = lazy(() =>
 const DemoShowcasePage = lazy(() =>
   import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
 );
-// Internal, no-auth landing-design preview (/landing-preview?v=a|b|c). Landing
-// variants Sam eyeballs in prod (C — the cinematic "Turn hiring on" concept — is
-// the default); fixture data only, no APIs.
+// Internal, no-auth landing-design preview (/landing-preview?v=a|b|c|d). Landing
+// variants Sam eyeballs in prod (D — the pinned scroll-scrubbed "Watch it work"
+// concept — is the default); fixture data only, no APIs.
 const LandingPreviewPage = lazy(() =>
   import('./features/marketing/landing_preview/LandingPreviewPage').then((m) => ({ default: m.LandingPreviewPage }))
 );
