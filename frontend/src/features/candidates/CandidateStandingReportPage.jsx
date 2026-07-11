@@ -1636,7 +1636,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 data-internal-only
                 onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
               >
-                View on Workable
+                <ExternalLink size={13} />
+                Open in Workable
               </button>
             ) : null}
           </div>
