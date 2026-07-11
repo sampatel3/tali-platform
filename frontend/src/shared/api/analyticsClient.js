@@ -27,4 +27,10 @@ export const analytics = {
   // ThresholdCalibration rows; `has_history=false` + a single current-threshold
   // entry when no calibration was ever activated (never fabricates past changes).
   thresholdHistory: (roleId) => api.get('/analytics/threshold-history', { params: { role_id: roleId } }),
+  // ATS native pipeline analytics — headcount per configured stage (funnel
+  // order, canonical-seed fallback pre-config) + outcome mix. Distinct from the
+  // Workable-stage reporting above.
+  pipelineFunnel: (params = {}) => api.get('/analytics/pipeline-funnel', { params }),
+  // Days from application to accepted offer — overall summary + per-role breakdown.
+  timeToFill: (params = {}) => api.get('/analytics/time-to-fill', { params }),
 };

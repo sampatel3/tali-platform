@@ -52,6 +52,9 @@ const NotFoundPage = lazy(() =>
 const HomePage = lazy(() =>
   import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
 );
+const PipelineAnalyticsPage = lazy(() =>
+  import('./features/analytics/PipelineAnalyticsPage').then((m) => ({ default: m.PipelineAnalyticsPage }))
+);
 const AnalyticsPage = lazy(() =>
   import('./features/home/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage }))
 );
@@ -212,6 +215,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/tasks/bespoke',
     '/candidate-detail',
     ].includes(pathname)
+    || pathname.startsWith('/analytics/')
     || pathname.startsWith('/jobs/')
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
@@ -934,6 +938,17 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <AnalyticsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/analytics/pipeline"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <PipelineAnalyticsPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />
