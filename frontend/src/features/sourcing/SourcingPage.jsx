@@ -1,6 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { prospects as prospectsApi } from '../../shared/api/prospectsClient';
+import CampaignsPanel from './CampaignsPanel';
 import './SourcingPage.css';
+
+// Read ?tab= and ?campaign= from the URL so the "Start outreach" CTA can
+// deep-link straight into a campaign's detail view.
+function readTabFromUrl() {
+  if (typeof window === 'undefined') return { tab: 'prospects', campaignId: null };
+  const params = new URLSearchParams(window.location.search || '');
+  const campaignId = params.get('campaign');
+  const tab = params.get('tab') === 'campaigns' || campaignId ? 'campaigns' : 'prospects';
+  return { tab, campaignId: campaignId ? Number(campaignId) : null };
+}
 
 const STATUSES = ['new', 'contacted', 'interested', 'converted', 'archived'];
 
@@ -42,6 +53,8 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
   const [formError, setFormError] = useState('');
   const [importResult, setImportResult] = useState(null);
   const fileRef = useRef(null);
+  const initial = readTabFromUrl();
+  const [tab, setTab] = useState(initial.tab);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -122,25 +135,53 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
         <header className="src-head">
           <div>
             <h1 className="src-title">Sourcing</h1>
-            <p className="src-sub">Sourced prospects for outreach.</p>
+            <p className="src-sub">Sourced prospects and outreach campaigns.</p>
           </div>
-          <div className="src-actions">
-            <button type="button" className="src-btn" onClick={() => setShowForm((v) => !v)}>
-              Add prospect
-            </button>
-            <button type="button" className="src-btn src-btn-ghost" onClick={() => fileRef.current?.click()}>
-              Import CSV
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,text/csv"
-              onChange={handleImport}
-              style={{ display: 'none' }}
-              data-testid="csv-input"
-            />
-          </div>
+          {tab === 'prospects' ? (
+            <div className="src-actions">
+              <button type="button" className="src-btn" onClick={() => setShowForm((v) => !v)}>
+                Add prospect
+              </button>
+              <button type="button" className="src-btn src-btn-ghost" onClick={() => fileRef.current?.click()}>
+                Import CSV
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleImport}
+                style={{ display: 'none' }}
+                data-testid="csv-input"
+              />
+            </div>
+          ) : null}
         </header>
+
+        <div className="src-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'prospects'}
+            className={`src-tab ${tab === 'prospects' ? 'src-tab-active' : ''}`}
+            onClick={() => setTab('prospects')}
+          >
+            Prospects
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'campaigns'}
+            className={`src-tab ${tab === 'campaigns' ? 'src-tab-active' : ''}`}
+            onClick={() => setTab('campaigns')}
+          >
+            Campaigns
+          </button>
+        </div>
+
+        {tab === 'campaigns' ? (
+          <CampaignsPanel initialCampaignId={initial.campaignId} />
+        ) : (
+        <>
 
         {showForm ? (
           <form className="src-form" onSubmit={handleAdd}>
@@ -270,6 +311,8 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
               ))}
             </tbody>
           </table>
+        )}
+        </>
         )}
       </div>
     </div>

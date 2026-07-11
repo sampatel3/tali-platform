@@ -110,6 +110,9 @@ const SourcingPage = lazy(() =>
 const UnsubscribePage = lazy(() =>
   import('./features/outreach/UnsubscribePage')
 );
+const OutreachThanksPage = lazy(() =>
+  import('./features/outreach/OutreachThanksPage')
+);
 const RequisitionsPage = lazy(() =>
   import('./features/requisitions/RequisitionsPage').then((m) => ({ default: m.RequisitionsPage }))
 );
@@ -160,6 +163,7 @@ const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
   if (pathname.startsWith('/submittal/')) return true;
   if (pathname.startsWith('/unsubscribe/')) return true;
+  if (pathname.startsWith('/outreach/thanks')) return true;
   const params = new URLSearchParams(search || '');
   const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
   if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
@@ -826,6 +830,17 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <UnsubscribePage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth outreach thanks page — the CTA landing when a campaign
+          has no job page. Interest is recorded by the backend before redirect. */}
+      <Route
+        path="/outreach/thanks"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <OutreachThanksPage />
           </Suspense>
         )}
       />

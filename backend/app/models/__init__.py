@@ -188,6 +188,12 @@ from .prospect import (
     PROSPECT_STATUSES,
     Prospect,
 )
+from .outreach_campaign import (
+    CAMPAIGN_STATUSES,
+    MESSAGE_STATUSES,
+    OutreachCampaign,
+    OutreachMessage,
+)
 
 __all__ = [
     "User",
@@ -336,4 +342,8 @@ __all__ = [
     "SUPPRESSION_REASON_RANK",
     "Prospect",
     "PROSPECT_STATUSES",
+    "OutreachCampaign",
+    "OutreachMessage",
+    "CAMPAIGN_STATUSES",
+    "MESSAGE_STATUSES",
 ]

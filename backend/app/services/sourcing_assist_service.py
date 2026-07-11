@@ -381,21 +381,26 @@ def draft_outreach(
     channel = channel if channel in _VALID_CHANNELS else "linkedin"
     profile = (profile_text or "").strip()[:_MAX_PROFILE_CHARS]
 
-    # Role monthly budget gate — same rule as every other role-scoped Anthropic
-    # entry point. Fail-open to the deterministic strings; no LLM spend.
+    # Role monthly budget gate — the route 402s first; this guard covers
+    # direct service callers. The draft IS the product, so fail-open here
+    # means an empty draft + warning, never an exception.
     if not can_spend_on_role(db, role=role):
-        result["warning"] = (
-            "This role's monthly Claude budget has been reached — showing the base search strings."
-        )
-        return result
+        return {
+            "subject": None,
+            "body": "",
+            "warnings": ["This role's monthly Claude budget has been reached."],
+        }
 
     try:
         if client is None:
             client = get_metered_client(organization_id=role.organization_id)
-    except Exception as exc:  # fail-open: deterministic strings still render
-        logger.warning("sourcing search client init failed (role=%s): %s", role.id, exc)
-        result["warning"] = "Couldn't generate refined suggestions — showing the base search strings."
-        return result
+    except Exception as exc:
+        logger.warning("outreach draft client init failed (role=%s): %s", role.id, exc)
+        return {
+            "subject": None,
+            "body": "",
+            "warnings": ["Claude is unavailable right now — try again shortly."],
+        }
     resolved_model = model or settings.resolved_claude_chat_model
 
     word_cap = 120 if channel == "linkedin" else 180
