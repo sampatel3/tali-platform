@@ -59,6 +59,29 @@ describe('ScorecardPanel', () => {
     expect(rolesApi.submitScorecard).toHaveBeenCalledWith(5, 9);
   });
 
+  it('offers neutral as a submittable recommendation', async () => {
+    rolesApi.listScorecards.mockResolvedValue({ data: [] });
+    rolesApi.getScorecardSummary.mockResolvedValue({ data: emptySummary });
+    rolesApi.upsertScorecard.mockResolvedValue({ data: { id: 7 } });
+    rolesApi.submitScorecard.mockResolvedValue({ data: { id: 7, submitted_at: 'now' } });
+
+    render(<ScorecardPanel applicationId={5} rolesApi={rolesApi} />);
+    expect(await screen.findByText('Your scorecard')).toBeInTheDocument();
+
+    pickRecommendation('Neutral');
+    // Neutral is a real lean, not an abstention — Submit is enabled.
+    expect(screen.getByText('Submit')).not.toBeDisabled();
+    fireEvent.click(screen.getByText('Submit'));
+
+    await waitFor(() =>
+      expect(rolesApi.upsertScorecard).toHaveBeenCalledWith(
+        5,
+        expect.objectContaining({ overall_recommendation: 'neutral' }),
+      ),
+    );
+    expect(rolesApi.submitScorecard).toHaveBeenCalledWith(5, 7);
+  });
+
   it('keeps Submit disabled for a no_decision abstention', async () => {
     rolesApi.listScorecards.mockResolvedValue({ data: [] });
     rolesApi.getScorecardSummary.mockResolvedValue({ data: emptySummary });

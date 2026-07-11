@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
+from ...models.application_interview import ApplicationInterview
 from ...models.interview_feedback import (
     INTERVIEW_RECOMMENDATIONS,
     NO_LEAN_RECOMMENDATIONS,
@@ -381,6 +382,22 @@ def upsert_scorecard(
     if data.overall_recommendation is not None:
         _validate_recommendation(data.overall_recommendation)
     _validate_overall_rating(data.overall_rating)
+
+    # The FK only proves some interview row exists; it doesn't prove the row
+    # belongs to THIS application. Validate application-scoped (which, since the
+    # application is already org-scoped, implies org-scoped) so a caller can't
+    # attach a card to another candidate's interview by guessing its id.
+    if data.interview_id is not None:
+        interview = (
+            db.query(ApplicationInterview)
+            .filter(
+                ApplicationInterview.id == data.interview_id,
+                ApplicationInterview.application_id == app.id,
+            )
+            .first()
+        )
+        if interview is None:
+            raise HTTPException(status_code=404, detail="Interview not found")
 
     interview_id_filter = (
         InterviewFeedback.interview_id.is_(None)

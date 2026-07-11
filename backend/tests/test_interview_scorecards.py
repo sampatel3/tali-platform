@@ -9,9 +9,23 @@ legacy CRUD lives in test_interview_feedback_routes.py.
 
 from datetime import datetime, timezone
 
+from app.models.application_interview import ApplicationInterview
 from app.models.interview_feedback import InterviewFeedback
 from app.models.user import User
 from tests.conftest import auth_headers
+
+
+def _interview(db, org_id, application_id) -> ApplicationInterview:
+    iv = ApplicationInterview(
+        organization_id=org_id,
+        application_id=application_id,
+        stage="interview",
+        source="manual",
+        status="linked",
+    )
+    db.add(iv)
+    db.commit()
+    return iv
 
 
 def _create_application(client, headers, candidate_email="sc@example.com"):
@@ -100,6 +114,53 @@ def test_scorecard_validation(client):
         ).status_code
         == 422
     )
+
+
+# --------------------------------------------------------------------------
+# interview_id must reference an interview on THIS application (the FK alone
+# only proves some interview row exists).
+# --------------------------------------------------------------------------
+def test_scorecard_unknown_interview_id_404(client, db):
+    headers, email = auth_headers(client)
+    app = _create_application(client, headers, candidate_email="ivunknown@example.com")
+    aid = app["id"]
+    r = client.post(
+        f"/api/v1/applications/{aid}/scorecards",
+        json={"overall_recommendation": "yes", "interview_id": 999999},
+        headers=headers,
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_scorecard_interview_id_from_other_application_404(client, db):
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    app_a = _create_application(client, headers, candidate_email="iva@example.com")
+    app_b = _create_application(client, headers, candidate_email="ivb@example.com")
+    # An interview belonging to application B, same org.
+    iv_b = _interview(db, org_id, app_b["id"])
+    # Attaching it to application A's scorecard must 404.
+    r = client.post(
+        f"/api/v1/applications/{app_a['id']}/scorecards",
+        json={"overall_recommendation": "yes", "interview_id": iv_b.id},
+        headers=headers,
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_scorecard_valid_interview_id_accepted(client, db):
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    app = _create_application(client, headers, candidate_email="ivok@example.com")
+    aid = app["id"]
+    iv = _interview(db, org_id, aid)
+    r = client.post(
+        f"/api/v1/applications/{aid}/scorecards",
+        json={"overall_recommendation": "yes", "interview_id": iv.id},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["interview_id"] == iv.id
 
 
 # --------------------------------------------------------------------------

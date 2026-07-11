@@ -12,8 +12,8 @@ which now reads only submitted rows, sees exactly what it saw before (zero
 behavioral delta at cutover). New rows start as drafts (submitted_at NULL) until
 explicitly submitted.
 
-Revision ID: 148_extend_interview_feedback
-Revises: 147_add_offer_templates
+Revision ID: 149_extend_interview_feedback
+Revises: 148_add_outreach_campaigns
 Create Date: 2026-07-11
 """
 from __future__ import annotations
@@ -21,8 +21,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "148_extend_interview_feedback"
-down_revision = "147_add_offer_templates"
+revision = "149_extend_interview_feedback"
+down_revision = "148_add_outreach_campaigns"
 branch_labels = None
 depends_on = None
 

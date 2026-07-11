@@ -48,7 +48,7 @@ class InterviewFeedback(Base):
     # Optional link to a specific recorded meeting; NULL for standalone feedback.
     interview_id = Column(Integer, ForeignKey("application_interviews.id"), nullable=True)
     # Draft/submit lifecycle: NULL = draft, set = submitted. Legacy rows were
-    # backfilled to submitted (see migration 148). The calibration script and
+    # backfilled to submitted (see migration 149). The calibration script and
     # the panel summary read only submitted rows.
     submitted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

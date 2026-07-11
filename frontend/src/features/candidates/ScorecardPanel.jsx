@@ -15,6 +15,7 @@ import {
 const RECS = [
   { value: 'strong_yes', label: 'Strong yes' },
   { value: 'yes', label: 'Yes' },
+  { value: 'neutral', label: 'Neutral' },
   { value: 'no', label: 'No' },
   { value: 'strong_no', label: 'Strong no' },
   { value: 'no_decision', label: 'No decision' },
