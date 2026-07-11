@@ -73,7 +73,7 @@
               {
                 "@type": "Question",
                 "name": "What does an AI-native assessment measure?",
-                "acceptedAnswer": { "@type": "Answer", "text": "Beyond whether the task works, an AI-native assessment scores AI collaboration as a first-class dimension across five dimensions — the 5 Ds of AI fluency: delegation, description, discernment, diligence, and the deliverable itself — each tied to the moment it happened in a session replay." }
+                "acceptedAnswer": { "@type": "Answer", "text": "Beyond whether the task works, an AI-native assessment scores AI collaboration as a first-class dimension across five dimensions — the 5 Ds of AI fluency: delegation, description, discernment, diligence, and the deliverable itself — each tied to the moment it happened in a session replay. Verification is scored, not assumed: every task plants a trap the candidate should catch, and diligence rewards verifying before calling the work done. Every task is battle-tested in a sandbox before a candidate sees it — authored from the role's job description and human-approved." }
               }
             ]
           }
@@ -155,7 +155,7 @@
           <ul>
             <li><strong>Every prompt</strong> — was it scoped and sequenced, or vague and hopeful?</li>
             <li><strong>Error recovery</strong> — did the candidate catch and correct a wrong AI suggestion before it shipped?</li>
-            <li><strong>Edits, tests, and terminal output</strong> — the real working timeline, not just the end state.</li>
+            <li><strong>Edits and sandboxed test runs</strong> — the real working timeline, not just the end state.</li>
             <li><strong>Autopilot signals</strong> — pasting AI output without reading or verifying it.</li>
           </ul>
 
@@ -172,6 +172,9 @@
             <div class="card"><h3>Diligence</h3><p>Thoroughness and verification: tests, edge cases, and responsible follow-through with AI in the loop.</p></div>
             <div class="card"><h3>Deliverable</h3><p>The shipped result itself — does it actually work: code quality, tests, completeness, graceful failure.</p></div>
           </div>
+
+          <p><strong>Verification is scored, not assumed.</strong> Every task plants a trap the candidate should catch, and the assessment scores whether they verified their work before calling it done — Diligence rewards verified-before-done, not confident-and-wrong.</p>
+          <p><strong>Every task is battle-tested before a candidate sees it.</strong> Each task is authored from the role's job description under a validation contract and human-approved, then run in a sandbox to confirm its baseline tests fail meaningfully — so the work sample is real, not a toy.</p>
 
           <p class="product-cap"><strong>The result: a candidate standing report.</strong> Each dimension is scored from the captured session, and every score links back to the moment it happened in the prompt-by-prompt replay.</p>
           <div class="product">
@@ -201,8 +204,8 @@
           <p>
             On <a href="/">Taali</a>, every assessment opens a chat-first
             workspace — Claude at the centre, your repo, a live editor, and a
-            terminal — and the runtime captures every prompt, paste, edit, and
-            test. Those traces feed the five dimensions above, producing a
+            sandboxed runtime — and the runtime captures every prompt, paste, edit,
+            and test. Those traces feed the five dimensions above, producing a
             candidate standing report with a prompt-by-prompt replay. It is the
             assessment half of <a href="/ai-native-hiring">AI-native hiring</a>,
             and it feeds the recommendations made by Taali's
@@ -232,7 +235,11 @@
               <p>
                 Beyond whether the task works, it scores AI collaboration across
                 five dimensions — delegation, description, discernment, diligence,
-                and the deliverable itself.
+                and the deliverable itself. Verification is scored, not assumed:
+                every task plants a trap the candidate should catch, and diligence
+                rewards verifying before calling the work done. Every task is
+                battle-tested in a sandbox before a candidate sees it — authored
+                from the role's job description and human-approved.
               </p>
             </details>
           </div>

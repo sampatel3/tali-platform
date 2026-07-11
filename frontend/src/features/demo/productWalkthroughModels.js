@@ -622,6 +622,11 @@ export const PRODUCT_WALKTHROUGH = {
       'Prioritize the highest-risk launch blockers first, then outline the smallest safe patch sequence for this regulated GenAI release.',
     claudeConversation: [
       {
+        role: 'assistant',
+        content:
+          "Hi — I'm Claude, and I'll be pairing with you on this. I already have the repo open and I've read the brief, so there's nothing to set up. If you'd like to see where things stand first, just ask me to run the tests.\n\nBefore we start, two decisions need to come from you — not from me:\n\n1. Where the confidence-gating threshold for high-risk actions should sit — and who reviews the borderline band just under it.\n\n2. Whether ungrounded retrieval context should hard-fail the request, or degrade the answer with a flag on it.\n\nThese calls are yours — I'll build to whatever you decide. You're scored on the steering, not on typing the code.",
+      },
+      {
         role: 'user',
         content:
           'Read RISKS.md and the launch checklist before anything else. Summarise the highest-blast-radius failures in the failing pytest run, in priority order. Do not propose patches yet.',
@@ -761,7 +766,7 @@ export const PRODUCT_WALKTHROUGH_TASK = {
   role: 'AI Engineer',
   durationLabel: `${aiGenaiProductionReadinessTask.duration_minutes} min`,
   stack: 'Python · Claude · Release safety',
-  tools: 'Repo · Editor · Terminal · Claude',
+  tools: 'Repo · Editor · Claude · Sandboxed tests',
   description:
     'Review a regulated GenAI launch, tighten the safety guardrails, and show how the candidate works with AI when the repo and launch pressure are both real.',
 };
