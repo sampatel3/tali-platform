@@ -6,7 +6,7 @@ from fastapi_users.jwt import decode_jwt, generate_jwt
 from sqlalchemy.orm import Session
 
 from ...platform.database import get_db
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
 from ...platform.security import get_password_hash
 from ...models.user import User
 from ...models.organization import Organization
@@ -14,6 +14,7 @@ from ...schemas.user import (
     UserResponse,
     TeamInviteRequest,
     TeamInviteResponse,
+    TeamRoleUpdateRequest,
     ResendInviteResponse,
 )
 from ...domains.integrations_notifications.adapters import build_email_adapter
@@ -93,7 +94,7 @@ def list_team_users(
 def invite_team_user(
     data: TeamInviteRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     if not current_user.organization_id:
         raise HTTPException(status_code=400, detail="You are not in an organization")
@@ -125,6 +126,9 @@ def invite_team_user(
         if not can_restore:
             raise HTTPException(status_code=400, detail="Email already exists")
         existing.is_active = True
+        # Ownership is only ever granted explicitly — a restored member comes
+        # back as member even if they were an owner when removed.
+        existing.role = "member"
         restored_verified = existing.is_verified
         if not restored_verified:
             existing.full_name = data.full_name
@@ -136,6 +140,7 @@ def invite_team_user(
             full_name=data.full_name,
             hashed_password=get_password_hash(temp_password),
             organization_id=current_user.organization_id,
+            role="member",
         )
         db.add(invited)
 
@@ -154,7 +159,7 @@ def invite_team_user(
 def resend_team_invite(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     target = _get_org_member(db, user_id, current_user)
     if target.is_verified or not target.is_active:
@@ -170,15 +175,58 @@ def resend_team_invite(
 def remove_team_member(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="CANNOT_REMOVE_SELF")
     target = _get_org_member(db, user_id, current_user)
+    if target.role == "owner":
+        _ensure_another_active_owner(db, current_user.organization_id, excluding_user_id=target.id)
     # Soft-remove only — other tables reference users; never hard-delete.
     target.is_active = False
     db.commit()
     return None
+
+
+@router.patch("/{user_id}/role", response_model=UserResponse)
+def update_team_user_role(
+    user_id: int,
+    data: TeamRoleUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    target = _get_org_member(db, user_id, current_user)
+    if target.role == data.role:
+        return target
+    if target.role == "owner" and data.role == "member":
+        _ensure_another_active_owner(db, current_user.organization_id, excluding_user_id=target.id)
+    target.role = data.role
+    try:
+        db.commit()
+        db.refresh(target)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update member role")
+    return target
+
+
+def _ensure_another_active_owner(db: Session, organization_id: int, *, excluding_user_id: int) -> None:
+    """Never leave the org without an active owner. Locks the org's active
+    owner rows so two concurrent demotions/removals can't both observe
+    "another owner exists" and commit a zero-owner workspace (FOR UPDATE on
+    Postgres; no-op on SQLite)."""
+    owners = (
+        db.query(User)
+        .filter(
+            User.organization_id == organization_id,
+            User.role == "owner",
+            User.is_active == True,  # noqa: E712 — inactive owners can't act
+        )
+        .with_for_update()
+        .all()
+    )
+    if not any(owner.id != excluding_user_id for owner in owners):
+        raise HTTPException(status_code=400, detail="An organization needs at least one owner")
 
 
 def _get_org_member(db: Session, user_id: int, current_user: User) -> User:

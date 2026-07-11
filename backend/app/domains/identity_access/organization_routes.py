@@ -38,6 +38,17 @@ _SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ALLOWED_WORKABLE_SCOPES = ("r_jobs", "r_candidates", "w_candidates")
 _EMAIL_ADAPTER = TypeAdapter(EmailStr)
 
+# Access-policy fields only workspace owners may change — these control who can
+# join the workspace and how they authenticate. Everything else on the org
+# PATCH (agent defaults, notifications, integrations) stays open to members.
+_OWNER_ONLY_ORG_FIELDS = {
+    "allowed_email_domains",
+    "sso_enforced",
+    "saml_enabled",
+    "saml_metadata_url",
+    "two_factor_required",
+}
+
 
 def _normalized_optional_email(value: str | None, *, field_name: str) -> str | None:
     raw = (value or "").strip().lower()
@@ -143,6 +154,12 @@ def update_my_org(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
+    touched_owner_fields = _OWNER_ONLY_ORG_FIELDS & data.model_fields_set
+    if touched_owner_fields and getattr(current_user, "role", None) != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only a workspace owner can change access settings",
+        )
     if data.name is not None:
         org.name = data.name
     org.workable_config = merge_workable_config(org, data)
