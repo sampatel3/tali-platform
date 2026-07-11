@@ -322,6 +322,12 @@ from .domains.assessments_runtime.offer_template_routes import (
 from .domains.assessments_runtime.job_hiring_team_routes import (
     router as hiring_team_router,
 )
+from .domains.assessments_runtime.pipeline_stages_routes import (
+    router as pipeline_stages_router,
+)
+from .domains.assessments_runtime.pipeline_analytics_routes import (
+    router as pipeline_analytics_router,
+)
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -380,6 +386,8 @@ app.include_router(campaigns_router, prefix="/api/v1")
 app.include_router(offers_router, prefix="/api/v1")
 app.include_router(offer_templates_router, prefix="/api/v1")
 app.include_router(hiring_team_router, prefix="/api/v1")
+app.include_router(pipeline_stages_router, prefix="/api/v1")
+app.include_router(pipeline_analytics_router, prefix="/api/v1")
 from .decision_policy.routes import router as decision_policy_router  # noqa: E402
 from .domains.capabilities.routes import router as capability_flags_router  # noqa: E402
 from .services.threshold_calibration.routes import router as threshold_calibration_router  # noqa: E402
