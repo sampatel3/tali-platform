@@ -15,6 +15,7 @@ vi.mock('../../shared/api', () => ({
     saveRepoFile: (...args) => mockSaveRepoFile(...args),
     claudeChat: (...args) => mockClaudeChat(...args),
     submit: (...args) => mockSubmit(...args),
+    runtimeEvent: () => Promise.resolve({ data: { success: true } }),
   },
 }));
 
