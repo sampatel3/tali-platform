@@ -23,6 +23,8 @@ export const pathForPage = (page, options = {}) => {
       return '/jobs';
     case 'requisitions':
       return '/requisitions';
+    case 'sourcing':
+      return '/sourcing';
     case 'chat': {
       const base = options.chatConversationId
         ? `/chat/${encodeURIComponent(options.chatConversationId)}`

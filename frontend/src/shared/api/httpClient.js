@@ -81,6 +81,18 @@ export const sendClientIntakeChat = (token, { message = '', files = [] } = {}) =
 export const submitClientIntake = (token) =>
   axios.post(`${intakeBase(token)}/submit`);
 
+// ---- Public, no-auth one-click UNSUBSCRIBE ----
+//
+// The outreach opt-out embedded in each campaign email. Bare axios (JWT-free)
+// like the other public endpoints — recipients have no recruiter session. GET
+// validates the token + returns `{ organization_name, email_masked }` and does
+// NOT write (prefetchers follow GET links); POST records the suppression.
+const unsubscribeBase = (token) =>
+  `${API_URL}/api/v1/public/unsubscribe/${encodeURIComponent(token)}`;
+
+export const fetchUnsubscribe = (token) => axios.get(unsubscribeBase(token));
+export const submitUnsubscribe = (token) => axios.post(unsubscribeBase(token));
+
 // ---- Sliding session ----
 // Access tokens expire after 30 minutes. Rather than silently logging active
 // users out mid-work (the old behavior), we note when the current token was
@@ -199,6 +211,7 @@ export const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/job/')
     || pathname.startsWith('/careers/')
     || pathname.startsWith('/intake/')
+    || pathname.startsWith('/unsubscribe/')
     || pathname === '/showcase'
     || pathname.startsWith('/showcase/')) {
     return true;
