@@ -1,0 +1,117 @@
+/* Scoped tweaks for the /home-preview Motion mockup. No new card designs — this
+   only positions the Motion glow overlay, makes the staggered KPI wrappers hug
+   the real tiles, fades queue rows in as they mount, and styles the two small
+   preview-only affordances (badge + empty states). */
+
+.hmp-root {
+  position: relative;
+}
+
+/* Header wrapper is the anchor for the OFF→ON glow flash. */
+.hmp-header {
+  position: relative;
+}
+
+/* The Motion glow that flashes over the agent strip on activation. Sits on the
+   right where the `.abar` lives; pointer-events off so it never blocks clicks. */
+.hmp-flash {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(560px, 60%);
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+  background: radial-gradient(
+    120% 100% at 82% 50%,
+    color-mix(in oklab, var(--purple) 45%, transparent) 0%,
+    transparent 62%
+  );
+  mix-blend-mode: screen;
+}
+
+/* Staggered KPI tiles: each real <KpiTile> is wrapped in an m.div for the
+   cascade, so make the wrapper a grid cell that stretches its tile to full
+   row height (matches the un-wrapped KpiStrip look). */
+.hmp-kpi-strip { margin: 0; }
+.hmp-kpi-cell { display: flex; }
+.hmp-kpi-cell > .kpi-tile { flex: 1; }
+
+/* Queue rows fade + rise in as they mount (progressive append drives the
+   cascade). Disabled under reduced motion so rows render in their final state. */
+@media (prefers-reduced-motion: no-preference) {
+  .hmp-feed .rq-stream-list > li {
+    animation: hmpRowIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+@keyframes hmpRowIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Empty states shown before the agent is turned on. */
+.hmp-feed-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 40px 24px;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+  color: var(--mute);
+  font-size: 0.9375rem;
+}
+.hmp-feed-empty strong { color: var(--ink); font-weight: 600; }
+
+.hmp-detail-empty {
+  padding: 40px 24px;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+  color: var(--mute);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+/* Floating PREVIEW badge + demo controls. */
+.hmp-badge {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--purple) 12%, var(--bg-1, #fff));
+  border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.12));
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  color: var(--purple-2, var(--purple));
+}
+.hmp-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 24%, transparent);
+}
+.hmp-badge-label { font-weight: 600; }
+.hmp-badge-btn,
+.hmp-badge-link {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid color-mix(in oklab, var(--purple) 34%, var(--line));
+  background: transparent;
+  color: inherit;
+  padding: 3px 9px;
+  border-radius: 999px;
+  text-decoration: none;
+}
+.hmp-badge-btn:hover,
+.hmp-badge-link:hover {
+  background: color-mix(in oklab, var(--purple) 16%, transparent);
+}
