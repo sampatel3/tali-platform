@@ -166,3 +166,18 @@ export const DEFAULT_ACTIONS = {
   primaryIcon: Check,
   alternatives: [],
 };
+
+// The two reject decision types (agent-recommended reject + pre-screen reject).
+export const isRejectDecisionType = (decisionType) =>
+  decisionType === 'reject' || decisionType === 'skip_assessment_reject';
+
+// Consequence surfaced beside every one-click reject — the candidate report
+// rail AND the Home hub card — so a recruiter always sees what confirming does.
+// Single source so the surfaces never drift. Attribution-accurate: Taali
+// disqualifies the candidate in Workable and the ATS — never Taali — handles
+// any candidate-facing email (see backend actions/reject_application.py: "We
+// never send a Taali-branded rejection email"; Workable's own disqualify-stage
+// workflow is what notifies the candidate, when the recruiter has configured
+// it). A locally-rejected candidate with no Workable link is simply not emailed.
+export const REJECT_CONSEQUENCE_COPY =
+  'Disqualifies them in Workable — the ATS handles any candidate email, not Taali.';

@@ -77,3 +77,22 @@ describe('AgentDecisionCard post-handover warning', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+describe('AgentDecisionCard reject consequence copy', () => {
+  // Parity with the candidate-report rail: a one-click reject must show what
+  // confirming does (disqualify in Workable; the ATS — not Taali — emails).
+  // Previously the hub card showed nothing.
+  it('shows the shared reject consequence under the recommendation', () => {
+    renderCard(baseDecision);
+    expect(
+      screen.getByText(/Disqualifies them in Workable — the ATS handles any candidate email, not Taali\./i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i }))
+      .toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));
+  });
+
+  it('does not show the consequence on a non-reject card', () => {
+    renderCard({ ...baseDecision, decision_type: 'advance_to_interview' });
+    expect(screen.queryByText(/Disqualifies them in Workable/i)).not.toBeInTheDocument();
+  });
+});

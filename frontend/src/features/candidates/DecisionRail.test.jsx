@@ -97,7 +97,7 @@ describe('DecisionRail reject consequence copy', () => {
     );
     const reject = screen.getByRole('button', { name: /Reject/i });
     expect(reject).toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));
-    expect(screen.getByText(/Disqualifies them in Workable and sends the rejection email\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Disqualifies them in Workable — the ATS handles any candidate email, not Taali\./i)).toBeInTheDocument();
   });
 
   it('does not show the consequence note for a non-reject decision', () => {

@@ -773,6 +773,16 @@
   color: var(--purple);
   margin-top: 7px;
 }
+/* Reject-consequence caption under the recommendation — mirrors the candidate
+   report rail's dr-rec-conf so the "what confirming does" note reads the same
+   on both surfaces. */
+.rq-rec-conf {
+  max-width: 340px;
+  margin: 9px auto 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--purple);
+}
 .rq-rec-btn {
   /* Fixed, content-sized pill — centred. Does NOT stretch with the card width
      (it read as oversized when the card grew). */
