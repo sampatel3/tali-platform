@@ -19,8 +19,8 @@ effective granted scopes (replicating ``workable_granted_scopes``):
 Then drop the ``email_mode`` key. Idempotent (safe to re-run) and reversible
 (downgrade restores ``email_mode`` from the bool and drops the new key).
 
-Revision ID: 149_workable_writeback_flag
-Revises: 148_add_outreach_campaigns
+Revision ID: 150_workable_writeback_flag
+Revises: 149_extend_interview_feedback
 Create Date: 2026-07-11
 """
 from __future__ import annotations
@@ -28,8 +28,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "149_workable_writeback_flag"
-down_revision = "148_add_outreach_campaigns"
+revision = "150_workable_writeback_flag"
+down_revision = "149_extend_interview_feedback"
 branch_labels = None
 depends_on = None
 
