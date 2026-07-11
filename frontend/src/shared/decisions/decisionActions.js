@@ -62,6 +62,17 @@ export const DECISION_ACTIONS = {
     },
     alternatives: [
       {
+        action: 'send_assessment',
+        label: 'Send assessment',
+        icon: Send,
+        kicker: 'OVERRIDE TO SEND',
+        headline: 'Send an assessment to {name} instead of advancing?',
+        body: "Dispatches the assessment invite instead of moving them forward — works even when this role skips assessments. The agent will recalibrate based on your reason.",
+        confirmLabel: 'Send assessment',
+        confirmClass: 'rq-approve',
+        placeholder: 'e.g. Want to verify hands-on skill before the interview',
+      },
+      {
         action: 'reject',
         label: 'Reject',
         icon: X,
