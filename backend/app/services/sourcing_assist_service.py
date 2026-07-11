@@ -38,6 +38,7 @@ from ..models.org_criterion import BUCKET_MUST
 from ..models.role import Role
 from ..platform.config import settings
 from .claude_client_resolver import get_metered_client
+from .role_budget_gate import can_spend_on_role
 
 logger = logging.getLogger("taali.sourcing_assist")
 
@@ -240,8 +241,21 @@ def build_search_strings(
         "title_synonyms": [],
     }
 
-    if client is None:
-        client = get_metered_client(organization_id=role.organization_id)
+    # Role monthly budget gate — same rule as every other role-scoped Anthropic
+    # entry point. Fail-open to the deterministic strings; no LLM spend.
+    if not can_spend_on_role(db, role=role):
+        result["warning"] = (
+            "This role's monthly Claude budget has been reached — showing the base search strings."
+        )
+        return result
+
+    try:
+        if client is None:
+            client = get_metered_client(organization_id=role.organization_id)
+    except Exception as exc:  # fail-open: deterministic strings still render
+        logger.warning("sourcing search client init failed (role=%s): %s", role.id, exc)
+        result["warning"] = "Couldn't generate refined suggestions — showing the base search strings."
+        return result
     resolved_model = model or settings.resolved_claude_chat_model
 
     user = (
@@ -367,8 +381,21 @@ def draft_outreach(
     channel = channel if channel in _VALID_CHANNELS else "linkedin"
     profile = (profile_text or "").strip()[:_MAX_PROFILE_CHARS]
 
-    if client is None:
-        client = get_metered_client(organization_id=role.organization_id)
+    # Role monthly budget gate — same rule as every other role-scoped Anthropic
+    # entry point. Fail-open to the deterministic strings; no LLM spend.
+    if not can_spend_on_role(db, role=role):
+        result["warning"] = (
+            "This role's monthly Claude budget has been reached — showing the base search strings."
+        )
+        return result
+
+    try:
+        if client is None:
+            client = get_metered_client(organization_id=role.organization_id)
+    except Exception as exc:  # fail-open: deterministic strings still render
+        logger.warning("sourcing search client init failed (role=%s): %s", role.id, exc)
+        result["warning"] = "Couldn't generate refined suggestions — showing the base search strings."
+        return result
     resolved_model = model or settings.resolved_claude_chat_model
 
     word_cap = 120 if channel == "linkedin" else 180

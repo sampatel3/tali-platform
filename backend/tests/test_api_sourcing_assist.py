@@ -200,3 +200,58 @@ def test_outreach_draft_foreign_role_404(client, monkeypatch):
         headers=headers_b,
     )
     assert resp.status_code == 404, resp.text
+
+
+# ---- budget gate + client-init fail-open -----------------------------------
+
+
+def test_sourcing_searches_budget_exhausted_fails_open(client, monkeypatch):
+    """A spent role budget must not 500 or spend — deterministic strings + warning."""
+    headers, _ = auth_headers(client)
+    role = _make_role_with_must_have(client, headers)
+
+    monkeypatch.setattr(svc, "can_spend_on_role", lambda db, *, role: False)
+
+    def _boom(*a, **k):  # any LLM attempt is a bug
+        raise AssertionError("LLM must not be called when the budget gate blocks")
+
+    monkeypatch.setattr(svc, "generate_structured", _boom)
+
+    resp = client.post(f"/api/v1/roles/{role['id']}/sourcing-searches", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["deterministic"]["boolean"]
+    assert body["refined"] == []
+    assert "budget" in body["warning"].lower()
+
+
+def test_sourcing_searches_client_init_failure_fails_open(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    role = _make_role_with_must_have(client, headers)
+
+    def _raise(**k):
+        raise RuntimeError("ANTHROPIC_API_KEY not configured")
+
+    monkeypatch.setattr(svc, "get_metered_client", _raise)
+
+    resp = client.post(f"/api/v1/roles/{role['id']}/sourcing-searches", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["deterministic"]["xray"]
+    assert body["warning"]
+
+
+def test_outreach_draft_budget_exhausted_402(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    role = _make_role_with_must_have(client, headers)
+
+    import app.domains.outreach.sourcing_assist_routes as routes_mod
+
+    monkeypatch.setattr(routes_mod, "can_spend_on_role", lambda db, *, role: False)
+
+    resp = client.post(
+        f"/api/v1/roles/{role['id']}/outreach-draft",
+        headers=headers,
+        json={"profile_text": "Senior engineer, 8 years Python.", "tone": "warm", "channel": "linkedin"},
+    )
+    assert resp.status_code == 402, resp.text
