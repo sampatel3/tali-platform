@@ -142,21 +142,55 @@ class _FakeRequest:
         self.headers = _FakeHeaders(headers)
 
 
-def test_bucket_uses_key_prefix_for_tali_bearer():
+def test_buckets_key_scoped_by_ip_plus_ip_guard():
     req = _FakeRequest({"Authorization": "Bearer tali_live_abcdef123456_secret"})
-    assert mw._mcp_bucket_id(req, "9.9.9.9") == "key:tali_live_abcdef"
+    buckets = mw._mcp_buckets(req, "9.9.9.9")
+    assert buckets[0][0] == "mcp:key:tali_live_abcdef:9.9.9.9"
+    assert buckets[1][0] == "mcp:ip:9.9.9.9"
+    assert buckets[1][1] == buckets[0][1] * 4
 
 
-def test_bucket_uses_key_prefix_for_x_api_key():
+def test_buckets_x_api_key_slot():
     req = _FakeRequest({"X-API-Key": "tali_test_abcdef123456_secret"})
-    assert mw._mcp_bucket_id(req, "9.9.9.9") == "key:tali_test_abcdef"
+    assert mw._mcp_buckets(req, "9.9.9.9")[0][0] == "mcp:key:tali_test_abcdef:9.9.9.9"
 
 
-def test_bucket_falls_back_to_ip_for_jwt():
+def test_buckets_fall_back_to_single_ip_bucket_for_jwt():
     req = _FakeRequest({"Authorization": "Bearer eyJhbGciOi.jwt.token"})
-    assert mw._mcp_bucket_id(req, "9.9.9.9") == "ip:9.9.9.9"
+    buckets = mw._mcp_buckets(req, "9.9.9.9")
+    assert [k for k, _ in buckets] == ["mcp:ip:9.9.9.9"]
 
 
-def test_bucket_falls_back_to_ip_when_no_auth():
+def test_buckets_fall_back_to_single_ip_bucket_when_no_auth():
     req = _FakeRequest({})
-    assert mw._mcp_bucket_id(req, "1.2.3.4") == "ip:1.2.3.4"
+    buckets = mw._mcp_buckets(req, "1.2.3.4")
+    assert [k for k, _ in buckets] == ["mcp:ip:1.2.3.4"]
+
+
+# ---------------------------------------------------------------------------
+# Spoofed-prefix attack paths (the P2): rotation must hit the IP guard, and a
+# known display prefix from another IP must not burn the real key's bucket.
+# ---------------------------------------------------------------------------
+
+
+def test_spoofed_prefix_rotation_capped_by_ip_guard(mcp_client, monkeypatch):
+    monkeypatch.setattr(settings, "MCP_RATE_LIMIT_PER_MINUTE", 3)
+    statuses = [
+        _post_mcp(mcp_client, {"Authorization": f"Bearer tali_live_spoof{i:04d}xx"}).status_code
+        for i in range(3 * 4 + 2)
+    ]
+    assert 429 in statuses
+
+
+def test_spoofed_prefix_from_other_ip_cannot_burn_victim_bucket(mcp_client, monkeypatch):
+    monkeypatch.setattr(settings, "MCP_RATE_LIMIT_PER_MINUTE", 3)
+    for _ in range(6):
+        _post_mcp(
+            mcp_client,
+            {"Authorization": "Bearer tali_live_abcdefSPOOF", "X-Forwarded-For": "6.6.6.6"},
+        )
+    resp = _post_mcp(
+        mcp_client,
+        {"Authorization": "Bearer tali_live_abcdefREAL", "X-Forwarded-For": "7.7.7.7"},
+    )
+    assert resp.status_code != 429

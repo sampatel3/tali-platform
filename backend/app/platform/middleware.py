@@ -31,13 +31,17 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _mcp_bucket_id(request: Request, ip: str) -> str:
-    """Stable per-key (else per-IP) identifier for /mcp rate buckets.
+def _mcp_buckets(request: Request, ip: str) -> list[tuple[str, int]]:
+    """(key, max) rate buckets for one /mcp request.
 
-    Uses the API-key prefix from the Authorization/X-API-Key header when a
-    tali_* token is presented (prefix string only — the key is NOT verified
-    here); otherwise falls back to client IP for JWT/session users.
+    The token prefix is UNVERIFIED here, so it can never be the sole bucket:
+    a spoofer rotating prefixes would mint a fresh bucket per request (limit
+    bypass + unbounded store growth), and a known display prefix could burn a
+    real key's bucket. So the key bucket is scoped by IP, and every request
+    also counts against a per-IP guard at 4x the key limit (allows a few keys
+    behind one NAT at full rate while bounding spoof rotation and memory).
     """
+    per_key = settings.MCP_RATE_LIMIT_PER_MINUTE
     candidates = []
     authz = request.headers.get("authorization")
     if authz:
@@ -48,11 +52,14 @@ def _mcp_bucket_id(request: Request, ip: str) -> str:
         candidates.append(x_api_key)
     for token in candidates:
         if token.startswith(_API_KEY_PREFIXES):
-            return f"key:{token[:_MCP_KEY_BUCKET_LEN]}"
-    return f"ip:{ip}"
+            return [
+                (f"mcp:key:{token[:_MCP_KEY_BUCKET_LEN]}:{ip}", per_key),
+                (f"mcp:ip:{ip}", per_key * 4),
+            ]
+    return [(f"mcp:ip:{ip}", per_key)]
 
 
-def _rate_limit_key(request: Request, ip: str, path: str) -> str:
+def _rate_limit_key(ip: str, path: str) -> str:
     if (
         "/api/v1/auth/login" in path
         or "/api/v1/auth/jwt/login" in path
@@ -66,9 +73,6 @@ def _rate_limit_key(request: Request, ip: str, path: str) -> str:
         return f"candidate_token:{ip}"
     if "/api/v1/assessments/" in path and ("/start" in path or "/execute" in path or "/submit" in path or "/claude" in path or "/upload-cv" in path):
         return f"assessment:{ip}"
-    # Public /mcp mount (JWT or tali_* API key auth). Bucketed per key, else IP.
-    if path == "/mcp" or path.startswith("/mcp/"):
-        return f"mcp:{_mcp_bucket_id(request, ip)}"
     return ""
 
 
@@ -79,8 +83,6 @@ def _rate_limit_max(key: str) -> int:
         return 15  # Candidate token endpoints: 15 per 60s (prevent brute-force)
     if key.startswith("assessment:"):
         return 30
-    if key.startswith("mcp:"):
-        return settings.MCP_RATE_LIMIT_PER_MINUTE
     return 0
 
 
@@ -90,26 +92,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         ip = _get_client_ip(request)
         path = request.url.path
-        key = _rate_limit_key(request, ip, path)
-        if not key:
-            return await call_next(request)
-
-        max_allowed = _rate_limit_max(key)
-        if max_allowed <= 0:
-            # Disabled bucket (e.g. MCP_RATE_LIMIT_PER_MINUTE=0).
-            return await call_next(request)
+        if path == "/mcp" or path.startswith("/mcp/"):
+            # Public MCP mount (JWT or tali_* API key). Multi-bucket: per
+            # unverified-key-prefix scoped by IP, plus a per-IP guard.
+            buckets = _mcp_buckets(request, ip)
+        else:
+            key = _rate_limit_key(ip, path)
+            buckets = [(key, _rate_limit_max(key))] if key else []
 
         now = time.time()
         window_start = now - _RATE_WINDOW_SEC
-        store = _rate_limit_store[key]
-        store[:] = [t for t in store if t > window_start]
-        if len(store) >= max_allowed:
-            logger.warning("Rate limit exceeded key=%s path=%s", key, path)
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Too many requests. Please try again later."},
-            )
-        store.append(now)
+        counted = []
+        for key, max_allowed in buckets:
+            if max_allowed <= 0:
+                # Disabled bucket (e.g. MCP_RATE_LIMIT_PER_MINUTE=0).
+                continue
+            store = _rate_limit_store[key]
+            store[:] = [t for t in store if t > window_start]
+            if len(store) >= max_allowed:
+                logger.warning("Rate limit exceeded key=%s path=%s", key, path)
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please try again later."},
+                )
+            counted.append(store)
+        for store in counted:
+            store.append(now)
         return await call_next(request)
 
 
