@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 
 import { DecisionRail } from './DecisionRail';
@@ -131,5 +131,81 @@ describe('DecisionRail reject consequence copy', () => {
     expect(reject).toHaveAttribute('title', expect.stringMatching(/Inputs changed since this was decided/i));
     // The visible consequence note still renders under the button.
     expect(screen.getByText(/Disqualifies them in Workable/i)).toBeInTheDocument();
+  });
+});
+
+describe('DecisionRail pre-screen escalation', () => {
+  const preScreenApp = { cv_match_score: null, workable_stage: null };
+
+  it('renders the pre-screen context + Run full evaluation action, not the generic hint', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide
+        preScreenedOut
+        preScreenScore={31}
+        preScreenReason="Missing the core Kubernetes requirement."
+        onRunFullEvaluation={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/Filtered out by pre-screen · 31\/100/i)).toBeInTheDocument();
+    expect(screen.getByText(/Missing the core Kubernetes requirement\./i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run full evaluation/i })).toBeInTheDocument();
+    // The generic "score this candidate" hint is suppressed — the pre-screen
+    // block replaces it.
+    expect(screen.queryByText(/No agent decision yet/i)).not.toBeInTheDocument();
+  });
+
+  it('fires onRunFullEvaluation when the action is clicked', () => {
+    const onRun = vi.fn();
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide
+        preScreenedOut
+        onRunFullEvaluation={onRun}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Run full evaluation/i }));
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the in-flight state and disables the action while evaluating', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide
+        preScreenedOut
+        evaluating
+        onRunFullEvaluation={vi.fn()}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /Evaluating/i });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(/Running a full CV evaluation now/i)).toBeInTheDocument();
+  });
+
+  it('does not render the pre-screen block for a client / interview view', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide={false}
+        preScreenedOut
+        onRunFullEvaluation={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /Run full evaluation/i })).not.toBeInTheDocument();
   });
 });

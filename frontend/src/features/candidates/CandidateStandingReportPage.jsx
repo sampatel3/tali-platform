@@ -1130,41 +1130,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             )}
           </div>
         ) : null}
-        {isPreScreenedOut ? (
-          <div
-            data-internal-only
-            style={{
-              marginTop: '4px',
-              marginBottom: '14px',
-              padding: '12px 14px',
-              borderRadius: '12px',
-              background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
-              border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
-              display: 'flex',
-              gap: '12px',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-            }}
-          >
-            <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
-              <strong>Filtered out by pre-screen{preScreenScore != null ? ` · ${Math.round(preScreenScore)}/100` : ''}.</strong>{' '}
-              {evaluating
-                ? 'Running a full CV evaluation now — the report updates automatically when the score lands.'
-                : (preScreenReason || 'Pre-screening found this CV unlikely to meet the role’s must-haves.')}
-            </div>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={handleRunFullEvaluation}
-              disabled={busyAction === 'rescore' || evaluating}
-            >
-              {evaluating ? (
-                <><Sparkles size={13} className="rq-spin" /> Evaluating…</>
-              ) : busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
-            </button>
-          </div>
-        ) : null}
+        {/* The pre-screen escalation used to be a bespoke top-of-page banner.
+            It now lives in the DecisionRail as a standard dr-btn action (see the
+            preScreenedOut props on <DecisionRail> below), consistent with every
+            other decision control. */}
 
         {isClientView && application?.client_share_summary ? (
           <div className="report-card" style={{ marginTop: 18, borderLeft: '4px solid var(--taali-accent, #4f46e5)' }}>
@@ -1243,11 +1212,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             provenance={application?.score_summary?.score_provenance}
             canDecide={!isClientView && !isInterviewView}
             busy={decisionBusy}
+            preScreenedOut={isPreScreenedOut}
+            preScreenScore={preScreenScore}
+            preScreenReason={preScreenReason}
+            evaluating={evaluating}
+            runFullEvaluationBusy={busyAction === 'rescore'}
             onApprove={handleDecisionApprove}
             onAlternative={handleDecisionAlternative}
             onTeach={(d) => setTeachFor(d)}
             onSnooze={handleDecisionSnooze}
             onReEvaluate={handleDecisionReEvaluate}
+            onRunFullEvaluation={handleRunFullEvaluation}
           />
           <main className="dossier-main">
         <div className="vtabs report-tabs" role="tablist" aria-label="Candidate report sections">

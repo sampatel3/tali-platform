@@ -60,11 +60,21 @@ export const DecisionRail = ({
   // and any share/interview view. Gates the entire decision apparatus.
   canDecide = false,
   busy = false,
+  // Pre-screen escalation: a candidate the cheap Stage-1 gate filtered out (no
+  // full cv_match score). The recruiter can pay to run the full v3 evaluation.
+  // Rendered as a first-class rail action in the same dr-* vocabulary as the
+  // decision buttons, replacing the old bespoke top-of-page banner.
+  preScreenedOut = false,
+  preScreenScore = null,
+  preScreenReason = '',
+  evaluating = false,
+  runFullEvaluationBusy = false,
   onApprove,
   onAlternative,
   onTeach,
   onSnooze,
   onReEvaluate,
+  onRunFullEvaluation,
 }) => {
   const isActionable = Boolean(
     decision && (decision.status === 'pending' || decision.status === 'reverted_for_feedback'),
@@ -130,6 +140,39 @@ export const DecisionRail = ({
         />
         <div className="dr-score-label">Taali score</div>
       </div>
+
+      {/* Pre-screen escalation — a first-class rail action, not a page banner.
+          Shows the cheap-gate verdict as context (a dr-hint) and offers the
+          full evaluation as a standard dr-btn, the same path the decision
+          actions below use. Renders above any emitted skip_assessment_reject
+          decision so the recruiter can accept the cheap reject OR pay for the
+          full look. */}
+      {canDecide && preScreenedOut ? (
+        <div className="dr-prescreen" data-internal-only>
+          <div className="dr-hint" role="status">
+            <strong>
+              Filtered out by pre-screen{preScreenScore != null ? ` · ${Math.round(preScreenScore)}/100` : ''}.
+            </strong>{' '}
+            {evaluating
+              ? 'Running a full CV evaluation now — the report updates automatically when the score lands.'
+              : (preScreenReason || 'Pre-screening found this CV unlikely to meet the role’s must-haves.')}
+          </div>
+          <button
+            type="button"
+            className="dr-btn dr-btn-wide"
+            onClick={() => onRunFullEvaluation?.()}
+            disabled={evaluating || runFullEvaluationBusy}
+          >
+            {evaluating ? (
+              <><Sparkles size={14} strokeWidth={2} aria-hidden="true" className="rq-spin" /> Evaluating…</>
+            ) : runFullEvaluationBusy ? (
+              'Queuing…'
+            ) : (
+              <><Sparkles size={14} strokeWidth={2} aria-hidden="true" /> Run full evaluation</>
+            )}
+          </button>
+        </div>
+      ) : null}
 
       {canDecide && isActionable ? (
         <div data-internal-only className={rescoring ? 'is-rescoring' : undefined}>
@@ -251,8 +294,10 @@ export const DecisionRail = ({
           <div className="dr-decided-outcome">{outcome}</div>
           <div className="dr-rec-conf">Resolved — no agent action pending</div>
         </div>
-      ) : canDecide ? (
+      ) : canDecide && !preScreenedOut ? (
         // Honest "why no card" hint (mirrors the retired strip's STATE 3).
+        // Suppressed when preScreenedOut — the pre-screen block above already
+        // explains why there's no full score and offers the escalation.
         <div className="dr-hint" data-internal-only>
           {!isScored ? (
             <span>No agent decision yet — score this candidate to get a recommendation.</span>

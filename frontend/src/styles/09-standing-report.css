@@ -1948,6 +1948,18 @@ button.eng-badge-button:focus-visible {
 }
 .dossier-rail .dr-btn-wide { flex-basis: 100%; }
 
+/* Pre-screen escalation block — a dr-hint (cheap-gate context) stacked over a
+   full-width dr-btn (the "Run full evaluation" action). The wrapper is a plain
+   div, so the standalone dr-btn needs an explicit width. */
+.dossier-rail .dr-prescreen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.dossier-rail .dr-prescreen .dr-hint { margin-bottom: 0; }
+.dossier-rail .dr-prescreen .dr-btn { width: 100%; }
+
 .dossier-rail .dr-hint {
   font-size: 0.8125rem;
   color: var(--mute);
