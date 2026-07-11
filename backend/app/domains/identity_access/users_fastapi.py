@@ -14,7 +14,7 @@ from fastapi_users import exceptions as fu_exceptions
 from fastapi_users.authentication import AuthenticationBackend, BearerTransport, JWTStrategy
 from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import case, select, update as sa_update
 
 from ...models.auth_event import (
     AUTH_EVENT_ACCOUNT_LOCKED,
@@ -124,16 +124,40 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             credentials.password, user.hashed_password
         )
         if not verified:
-            # A lock that already expired starts a fresh count
-            attempts = 1 if locked_until else user.failed_login_attempts + 1
-            update_dict = {"failed_login_attempts": attempts, "locked_until": None}
+            if locked_until:
+                # A lock that already expired starts a fresh count
+                attempts = 1
+                await self.user_db.update(
+                    user, {"failed_login_attempts": 1, "locked_until": None}
+                )
+            else:
+                # Single atomic increment — concurrent bad logins must not
+                # lose counts to a read-modify-write race, and the lock is
+                # set in the same statement the moment the threshold is hit.
+                lock_at = now + timedelta(minutes=settings.AUTH_LOCKOUT_MINUTES)
+                result = await session.execute(
+                    sa_update(User)
+                    .where(User.id == user.id)
+                    .values(
+                        failed_login_attempts=User.failed_login_attempts + 1,
+                        locked_until=case(
+                            (
+                                User.failed_login_attempts + 1
+                                >= settings.AUTH_LOCKOUT_THRESHOLD,
+                                lock_at,
+                            ),
+                            else_=User.locked_until,
+                        ),
+                    )
+                    .returning(User.failed_login_attempts)
+                )
+                attempts = result.scalar_one()
+                await session.commit()
             event_type = AUTH_EVENT_LOGIN_FAILED
             metadata = {"reason": "bad_password", "failed_attempts": attempts}
             if attempts >= settings.AUTH_LOCKOUT_THRESHOLD:
-                update_dict["locked_until"] = now + timedelta(minutes=settings.AUTH_LOCKOUT_MINUTES)
                 event_type = AUTH_EVENT_ACCOUNT_LOCKED
                 metadata["lock_minutes"] = settings.AUTH_LOCKOUT_MINUTES
-            await self.user_db.update(user, update_dict)
             await record_auth_event_async(
                 session,
                 event_type,

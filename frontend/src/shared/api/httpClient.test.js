@@ -5,7 +5,9 @@ import api, {
   shouldRefreshToken,
   setAccessToken,
   clearAccessToken,
+  isUserActive,
   REFRESH_TOKEN_AFTER_MS,
+  USER_IDLE_CUTOFF_MS,
 } from './httpClient';
 
 // Regression: a stale/expired JWT in localStorage + the auth bootstrap 401
@@ -79,6 +81,14 @@ describe('httpClient sliding token refresh', () => {
     expect(shouldRefreshToken(undefined)).toBe(true);
     expect(shouldRefreshToken('')).toBe(true);
     expect(shouldRefreshToken('not-a-number')).toBe(true);
+  });
+
+  it('only slides the session for a recently active user (unattended tabs idle out)', () => {
+    const now = Date.now();
+    expect(isUserActive(now, now)).toBe(true);
+    expect(isUserActive(now - USER_IDLE_CUTOFF_MS + 1000, now)).toBe(true);
+    expect(isUserActive(now - USER_IDLE_CUTOFF_MS - 1000, now)).toBe(false);
+    expect(isUserActive(undefined, now)).toBe(false);
   });
 
   it('setAccessToken stamps the issue time; clearAccessToken removes both keys', () => {

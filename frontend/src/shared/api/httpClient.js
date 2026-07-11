@@ -110,10 +110,30 @@ export const shouldRefreshToken = (issuedAtRaw, now = Date.now()) => {
   return now - issuedAt > REFRESH_TOKEN_AFTER_MS;
 };
 
+// The session slides only for a PRESENT user: every refresh (interceptor
+// trigger and heartbeat alike) requires input in the last USER_IDLE_CUTOFF_MS.
+// Without this, a visible-but-unattended tab — or one kept warm by background
+// polling — would mint fresh tokens forever and never idle out.
+export const USER_IDLE_CUTOFF_MS = 15 * 60 * 1000;
+
+// Exported for tests.
+export const isUserActive = (lastActivityAt, now = Date.now()) => (
+  Number.isFinite(Number(lastActivityAt)) && now - Number(lastActivityAt) <= USER_IDLE_CUTOFF_MS
+);
+
+let lastUserActivityAt = Date.now(); // page load counts as activity
+
+if (typeof window !== 'undefined') {
+  ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach((evt) => {
+    window.addEventListener(evt, () => { lastUserActivityAt = Date.now(); }, { passive: true, capture: true });
+  });
+}
+
 let refreshInFlight = null;
 
 const maybeRefreshToken = () => {
   if (refreshInFlight) return;
+  if (!isUserActive(lastUserActivityAt)) return;
   if (!localStorage.getItem(TOKEN_KEY)) return;
   if (!shouldRefreshToken(localStorage.getItem(TOKEN_ISSUED_AT_KEY))) return;
   refreshInFlight = api
@@ -130,8 +150,8 @@ const maybeRefreshToken = () => {
 };
 
 // Heartbeat so a user reading/typing without firing API calls stays signed in.
-// Only ticks while the tab is visible — a backgrounded tab lets the session
-// idle out naturally.
+// Only ticks while the tab is visible; the user-activity gate inside
+// maybeRefreshToken keeps an unattended tab from sliding forever.
 // (Skipped under vitest — a live interval would keep test workers alive.)
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && import.meta.env?.MODE !== 'test') {
   setInterval(() => {
