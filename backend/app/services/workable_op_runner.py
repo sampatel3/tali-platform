@@ -388,7 +388,10 @@ def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict
 def _op_post_note(db: Session, organization_id: int, payload: dict) -> dict:
     """Post a free-form note to the candidate's Workable activity feed."""
     from ..models.organization import Organization
-    from .workable_actions_service import resolve_workable_actor_member_id
+    from .workable_actions_service import (
+        resolve_workable_actor_member_id,
+        workable_writeback_enabled,
+    )
     from ..domains.integrations_notifications.adapters import build_workable_adapter
     from ..domains.assessments_runtime.pipeline_service import append_application_event
 
@@ -410,6 +413,8 @@ def _op_post_note(db: Session, organization_id: int, payload: dict) -> dict:
     if app is None or not app.workable_candidate_id or not body:
         return {"status": "skipped", "reason": "not_linked_or_empty", "application_id": application_id}
     org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not workable_writeback_enabled(org):
+        return {"status": "skipped", "reason": "writeback_disabled", "application_id": application_id}
     member_id = resolve_workable_actor_member_id(org, role=getattr(app, "role", None))
     if not member_id or not (org and getattr(org, "workable_access_token", None)):
         return {"status": "skipped", "reason": "not_configured", "application_id": application_id}

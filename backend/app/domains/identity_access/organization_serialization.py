@@ -27,7 +27,19 @@ def default_workable_config() -> dict:
 
 def resolved_workable_config(org: Organization) -> dict:
     raw = org.workable_config if isinstance(org.workable_config, dict) else {}
-    return WorkableConfigBase(**{**default_workable_config(), **raw}).model_dump()
+    resolved = WorkableConfigBase(**{**default_workable_config(), **raw}).model_dump()
+    # Expose the effective write-back state the UI reads. Prefer the stored
+    # bool; fall back to scope-derived capability for pre-migration data so the
+    # toggle reflects real behavior. Mirrors ``workable_writeback_enabled``.
+    from ...services.workable_actions_service import workable_can_write_candidates
+
+    if "workable_writeback" in raw:
+        resolved["workable_writeback"] = bool(raw.get("workable_writeback"))
+    else:
+        resolved["workable_writeback"] = bool(
+            getattr(org, "workable_connected", False)
+        ) and workable_can_write_candidates(org)
+    return resolved
 
 
 def resolved_fireflies_config(org: Organization) -> FirefliesConfig:
@@ -118,12 +130,11 @@ def merge_notification_preferences(org: Organization, incoming: OrgUpdate) -> di
 
 
 def resolved_workable_mode(org: Organization) -> str:
-    """Map email_mode + granted_scopes onto the UI-facing two-way /
+    """Map the write-back flag + granted_scopes onto the UI-facing two-way /
     read-only label introduced in the settings redesign."""
     config = resolved_workable_config(org)
     granted = config.get("granted_scopes") or []
-    email_mode = str(config.get("email_mode") or "manual_taali")
-    if email_mode == "workable_preferred_fallback_manual" and "w_candidates" in granted:
+    if bool(config.get("workable_writeback")) and "w_candidates" in granted:
         return "two_way"
     return "read_only"
 

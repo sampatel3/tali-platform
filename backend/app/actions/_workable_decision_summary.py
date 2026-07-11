@@ -66,6 +66,10 @@ def _workable_writeback_ready(
         return False
     if org is None:
         return False
+    from ..services.workable_actions_service import workable_writeback_enabled
+
+    if not workable_writeback_enabled(org):
+        return False
     return bool(
         getattr(org, "workable_connected", False)
         and getattr(org, "workable_access_token", None)
@@ -229,6 +233,26 @@ def try_workable_advance(
         return False
 
     config = result.get("config") or {}
+    if result.get("skipped"):
+        # Read-only mode: the write-back is a benign no-op, resolved in Taali
+        # only. Don't stamp workable_stage or log a failure. (The
+        # _workable_writeback_ready gate normally prevents reaching here.)
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_writeback_skipped",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason="read-only mode — resolved in Taali only",
+            metadata={
+                "action": result.get("action"),
+                "code": result.get("code"),
+                "workable_candidate_id": app.workable_candidate_id,
+                "target_stage": target,
+                "source": "decision_summary",
+            },
+        )
+        return False
     if not result.get("success"):
         append_application_event(
             db,

@@ -19,10 +19,9 @@ went out. ``assessment.invite_channel`` records what actually happened:
   - ``"workable_hybrid"`` → email sent + Workable updated successfully
   - ``"workable_partial"`` → email sent but the Workable update failed
 
-The legacy ``email_mode`` config field is still honored: ``manual_taali``
-suppresses the Workable-side action even when the org is connected.
-``workable_preferred_fallback_manual`` is treated as opt-in to the
-Workable update.
+The ``workable_writeback`` config flag governs this: when false (read-only
+mode) the Workable-side action is suppressed even when the org is connected.
+When true, the Workable stage move + note is attempted.
 """
 
 from __future__ import annotations
@@ -35,7 +34,10 @@ from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.request_context import get_request_id
 from .adapters import build_workable_adapter
-from ...services.workable_actions_service import move_candidate_in_workable
+from ...services.workable_actions_service import (
+    move_candidate_in_workable,
+    workable_writeback_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ logger = logging.getLogger(__name__)
 def _workable_config(org: Organization) -> dict:
     config = org.workable_config if isinstance(org.workable_config, dict) else {}
     return {
-        "email_mode": str(config.get("email_mode") or "manual_taali"),
+        "workable_writeback": workable_writeback_enabled(org),
         "workflow_mode": str(config.get("workflow_mode") or "manual"),
         "invite_stage_name": str(config.get("invite_stage_name") or "").strip(),
     }
@@ -101,10 +103,9 @@ def _workable_handoff_eligible(*, assessment: Assessment, org: Organization, con
         return False
     if not config["invite_stage_name"]:
         return False
-    # Honor explicit opt-out via legacy ``manual_taali`` config — even if
-    # everything else is wired, the recruiter has said "no Workable side
-    # effects on assessment send".
-    if config["email_mode"] == "manual_taali":
+    # Honor read-only mode — even if everything else is wired, write-back off
+    # means "no Workable side effects on assessment send".
+    if not config["workable_writeback"]:
         return False
     return True
 

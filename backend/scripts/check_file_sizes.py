@@ -37,6 +37,7 @@ ALLOWLIST: dict[str, str] = {
     "app/domains/billing_webhooks/billing_routes.py": "Stripe + credit-pack billing routes (TODO: split webhook handlers)",
     "app/domains/workable_sync/routes.py": "legacy Workable sync API",
     "app/services/fit_matching_service.py": "CV-to-role fit scoring pipeline",
+    "app/services/workable_actions_service.py": "Workable write helpers + read-only gate (8 LOC over; TODO: extract note-template rendering)",
     "app/services/interview_support_service.py": "interview pack builder (1 LOC over after chip-helper extraction)",
     "app/services/pricing_service.py": "single source of truth for the per-feature pricing + reservation tables; grows one entry per metered Feature",
     "app/services/pre_screening_service.py": "canonical Stage-1 pre-screen + fraud gate engine (4 LOC over after cross-candidate mass-apply wiring)",

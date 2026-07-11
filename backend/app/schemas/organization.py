@@ -6,7 +6,10 @@ from pydantic import BaseModel, Field, field_validator
 
 class WorkableConfigBase(BaseModel):
     workflow_mode: Literal["manual", "workable_hybrid"] = "manual"
-    email_mode: Literal["manual_taali", "workable_preferred_fallback_manual"] = "manual_taali"
+    # True when Taali writes candidate activity back to Workable (invites,
+    # stage moves, disqualify, notes); False = read-only (Taali-only, no
+    # write-backs). Replaces the legacy ``email_mode`` misnomer.
+    workable_writeback: bool = False
     sync_model: Literal["scheduled_pull_only"] = "scheduled_pull_only"
     sync_scope: Literal["open_jobs_active_candidates"] = "open_jobs_active_candidates"
     granted_scopes: List[str] = Field(default_factory=list)
@@ -27,7 +30,7 @@ class WorkableConfigBase(BaseModel):
 
 class WorkableConfigUpdate(BaseModel):
     workflow_mode: Optional[Literal["manual", "workable_hybrid"]] = None
-    email_mode: Optional[Literal["manual_taali", "workable_preferred_fallback_manual"]] = None
+    workable_writeback: Optional[bool] = None
     sync_model: Optional[Literal["scheduled_pull_only"]] = None
     sync_scope: Optional[Literal["open_jobs_active_candidates"]] = None
     score_precedence: Optional[Literal["workable_first"]] = None

@@ -90,7 +90,7 @@ def workable_granted_scopes(org: Organization | None) -> list[str]:
 
     inferred = ["r_jobs", "r_candidates"]
     if (
-        str(config.get("email_mode") or "manual_taali") == "workable_preferred_fallback_manual"
+        bool(config.get("workable_writeback"))
         or bool(config.get("auto_reject_enabled"))
     ):
         inferred.append(WORKABLE_WRITE_SCOPE)
@@ -103,6 +103,18 @@ def workable_has_scope(org: Organization | None, scope: str) -> bool:
 
 def workable_can_write_candidates(org: Organization | None) -> bool:
     return workable_has_scope(org, WORKABLE_WRITE_SCOPE)
+
+
+def workable_writeback_enabled(org: "Organization | None") -> bool:
+    """True when Taali writes candidate activity back to Workable. Reads the
+    ``workable_writeback`` bool; falls back to scope-derived capability when
+    absent (pre-migration) so behavior is preserved."""
+    if org is None or not getattr(org, "workable_connected", False):
+        return False
+    config = org.workable_config if isinstance(org.workable_config, dict) else {}
+    if "workable_writeback" in config:
+        return bool(config.get("workable_writeback"))
+    return workable_can_write_candidates(org)  # legacy fallback (scope-derived)
 
 
 def resolved_workable_action_config(org: Organization | None, role: Role | None = None) -> dict[str, Any]:
@@ -269,6 +281,24 @@ def _build_failure_result(
     }
 
 
+def _build_skipped_result(*, action: str, config: dict, message: str) -> dict:
+    # Deliberate no-op (read-only mode). Never raises, even under strict
+    # writes — the caller resolves the decision locally.
+    return {"success": False, "skipped": True, "action": action,
+            "code": "writeback_disabled", "message": message, "config": config, "response": {}}
+
+
+def _readonly_skip(org: "Organization | None", action: str, *, role: "Role | None" = None) -> dict | None:
+    """Benign skipped-result when write-back is off; None when writes are on."""
+    if workable_writeback_enabled(org):
+        return None
+    return _build_skipped_result(
+        action=action,
+        config=resolved_workable_action_config(org, role=role),
+        message="Workable write-back is off (read-only mode)",
+    )
+
+
 def _build_success_result(
     *,
     action: str,
@@ -325,6 +355,8 @@ def disqualify_candidate_in_workable(
     threshold_100: float | int | None = None,
     withdrew: bool = False,
 ) -> dict[str, Any]:
+    if (skip := _readonly_skip(org, "disqualify", role=role)) is not None:
+        return skip
     config = resolved_workable_action_config(org, role=role)
     validation_error = _validate_writeable_org(org, config=config, action="disqualify")
     if validation_error is not None:
@@ -380,6 +412,8 @@ def revert_candidate_disqualification_in_workable(
     app: CandidateApplication | None,
     role: Role | None = None,
 ) -> dict[str, Any]:
+    if (skip := _readonly_skip(org, "revert", role=role)) is not None:
+        return skip
     config = resolved_workable_action_config(org, role=role)
     validation_error = _validate_writeable_org(org, config=config, action="revert")
     if validation_error is not None:
@@ -425,6 +459,8 @@ def move_candidate_in_workable(
     target_stage: str,
     role: Role | None = None,
 ) -> dict[str, Any]:
+    if (skip := _readonly_skip(org, "move", role=role)) is not None:
+        return skip
     config = resolved_workable_action_config(org, role=role)
     validation_error = _validate_writeable_org(org, config=config, action="move")
     if validation_error is not None:

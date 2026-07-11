@@ -111,7 +111,19 @@ def run(
             detail="Workable is not connected for this organization",
         )
 
-    from ..services.workable_actions_service import resolve_workable_actor_member_id
+    from ..services.workable_actions_service import (
+        resolve_workable_actor_member_id,
+        workable_writeback_enabled,
+    )
+
+    # Read-only mode: Taali never writes to Workable, including agent/recruiter
+    # notes and assessment-result posts. Skip locally (no error).
+    if not workable_writeback_enabled(org):
+        return PostWorkableNoteResult(
+            application_id=application_id,
+            status="skipped",
+            detail="Workable write-back is off (read-only mode)",
+        )
 
     member_id = resolve_workable_actor_member_id(org, getattr(app, "role", None))
     if not member_id:

@@ -399,7 +399,7 @@ describe('SettingsPage recruiter surface', () => {
         workable_connected: true,
         workable_subdomain: 'acme',
         workable_config: {
-          email_mode: 'manual_taali',
+          workable_writeback: false,
           default_sync_mode: 'full',
           granted_scopes: ['r_jobs', 'r_candidates', 'w_candidates'],
           workable_actor_member_id: '',
@@ -446,7 +446,7 @@ describe('SettingsPage recruiter surface', () => {
         workable_connected: true,
         workable_subdomain: 'acme',
         workable_config: {
-          email_mode: 'manual_taali',
+          workable_writeback: false,
           default_sync_mode: 'full',
           granted_scopes: ['r_jobs', 'r_candidates'],
           workable_actor_member_id: '',
@@ -463,8 +463,8 @@ describe('SettingsPage recruiter surface', () => {
       expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     });
 
-    // The mode card was renamed hybrid|manual → two_way|read_only.
-    fireEvent.click(screen.getByRole('button', { name: /Two-way/i }));
+    // The mode card is now the write-back binary (write back / read-only).
+    fireEvent.click(screen.getByRole('button', { name: /Write back to Workable/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Save Workable Settings' }));
 
     await waitFor(() => {
