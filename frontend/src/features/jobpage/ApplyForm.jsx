@@ -124,7 +124,13 @@ function EEOStep({ token, onDone }) {
   const submit = async (declined) => {
     setBusy(true);
     try {
-      await publicJobApi.submitEeo(token, { ...values, declined_to_answer: !!declined });
+      // Declining sends ONLY the decline marker — any values the applicant
+      // selected before choosing Skip are deliberately dropped, so no protected
+      // characteristic ever leaves the browser on a decline.
+      const payload = declined
+        ? { declined_to_answer: true }
+        : { ...values, declined_to_answer: false };
+      await publicJobApi.submitEeo(token, payload);
     } catch {
       // Voluntary + best-effort: never block or alarm the candidate on failure.
     } finally {

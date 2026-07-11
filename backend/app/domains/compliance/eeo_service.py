@@ -54,7 +54,12 @@ def record_response(
     declined_to_answer: bool = False,
 ) -> EEOResponse:
     """Record (or overwrite) the voluntary self-ID for ONE application. Idempotent
-    per application: a second call updates the same row rather than inserting."""
+    per application: a second call updates the same row rather than inserting.
+
+    A DECLINE stores ONLY the declined marker: any demographic values arriving
+    alongside ``declined_to_answer=True`` (e.g. the applicant picked values, then
+    chose Skip) are discarded — declining means no protected characteristic is
+    persisted or counted."""
     _application_in_org(db, org_id, application_id)
     row = (
         db.query(EEOResponse)
@@ -67,11 +72,12 @@ def record_response(
     if row is None:
         row = EEOResponse(organization_id=org_id, application_id=application_id)
         db.add(row)
-    row.gender = gender
-    row.race_ethnicity = race_ethnicity
-    row.veteran_status = veteran_status
-    row.disability_status = disability_status
-    row.declined_to_answer = bool(declined_to_answer)
+    declined = bool(declined_to_answer)
+    row.gender = None if declined else gender
+    row.race_ethnicity = None if declined else race_ethnicity
+    row.veteran_status = None if declined else veteran_status
+    row.disability_status = None if declined else disability_status
+    row.declined_to_answer = declined
     db.flush()
     return row
 
@@ -111,20 +117,29 @@ def aggregate_report(
 def suppress_small_cells(
     report: Dict[str, Any], min_count: int = SMALL_CELL_THRESHOLD
 ) -> Dict[str, Any]:
-    """Return a k-anonymized copy of a raw aggregate report: any per-category
-    value whose count is below ``min_count`` has its count replaced with the
-    string ``"<5"`` so a low cell can't be used to re-identify an individual.
+    """Return a k-anonymized copy of a raw aggregate report.
+
+    Masking only the COUNT (e.g. ``female: "<5"``) still leaks WHICH protected
+    values exist in a small cohort — in a role-scoped report with two responses,
+    the label alone re-identifies. So suppression hides the label itself: each
+    category becomes ``{"values": {...}, "suppressed_count": N}`` where ``values``
+    keeps only labels whose count is at/above ``min_count`` and every below-
+    threshold response is rolled into the single anonymous ``suppressed_count``
+    bucket (no label). When a category's whole cohort is below the threshold,
+    ``values`` is empty — no per-value rows at all, only the suppressed marker.
     The org-wide ``total`` / ``declined_count`` totals are not protected cells and
     pass through unchanged."""
     out: Dict[str, Any] = {
         "total": report.get("total", 0),
         "declined_count": report.get("declined_count", 0),
     }
-    label = f"<{min_count}"
     for category in _CATEGORIES:
         counts = report.get(category, {}) or {}
+        visible = {v: c for v, c in counts.items() if c >= min_count}
         out[category] = {
-            value: (count if count >= min_count else label)
-            for value, count in counts.items()
+            "values": visible,
+            "suppressed_count": sum(
+                c for v, c in counts.items() if v not in visible
+            ),
         }
     return out

@@ -69,6 +69,24 @@ def test_access_request_returns_export(client, db):
     ).status_code == 409
 
 
+def test_email_subject_resolves_case_insensitively(client, db):
+    # A candidate stored with a mixed-case email (imported/legacy rows keep the
+    # original casing) must still resolve when the data subject submits any casing.
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cand = _candidate_with_app(db, org_id, email="Mixed.Case@Example.com")
+
+    rid = client.post(
+        "/api/v1/compliance/data-requests",
+        json={"request_type": "access", "subject_email": "mixed.case@example.COM"},
+        headers=headers,
+    ).json()["id"]
+
+    r = client.post(f"/api/v1/compliance/data-requests/{rid}/fulfill", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["export"]["candidate"]["email"] == cand.email
+
+
 def test_erasure_scrubs_every_pii_field_incl_raw_ats_payloads(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)

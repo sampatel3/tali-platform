@@ -93,21 +93,46 @@ def test_aggregate_report_returns_counts_only(db):
     assert rep["declined_count"] == 1
 
 
-def test_suppress_small_cells_masks_low_counts():
+def test_suppress_small_cells_hides_labels_not_just_counts():
     raw = {
         "total": 12,
         "declined_count": 1,
         "gender": {"female": 7, "male": 3},
-        "race_ethnicity": {},
+        "race_ethnicity": {"asian": 2, "white": 1},
         "veteran_status": {},
         "disability_status": {},
     }
     out = suppress_small_cells(raw, min_count=5)
-    # A cell at/above threshold keeps its real count; a low cell reads "<5".
-    assert out["gender"]["female"] == 7
-    assert out["gender"]["male"] == "<5"
+    # At/above threshold: the label + real count stay visible.
+    assert out["gender"]["values"] == {"female": 7}
+    # Below threshold: the LABEL disappears — rolled into the anonymous bucket.
+    assert "male" not in out["gender"]["values"]
+    assert out["gender"]["suppressed_count"] == 3
+    # A category whose entire cohort is small has NO per-value rows at all.
+    assert out["race_ethnicity"]["values"] == {}
+    assert out["race_ethnicity"]["suppressed_count"] == 3
     # Org-wide totals are not protected cells — pass through.
     assert out["total"] == 12 and out["declined_count"] == 1
+
+
+def test_record_decline_discards_any_demographics(db):
+    org = Organization(name="Acme", slug="eeo-decline")
+    db.add(org)
+    db.flush()
+    app = _app(db, org.id)
+
+    # The applicant picked values, then declined — nothing demographic persists.
+    row = record_response(
+        db, org.id, app.id,
+        gender="female", race_ethnicity="asian", veteran_status="no",
+        disability_status="no", declined_to_answer=True,
+    )
+    assert row.declined_to_answer is True
+    assert row.gender is None and row.race_ethnicity is None
+    assert row.veteran_status is None and row.disability_status is None
+    # And the aggregate counts nothing for a decline.
+    rep = aggregate_report(db, org.id)
+    assert rep["declined_count"] == 1 and rep["gender"] == {}
 
 
 # --- public token-authorised write --------------------------------------- #
@@ -179,5 +204,8 @@ def test_eeo_report_suppresses_small_cells(client, db):
     db.commit()
 
     rep = client.get("/api/v1/compliance/eeo-report", headers=headers).json()
-    assert rep["gender"]["female"] == 5   # at threshold — real count
-    assert rep["gender"]["male"] == "<5"  # below threshold — suppressed
+    # At threshold: the label + real count are visible.
+    assert rep["gender"]["values"] == {"female": 5}
+    # Below threshold: the label is gone, the response is in the anonymous bucket.
+    assert "male" not in rep["gender"]["values"]
+    assert rep["gender"]["suppressed_count"] == 1

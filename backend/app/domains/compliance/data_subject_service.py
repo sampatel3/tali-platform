@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
 from ...models.candidate import Candidate
@@ -137,7 +138,13 @@ def _resolve_candidate(
     if req.candidate_id:
         return q.filter(Candidate.id == req.candidate_id).first()
     if req.subject_email:
-        return q.filter(Candidate.email == req.subject_email).first()
+        # Case-insensitive on BOTH sides: create_request lowercases the submitted
+        # address, but imported/legacy candidate rows can hold mixed-case emails —
+        # an erasure must not miss `Person@Example.com`. Mirrors the identity
+        # resolver (candidate_identity_service.resolve_candidate).
+        return q.filter(
+            sa_func.lower(Candidate.email) == req.subject_email.strip().lower()
+        ).first()
     return None
 
 

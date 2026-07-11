@@ -289,20 +289,31 @@ const ComplianceSection = () => {
             <div className="mb-2">
               {eeo.total} responses · {eeo.declined_count} declined
             </div>
-            {EEO_CATEGORIES.map((cat) =>
-              Object.keys(eeo[cat] || {}).length ? (
+            {EEO_CATEGORIES.map((cat) => {
+              // New suppressed shape: { values: {label: count}, suppressed_count }.
+              // Below-threshold responses arrive as an anonymous bucket — the
+              // backend never sends their value labels.
+              const values = eeo[cat]?.values || {};
+              const suppressed = eeo[cat]?.suppressed_count || 0;
+              if (!Object.keys(values).length && !suppressed) return null;
+              return (
                 <div key={cat} className="mt-1">
                   <span className="text-xs uppercase text-[var(--taali-muted)]">{cat.replace(/_/g, ' ')}: </span>
-                  {Object.entries(eeo[cat]).map(([k, v]) => (
+                  {Object.entries(values).map(([k, v]) => (
                     <Badge key={k} variant="muted" className="ml-1">
                       {k}: {v}
                     </Badge>
                   ))}
+                  {suppressed ? (
+                    <Badge variant="muted" className="ml-1">
+                      {suppressed} suppressed
+                    </Badge>
+                  ) : null}
                 </div>
-              ) : null,
-            )}
+              );
+            })}
             <div className="mt-2 text-xs text-[var(--taali-muted)]">
-              Small cells are suppressed and shown as “&lt;5” to protect individuals.
+              Small groups are combined into a “suppressed” bucket to protect individuals.
             </div>
           </Card>
         )}

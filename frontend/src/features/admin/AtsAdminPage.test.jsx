@@ -79,17 +79,20 @@ describe('AtsAdminPage', () => {
     await waitFor(() => expect(compliance.rejectRequest).toHaveBeenCalledWith(12, expect.any(String)));
   });
 
-  it('shows the aggregate EEO report with suppressed cells as "<5"', async () => {
+  it('shows visible EEO cells and rolls small cohorts into a labelless suppressed bucket', async () => {
     compliance.eeoReport.mockResolvedValue({
       total: 6,
       declined_count: 0,
-      gender: { female: 5, male: '<5' },
-      race_ethnicity: {},
-      veteran_status: {},
-      disability_status: {},
+      gender: { values: { female: 5 }, suppressed_count: 1 },
+      race_ethnicity: { values: {}, suppressed_count: 0 },
+      veteran_status: { values: {}, suppressed_count: 0 },
+      disability_status: { values: {}, suppressed_count: 0 },
     });
     await openCompliance();
-    expect(await screen.findByText('male: <5')).toBeInTheDocument();
-    expect(screen.getByText('female: 5')).toBeInTheDocument();
+    expect(await screen.findByText('female: 5')).toBeInTheDocument();
+    // The below-threshold response is anonymous — its label ("male") never renders.
+    expect(screen.getByText('1 suppressed')).toBeInTheDocument();
+    expect(screen.queryByText('male: 1')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^male:/)).not.toBeInTheDocument();
   });
 });

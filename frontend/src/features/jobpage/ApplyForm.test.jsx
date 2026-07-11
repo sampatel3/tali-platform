@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -84,9 +84,11 @@ describe('ApplyForm', () => {
 
     const eeo = await screen.findByTestId('eeo-step');
     expect(eeo).toBeInTheDocument();
-    // Skip dismisses it without demographic data being required.
+    // The applicant picks a value, then chooses Skip — the selected demographic
+    // must NOT leave the browser. Skip sends ONLY the decline marker.
+    fireEvent.change(within(eeo).getByLabelText(/Gender/i), { target: { value: 'Female' } });
     fireEvent.click(screen.getByRole('button', { name: /^Skip$/i }));
-    await waitFor(() => expect(publicJobApi.submitEeo).toHaveBeenCalledWith('eeo_tok', expect.objectContaining({ declined_to_answer: true })));
+    await waitFor(() => expect(publicJobApi.submitEeo).toHaveBeenCalledWith('eeo_tok', { declined_to_answer: true }));
     await waitFor(() => expect(screen.queryByTestId('eeo-step')).not.toBeInTheDocument());
   });
 
