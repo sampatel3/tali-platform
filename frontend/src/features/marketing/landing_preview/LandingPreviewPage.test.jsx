@@ -30,16 +30,39 @@ describe('LandingPreviewPage', () => {
     stubMatchMedia(false);
   });
 
-  it('renders variant C (the cinematic switch) by default without crashing', () => {
-    renderAt('');
+  it('renders variant C (the light switch) by default without crashing', () => {
+    const { container } = renderAt('');
     // Variant C OFF-state hero copy.
     expect(screen.getByText(/Hiring runs on guesswork\./i)).toBeTruthy();
     // The agent switch is present as a role="switch".
     expect(screen.getByRole('switch')).toBeTruthy();
+    // Light theme root is mounted (the scoped `.lvc` shell).
+    expect(container.querySelector('.lvc')).toBeTruthy();
     // Switcher chip renders with C active.
     expect(
       screen.getByRole('button', { name: /C · Turn hiring on/i }).getAttribute('aria-pressed'),
     ).toBe('true');
+  });
+
+  it('carries the denser variant-C content and the "How it works" CTA (vision removed)', () => {
+    renderAt('');
+    // Secondary hero CTA is now "How it works" (was "Read the vision").
+    expect(screen.getByRole('button', { name: /How it works/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Read the vision/i })).toBeNull();
+    // The removed vision section copy is gone.
+    expect(screen.queryByText(/Where this goes\./i)).toBeNull();
+    // Pipeline stages carry real copy.
+    expect(screen.getByText('Hand back')).toBeTruthy();
+    expect(screen.getByText(/Plugs into your ATS/i)).toBeTruthy();
+    // All five Ds render as information rows. ("Discernment" also labels the
+    // trap dial, so allow more than one match.)
+    ['Delegation', 'Description', 'Discernment', 'Diligence', 'Deliverable'].forEach((d) => {
+      expect(screen.getAllByText(d).length).toBeGreaterThan(0);
+    });
+    // Closing CTA band is kept.
+    expect(screen.getByText(/Watch it decide in three minutes\./i)).toBeTruthy();
+    // LeetCode mention is gone from the problem section.
+    expect(screen.queryByText(/LeetCode/i)).toBeNull();
   });
 
   it('flips the agent switch from off to on when clicked', () => {
