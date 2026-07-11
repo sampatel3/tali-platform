@@ -6,14 +6,18 @@ import { auth } from '../../shared/api';
 import { PageLink } from '../../shared/ui/PageLink';
 import { AuthShell, AuthField } from './AuthShell';
 
-// Typed accept-invite failures from the backend. INVITE_ALREADY_ACCEPTED gets
-// its own success-ish "sign in instead" affordance, so it's flagged for the
-// render below rather than folded into the generic error copy.
+// Typed accept-invite failures from the backend. INVITE_ALREADY_ACCEPTED and
+// INVITE_SSO_REQUIRED both resolve on the sign-in page, so those get a
+// "go to sign in" affordance rather than telling the user to chase their admin.
 const INVITE_ERRORS = {
   INVITE_TOKEN_INVALID: 'This invite link is invalid or has expired. Ask your workspace admin to resend the invite.',
   INVITE_ALREADY_ACCEPTED: 'This invite was already accepted. Sign in instead.',
   INVITE_REVOKED: 'This invite is no longer active. Ask your workspace admin for a new one.',
+  INVITE_SSO_REQUIRED: 'Your workspace requires single sign-on. Use "Sign in with SSO" on the sign-in page.',
 };
+
+// Errors whose fix lives on /login — the error card adds a sign-in link.
+const SIGN_IN_ERRORS = new Set(['INVITE_ALREADY_ACCEPTED', 'INVITE_SSO_REQUIRED']);
 
 export const AcceptInvitePage = ({ onNavigate, token }) => {
   const { completeLogin } = useAuth();
@@ -21,14 +25,14 @@ export const AcceptInvitePage = ({ onNavigate, token }) => {
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  // Set when the invite was already accepted — the error card then offers a
-  // "sign in" link rather than telling the user to chase their admin.
-  const [alreadyAccepted, setAlreadyAccepted] = useState(false);
+  // Set when the error resolves on the sign-in page (already accepted /
+  // SSO-enforced) — the error card then offers a "go to sign in" link.
+  const [offerSignIn, setOfferSignIn] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    setAlreadyAccepted(false);
+    setOfferSignIn(false);
     if (password.length < 8) {
       setError('Password must be at least 8 characters long.');
       return;
@@ -60,7 +64,7 @@ export const AcceptInvitePage = ({ onNavigate, token }) => {
         setError('Can\'t reach Taali right now — try again in a moment.');
       } else if (status === 400 && typeof detail === 'string' && INVITE_ERRORS[detail]) {
         setError(INVITE_ERRORS[detail]);
-        setAlreadyAccepted(detail === 'INVITE_ALREADY_ACCEPTED');
+        setOfferSignIn(SIGN_IN_ERRORS.has(detail));
       } else if (status === 422) {
         setError('That password can\'t be used — choose at least 8 characters.');
       } else {
@@ -110,7 +114,7 @@ export const AcceptInvitePage = ({ onNavigate, token }) => {
             <AlertTriangle size={16} strokeWidth={1.8} style={{ color: 'var(--red)', flexShrink: 0 }} />
             <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{error}</span>
           </div>
-          {alreadyAccepted ? (
+          {offerSignIn ? (
             <PageLink page="login" className="mc-auth-cta mc-auth-cta-outline" style={{ marginTop: 12, height: 36, fontSize: 13 }}>
               Go to sign in →
             </PageLink>

@@ -61,9 +61,13 @@ const MembersSection = ({
       setTeamMembers((prev) => [...prev, res?.data].filter(Boolean));
       setInviteName('');
       setInviteEmail('');
-      // The row is added either way; only the toast changes if the email
-      // itself couldn't be delivered — the admin can still "Resend invite".
-      if (res?.data?.email_sent === false) {
+      // The row is added either way; only the toast changes. Re-inviting a
+      // previously removed VERIFIED member restores them directly (status
+      // 'active', no email sent — they already have a password), so the
+      // email-failure warning only applies to genuinely pending invites.
+      if (res?.data?.status === 'active') {
+        showToast('Member restored.', 'success');
+      } else if (res?.data?.email_sent === false) {
         showToast('Invite created, but the email could not be sent. Use Resend invite.', 'warning');
       } else {
         showToast('Invite sent.', 'success');

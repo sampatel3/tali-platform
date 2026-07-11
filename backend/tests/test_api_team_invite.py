@@ -321,3 +321,68 @@ def test_reinvite_existing_active_email_still_400(client):
     resp = _invite(client, headers, email)
     assert resp.status_code == 400
     assert "Email already exists" in resp.json()["detail"]
+
+
+def test_reinvite_removed_verified_member_restores_without_email(client):
+    headers, _ = auth_headers(client)
+    email = "restore-verified@example.com"
+    assert _invite(client, headers, email).status_code == 201
+    user = _get_user(email)
+    user_id = user.id
+
+    # Accept so the member is verified, then remove them.
+    token = generate_invite_token(user)
+    accept = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": token, "password": "NewPass123!"},
+    )
+    assert accept.status_code == 200
+    assert client.delete(f"/api/v1/users/{user_id}", headers=headers).status_code == 204
+
+    # Re-invite → restores the SAME verified row; no invite email, no rename.
+    resp = _invite(client, headers, email, full_name="Should Not Rename")
+    assert resp.status_code in (200, 201), resp.text
+    data = resp.json()
+    assert data["id"] == user_id
+    assert data["status"] == "active"
+    assert data["email_sent"] is False
+
+    refreshed = _get_user(email)
+    assert refreshed.is_active is True
+    assert refreshed.is_verified is True
+    assert refreshed.full_name != "Should Not Rename"
+
+    # Back in the team list.
+    list_resp = client.get("/api/v1/users/", headers=headers)
+    assert email in [m["email"] for m in list_resp.json()]
+
+
+# ---------------------------------------------------------------------------
+# SSO enforcement blocks accept-invite
+# ---------------------------------------------------------------------------
+
+
+def test_accept_invite_sso_enforced_400(client):
+    headers, _ = auth_headers(client)
+    email = "sso-invitee@example.com"
+    assert _invite(client, headers, email).status_code == 201
+    user = _get_user(email)
+    token = generate_invite_token(user)
+
+    # Org enables SSO enforcement AFTER the invite went out.
+    patch = client.patch(
+        "/api/v1/organizations/me",
+        json={"sso_enforced": True},
+        headers=headers,
+    )
+    assert patch.status_code == 200, patch.text
+
+    resp = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": token, "password": "NewPass123!"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "INVITE_SSO_REQUIRED"
+
+    # Password was NOT set and the user stays unverified.
+    assert _get_user(email).is_verified is False

@@ -124,6 +124,13 @@ def accept_invite(
     if not user.is_active:
         raise HTTPException(status_code=400, detail="INVITE_REVOKED")
 
+    # The org may have enforced SSO after the invite was sent — accepting
+    # must not become a password-auth bypass. Provision via the IdP instead.
+    if user.organization_id:
+        org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+        if org and getattr(org, "sso_enforced", False):
+            raise HTTPException(status_code=400, detail="INVITE_SSO_REQUIRED")
+
     # Same password rules as the FastAPI-Users config (min 8 chars / 72 bytes).
     if len(body.password) < 8 or len(body.password.encode("utf-8")) > 72:
         raise HTTPException(status_code=422, detail="Password must be 8–72 characters")

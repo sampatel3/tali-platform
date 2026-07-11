@@ -110,18 +110,24 @@ def invite_team_user(
         raise HTTPException(status_code=400, detail="Email domain is not allowed for this organization")
 
     existing = db.query(User).filter(User.email == data.email).first()
+    restored_verified = False
     if existing:
-        # A revoked invite in this same org (soft-removed, never accepted) can
-        # be re-invited: re-activate the row and resend rather than erroring.
-        is_revoked_invite = (
+        # A soft-removed user in this same org can be re-invited: re-activate
+        # the row rather than erroring. Two cases:
+        #  - revoked invite (never accepted): treat as a fresh invite —
+        #    update the name and resend the invite email;
+        #  - removed verified member: restore as-is — they already have a
+        #    password and can just log in, so no invite email and no rename.
+        can_restore = (
             existing.organization_id == current_user.organization_id
             and not existing.is_active
-            and not existing.is_verified
         )
-        if not is_revoked_invite:
+        if not can_restore:
             raise HTTPException(status_code=400, detail="Email already exists")
         existing.is_active = True
-        existing.full_name = data.full_name
+        restored_verified = existing.is_verified
+        if not restored_verified:
+            existing.full_name = data.full_name
         invited = existing
     else:
         temp_password = secrets.token_urlsafe(16)
@@ -140,7 +146,7 @@ def invite_team_user(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to invite team member")
 
-    email_sent = _send_invite_email(invited, current_user, org)
+    email_sent = False if restored_verified else _send_invite_email(invited, current_user, org)
     return _invite_response(invited, email_sent)
 
 

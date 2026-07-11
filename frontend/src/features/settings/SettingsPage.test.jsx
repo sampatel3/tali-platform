@@ -226,6 +226,30 @@ describe('SettingsPage recruiter surface', () => {
     });
   });
 
+  it('toasts "Member restored." (no email warning) when re-inviting a removed verified member', async () => {
+    // A previously removed VERIFIED member is restored directly: the invite
+    // response carries status 'active' and email_sent false (no email goes
+    // out — they already have a password).
+    teamApi.invite.mockResolvedValueOnce({
+      data: { id: 24, email: 'back@deeplight.ai', full_name: 'Come Back', status: 'active', email_sent: false },
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: /Members/i }).length).toBeGreaterThan(0);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Alex Weston'), { target: { value: 'Come Back' } });
+    fireEvent.change(screen.getByPlaceholderText('alex@company.com'), { target: { value: 'back@deeplight.ai' } });
+    fireEvent.click(screen.getByRole('button', { name: /Invite member/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Come Back')).toBeInTheDocument();
+      expect(showToast).toHaveBeenCalledWith('Member restored.', 'success');
+    });
+    expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining('could not be sent'), 'warning');
+  });
+
   it('resends an invite for a pending member and toasts', async () => {
     teamApi.list.mockResolvedValue({
       data: [{ id: 8, email: 'pending@deeplight.ai', full_name: 'Pending Person', status: 'invited' }],

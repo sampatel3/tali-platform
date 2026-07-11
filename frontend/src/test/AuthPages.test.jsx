@@ -243,6 +243,23 @@ describe('Auth page redesign', () => {
     });
   });
 
+  it('points SSO-enforced workspaces at the sign-in page', async () => {
+    auth.acceptInvite.mockRejectedValue({
+      response: { status: 400, data: { detail: 'INVITE_SSO_REQUIRED' } },
+    });
+
+    renderWithAuth(<AcceptInvitePage token="sso-token" onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Set password & continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Your workspace requires single sign-on/i)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Go to sign in/i })).toBeInTheDocument();
+    });
+  });
+
   it('verifies email and lands on the redesigned success screen', async () => {
     auth.verifyEmail.mockResolvedValue({ data: { detail: 'Email verified successfully.' } });
 
