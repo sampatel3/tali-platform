@@ -30,8 +30,8 @@ unique (org_id, ats, remote_status).
 Indexes implied by ``index=True`` on the models are emitted explicitly here —
 the autogenerate-style create_table does NOT create them.
 
-Revision ID: 140_add_bullhorn_integration
-Revises: 139_add_application_workable_created_at
+Revision ID: 142_add_bullhorn_integration
+Revises: 141_add_auth_hardening
 Create Date: 2026-07-09
 """
 from __future__ import annotations
@@ -39,8 +39,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "140_add_bullhorn_integration"
-down_revision = "139_add_application_workable_created_at"
+revision = "142_add_bullhorn_integration"
+down_revision = "141_add_auth_hardening"
 branch_labels = None
 depends_on = None
 

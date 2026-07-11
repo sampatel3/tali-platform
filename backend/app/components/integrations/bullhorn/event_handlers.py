@@ -129,6 +129,13 @@ def _handle_job_order(
     if job_order is None:
         # Vanished between event and fetch — treat as a delete (soft-delete mirror).
         return _handle_delete(db, org, ENTITY_JOB_ORDER, job_order_id, now=now)
+    if not _job_order_is_open(job_order):
+        # A just-closed JobOrder (isOpen false / non-open status). The full sync
+        # only imports ``isOpen:true`` orders, so an incremental UPDATE must NOT
+        # reactivate a closed order (``upsert_role_from_job_order`` clears
+        # ``deleted_at``). Route to the same soft-delete path a remote delete
+        # uses so local state converges with a full re-sync.
+        return _handle_delete(db, org, ENTITY_JOB_ORDER, job_order_id, now=now)
     role, _created = sync_jobs.upsert_role_from_job_order(db, org, job_order)
     if role is None:
         return "skipped"
@@ -329,6 +336,23 @@ def _handle_delete(
 
 
 # --- helpers ------------------------------------------------------------------
+
+
+def _job_order_is_open(job_order: dict) -> bool:
+    """True when a re-fetched JobOrder is still open (matches the full sync).
+
+    The full sync only imports ``isOpen:true`` orders, so an incremental event
+    must treat a non-open order as a close, not an active upsert. Bullhorn always
+    returns ``isOpen`` in ``JOB_ORDER_FIELDS``; when present it is authoritative.
+    Only when it's absent do we fall back to being permissive (treat as open) so
+    a malformed payload never silently closes a live role.
+    """
+    is_open = job_order.get("isOpen")
+    if is_open is None:
+        return True
+    if isinstance(is_open, str):
+        return is_open.strip().lower() not in {"false", "0", "no", ""}
+    return bool(is_open)
 
 
 def _role_for_submission(db: Session, org: Organization, submission: dict) -> Role | None:

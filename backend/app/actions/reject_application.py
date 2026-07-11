@@ -210,12 +210,16 @@ def _try_bullhorn_reject(
 ) -> bool:
     """Reject via the Bullhorn provider when the org routes to Bullhorn.
 
-    Returns True when Bullhorn owns this org's write-back (handled here — the
-    caller must NOT also try Workable), False to fall through to the Workable
-    path. Records a ``bullhorn_rejected`` / ``bullhorn_writeback_failed`` event,
-    mirroring the Workable trail. Honours strict mode: the provider raises
-    ``WorkableWritebackError`` on failure so the decision-batch can re-queue;
-    that propagates (never swallowed), exactly like the Workable disqualify.
+    Returns True when Bullhorn owned this org's write-back AND it succeeded (the
+    caller must NOT also try Workable). Returns False when either the org doesn't
+    route to Bullhorn OR the Bullhorn write-back FAILED (``needs_mapping`` /
+    ``api_error`` in non-strict paths): the caller then falls through to the
+    Workable path (a no-op for a Bullhorn-only org — the local reject already
+    stood in ``run()``). Records a ``bullhorn_rejected`` /
+    ``bullhorn_writeback_failed`` event, mirroring the Workable trail. Honours
+    strict mode: the provider raises ``WorkableWritebackError`` on failure so the
+    decision-batch can re-queue; that propagates (never swallowed), exactly like
+    the Workable disqualify.
     """
     from ..components.integrations.bullhorn.provider import BullhornProvider
     from ..components.integrations.resolver import resolve_ats_provider
@@ -270,6 +274,11 @@ def _try_bullhorn_reject(
             result.get("code"),
             result.get("message"),
         )
+        # NOT handled: a failed write-back must not be treated as success. Return
+        # False so the caller falls through to the Workable path (a no-op for a
+        # Bullhorn-only org — the local reject already stood in ``run()``),
+        # mirroring the Workable write-back-failure behaviour.
+        return False
     return True
 
 

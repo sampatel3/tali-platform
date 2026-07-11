@@ -103,6 +103,7 @@ def execute_bullhorn_sync_run(*, org_id: int, mode: str = "full") -> None:
 
     db = SessionLocal()
     mutex_handle = None
+    lock_owned = False
     sync_completed = False
     cancelled = False
     try:
@@ -116,6 +117,12 @@ def execute_bullhorn_sync_run(*, org_id: int, mode: str = "full") -> None:
             logger.info("Bullhorn sync skipped org_id=%s — another sync/op holds the lock", org_id)
             return
 
+        # Only now do we own the run: this task acquired the lock (or ran
+        # unguarded because Redis was down). Any finalization below is ours to
+        # do — a task that bailed at the lock check above must NEVER touch the
+        # holder's last-sync status or clear its live progress marker.
+        lock_owned = True
+
         service = BullhornSyncService(_build_service(org))
         try:
             service.sync_org(db, org, mode=mode)
@@ -127,7 +134,11 @@ def execute_bullhorn_sync_run(*, org_id: int, mode: str = "full") -> None:
         logger.exception("Bullhorn background sync failed org_id=%s", org_id)
     finally:
         try:
-            _finalize(db, org_id, completed=sync_completed, cancelled=cancelled)
+            # Guard finalization on lock ownership: only the task that acquired
+            # the lock finalizes. A duplicate task that returned at the lock
+            # check must not mark the live run failed or clear its progress.
+            if lock_owned:
+                _finalize(db, org_id, completed=sync_completed, cancelled=cancelled)
         finally:
             if mutex_handle is not None:
                 _release_mutex(mutex_handle)
