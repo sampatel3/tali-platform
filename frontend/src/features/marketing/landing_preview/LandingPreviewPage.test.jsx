@@ -141,11 +141,13 @@ describe('LandingPreviewPage', () => {
     ).toBe('true');
   });
 
-  it('falls back to variant D (the default) for an unknown ?v value', () => {
+  it('falls back to variant E (the default) for an unknown ?v value', () => {
     const { container } = renderAt('?v=zzz');
-    // Variant D is now the default; its scrubbed scene mounts.
-    expect(container.querySelector('.lvd')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /^Watch it work$/i })).toBeTruthy();
+    // Variant E is now the default; its conventional B2B shell mounts.
+    expect(container.querySelector('.lve')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /E · Watch it work/i }).getAttribute('aria-pressed'),
+    ).toBe('true');
   });
 
   it('switches variants when a chip is clicked', () => {
@@ -154,9 +156,9 @@ describe('LandingPreviewPage', () => {
     expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeTruthy();
   });
 
-  // ── Variant D · "Watch it work" ────────────────────────────────────────
-  it('renders variant D (the pinned "watch it work" scene) by default', () => {
-    const { container } = renderAt('');
+  // ── Variant D · "Watch it work" (pinned/scrubbed) ──────────────────────
+  it('renders variant D (the pinned "watch it work" scene) at ?v=d', () => {
+    const { container } = renderAt('?v=d');
     // Scoped root + the agent switch mount.
     expect(container.querySelector('.lvd')).toBeTruthy();
     expect(screen.getByRole('switch')).toBeTruthy();
@@ -181,7 +183,7 @@ describe('LandingPreviewPage', () => {
   it('flips the variant-D agent switch from off to on when clicked', () => {
     vi.useFakeTimers();
     try {
-      renderAt('');
+      renderAt('?v=d');
       const toggle = screen.getByRole('switch');
       expect(toggle.getAttribute('aria-checked')).toBe('false');
       act(() => {
@@ -198,7 +200,7 @@ describe('LandingPreviewPage', () => {
 
   it('renders variant D as stacked static beats (no pin/scrub) under reduced-motion', () => {
     stubMatchMedia(true);
-    const { container } = renderAt('');
+    const { container } = renderAt('?v=d');
     // Reduced-motion → static mode: switch loads already on, no scrub.
     const toggle = screen.getByRole('switch');
     expect(toggle.getAttribute('aria-checked')).toBe('true');
@@ -209,5 +211,69 @@ describe('LandingPreviewPage', () => {
     // Final-state values are shown statically (counter, audit line).
     expect(screen.getByText(/1,240/)).toBeTruthy();
     expect(screen.getByText(/synced to Workable/i)).toBeTruthy();
+  });
+
+  // ── Variant E · "Watch it work" (autoplay-on-enter, conventional B2B) ────
+  it('renders variant E as the default (?v empty) with its nav, hero and mocks', () => {
+    const { container } = renderAt('');
+    // Scoped `.lve` root + the E switcher chip is active by default.
+    expect(container.querySelector('.lve')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /E · Watch it work/i }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    // Verbatim hero H1 + sub.
+    expect(
+      screen.getByText(/Taali is the hiring agent that screens, assesses, and decides/i),
+    ).toBeTruthy();
+    expect(screen.getByText(/You stay in control of every call that matters/i)).toBeTruthy();
+    // Sticky nav: primary "See it live" CTA + "Log in". The desktop nav cluster
+    // is display:none in the mobile-first base CSS (jsdom doesn't resolve the
+    // min-width media query), so query it with `hidden: true`.
+    expect(screen.getAllByRole('button', { name: /See it live/i, hidden: true }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /^Log in$/i, hidden: true })).toBeTruthy();
+    // The subtle agent switch mounts as role="switch".
+    expect(screen.getByRole('switch')).toBeTruthy();
+    // Signature autoplay mock + a feature band are present.
+    expect(screen.getByText(/Watch the agent run your/i)).toBeTruthy();
+    expect(screen.getByText(/The agent advises\./i)).toBeTruthy();
+    // Broadened copy: "works with AI", never "ship/build with AI".
+    expect(container.textContent).not.toMatch(/ship with AI/i);
+    expect(container.textContent).not.toMatch(/build with AI/i);
+    // Production closing + footer reused.
+    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeTruthy();
+    // "Book a demo" appears as the hero secondary CTA and again in the footer.
+    expect(screen.getAllByRole('button', { name: /Book a demo/i }).length).toBeGreaterThan(0);
+  });
+
+  it('renders variant E at the explicit ?v=e and flips the agent switch off → on', () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = renderAt('?v=e');
+      expect(container.querySelector('.lve')).toBeTruthy();
+      const toggle = screen.getByRole('switch');
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      act(() => {
+        fireEvent.click(toggle);
+      });
+      // Press animation is 180ms, then state flips.
+      act(() => {
+        vi.advanceTimersByTime(240);
+      });
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders variant E with final mock states and no autoplay under reduced-motion', () => {
+    stubMatchMedia(true);
+    const { container } = renderAt('?v=e');
+    // Reduced motion → switch loads already ON, no auto-flip.
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
+    // Mocks render their FINAL composed state: the `[data-animated]` arming
+    // attribute (which hides children for the loop) must be absent everywhere,
+    // so every mock is legible without any animation running.
+    expect(container.querySelector('.lve-mock')).toBeTruthy();
+    expect(container.querySelector('.lve-mock[data-animated]')).toBeNull();
   });
 });
