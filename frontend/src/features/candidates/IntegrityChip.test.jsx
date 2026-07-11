@@ -37,6 +37,22 @@ describe('IntegrityChip', () => {
     expect(screen.getByText(/62% phrase overlap/)).toBeTruthy();
   });
 
+  it('omits the trust-band pill when the band is unknown (never defaults to High)', () => {
+    render(
+      <IntegrityChip verdict="review" trustBand={null} warnings={['x']} />
+    );
+    // The chip renders, but no "High trust" false-reassurance pill.
+    expect(screen.getByText('Integrity')).toBeTruthy();
+    expect(screen.queryByText(/trust/)).toBeNull();
+  });
+
+  it('renders the High-trust pill only for an explicit high band', () => {
+    render(
+      <IntegrityChip verdict="review" trustBand="high" warnings={['x']} />
+    );
+    expect(screen.getByText('High trust')).toBeTruthy();
+  });
+
   it('surfaces unverified employers and corroborations in the expanded block', () => {
     render(
       <IntegrityChip

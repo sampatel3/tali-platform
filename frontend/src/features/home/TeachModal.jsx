@@ -14,10 +14,15 @@
 // — without attribution the policy fitter has no way to know if the fix
 // belongs in cv_scoring vs the policy composer.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Brain, X } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
+// The rq-* / home-title-md classes live in home.css — imported here so any
+// consumer outside the home chunk (the candidate report statically imports this
+// modal) gets them without depending on load order. Duplicate CSS imports are
+// deduped by the bundler.
+import './home.css';
 
 const FAILURE_MODES = [
   { id: 'rubric_mismatch', l: 'Rubric mismatch', d: "Score doesn't match the rubric" },
@@ -65,6 +70,7 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
   const [direction, setDirection] = useState('over');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const dialogRef = useRef(null);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -73,6 +79,22 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose, submitting]);
+
+  // Lock body scroll while mounted — the long candidate report scrolls behind
+  // the backdrop otherwise. Restore the prior value on unmount.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Restore focus to whatever was focused before the modal opened, on unmount.
+  useEffect(() => {
+    const prevFocus = document.activeElement;
+    return () => {
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+    };
+  }, []);
 
   const isOrgScope = scope === 'org';
   const isCanSubmit = useMemo(
@@ -105,23 +127,47 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
     }
   };
 
+  // Minimal, dependency-free focus trap: wrap Tab / Shift+Tab at the dialog's
+  // focusable boundaries so keyboard focus can't escape behind the backdrop.
+  const onTrapKeyDown = (e) => {
+    if (e.key !== 'Tab' || !dialogRef.current) return;
+    const focusable = dialogRef.current.querySelectorAll(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div className="rq-modal-backdrop" onClick={() => !submitting && onClose?.()}>
       <div
         className="rq-modal"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="rq-teach-title"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onTrapKeyDown}
         tabIndex={-1}
         // Move focus into the dialog on open (nothing here is autofocused), so
         // keyboard/screen-reader users land inside it rather than on the trigger
         // behind the backdrop.
-        ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus(); }}
+        ref={(el) => {
+          dialogRef.current = el;
+          if (el && !el.contains(document.activeElement)) el.focus();
+        }}
       >
         <div className="rq-modal-head">
           <div>
             <span className="kicker">TEACH THE AGENT</span>
-            <h3 className="home-title-md" style={{ margin: '6px 0 2px' }}>
+            <h3 id="rq-teach-title" className="home-title-md" style={{ margin: '6px 0 2px' }}>
               What did the agent get wrong?
             </h3>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>

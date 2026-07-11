@@ -15,6 +15,14 @@ import { asArray, asCleanText, splitInlineList } from './candidatesUiUtils';
 
 const CV_TEXT_PREVIEW_LIMIT = 18000;
 
+// Guarded date format — a malformed `uploadedAt` renders "Invalid Date" via a
+// bare toLocaleDateString, so drop the whole suffix when the value won't parse.
+const fmtDate = (v) => {
+  if (!v) return '';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+};
+
 const inferCvMime = (filename) => {
   const ext = String(filename || '').split('.').pop().toLowerCase();
   if (ext === 'pdf') return 'application/pdf';
@@ -404,7 +412,11 @@ const CvDocumentViewer = ({
     || /pdf|word|officedocument|text\/plain/i.test(String(mime || ''));
   const downloadName = sanitizeDownloadName(filename, 'candidate-cv');
   const cvModel = useMemo(() => normalizeCvSections({ parsedSections, cvText, application }), [application, cvText, parsedSections]);
-  const hasTextFallback = Boolean(cvText || parsedSections || cvModel.summary || cvModel.rawSections.length);
+  // A `{parse_failed: true}` cv_sections object is not usable content — treating
+  // it as a fallback renders a near-empty branded "CV" (name+contact only)
+  // instead of the honest processing/empty state.
+  const usableSections = parsedSections && !parsedSections.parse_failed;
+  const hasTextFallback = Boolean(cvText || usableSections || cvModel.summary || cvModel.rawSections.length);
 
   // Note: blobUrl ownership belongs to the module-level documentCache —
   // we deliberately do NOT revoke on unmount because the same URL is
@@ -552,12 +564,16 @@ const CvDocumentViewer = ({
           <span>Loading CV preview...</span>
         </div>
       ) : isTextParseable ? (
-        // A text-friendly file (PDF/Word/txt) with no extracted text yet means
-        // the CV is still being processed — show a processing state, not a
-        // dead-end "can't preview" that reads like a permanent failure.
-        <div className="cv-doc-loading">
-          <Spinner size={18} />
-          <span>Processing this CV — the preview will appear once it&apos;s ready. You can download the original in the meantime.</span>
+        // A text-friendly file (PDF/Word/txt) with no extracted text yet. Nothing
+        // polls behind this view (the blob fetch is one-shot), so a spinner would
+        // claim activity that isn't happening — use static copy that points at the
+        // Download action instead.
+        <div className="cv-doc-empty">
+          <div>
+            <div className="sub">Candidate CV fetched</div>
+            <div className="headline">{filename}</div>
+          </div>
+          <p>The CV preview isn&apos;t available — the document may still be processing or the text couldn&apos;t be extracted. Download the original below.</p>
         </div>
       ) : (
         <div className="cv-doc-empty">
@@ -570,7 +586,7 @@ const CvDocumentViewer = ({
       )}
       {errorMessage ? <div className="cv-viewer-error">{errorMessage}</div> : null}
       <div className="cv-doc-filebar">
-        <span>{filename}{uploadedAt ? ` · updated ${new Date(uploadedAt).toLocaleDateString()}` : ''}</span>
+        <span>{filename}{fmtDate(uploadedAt) ? ` · updated ${fmtDate(uploadedAt)}` : ''}</span>
         <button type="button" className="btn btn-outline btn-sm" onClick={handleDownload} disabled={downloading}>
           <Download size={13} />
           {downloading ? 'Downloading...' : 'Download original'}

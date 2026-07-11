@@ -294,6 +294,7 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
 
   const handleDelete = async (entry) => {
     if (!rolesApi?.deleteInterviewFeedback) return;
+    if (!window.confirm('Delete this interview feedback entry? This cannot be undone.')) return;
     setBusy(true);
     try {
       await rolesApi.deleteInterviewFeedback(applicationId, entry.id);

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 
-import { Badge } from '../../shared/ui/TaaliPrimitives';
 import {
   FLUENCY_4D_AXES,
   axisForRubricDimension,
@@ -44,10 +43,22 @@ const humanizeDimensionId = (id) => String(id || '')
   .replace(/_/g, ' ')
   .replace(/\b\w/g, (c) => c.toUpperCase());
 
-const RUBRIC_RATING_CLASS = {
-  excellent: 'success',
-  good: 'info',
-  poor: 'danger',
+// Per-criterion ratings are EVIDENCE, not a reject/advance verdict, so they stay
+// on the purple scale — a stronger rating reads darker — rather than borrowing
+// the green/red the design system reserves for terminal decisions. Mirrors the
+// intensity treatment in InterviewFeedbackSection's recommendation chips.
+const RATING_INTENSITY = {
+  excellent: 100,
+  good: 64,
+  poor: 30,
+};
+
+const ratingBadgeStyle = (rating) => {
+  const intensity = RATING_INTENSITY[rating] ?? 44;
+  return {
+    background: `color-mix(in oklab, var(--purple) ${intensity}%, transparent)`,
+    color: intensity >= 60 ? 'var(--bg)' : 'var(--ink)',
+  };
 };
 
 // Heuristic column ("prompt_quality_score") → readable label for the fallback
@@ -146,12 +157,12 @@ export const AssessmentScorecard = ({ assessment = null }) => {
                     <div className="sc5-crit-row">
                       <span className="sc5-crit-name">{humanizeDimensionId(item.id)}</span>
                       {item.rating ? (
-                        <Badge
-                          variant={RUBRIC_RATING_CLASS[item.rating] || 'muted'}
-                          className="font-mono text-[0.625rem] uppercase"
+                        <span
+                          className="taali-badge font-mono text-[0.625rem] uppercase"
+                          style={ratingBadgeStyle(item.rating)}
                         >
                           {item.rating}
-                        </Badge>
+                        </span>
                       ) : null}
                       <span className="sc5-crit-score">
                         {item.score != null ? `${Math.round(item.score * 10)} / 100` : '—'}

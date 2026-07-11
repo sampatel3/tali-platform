@@ -647,7 +647,7 @@ export const CandidateTimelineTab = ({ candidate }) => {
       <Panel className="p-4">
         <div className="mb-3 font-bold text-[var(--taali-text)]">Assessment Timeline</div>
         <div className="relative pl-8">
-          <div className="absolute bottom-0 left-3 top-0 w-0.5 bg-[var(--taali-purple)]/40" />
+          <div className="absolute bottom-0 left-3 top-0 w-0.5 bg-[color-mix(in_srgb,var(--taali-purple)_40%,transparent)]" />
           {events.map((event) => {
             const Icon = timelineIconForType(event.type);
             const when = event.timestamp ? new Date(event.timestamp).toLocaleString() : '—';
