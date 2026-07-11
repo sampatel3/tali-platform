@@ -308,6 +308,8 @@ from .domains.submittal_packs import (
     router as submittal_packs_router,
 )
 from .domains.outreach import (
+    campaigns_router,
+    interest_public_router,
     prospects_router,
     unsubscribe_public_router,
 )
@@ -374,6 +376,7 @@ app.include_router(share_links_router, prefix="/api/v1")
 app.include_router(submittal_packs_router, prefix="/api/v1")
 app.include_router(prospects_router, prefix="/api/v1")
 app.include_router(sourcing_assist_router, prefix="/api/v1")
+app.include_router(campaigns_router, prefix="/api/v1")
 app.include_router(offers_router, prefix="/api/v1")
 app.include_router(offer_templates_router, prefix="/api/v1")
 app.include_router(hiring_team_router, prefix="/api/v1")
@@ -427,6 +430,9 @@ app.include_router(marketing_leads_public_router)
 # Public one-click unsubscribe: GET/POST /api/v1/public/unsubscribe/{token}
 # (no auth) — the outreach opt-out. GET is read-only; POST records suppression.
 app.include_router(unsubscribe_public_router)
+# (no auth) — the outreach interest-capture CTA. GET ratchets the message to
+# 'interested' (idempotent) and 302s to the job page / thanks page.
+app.include_router(interest_public_router)
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (
