@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
@@ -67,13 +67,29 @@ def _serialize(prospect: Prospect, suppressed_reason: str | None) -> dict[str, A
     }
 
 
+class _EmailProbe(BaseModel):
+    email: EmailStr
+
+
+def _valid_email(email: str) -> bool:
+    """Same validator as the manual-create path (pydantic EmailStr) so CSV
+    imports can't mint mail-able prospects with addresses like ``bad@``."""
+    try:
+        _EmailProbe(email=email)
+        return True
+    except Exception:
+        return False
+
+
 def _link_candidate_id(db: Session, organization_id: int, email: str) -> int | None:
     """Return the id of an in-org candidate with this (normalized) email, if any."""
     candidate = (
         db.query(Candidate)
         .filter(
             Candidate.organization_id == organization_id,
-            Candidate.email == email,
+            # Candidate emails can be stored with submitted casing; the
+            # prospect side is already normalized (lowercased).
+            func.lower(Candidate.email) == email,
         )
         .first()
     )
@@ -209,7 +225,7 @@ async def import_prospects(
         if not full_name:
             invalid_rows.append({"row": idx, "reason": "missing full_name"})
             continue
-        if not email or "@" not in email:
+        if not email or not _valid_email(email):
             invalid_rows.append({"row": idx, "reason": "missing or invalid email"})
             continue
         if email in seen_in_file:

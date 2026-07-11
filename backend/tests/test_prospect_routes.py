@@ -294,3 +294,39 @@ def test_org_isolation_list_and_mutations(client):
 def test_prospect_routes_require_auth(client):
     assert client.get("/api/v1/prospects").status_code in (401, 403)
     assert client.post("/api/v1/prospects", json={"full_name": "x", "email": "x@x.com"}).status_code in (401, 403)
+
+
+def test_csv_import_rejects_malformed_emails(client):
+    """CSV rows with '@'-containing but invalid addresses must land in
+    invalid_rows, not become mail-able prospects (same validator as manual create)."""
+    headers, _ = auth_headers(client)
+    csv_body = "full_name,email\nBad At,bad@\nAt Domain,@example\nGood Person,good@example.com\n"
+    resp = client.post(
+        "/api/v1/prospects/import",
+        headers=headers,
+        files={"file": ("p.csv", csv_body, "text/csv")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["created"] == 1
+    reasons = [r["reason"] for r in body["invalid_rows"]]
+    assert reasons.count("missing or invalid email") == 2
+
+
+def test_prospect_links_candidate_case_insensitively(client, db):
+    """A candidate stored as Jane@Example.com must link to prospect jane@example.com."""
+    headers, email = auth_headers(client)
+    from app.models import Candidate, User
+
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    cand = Candidate(organization_id=org_id, full_name="Jane", email="Jane@Example.com")
+    db.add(cand)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/prospects",
+        headers=headers,
+        json={"full_name": "Jane", "email": "jane@example.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["candidate_id"] == cand.id
