@@ -7,8 +7,8 @@ Revises: 141_add_auth_hardening
 from alembic import op
 import sqlalchemy as sa
 
-revision = "142_add_email_suppressions_and_prospects"
-down_revision = "141_add_auth_hardening"
+revision = "144_add_email_suppressions_and_prospects"
+down_revision = "143_audit_event_immutability"
 branch_labels = None
 depends_on = None
 

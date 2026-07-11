@@ -8,6 +8,7 @@ existing config.
 from __future__ import annotations
 
 from ...models.organization import Organization
+from ...platform.config import settings
 from ...schemas.organization import (
     AiToolingConfig,
     FirefliesConfig,
@@ -136,5 +137,9 @@ def org_response_payload(org: Organization) -> OrgResponse:
     response.ai_tooling_config = AiToolingConfig(**resolved_ai_tooling_config(org))
     response.notification_preferences = NotificationPreferences(**resolved_notification_preferences(org))
     response.workable_mode = resolved_workable_mode(org)
+    # Platform-level Bullhorn gate — not a column; the FE reads it to decide
+    # whether to show the Bullhorn settings section (off in every environment
+    # until the integration is enabled).
+    response.bullhorn_enabled = bool(settings.BULLHORN_ENABLED)
     response.has_billing_account = bool(getattr(org, "stripe_customer_id", None))
     return response

@@ -295,6 +295,7 @@ from .domains.assessments_runtime.requisition_routes import (
 from .domains.assessments_runtime.clients_routes import router as clients_router
 from .domains.identity_access.user_routes import router as users_router
 from .api.v1.workable import router as workable_router
+from .api.v1.bullhorn import router as bullhorn_router
 from .api.v1.auth import router as auth_router
 from .api.v1.background_jobs import router as background_jobs_router
 from .domains.share_links import (
@@ -311,6 +312,7 @@ from .domains.outreach import (
     unsubscribe_public_router,
 )
 from .domains.assessments_runtime.pool_rescore_routes import router as pool_rescore_router
+from .domains.outreach import router as sourcing_assist_router
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -359,10 +361,12 @@ app.include_router(roles_router, prefix="/api/v1")
 app.include_router(requisition_router, prefix="/api/v1")
 app.include_router(clients_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
+app.include_router(bullhorn_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
 app.include_router(submittal_packs_router, prefix="/api/v1")
 app.include_router(prospects_router, prefix="/api/v1")
+app.include_router(sourcing_assist_router, prefix="/api/v1")
 from .decision_policy.routes import router as decision_policy_router  # noqa: E402
 from .domains.capabilities.routes import router as capability_flags_router  # noqa: E402
 from .services.threshold_calibration.routes import router as threshold_calibration_router  # noqa: E402

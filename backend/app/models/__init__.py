@@ -79,6 +79,7 @@ from .usage_grant import (
     UsageGrant,
 )
 from .workable_sync_run import WorkableSyncRun
+from .ats_stage_map import AtsStageMap
 from .graph_sync_state import GraphSyncState
 from .background_job_run import (
     BackgroundJobRun,
@@ -260,6 +261,7 @@ __all__ = [
     "GRANT_MANUAL",
     "GRANT_TOPUP",
     "WorkableSyncRun",
+    "AtsStageMap",
     "GraphSyncState",
     "BackgroundJobRun",
     "JOB_KIND_SCORING_BATCH",

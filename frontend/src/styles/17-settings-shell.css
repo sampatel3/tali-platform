@@ -432,3 +432,42 @@
   padding-top: 0;
 }
 
+
+/* ── Bullhorn integration: stage-map editor. A compact per-row editor
+   (remote status text · Taali stage select · reject checkbox · remove).
+   Reuses the settings tokens so it sits flush with the rest of the tab. ── */
+.bh-stage-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bh-stage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 200px) auto auto;
+  align-items: center;
+  gap: 12px;
+}
+.bh-stage-row input.bh-stage-remote,
+.bh-stage-row select {
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  font-size: 0.84375rem;         /* 13.5px — matches .field input */
+  font-family: var(--font-mono);
+}
+.bh-stage-row select {
+  cursor: pointer;
+}
+.bh-stage-reject {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--mute);
+  white-space: nowrap;
+}
+.bh-stage-reject input[type="checkbox"] {
+  accent-color: var(--purple);
+}

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .bullhorn_auto_reject import (
+    finalize_pre_screen_bullhorn_reject,
+    try_bullhorn_reject,
+)
 from ..domains.assessments_runtime.pipeline_service import (
     append_application_event,
     ensure_pipeline_fields,
@@ -63,6 +67,30 @@ def reject_for_cv_gap(
     failed (the caller leaves the candidate open and reports the failure). Any
     DB writes made here (events) are left for the caller to commit/rollback.
     """
+    # Bullhorn-connected org → reject via the Bullhorn provider first (writes the
+    # org's rejected-category JobSubmission status), then flip the local outcome.
+    # A no-op for non-Bullhorn orgs, so the Workable path below is unchanged.
+    if try_bullhorn_reject(
+        db,
+        app=app,
+        org=org,
+        role=role,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        reason=reason,
+        trigger=trigger,
+    ):
+        ensure_pipeline_fields(app)
+        transition_outcome(
+            db,
+            app=app,
+            to_outcome="rejected",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason=reason,
+        )
+        return {"performed": True, "reason": reason, "bullhorn_written": True}
+
     workable_linked = bool(getattr(app, "workable_candidate_id", None))
     org_writeable = bool(
         org
@@ -239,6 +267,22 @@ def run_auto_reject_if_needed(
                 "management)."
             ),
         )
+
+    # Bullhorn-connected org → reject via the Bullhorn provider before the
+    # Workable-linkage gates below (a Bullhorn app has no workable_candidate_id,
+    # so those gates would wrongly divert it to a card). Returns None (falls
+    # through to the unchanged Workable logic) for non-Bullhorn orgs.
+    bullhorn_outcome = finalize_pre_screen_bullhorn_reject(
+        db,
+        app=app,
+        org=org,
+        role=role,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        decision=decision,
+    )
+    if bullhorn_outcome is not None:
+        return bullhorn_outcome
 
     # Candidate-linkage gate. The Workable write-back below disqualifies by
     # ``workable_candidate_id``; an unlinked candidate hits a guaranteed
