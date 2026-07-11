@@ -211,6 +211,75 @@ describe('Auth page redesign', () => {
     expect(localStorage.getItem('taali_access_token')).toBe('invite_tok');
   });
 
+  it('surfaces the backend password reason verbatim on a 422 accept-invite', async () => {
+    auth.acceptInvite.mockRejectedValue({
+      response: {
+        status: 422,
+        data: { detail: 'This password is too common. Choose something less predictable.' },
+      },
+    });
+
+    renderWithAuth(<AcceptInvitePage token="invite-token" onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Set password & continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('This password is too common. Choose something less predictable.')).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces the FastAPI-Users {code, reason} password reason on register', async () => {
+    auth.register.mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          detail: {
+            code: 'REGISTER_INVALID_PASSWORD',
+            reason: 'This password is too common. Choose something less predictable.',
+          },
+        },
+      },
+    });
+
+    renderWithAuth(<RegisterPage onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), { target: { value: 'sam@taali.ai' } });
+    fireEvent.change(screen.getByPlaceholderText('Sam Patel'), { target: { value: 'Sam Patel' } });
+    fireEvent.change(screen.getByPlaceholderText('Deeplight AI'), { target: { value: 'Taali' } });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create account →' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('This password is too common. Choose something less predictable.')).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces the FastAPI-Users {code, reason} password reason on reset', async () => {
+    auth.resetPassword.mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          detail: {
+            code: 'RESET_PASSWORD_INVALID_PASSWORD',
+            reason: 'This password is too common. Choose something less predictable.',
+          },
+        },
+      },
+    });
+
+    render(<ResetPasswordPage token="reset-token" onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Update password/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('This password is too common. Choose something less predictable.')).toBeInTheDocument();
+    });
+  });
+
   it('shows the invalid-token error message when the invite is expired', async () => {
     auth.acceptInvite.mockRejectedValue({
       response: { status: 400, data: { detail: 'INVITE_TOKEN_INVALID' } },

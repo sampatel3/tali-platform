@@ -44,8 +44,10 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
       const detail = err.response?.data?.detail;
       if (err.code === 'ERR_NETWORK' || err.message === 'Network Error' || (status && status >= 502)) {
         setError('Can\'t reach Taali right now — try again in a moment.');
-      } else if (status === 400 && detail?.code === 'RESET_PASSWORD_INVALID_PASSWORD') {
-        setError(detail.reason || 'That password can\'t be used — try a different one.');
+      } else if (typeof detail?.reason === 'string' && detail.reason.trim()) {
+        // FastAPI-Users password-validation failures: { code, reason } —
+        // surface the server's specific reason (blocklist, too common, etc.).
+        setError(detail.reason.trim());
       } else {
         setError('We couldn\'t update your password. The link may have expired — request a new one below.');
       }

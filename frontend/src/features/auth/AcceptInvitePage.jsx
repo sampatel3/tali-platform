@@ -67,7 +67,13 @@ export const AcceptInvitePage = ({ onNavigate, token }) => {
         setError(INVITE_ERRORS[detail]);
         setOfferSignIn(SIGN_IN_ERRORS.has(detail));
       } else if (status === 422) {
-        setError('That password can\'t be used — choose at least 8 characters.');
+        // The backend returns the specific reason (too common, contains email,
+        // too short/long) as a plain string in detail — show it verbatim.
+        setError(
+          typeof detail === 'string' && detail.trim()
+            ? detail.trim()
+            : 'That password can\'t be used — choose at least 8 characters.',
+        );
       } else {
         setError('We couldn\'t set up your account. The invite may have expired — ask your workspace admin to resend it.');
       }

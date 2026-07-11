@@ -45,6 +45,9 @@ export const RegisterPage = ({ onNavigate }) => {
         msg = errorMessages[detail];
       } else if (typeof detail === 'string') {
         msg = detail;
+      } else if (detail && typeof detail === 'object' && !Array.isArray(detail) && typeof detail.reason === 'string' && detail.reason.trim()) {
+        // FastAPI-Users password-validation failures: { code, reason }.
+        msg = detail.reason.trim();
       } else if (Array.isArray(detail) && detail.length > 0) {
         const parts = detail.map((e) => {
           const m = e.msg ?? e.message;
