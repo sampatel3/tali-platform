@@ -47,6 +47,8 @@ RECOMMENDATION_SCORE = {
 }
 POSITIVE_RECOMMENDATIONS = {"yes", "strong_yes"}
 NEGATIVE_RECOMMENDATIONS = {"no", "strong_no"}
+# Explicit abstention — carries no lean, so it never enters any aggregate.
+ABSTAIN_RECOMMENDATIONS = {"no_decision"}
 # recommendation bands rendered top→bottom in the per-band mean table.
 BAND_ORDER = ("strong_yes", "yes", "neutral", "no", "strong_no")
 ADVANCED_MARKERS = {"advanced"}
@@ -114,6 +116,12 @@ def compute_calibration(rows: list[FeedbackRow]) -> CalibrationStats:
     hired_flags: list[int] = []
 
     for row in rows:
+        # Abstentions carry no lean — they don't count toward n, any band, the
+        # correlations, or the contradiction tally. (The SQL already filters
+        # these out; this guard keeps the pure function correct on its own.)
+        if row.recommendation in ABSTAIN_RECOMMENDATIONS:
+            stats.n -= 1
+            continue
         score = row.taali_score
         if score is not None:
             stats.n_scored += 1
@@ -164,6 +172,12 @@ def load_rows(conn, org: Optional[int]) -> list[FeedbackRow]:
         JOIN candidate_applications ca ON ca.id = ifb.application_id
         LEFT JOIN roles r ON r.id = ifb.role_id
         WHERE ca.deleted_at IS NULL
+          -- Submitted feedback only; drafts (submitted_at NULL) are excluded.
+          -- Legacy rows were backfilled to submitted (migration 148), so this
+          -- is a no-op at cutover.
+          AND ifb.submitted_at IS NOT NULL
+          -- Abstentions carry no lean — never enter the calibration.
+          AND ifb.overall_recommendation <> 'no_decision'
           {_org_clause(org)}
         """
     )
