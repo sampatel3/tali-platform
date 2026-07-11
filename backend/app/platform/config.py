@@ -559,6 +559,12 @@ class Settings(BaseSettings):
     MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
 
+    # Bullhorn ATS integration (staging-only; see docs/BULLHORN_BUILD_PLAN.md).
+    # OFF by default — every /bullhorn route + sync/event task is gated on this.
+    BULLHORN_ENABLED: bool = False
+    # Per-org event-subscription poll cadence for the incremental sync.
+    BULLHORN_EVENT_POLL_SECONDS: int = 180
+
     # TAALI score blending. assessment vs. role-fit (0.0..1.0 each); role-fit
     # is a 50/50 mix of CV fit and requirements fit. Weights are normalized in
     # taali_scoring.weighted_average_100, so any pair that's > 0 works.

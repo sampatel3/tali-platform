@@ -295,6 +295,7 @@ from .domains.assessments_runtime.requisition_routes import (
 from .domains.assessments_runtime.clients_routes import router as clients_router
 from .domains.identity_access.user_routes import router as users_router
 from .api.v1.workable import router as workable_router
+from .api.v1.bullhorn import router as bullhorn_router
 from .api.v1.auth import router as auth_router
 from .api.v1.background_jobs import router as background_jobs_router
 from .domains.share_links import (
@@ -355,6 +356,7 @@ app.include_router(roles_router, prefix="/api/v1")
 app.include_router(requisition_router, prefix="/api/v1")
 app.include_router(clients_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
+app.include_router(bullhorn_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
 app.include_router(submittal_packs_router, prefix="/api/v1")

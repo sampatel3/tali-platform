@@ -40,6 +40,15 @@ class WorkableConfigUpdate(BaseModel):
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
 
 
+class BullhornConfigBase(BaseModel):
+    """Per-org Bullhorn integration settings placeholder. Minimal by design: the
+    live per-org config (note_action, confirmed/placed status) is written to the
+    ``org.bullhorn_config`` JSON column at connect time and read directly as a
+    dict, and the remote status → Taali stage mapping lives in ``ats_stage_map``.
+    No typed knobs are exposed here yet.
+    """
+
+
 class FirefliesConfig(BaseModel):
     connected: bool = False
     has_api_key: bool = False
@@ -183,6 +192,14 @@ class OrgResponse(BaseModel):
     workable_last_sync_at: Optional[datetime] = None
     workable_last_sync_status: Optional[str] = None
     workable_last_sync_summary: Optional[dict] = None
+    # Bullhorn ATS integration (staging-only until the platform flag is on).
+    # ``bullhorn_enabled`` is the platform-level gate the FE reads to decide
+    # whether to show the Bullhorn settings section at all; the connection
+    # fields mirror the Workable ones. No credential is ever exposed here.
+    bullhorn_enabled: bool = False
+    bullhorn_connected: bool = False
+    bullhorn_last_sync_at: Optional[datetime] = None
+    bullhorn_last_sync_status: Optional[str] = None
     active_claude_model: str
     active_claude_scoring_model: str
     plan: str

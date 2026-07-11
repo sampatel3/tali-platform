@@ -284,6 +284,28 @@ function WorkableCounters({ data }) {
   );
 }
 
+function BullhornCounters({ data }) {
+  // Bullhorn nests live progress under sync_progress (no per-run table), so the
+  // counters read from there rather than the flat shape Workable's runner emits.
+  const p = data?.sync_progress || {};
+  const jobsTotal = Number(p.jobs_total ?? 0);
+  const jobsProcessed = Number(p.jobs_processed ?? 0);
+  const candidatesUpserted = Number(p.candidates_upserted ?? 0);
+  const applicationsUpserted = Number(p.applications_upserted ?? 0);
+  const running = !!data?.sync_in_progress;
+  return (
+    <div className="bg-jobs-panel-counters">
+      <strong>{jobsProcessed}</strong> / {jobsTotal} jobs
+      <div className="bg-jobs-panel-breakdown">
+        {candidatesUpserted} candidates · {applicationsUpserted} apps
+      </div>
+      {p.phase && running ? (
+        <div className="bg-jobs-panel-phase">phase: <code>{p.phase}</code></div>
+      ) : null}
+    </div>
+  );
+}
+
 function JobRow({
   type, status, scope, counters, startedAt, finishedAt,
   onCancel, onDismiss, isLive,
@@ -344,6 +366,7 @@ export default function BackgroundJobsPanel() {
   const liveProcess = ctx?.processJobs ?? {};
   const graphSync = ctx?.graphSyncJob ?? null;
   const workableSync = ctx?.workableSyncJob ?? null;
+  const bullhornSync = ctx?.bullhornSyncJob ?? null;
 
   // 5s loop: history endpoints + heartbeat tick (drives "Last updated" tooltip).
   useEffect(() => {
@@ -570,6 +593,31 @@ export default function BackgroundJobsPanel() {
       });
     }
 
+    // Bullhorn sync — live card only (no per-run table, so no history rows).
+    if (bullhornSync && bullhornSync.sync_in_progress) {
+      const status = bullhornSync.sync_in_progress ? 'running' : (bullhornSync.last_sync_status || 'running');
+      rows.push({
+        key: 'bullhorn-live',
+        type: 'Bullhorn sync',
+        status,
+        sortAt: tsValue(bullhornSync.sync_progress?.started_at ?? bullhornSync.last_sync_at),
+        node: (
+          <JobRow
+            key="bullhorn-live"
+            type="Bullhorn sync"
+            status={status}
+            scope="Org-wide"
+            counters={<BullhornCounters data={bullhornSync} />}
+            startedAt={bullhornSync.sync_progress?.started_at ?? null}
+            finishedAt={bullhornSync.last_sync_at}
+            onCancel={() => ctx?.cancelBullhornSync?.()}
+            onDismiss={() => ctx?.dismissBullhornSyncJob?.()}
+            isLive
+          />
+        ),
+      });
+    }
+
     if (graphSync && isVisible(graphSync.status)) {
       rows.push({
         key: 'graph-live',
@@ -664,7 +712,7 @@ export default function BackgroundJobsPanel() {
     rows.sort((a, b) => b.sortAt - a.sortAt);
     return rows;
   }, [
-    liveProcess, liveJobs, liveFetch, graphSync, workableSync,
+    liveProcess, liveJobs, liveFetch, graphSync, workableSync, bullhornSync,
     history, workableHistory, liveScoreRoleIds, liveFetchRoleIds,
     showAllHistory, ctx, tick,
   ]);
@@ -676,8 +724,9 @@ export default function BackgroundJobsPanel() {
     if (liveActive(liveProcess)) return true;
     if (graphSync && ACTIVE_STATUSES.has(String(graphSync.status ?? '').toLowerCase())) return true;
     if (workableSync && (workableSync.sync_in_progress || ACTIVE_STATUSES.has(String(workableSync.status ?? '').toLowerCase()))) return true;
+    if (bullhornSync && bullhornSync.sync_in_progress) return true;
     return false;
-  }, [liveJobs, liveFetch, liveProcess, graphSync, workableSync]);
+  }, [liveJobs, liveFetch, liveProcess, graphSync, workableSync, bullhornSync]);
 
   // tick is read so React re-renders the "last updated" tooltip text every 5s.
   void tick;
