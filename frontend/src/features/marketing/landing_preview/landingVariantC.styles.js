@@ -56,7 +56,9 @@ export const VARIANT_C_CSS = `
 /* ── HERO ────────────────────────────────────────────────────────────── */
 .lvc-hero {
   position: relative;
-  min-height: 100vh;
+  /* Fill a laptop viewport, but never become a void on tall/zoomed-out
+     screens — the next section should always hint from below the fold. */
+  min-height: min(100vh, 920px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -527,6 +529,14 @@ export const VARIANT_C_CSS = `
 @media (min-width: 1024px) {
   .lvc-stage-grid { grid-template-columns: repeat(3, 1fr); }
   .lvc-standard { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  /* Inside the narrow standard column the 3-col row squeezes the
+     definition into a ribbon — stack the chip under it instead. */
+  .lvc-ds-row { grid-template-columns: 140px 1fr; }
+  .lvc-ds-chip { grid-column: 2; justify-self: start; margin-top: 6px; }
+}
+@media (min-width: 1280px) {
+  /* Five stages, one row — the 3+2 split leaves a lopsided hole. */
+  .lvc-stage-grid { grid-template-columns: repeat(5, 1fr); }
 }
 @media (max-width: 560px) {
   .lvc-cv { width: 88px; height: 112px; }
