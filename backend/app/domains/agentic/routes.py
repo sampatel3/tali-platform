@@ -547,7 +547,11 @@ def list_agent_decisions(
                 AgentDecision.reasoning.ilike(like),
             )
         )
-    query = query.order_by(desc(AgentDecision.created_at)).limit(limit)
+    # ``created_at`` is the transaction timestamp (server_default=func.now()), so
+    # every row written in one bulk-scoring transaction shares an identical value.
+    # Order by the unique primary key as a tiebreaker to give a total, stable order —
+    # otherwise tied rows shuffle on every reload and the LIMIT cutoff flickers.
+    query = query.order_by(desc(AgentDecision.created_at), desc(AgentDecision.id)).limit(limit)
     rows = query.all()
 
     # A2: compute staleness per row. Only meaningful for ``pending``
