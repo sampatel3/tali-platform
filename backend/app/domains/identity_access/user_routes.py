@@ -15,6 +15,7 @@ from ...schemas.user import (
     TeamInviteRequest,
     TeamInviteResponse,
     ResendInviteResponse,
+    InviteLinkResponse,
 )
 from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...platform.config import settings
@@ -164,6 +165,23 @@ def resend_team_invite(
         raise HTTPException(status_code=404, detail="Organization not found")
     email_sent = _send_invite_email(target, current_user, org)
     return ResendInviteResponse(email_sent=email_sent)
+
+
+@router.post("/{user_id}/invite-link", response_model=InviteLinkResponse)
+def get_team_invite_link(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mint a fresh accept-invite link for a pending member so the admin can
+    deliver it manually (e.g. Slack) when the invite email failed to send.
+    Generates a new token each call — same as resend; no email is sent."""
+    target = _get_org_member(db, user_id, current_user)
+    if target.is_verified or not target.is_active:
+        raise HTTPException(status_code=400, detail="NOT_PENDING_INVITE")
+    token = generate_invite_token(target)
+    accept_link = f"{settings.FRONTEND_URL}/accept-invite?token={token}"
+    return InviteLinkResponse(accept_link=accept_link)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

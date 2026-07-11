@@ -71,3 +71,7 @@ class AcceptInviteRequest(BaseModel):
 
 class ResendInviteResponse(BaseModel):
     email_sent: bool
+
+
+class InviteLinkResponse(BaseModel):
+    accept_link: str

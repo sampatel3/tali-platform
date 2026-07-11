@@ -92,6 +92,27 @@ const MembersSection = ({
     }
   };
 
+  // Recovery path for a pending invite whose email failed to send: mint a
+  // fresh accept-invite link and copy it so the admin can deliver it manually
+  // (Slack, etc.). Non-destructive, so no inline confirm step.
+  const handleCopyInviteLink = async (member) => {
+    if (!member?.id) return;
+    if (!navigator.clipboard?.writeText) {
+      showToast('Could not copy the invite link.', 'warning');
+      return;
+    }
+    setMemberActionId(member.id);
+    try {
+      const res = await teamApi.inviteLink(member.id);
+      await navigator.clipboard.writeText(res.data.accept_link);
+      showToast('Invite link copied.', 'success');
+    } catch (error) {
+      showToast('Could not copy the invite link.', 'warning');
+    } finally {
+      setMemberActionId(null);
+    }
+  };
+
   // Backs both "Revoke" (pending invite) and "Remove" (active member) — the
   // backend DELETE handles both. `wasInvited` only picks the success toast copy.
   const handleRemoveMember = async (member, { wasInvited } = {}) => {
@@ -208,14 +229,24 @@ const MembersSection = ({
                   ) : (
                     <>
                       {invited ? (
-                        <button
-                          type="button"
-                          className="settings-member-link"
-                          onClick={() => handleResendInvite(member)}
-                          disabled={busy}
-                        >
-                          {busy ? 'Sending...' : 'Resend invite'}
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="settings-member-link"
+                            onClick={() => handleResendInvite(member)}
+                            disabled={busy}
+                          >
+                            {busy ? 'Sending...' : 'Resend invite'}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-member-link"
+                            onClick={() => handleCopyInviteLink(member)}
+                            disabled={busy}
+                          >
+                            Copy link
+                          </button>
+                        </>
                       ) : null}
                       {(invited || showRemove) ? (
                         <button
