@@ -77,6 +77,21 @@ def _open_application_emails(db: Session, org_id: int) -> set[str]:
     return {normalize_email(e) for (e,) in rows if e and normalize_email(e)}
 
 
+def _open_application_candidate_ids(db: Session, org_id: int) -> set[int]:
+    """Candidate ids with ANY open application in this org — catches linked
+    prospects whose candidate applied under a different (or missing) email."""
+    rows = (
+        db.query(CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.application_outcome == "open",
+            CandidateApplication.candidate_id.isnot(None),
+        )
+        .all()
+    )
+    return {int(cid) for (cid,) in rows}
+
+
 def _resolve_prospect_recipients(
     db: Session, org_id: int, prospect_ids: list[int]
 ) -> list[dict[str, Any]]:
@@ -158,6 +173,7 @@ def resolve_audience(
     all_emails = [c["email"] for c in candidates if c["email"]]
     suppressed = suppressed_set(db, emails=all_emails, organization_id=org_id)
     open_emails = _open_application_emails(db, org_id)
+    open_candidate_ids = _open_application_candidate_ids(db, org_id)
 
     # Emails already in this campaign — the UniqueConstraint would reject them,
     # so filter up front and report as duplicates.
@@ -182,7 +198,9 @@ def resolve_audience(
         if email in suppressed:
             skipped.append({"email": email, "reason": "suppressed"})
             continue
-        if email in open_emails:
+        if email in open_emails or (
+            c.get("candidate_id") and int(c["candidate_id"]) in open_candidate_ids
+        ):
             skipped.append({"email": email, "reason": "open_application"})
             continue
         if email in seen_in_batch or email in existing_emails:

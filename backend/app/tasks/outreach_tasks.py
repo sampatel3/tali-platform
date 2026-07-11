@@ -289,8 +289,8 @@ def send_campaign_messages(campaign_id: int) -> dict:
     from ..components.notifications.email_client import EmailService
     from ..models.outreach_campaign import (
         CAMPAIGN_STATUS_SENT,
-        MESSAGE_STATUS_APPROVED,
         MESSAGE_STATUS_FAILED,
+        MESSAGE_STATUS_QUEUED,
         MESSAGE_STATUS_SENT,
         MESSAGE_STATUS_SUPPRESSED,
         OutreachCampaign,
@@ -324,12 +324,14 @@ def send_campaign_messages(campaign_id: int) -> dict:
 
             reply_to = f"support@{BRAND_DOMAIN}"
 
-        # THE approval gate: only 'approved' rows are ever selected for send.
+        # THE approval gate: rows reach 'queued' only from 'approved' (an
+        # atomic flip in the send route), and only 'queued' rows are selected
+        # — a racing duplicate task finds nothing to send.
         approved = (
             db.query(OutreachMessage)
             .filter(
                 OutreachMessage.campaign_id == campaign.id,
-                OutreachMessage.status == MESSAGE_STATUS_APPROVED,
+                OutreachMessage.status == MESSAGE_STATUS_QUEUED,
             )
             .all()
         )

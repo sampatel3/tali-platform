@@ -23,6 +23,7 @@ from ...models.outreach_campaign import (
     MESSAGE_STATUS_APPROVED,
     MESSAGE_STATUS_DRAFT,
     MESSAGE_STATUS_PENDING,
+    MESSAGE_STATUS_QUEUED,
     OutreachCampaign,
     OutreachMessage,
 )
@@ -333,7 +334,11 @@ def reject_message(
     current_user: User = Depends(get_current_user),
 ):
     message = _get_owned_message(db, campaign_id, mid, current_user.organization_id)
-    # Back to pending — excluded from send (only 'approved' sends).
+    # Only pre-send states can be rejected — resurrecting a sent/delivered row
+    # would allow a second send to the same recipient and corrupt tracking.
+    if message.status not in (MESSAGE_STATUS_DRAFT, MESSAGE_STATUS_APPROVED):
+        raise HTTPException(status_code=409, detail="Only draft or approved messages can be rejected")
+    # Back to pending — excluded from send.
     message.status = MESSAGE_STATUS_PENDING
     db.commit()
     db.refresh(message)
@@ -359,6 +364,8 @@ def send_campaign(
     campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
     if svc.is_archived(campaign):
         raise HTTPException(status_code=409, detail="Campaign is archived")
+    if campaign.status == CAMPAIGN_STATUS_SENDING:
+        raise HTTPException(status_code=409, detail="Campaign is already sending")
 
     approved = svc.approved_count(db, campaign.id)
     estimate = {"approved_count": approved}
@@ -367,6 +374,15 @@ def send_campaign(
     if approved == 0:
         raise HTTPException(status_code=400, detail="No approved messages to send")
 
+    # Atomically move approved -> queued in the same transaction that flips
+    # the campaign to sending: a racing second confirm finds zero approved
+    # rows (and a 409), so two workers can never double-select a message.
+    # 'queued' is reachable ONLY from 'approved' here — the send task selects
+    # queued, preserving the nothing-sends-unapproved invariant.
+    db.query(OutreachMessage).filter(
+        OutreachMessage.campaign_id == campaign.id,
+        OutreachMessage.status == MESSAGE_STATUS_APPROVED,
+    ).update({OutreachMessage.status: MESSAGE_STATUS_QUEUED}, synchronize_session=False)
     campaign.status = CAMPAIGN_STATUS_SENDING
     db.commit()
 

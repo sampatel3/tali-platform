@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 from app.models.organization import Organization
 from app.models.outreach_campaign import (
     MESSAGE_STATUS_APPROVED,
+    MESSAGE_STATUS_QUEUED,
     MESSAGE_STATUS_DRAFT,
     MESSAGE_STATUS_FAILED,
     MESSAGE_STATUS_INTERESTED,
@@ -168,10 +169,12 @@ def test_send_only_approved_with_footer_and_headers(db):
     c = _campaign(db, org.id, user.id)
     approved = _msg(
         db, c, org.id, "yes@example.com",
-        status=MESSAGE_STATUS_APPROVED, subject="Hi", body="Body {{cta_url}}",
+        status=MESSAGE_STATUS_QUEUED, subject="Hi", body="Body {{cta_url}}",
     )
-    # A draft (not approved) must NEVER be sent.
+    # A draft must NEVER be sent, and neither must an approved-but-not-queued
+    # row — only the send route's atomic approved->queued flip feeds the task.
     _msg(db, c, org.id, "no@example.com", status=MESSAGE_STATUS_DRAFT, body="x {{cta_url}}")
+    _msg(db, c, org.id, "later@example.com", status=MESSAGE_STATUS_APPROVED, body="y {{cta_url}}")
 
     fake_email = _run_send(db, c.id)
 
@@ -199,7 +202,7 @@ def test_send_rechecks_suppression(db):
     c = _campaign(db, org.id, user.id)
     m = _msg(
         db, c, org.id, "blocked@example.com",
-        status=MESSAGE_STATUS_APPROVED, body="B {{cta_url}}",
+        status=MESSAGE_STATUS_QUEUED, body="B {{cta_url}}",
     )
     # Suppression lands AFTER approval — send must skip it.
     suppress(db, email="blocked@example.com", reason="unsubscribed", organization_id=org.id)
@@ -215,7 +218,7 @@ def test_send_failure_isolated(db):
     c = _campaign(db, org.id, user.id)
     m = _msg(
         db, c, org.id, "fail@example.com",
-        status=MESSAGE_STATUS_APPROVED, body="B {{cta_url}}",
+        status=MESSAGE_STATUS_QUEUED, body="B {{cta_url}}",
     )
     fake_email = _run_send(
         db, c.id, send_result={"success": False, "error": "resend down"}

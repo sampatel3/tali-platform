@@ -394,3 +394,68 @@ def test_org_isolation(client, db):
     assert not any(
         c["id"] == cid for c in client.get("/api/v1/outreach/campaigns", headers=h2).json()["campaigns"]
     )
+
+
+def test_send_while_sending_409_and_queued_flip(client, db):
+    """Second confirmed send 409s, and the atomic approved->queued flip means a
+    racing duplicate task would find zero rows to select."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    m = _seed_draft(db, org_id, cid)
+    m.status = MESSAGE_STATUS_APPROVED
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        r1 = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/send", json={"confirm": True}, headers=headers
+        )
+        assert r1.status_code == 200, r1.text
+        db.refresh(m)
+        assert m.status == "queued"
+
+        r2 = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/send", json={"confirm": True}, headers=headers
+        )
+        assert r2.status_code == 409
+        delay.assert_called_once_with(cid)
+
+
+def test_reject_sent_message_409(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    m = _seed_draft(db, org_id, cid)
+    m.status = "sent"
+    db.commit()
+
+    r = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/messages/{m.id}/reject", headers=headers
+    )
+    assert r.status_code == 409
+    db.refresh(m)
+    assert m.status == "sent"
+
+
+def test_audience_excludes_linked_prospect_with_open_application(client, db):
+    """A prospect linked to a candidate whose open application is under a
+    DIFFERENT email must still be excluded."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cand, _app = _make_candidate_with_app(
+        db, org_id, "work-alias@example.com", outcome="open"
+    )
+    p = _make_prospect(
+        db, org_id, "personal@example.com", name="Open App", candidate_id=cand.id
+    )
+    cid = _create_campaign(client, headers).json()["id"]
+
+    r = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        headers=headers,
+        json={"prospect_ids": [p.id], "application_ids": []},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["added"] == 0
+    assert body["skipped"][0]["reason"] == "open_application"
