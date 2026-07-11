@@ -4,12 +4,14 @@ import { useSearchParams } from 'react-router-dom';
 import { LandingVariantA } from './LandingVariantA';
 import { LandingVariantB } from './LandingVariantB';
 import { LandingVariantC } from './LandingVariantC';
+import { LandingVariantD } from './variant_d/LandingVariantD';
 
-const DEFAULT_VARIANT = 'c';
+const DEFAULT_VARIANT = 'd';
 const VARIANTS = {
   a: { label: 'A · Value-abstract', Component: LandingVariantA },
   b: { label: 'B · One live artifact', Component: LandingVariantB },
   c: { label: 'C · Turn hiring on', Component: LandingVariantC },
+  d: { label: 'D · Watch it work', Component: LandingVariantD },
 };
 
 // Small floating variant-switcher chip. Fixed bottom-centre, updates the ?v=
@@ -49,11 +51,12 @@ const VariantSwitcher = ({ active, onPick }) => (
   </div>
 );
 
-// Public, no-auth preview route at /landing-preview. `?v=c` (default) renders the
-// cinematic "Turn hiring on" agent-switch concept; `?v=a` the value-abstract
-// variant; `?v=b` the narrative + one-live-artifact variant. All render
-// logged-out. onNavigate is passed from AppShell so the shared nav/footer/CTAs
-// route to the same marketing pages as the live landing.
+// Public, no-auth preview route at /landing-preview. `?v=d` (default) renders the
+// pinned scroll-scrubbed "Watch it work" concept; `?v=c` the "Turn hiring on"
+// agent-switch concept; `?v=a` the value-abstract variant; `?v=b` the narrative +
+// one-live-artifact variant. All render logged-out. onNavigate is passed from
+// AppShell so the shared nav/footer/CTAs route to the same marketing pages as the
+// live landing.
 export const LandingPreviewPage = ({ onNavigate }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const raw = (searchParams.get('v') || DEFAULT_VARIANT).toLowerCase();
