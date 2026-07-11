@@ -330,8 +330,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     // If the URL asked for a tab that isn't available (e.g. ?tab=assessment on
     // a candidate with no completed assessment), rewrite the search param so a
     // shared link doesn't keep advertising a tab the recipient can't see.
-    // Only write when the param actually differs (guards against an effect
-    // loop) and preserve other params like ?from.
+    // Crucially, wait for the cold load to finish: during it completedAssessment
+    // is still null, so `availableTabIds` doesn't yet include the assessment
+    // tab. Rewriting then would delete a deep link's ?tab=assessment before the
+    // data lands, dropping scored candidates onto Overview. Only heal once the
+    // report has actually loaded and the tab is genuinely unavailable.
+    if (loading) return;
     const currentTabParam = searchParams.get('tab');
     const desiredTabParam = safeTab === 'overview' ? null : safeTab;
     if (currentTabParam !== desiredTabParam) {
@@ -340,7 +344,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       else nextParams.delete('tab');
       setSearchParams(nextParams, { replace: true });
     }
-  }, [availableTabIds, requestedTab, searchParams, setSearchParams]);
+  }, [availableTabIds, requestedTab, searchParams, setSearchParams, loading]);
 
   const activateTab = useCallback((tabId) => {
     const safeTab = availableTabIds.has(tabId) ? tabId : 'overview';
