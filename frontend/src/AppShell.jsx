@@ -106,6 +106,20 @@ const HomeShowcaseView = lazy(() =>
 const HomeMotionPreview = lazy(() =>
   import('./features/home/HomeMotionPreview').then((m) => ({ default: m.HomeMotionPreview }))
 );
+// Internal Motion previews of the rest of the app (/jobs-preview,
+// /report-preview, /analytics-preview) — companions to /home-preview so the
+// founder can tour the whole app on Motion. Public, no-auth: they reuse
+// production leaf components on fixture data only, make no API calls, and are
+// not in isProtectedRecruiterPath (nor httpClient isPublicPath).
+const JobsMotionPreview = lazy(() =>
+  import('./features/jobs/JobsMotionPreview').then((m) => ({ default: m.JobsMotionPreview }))
+);
+const ReportMotionPreview = lazy(() =>
+  import('./features/candidates/ReportMotionPreview').then((m) => ({ default: m.ReportMotionPreview }))
+);
+const AnalyticsMotionPreview = lazy(() =>
+  import('./features/analytics/AnalyticsMotionPreview').then((m) => ({ default: m.AnalyticsMotionPreview }))
+);
 const TopReportPage = lazy(() => import('./features/chat/TopReportPage'));
 const SubmittalPackPage = lazy(() => import('./features/jobs/SubmittalPackPage'));
 const CandidateStandingReportPage = lazy(() =>
@@ -583,6 +597,33 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <HomeMotionPreview />
+          </Suspense>
+        )}
+      />
+      {/* Motion previews of the rest of the app — public, no-auth, fixtures
+          only. Tour: /home-preview · /jobs-preview · /report-preview ·
+          /analytics-preview · /landing-preview. */}
+      <Route
+        path="/jobs-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <JobsMotionPreview />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/report-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ReportMotionPreview />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/analytics-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AnalyticsMotionPreview />
           </Suspense>
         )}
       />
