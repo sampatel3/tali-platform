@@ -75,6 +75,21 @@ def test_create_and_list_roundtrip(client):
     assert rows[1]["interview_round"] == "technical"
 
 
+def test_recorded_feedback_is_submitted_on_create(client):
+    """The record endpoint captures a completed interview, so the row is
+    SUBMITTED on create — otherwise the calibration script (which now reads only
+    submitted rows) would silently drop recruiter-recorded feedback."""
+    headers, _ = auth_headers(client)
+    app = _create_application(client, headers, candidate_email="recorded@example.com")
+    resp = client.post(
+        f"/api/v1/applications/{app['id']}/interview-feedback",
+        headers=headers,
+        json={"overall_recommendation": "yes"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["submitted_at"] is not None
+
+
 def test_recommendation_validation(client):
     headers, _ = auth_headers(client)
     app = _create_application(client, headers, candidate_email="badrec@example.com")

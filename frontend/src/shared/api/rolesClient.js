@@ -103,6 +103,18 @@ export const roles = {
     api.patch(`/applications/${applicationId}/interview-feedback/${feedbackId}`, data),
   deleteInterviewFeedback: (applicationId, feedbackId) =>
     api.delete(`/applications/${applicationId}/interview-feedback/${feedbackId}`),
+  // Scorecard lifecycle over the same interview_feedback rows: an interviewer
+  // drafts and submits their OWN card, and the panel summary tallies the
+  // submitted cards. Keyed per (application, interviewer) so re-posting edits
+  // in place.
+  listScorecards: (applicationId) =>
+    api.get(`/applications/${applicationId}/interview-feedback`),
+  getScorecardSummary: (applicationId) =>
+    api.get(`/applications/${applicationId}/scorecards/summary`),
+  upsertScorecard: (applicationId, data) =>
+    api.post(`/applications/${applicationId}/scorecards`, data),
+  submitScorecard: (applicationId, feedbackId) =>
+    api.post(`/applications/${applicationId}/scorecards/${feedbackId}/submit`),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
     api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob', ...config }),
