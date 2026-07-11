@@ -6,7 +6,7 @@ from fastapi_users.jwt import decode_jwt, generate_jwt
 from sqlalchemy.orm import Session
 
 from ...platform.database import get_db
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
 from ...platform.security import get_password_hash
 from ...models.user import User
 from ...models.organization import Organization
@@ -14,14 +14,18 @@ from ...schemas.user import (
     UserResponse,
     TeamInviteRequest,
     TeamInviteResponse,
+    TeamRoleUpdateRequest,
     ResendInviteResponse,
+    InviteLinkResponse,
 )
 from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...platform.config import settings
+from ...models.auth_event import AUTH_EVENT_MEMBER_INVITED, AUTH_EVENT_MEMBER_REMOVED
 from .access_policy import (
     is_email_allowed_for_domains,
     normalize_allowed_domains,
 )
+from .auth_events import record_auth_event
 
 logger = logging.getLogger("taali.users")
 
@@ -93,7 +97,7 @@ def list_team_users(
 def invite_team_user(
     data: TeamInviteRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     if not current_user.organization_id:
         raise HTTPException(status_code=400, detail="You are not in an organization")
@@ -125,6 +129,9 @@ def invite_team_user(
         if not can_restore:
             raise HTTPException(status_code=400, detail="Email already exists")
         existing.is_active = True
+        # Ownership is only ever granted explicitly — a restored member comes
+        # back as member even if they were an owner when removed.
+        existing.role = "member"
         restored_verified = existing.is_verified
         if not restored_verified:
             existing.full_name = data.full_name
@@ -136,6 +143,7 @@ def invite_team_user(
             full_name=data.full_name,
             hashed_password=get_password_hash(temp_password),
             organization_id=current_user.organization_id,
+            role="member",
         )
         db.add(invited)
 
@@ -146,6 +154,16 @@ def invite_team_user(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to invite team member")
 
+    record_auth_event(
+        db,
+        AUTH_EVENT_MEMBER_INVITED,
+        user_id=invited.id,
+        actor_user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        email=invited.email,
+        metadata={"restored": bool(existing)} if existing else None,
+    )
+
     email_sent = False if restored_verified else _send_invite_email(invited, current_user, org)
     return _invite_response(invited, email_sent)
 
@@ -154,7 +172,7 @@ def invite_team_user(
 def resend_team_invite(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     target = _get_org_member(db, user_id, current_user)
     if target.is_verified or not target.is_active:
@@ -166,19 +184,91 @@ def resend_team_invite(
     return ResendInviteResponse(email_sent=email_sent)
 
 
+@router.post("/{user_id}/invite-link", response_model=InviteLinkResponse)
+def get_team_invite_link(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    """Mint a fresh accept-invite link for a pending member so the admin can
+    deliver it manually (e.g. Slack) when the invite email failed to send.
+    Generates a new token each call — same as resend; no email is sent.
+    Owner-only: the link carries a token that can set the pending user's
+    password, so it's gated like the rest of member management."""
+    target = _get_org_member(db, user_id, current_user)
+    if target.is_verified or not target.is_active:
+        raise HTTPException(status_code=400, detail="NOT_PENDING_INVITE")
+    token = generate_invite_token(target)
+    accept_link = f"{settings.FRONTEND_URL}/accept-invite?token={token}"
+    return InviteLinkResponse(accept_link=accept_link)
+
+
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_team_member(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="CANNOT_REMOVE_SELF")
     target = _get_org_member(db, user_id, current_user)
+    if target.role == "owner":
+        _ensure_another_active_owner(db, current_user.organization_id, excluding_user_id=target.id)
     # Soft-remove only — other tables reference users; never hard-delete.
     target.is_active = False
     db.commit()
+    record_auth_event(
+        db,
+        AUTH_EVENT_MEMBER_REMOVED,
+        user_id=target.id,
+        actor_user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        email=target.email,
+        # A pending (unverified) target means this was an invite revocation.
+        metadata={"was_pending_invite": not target.is_verified},
+    )
     return None
+
+
+@router.patch("/{user_id}/role", response_model=UserResponse)
+def update_team_user_role(
+    user_id: int,
+    data: TeamRoleUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    target = _get_org_member(db, user_id, current_user)
+    if target.role == data.role:
+        return target
+    if target.role == "owner" and data.role == "member":
+        _ensure_another_active_owner(db, current_user.organization_id, excluding_user_id=target.id)
+    target.role = data.role
+    try:
+        db.commit()
+        db.refresh(target)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update member role")
+    return target
+
+
+def _ensure_another_active_owner(db: Session, organization_id: int, *, excluding_user_id: int) -> None:
+    """Never leave the org without an active owner. Locks the org's active
+    owner rows so two concurrent demotions/removals can't both observe
+    "another owner exists" and commit a zero-owner workspace (FOR UPDATE on
+    Postgres; no-op on SQLite)."""
+    owners = (
+        db.query(User)
+        .filter(
+            User.organization_id == organization_id,
+            User.role == "owner",
+            User.is_active == True,  # noqa: E712 — inactive owners can't act
+        )
+        .with_for_update()
+        .all()
+    )
+    if not any(owner.id != excluding_user_id for owner in owners):
+        raise HTTPException(status_code=400, detail="An organization needs at least one owner")
 
 
 def _get_org_member(db: Session, user_id: int, current_user: User) -> User:

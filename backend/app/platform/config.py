@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Per-account login lockout: N consecutive failures locks the account for M minutes
+    AUTH_LOCKOUT_THRESHOLD: int = 5
+    AUTH_LOCKOUT_MINUTES: int = 15
 
     # E2B
     E2B_API_KEY: str = ""

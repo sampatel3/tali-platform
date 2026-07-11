@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, EmailStr, Field, computed_field
+from typing import Literal, Optional
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, computed_field
 
 
 class UserCreate(BaseModel):
@@ -15,10 +15,16 @@ class UserResponse(BaseModel):
     email: str
     full_name: Optional[str] = None
     is_active: bool
-    is_email_verified: bool = False
+    # The ORM stores this as FastAPI-Users' `is_verified`; keep the public
+    # field name but read whichever attribute is present.
+    is_email_verified: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_email_verified", "is_verified"),
+    )
     # Mirrors the FastAPI-Users ``is_verified`` column; drives ``status``.
     is_verified: bool = False
     organization_id: Optional[int] = None
+    role: str = "member"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -62,6 +68,10 @@ class TeamInviteRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=200)
 
 
+class TeamRoleUpdateRequest(BaseModel):
+    role: Literal["owner", "member"]
+
+
 class AcceptInviteRequest(BaseModel):
     token: str = Field(min_length=1, max_length=2000)
     # Password rules (min 8 / max 72 bytes) are enforced in the route to
@@ -71,3 +81,7 @@ class AcceptInviteRequest(BaseModel):
 
 class ResendInviteResponse(BaseModel):
     email_sent: bool
+
+
+class InviteLinkResponse(BaseModel):
+    accept_link: str

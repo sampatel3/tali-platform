@@ -33,22 +33,21 @@ vi.mock('../../shared/api', () => ({
   team: {
     list: vi.fn(),
     invite: vi.fn(),
+    setRole: vi.fn(),
     resendInvite: vi.fn(),
+    inviteLink: vi.fn(),
     remove: vi.fn(),
   },
 }));
 
 const showToast = vi.fn();
 
+// Mutable so individual tests can flip the signed-in user between owner and
+// member; beforeEach resets it to the owner default.
+const authState = vi.hoisted(() => ({ user: null }));
+
 vi.mock('../../context/AuthContext', () => ({
-  useAuth: () => ({
-    user: {
-      id: 1,
-      email: 'admin@taali.ai',
-      full_name: 'Sam Patel',
-      organization: { name: 'DeepLight AI' },
-    },
-  }),
+  useAuth: () => ({ user: authState.user }),
 }));
 
 vi.mock('../../context/ToastContext', () => ({
@@ -111,6 +110,13 @@ const renderSettingsRoute = (initialPath = '/settings/email') => render(
 describe('SettingsPage recruiter surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.user = {
+      id: 1,
+      email: 'admin@taali.ai',
+      full_name: 'Sam Patel',
+      role: 'owner',
+      organization: { name: 'DeepLight AI' },
+    };
     orgsApi.get.mockResolvedValue({ data: baseOrgData });
     orgsApi.update.mockResolvedValue({ data: baseOrgData });
     orgsApi.getWorkableSyncStatus.mockResolvedValue({ data: { sync_in_progress: false } });
@@ -127,6 +133,7 @@ describe('SettingsPage recruiter surface', () => {
     teamApi.list.mockResolvedValue({ data: [] });
     teamApi.invite.mockResolvedValue({ data: { id: 22, email: 'new@deeplight.ai', full_name: 'New Recruiter', status: 'invited', email_sent: true } });
     teamApi.resendInvite.mockResolvedValue({ data: { email_sent: true } });
+    teamApi.inviteLink.mockResolvedValue({ data: { accept_link: 'https://app.taali.ai/accept-invite?token=abc123' } });
     teamApi.remove.mockResolvedValue({ status: 204 });
   });
 
@@ -174,7 +181,8 @@ describe('SettingsPage recruiter surface', () => {
   it('renders the new Members tab heading and role chips', async () => {
     teamApi.list.mockResolvedValue({
       data: [
-        { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'Recruiter' },
+        { id: 1, email: 'admin@taali.ai', full_name: 'Sam Patel', is_email_verified: true, role: 'owner' },
+        { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'member' },
       ],
     });
     renderSettingsRoute('/settings/members');
@@ -185,7 +193,53 @@ describe('SettingsPage recruiter surface', () => {
     await waitFor(() => {
       expect(screen.getByText('Iris Park')).toBeInTheDocument();
     });
-    expect(screen.getByText('Recruiter')).toBeInTheDocument();
+    expect(screen.getByText('Owner')).toBeInTheDocument();
+    expect(screen.getByText('Member')).toBeInTheDocument();
+  });
+
+  it('lets an owner promote a member to owner', async () => {
+    teamApi.list.mockResolvedValue({
+      data: [
+        { id: 1, email: 'admin@taali.ai', full_name: 'Sam Patel', is_email_verified: true, role: 'owner' },
+        { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'member' },
+      ],
+    });
+    teamApi.setRole.mockResolvedValue({
+      data: { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'owner' },
+    });
+    renderSettingsRoute('/settings/members');
+
+    const promoteButton = await screen.findByRole('button', { name: 'Make owner' });
+    fireEvent.click(promoteButton);
+
+    await waitFor(() => {
+      expect(teamApi.setRole).toHaveBeenCalledWith(7, 'owner');
+    });
+    await waitFor(() => {
+      expect(showToast).toHaveBeenCalledWith('Iris Park is now an owner.', 'success');
+    });
+    // Chip flips to Owner and the row action becomes a demote.
+    expect(await screen.findByRole('button', { name: 'Make member' })).toBeInTheDocument();
+  });
+
+  it('hides invite + member management from non-owners', async () => {
+    authState.user = { ...authState.user, role: 'member' };
+    teamApi.list.mockResolvedValue({
+      data: [
+        { id: 1, email: 'owner@deeplight.ai', full_name: 'Org Owner', is_email_verified: true, role: 'owner' },
+        { id: 2, email: 'admin@taali.ai', full_name: 'Sam Patel', is_email_verified: true, role: 'member' },
+      ],
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getByText('Only a workspace owner can invite members.')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /Invite member/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Make owner|Make member/i })).not.toBeInTheDocument();
+    // Access settings save is owner-only too.
+    expect(screen.getByRole('button', { name: 'Save access settings' })).toBeDisabled();
+    expect(screen.getByText('Only a workspace owner can change access settings.')).toBeInTheDocument();
   });
 
   it('appends the new row and toasts success after inviting a member', async () => {
@@ -265,6 +319,28 @@ describe('SettingsPage recruiter surface', () => {
     await waitFor(() => {
       expect(teamApi.resendInvite).toHaveBeenCalledWith(8);
       expect(showToast).toHaveBeenCalledWith('Invite resent.', 'success');
+    });
+  });
+
+  it('copies the invite link for a pending member and toasts success', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    teamApi.list.mockResolvedValue({
+      data: [{ id: 8, email: 'pending@deeplight.ai', full_name: 'Pending Person', status: 'invited' }],
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending Person')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+
+    await waitFor(() => {
+      expect(teamApi.inviteLink).toHaveBeenCalledWith(8);
+      expect(writeText).toHaveBeenCalledWith('https://app.taali.ai/accept-invite?token=abc123');
+      expect(showToast).toHaveBeenCalledWith('Invite link copied.', 'success');
     });
   });
 

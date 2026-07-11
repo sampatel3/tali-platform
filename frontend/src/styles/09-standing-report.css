@@ -1948,6 +1948,18 @@ button.eng-badge-button:focus-visible {
 }
 .dossier-rail .dr-btn-wide { flex-basis: 100%; }
 
+/* Pre-screen escalation block — a dr-hint (cheap-gate context) stacked over a
+   full-width dr-btn (the "Run full evaluation" action). The wrapper is a plain
+   div, so the standalone dr-btn needs an explicit width. */
+.dossier-rail .dr-prescreen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.dossier-rail .dr-prescreen .dr-hint { margin-bottom: 0; }
+.dossier-rail .dr-prescreen .dr-btn { width: 100%; }
+
 .dossier-rail .dr-hint {
   font-size: 0.8125rem;
   color: var(--mute);
@@ -2298,6 +2310,24 @@ button.eng-badge-button:focus-visible {
 .mc-overview-dimensions--stacked .mc-overview-dim-bar > i.low { background: var(--purple-lav); }
 @media (max-width: 720px) {
   .mc-overview-dimensions--stacked .mc-overview-dim-row { grid-template-columns: 120px 1fr 56px; gap: 10px; }
+}
+
+/* Pre-assessment placeholder — the one compact card that stands in for the
+   empty scorecard + the two assessment-gated evidence cards (AI USAGE,
+   CODE & GIT) before the candidate completes the assessment. */
+.mc-overview-dimensions-empty {
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.mc-overview-dimensions-empty .mc-kicker { margin: 0 0 6px; }
+.mc-overview-dimensions-empty .mc-overview-dim-empty {
+  margin: 0;
+  color: var(--mute);
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
 
 /* ============================================================

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { auth as authApi } from '../shared/api';
+import { clearAccessToken, setAccessToken } from '../shared/api/httpClient';
 import { clearCache } from '../shared/api/resourceCache';
 
 const AuthContext = createContext(null);
@@ -28,7 +29,7 @@ export function AuthProvider({ children }) {
   // cache the profile — the exact tail of `login`, shared so callers never
   // hand-roll localStorage writes.
   const completeLogin = useCallback(async (accessToken) => {
-    localStorage.setItem('taali_access_token', accessToken);
+    setAccessToken(accessToken);
     const { data: profile } = await authApi.me();
     localStorage.setItem('taali_user', JSON.stringify(profile));
     setUser(profile);
@@ -46,7 +47,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('taali_access_token');
+    clearAccessToken();
     localStorage.removeItem('taali_user');
     // Drop any cached per-account data (e.g. role workspaces) so the next user
     // to sign in on this tab can't briefly see the previous user's data.
@@ -79,7 +80,7 @@ export function AuthProvider({ children }) {
         localStorage.setItem('taali_user', JSON.stringify(data));
       })
       .catch(() => {
-        localStorage.removeItem('taali_access_token');
+        clearAccessToken();
         localStorage.removeItem('taali_user');
         setUser(null);
       })

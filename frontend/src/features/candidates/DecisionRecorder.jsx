@@ -127,7 +127,7 @@ export const DecisionRecorder = ({
       ) : null}
 
       {conflict ? (
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[var(--taali-radius-card)] border border-[var(--taali-warning)]/40 bg-[var(--taali-warning)]/10 px-3 py-2 text-xs text-[var(--taali-text)]">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[var(--taali-radius-card)] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-2 text-xs text-[var(--taali-text)]">
           <span>This {entityNoun} was updated elsewhere. Reload to see the latest before saving again.</span>
           {onReload ? (
             <Button type="button" variant="secondary" size="sm" onClick={onReload}>

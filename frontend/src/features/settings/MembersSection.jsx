@@ -25,6 +25,7 @@ const MembersSection = ({
   setTeamMembers,
   showToast,
   userEmail,
+  isOwner,
   accessForm,
   setAccessForm,
   accessSaving,
@@ -92,6 +93,27 @@ const MembersSection = ({
     }
   };
 
+  // Recovery path for a pending invite whose email failed to send: mint a
+  // fresh accept-invite link and copy it so the admin can deliver it manually
+  // (Slack, etc.). Non-destructive, so no inline confirm step.
+  const handleCopyInviteLink = async (member) => {
+    if (!member?.id) return;
+    if (!navigator.clipboard?.writeText) {
+      showToast('Could not copy the invite link.', 'warning');
+      return;
+    }
+    setMemberActionId(member.id);
+    try {
+      const res = await teamApi.inviteLink(member.id);
+      await navigator.clipboard.writeText(res.data.accept_link);
+      showToast('Invite link copied.', 'success');
+    } catch (error) {
+      showToast('Could not copy the invite link.', 'warning');
+    } finally {
+      setMemberActionId(null);
+    }
+  };
+
   // Backs both "Revoke" (pending invite) and "Remove" (active member) — the
   // backend DELETE handles both. `wasInvited` only picks the success toast copy.
   const handleRemoveMember = async (member, { wasInvited } = {}) => {
@@ -104,6 +126,23 @@ const MembersSection = ({
       showToast(wasInvited ? 'Invite revoked.' : 'Member removed.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, wasInvited ? 'Failed to revoke invite.' : 'Failed to remove member.'), 'error');
+    } finally {
+      setMemberActionId(null);
+    }
+  };
+
+  const handleSetRole = async (member, nextRole) => {
+    if (!member?.id) return;
+    setMemberActionId(member.id);
+    try {
+      const res = await teamApi.setRole(member.id, nextRole);
+      const updated = res?.data;
+      setTeamMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, ...(updated || { role: nextRole }) } : m)));
+      showToast(nextRole === 'owner'
+        ? `${member.full_name || member.email} is now an owner.`
+        : `${member.full_name || member.email} is now a member.`, 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to update member role.'), 'error');
     } finally {
       setMemberActionId(null);
     }
@@ -134,30 +173,30 @@ const MembersSection = ({
       title="Members"
       subtitle={`${teamMembers.length} ${teamMembers.length === 1 ? 'person' : 'people'} in this workspace.`}
     >
-      <form className="settings-invite-form" onSubmit={handleInvite}>
-        <label className="field">
-          <span className="k">Full name</span>
-          <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Alex Weston" />
-        </label>
-        <label className="field">
-          <span className="k">Email</span>
-          <input type="email" required value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="alex@company.com" />
-        </label>
-        <div className="settings-member-actions">
-          <button type="submit" className="btn btn-purple btn-sm" disabled={inviteLoading}>
-            {inviteLoading ? 'Inviting...' : '+ Invite member'}
-          </button>
+      {isOwner ? (
+        <form className="settings-invite-form" onSubmit={handleInvite}>
+          <label className="field">
+            <span className="k">Full name</span>
+            <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Alex Weston" />
+          </label>
+          <label className="field">
+            <span className="k">Email</span>
+            <input type="email" required value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="alex@company.com" />
+          </label>
+          <div className="settings-member-actions">
+            <button type="submit" className="btn btn-purple btn-sm" disabled={inviteLoading}>
+              {inviteLoading ? 'Inviting...' : '+ Invite member'}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="settings-inline-note">
+          Only a workspace owner can invite members.
         </div>
-      </form>
-      {/* HANDOFF settings.md — role assignment moved off the
-          removed "Roles & access" tab onto a column on this
-          table. We default to Owner / Admin / Recruiter /
-          Hiring manager, with Owner/Admin able to manage
-          others. */}
-      {/* Preview `.member` — flat divider list: avatar · name/email ·
-          role chip. Active roles read purple, an unverified
-          "Invited" member greys out the avatar + chip. No per-row
-          action button (the preview omits it). */}
+      )}
+      {/* Two roles, deliberately simple: Owner (manages members + access
+          settings) and Member. Unverified members render as "Invited".
+          Owners get per-row invite-lifecycle actions plus promote/demote. */}
       <div className="members">
         {teamMembers.map((member) => {
           const isSelf = member?.email === userEmail;
@@ -167,15 +206,13 @@ const MembersSection = ({
           const invited = member?.status
             ? member.status === 'invited'
             : !member?.is_email_verified;
-          // Derive every row's role from member.role (falling back to
-          // Recruiter/Invited) — never hardcode the self row to Owner,
-          // which mislabelled every recruiter as Owner.
+          const memberRole = String(member?.role || '').toLowerCase();
           const role = invited
             ? 'Invited'
-            : (String(member?.role || '').trim() || 'Recruiter');
+            : (memberRole === 'owner' ? 'Owner' : 'Member');
           const busy = memberActionId === member.id;
           const confirming = confirmRemoveId === member.id;
-          const showRemove = !isSelf;
+          const showRemove = isOwner && !isSelf;
           return (
             <div key={member.id} className="mb">
               <div className={`av${invited ? ' inv' : ''}`}>{initialsFor(member.full_name || member.email)}</div>
@@ -184,7 +221,7 @@ const MembersSection = ({
                 <div>{isSelf ? 'you' : (member?.email || '—')}</div>
               </div>
               <span className={`chip${invited ? '' : ' purple'}`}>{role}</span>
-              {(invited || showRemove) ? (
+              {showRemove ? (
                 <div className="settings-member-row-actions">
                   {confirming ? (
                     <>
@@ -208,25 +245,42 @@ const MembersSection = ({
                   ) : (
                     <>
                       {invited ? (
+                        <>
+                          <button
+                            type="button"
+                            className="settings-member-link"
+                            onClick={() => handleResendInvite(member)}
+                            disabled={busy}
+                          >
+                            {busy ? 'Sending...' : 'Resend invite'}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-member-link"
+                            onClick={() => handleCopyInviteLink(member)}
+                            disabled={busy}
+                          >
+                            Copy link
+                          </button>
+                        </>
+                      ) : (
                         <button
                           type="button"
                           className="settings-member-link"
-                          onClick={() => handleResendInvite(member)}
+                          onClick={() => handleSetRole(member, memberRole === 'owner' ? 'member' : 'owner')}
                           disabled={busy}
                         >
-                          {busy ? 'Sending...' : 'Resend invite'}
+                          {busy ? 'Saving...' : memberRole === 'owner' ? 'Make member' : 'Make owner'}
                         </button>
-                      ) : null}
-                      {(invited || showRemove) ? (
-                        <button
-                          type="button"
-                          className="settings-member-link settings-member-link-danger"
-                          onClick={() => setConfirmRemoveId(member.id)}
-                          disabled={busy}
-                        >
-                          {invited ? 'Revoke' : 'Remove'}
-                        </button>
-                      ) : null}
+                      )}
+                      <button
+                        type="button"
+                        className="settings-member-link settings-member-link-danger"
+                        onClick={() => setConfirmRemoveId(member.id)}
+                        disabled={busy}
+                      >
+                        {invited ? 'Revoke' : 'Remove'}
+                      </button>
                     </>
                   )}
                 </div>
@@ -272,8 +326,12 @@ const MembersSection = ({
           </div>
         </div>
         <div className="settings-save-row">
-          <div className="settings-inline-note">Team invites respect the allowed domain list immediately.</div>
-          <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAccess} disabled={accessSaving}>
+          <div className="settings-inline-note">
+            {isOwner
+              ? 'Team invites respect the allowed domain list immediately.'
+              : 'Only a workspace owner can change access settings.'}
+          </div>
+          <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAccess} disabled={accessSaving || !isOwner}>
             {accessSaving ? 'Saving...' : 'Save access settings'}
           </button>
         </div>

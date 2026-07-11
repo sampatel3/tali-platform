@@ -99,11 +99,23 @@ describe('InterviewFeedbackSection', () => {
     expect(api.createInterviewFeedback).not.toHaveBeenCalled();
   });
 
-  it('deletes an entry via the API', async () => {
+  it('deletes an entry via the API after confirming', async () => {
     const api = makeApi({ listInterviewFeedback: vi.fn().mockResolvedValue({ data: [] }) });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSection({ initialFeedback: [existingEntry], rolesApi: api });
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
     await waitFor(() => expect(api.deleteInterviewFeedback).toHaveBeenCalledWith(5, 11));
+    confirmSpy.mockRestore();
+  });
+
+  it('does not delete when the confirm is dismissed', () => {
+    const api = makeApi();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderSection({ initialFeedback: [existingEntry], rolesApi: api });
+    fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(api.deleteInterviewFeedback).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it('read-only mode (recruiter share links) lists entries without record/edit/delete', () => {

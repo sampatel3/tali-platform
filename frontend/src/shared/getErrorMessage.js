@@ -35,8 +35,12 @@ export const getErrorMessage = (err, fallback = 'Something went wrong. Please tr
         return `${loc}: ${msg}`;
       }
       if (typeof msg === 'string' && msg.trim()) return msg.trim();
-    } else if (typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
-      return detail.message.trim();
+    } else if (typeof detail === 'object') {
+      // FastAPI-Users password-validation failures come back as
+      // { code, reason }; other endpoints use { message }.
+      const objMsg = (typeof detail.reason === 'string' && detail.reason.trim())
+        || (typeof detail.message === 'string' && detail.message.trim());
+      if (objMsg) return objMsg;
     }
   }
 

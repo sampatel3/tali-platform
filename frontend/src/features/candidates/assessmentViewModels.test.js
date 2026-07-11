@@ -38,6 +38,59 @@ describe('assessmentViewModels', () => {
     expect(summaryModel.taaliScore).toBe(74);
   });
 
+  it('renormalises role fit over present components — a null component is not weighted as 0', () => {
+    // computeRoleFitScore(80, null) must be 80, not 40: the absent requirements
+    // component drops out of the average rather than counting as a zero.
+    const model = buildRoleFitEvidenceModel({
+      application: {
+        cv_match_score: 80,
+        cv_match_details: { score_scale: '0-100' },
+      },
+      completedAssessment: null,
+    });
+    expect(model.roleFitScore).toBe(80);
+  });
+
+  it('does not clamp a real 0-100 assessment_score to 10 (scale-hint regression)', () => {
+    // The scale hint must follow the value the ??-chain actually picks
+    // (assessment_score, 0-100) — not the legacy 0-10 `score` field.
+    const summaryModel = buildAssessmentSummaryModel({
+      application: null,
+      completedAssessment: {
+        status: 'completed',
+        assessment_score: 85,
+        score: 8,
+      },
+    });
+    expect(summaryModel.assessmentScore).toBe(85);
+  });
+
+  it('keeps the legacy 0-10 `score` field behaviour when it is the only source', () => {
+    const summaryModel = buildAssessmentSummaryModel({
+      application: null,
+      completedAssessment: { status: 'completed', score: 8 },
+    });
+    // Behaviour is preserved verbatim: the legacy `score <= 10` path passes the
+    // '0-10' hint, which CLAMPS to 0–10 (it does not ×10-scale) — so 8 stays 8.
+    expect(summaryModel.assessmentScore).toBe(8);
+  });
+
+  it('yields null scores and a Pending recommendation for an unscored candidate', () => {
+    // Backend serialises score_summary.assessment_score: null for candidates
+    // with no completed assessment — normalizeScore(null) must stay null so the
+    // rail reads "—" and the recommendation is Pending (not "Below threshold").
+    const model = buildStandingCandidateReportModel({
+      application: {
+        cv_match_details: {},
+        score_summary: { assessment_score: null, taali_score: null },
+      },
+      completedAssessment: null,
+    });
+    expect(model.summaryModel.taaliScore).toBeNull();
+    expect(model.summaryModel.assessmentScore).toBeNull();
+    expect(model.recommendation.label).toBe('Pending');
+  });
+
   it('surfaces the server-canonical integrity warnings verbatim (single source)', () => {
     // Flags come ONLY from score_summary.integrity.warnings — the server's
     // build_integrity_warnings is the one place the wording lives.

@@ -360,6 +360,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   });
   const [ssoSaving, setSsoSaving] = useState(false);
   const [teamMembers, setTeamMembers] = useState([]);
+  // Owners manage members and access settings; members get a read-only view.
+  const isOwner = String(user?.role || '') === 'owner';
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingCosts, setBillingCosts] = useState(null);
   const [billingCredits, setBillingCredits] = useState(null);
@@ -1524,6 +1526,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   setTeamMembers={setTeamMembers}
                   showToast={showToast}
                   userEmail={user?.email}
+                  isOwner={isOwner}
                   accessForm={accessForm}
                   setAccessForm={setAccessForm}
                   accessSaving={accessSaving}
@@ -1962,8 +1965,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
 
                   <div className="settings-save-row">
-                    <div className="settings-inline-note">SAML metadata is required when SAML is enabled.</div>
-                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveSso} disabled={ssoSaving}>
+                    <div className="settings-inline-note">
+                      {isOwner
+                        ? 'SAML metadata is required when SAML is enabled.'
+                        : 'Only a workspace owner can change security settings.'}
+                    </div>
+                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveSso} disabled={ssoSaving || !isOwner}>
                       {ssoSaving ? 'Saving...' : 'Save security settings'}
                     </button>
                   </div>

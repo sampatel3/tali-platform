@@ -94,6 +94,16 @@ describe('AssessmentScorecard', () => {
     expect(screen.getByText('75 / 100')).toBeTruthy();
   });
 
+  it('renders rating chips on the purple scale, not the success/danger design-system colours', () => {
+    render(<AssessmentScorecard assessment={ASSESSMENT} />);
+    fireEvent.click(screen.getByRole('button', { name: /Discernment/ }));
+    const chip = screen.getByText('good');
+    // Per-criterion ratings are evidence, not verdicts — no green/red badge classes.
+    expect(chip.className).not.toMatch(/taali-badge-(success|danger|info)/);
+    expect(chip.getAttribute('style') || '').toMatch(/color-mix/);
+    expect(chip.getAttribute('style') || '').toMatch(/--purple/);
+  });
+
   it('shows the empty state for an unscored assessment', () => {
     render(<AssessmentScorecard assessment={{}} />);
     expect(screen.getByTestId('assessment-scorecard-empty')).toBeTruthy();

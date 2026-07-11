@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useToast } from '../../context/ToastContext';
 import {
@@ -105,27 +105,69 @@ const EVIDENCE_PANELS = [
 
 export const AssessmentEvidencePanels = ({ candidate = null }) => {
   const [activePanel, setActivePanel] = useState('prompts');
+  const tabRefs = useRef([]);
   if (!candidate) return null;
   const active = EVIDENCE_PANELS.find((panel) => panel.id === activePanel) || EVIDENCE_PANELS[0];
   const ActiveComponent = active.Component;
+
+  // Roving-tabindex keyboard contract for the tablist: arrows move between tabs
+  // (wrapping), Home/End jump to the ends, and the focused tab activates.
+  const activeIndex = EVIDENCE_PANELS.findIndex((panel) => panel.id === activePanel);
+  const focusTab = (index) => {
+    const target = EVIDENCE_PANELS[index];
+    if (!target) return;
+    setActivePanel(target.id);
+    tabRefs.current[index]?.focus();
+  };
+  const onTabKeyDown = (event) => {
+    const last = EVIDENCE_PANELS.length - 1;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      focusTab(activeIndex >= last ? 0 : activeIndex + 1);
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusTab(activeIndex <= 0 ? last : activeIndex - 1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      focusTab(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      focusTab(last);
+    }
+  };
+
   return (
     <div className="report-assessment-evidence">
       <div className="mc-kicker">RAW EVIDENCE</div>
       <div className="evidence-seg" role="tablist" aria-label="Assessment evidence">
-        {EVIDENCE_PANELS.map((panel) => (
-          <button
-            key={panel.id}
-            type="button"
-            role="tab"
-            aria-selected={activePanel === panel.id}
-            className={activePanel === panel.id ? 'on' : ''}
-            onClick={() => setActivePanel(panel.id)}
-          >
-            {panel.label}
-          </button>
-        ))}
+        {EVIDENCE_PANELS.map((panel, index) => {
+          const selected = activePanel === panel.id;
+          return (
+            <button
+              key={panel.id}
+              ref={(el) => { tabRefs.current[index] = el; }}
+              type="button"
+              role="tab"
+              id={`evidence-tab-${panel.id}`}
+              aria-selected={selected}
+              aria-controls={`evidence-panel-${panel.id}`}
+              tabIndex={selected ? 0 : -1}
+              className={selected ? 'on' : ''}
+              onClick={() => setActivePanel(panel.id)}
+              onKeyDown={onTabKeyDown}
+            >
+              {panel.label}
+            </button>
+          );
+        })}
       </div>
-      <ActiveComponent candidate={candidate} />
+      <div
+        role="tabpanel"
+        id={`evidence-panel-${active.id}`}
+        aria-labelledby={`evidence-tab-${active.id}`}
+      >
+        <ActiveComponent candidate={candidate} />
+      </div>
     </div>
   );
 };

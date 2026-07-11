@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 
 import { DecisionRail } from './DecisionRail';
@@ -61,5 +61,151 @@ describe('DecisionRail re-score / staleness guarding', () => {
     expect(screen.queryByText(/Re-scoring this candidate/i)).not.toBeInTheDocument();
     const approve = screen.getByRole('button', { name: /Advance|Approve/i });
     expect(approve).not.toBeDisabled();
+  });
+});
+
+describe('DecisionRail score ring', () => {
+  it('reads "—" (not 0/100) when the Taali score is unscored', () => {
+    render(
+      <DecisionRail candidateName="Sam Patel" candidateInitials="SP" taaliScore={null} />,
+    );
+    // The ring's accessible label mirrors the "—" override, not "0 of 100".
+    expect(screen.getByLabelText(/—/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/0 of 100/)).not.toBeInTheDocument();
+  });
+});
+
+describe('DecisionRail reject consequence copy', () => {
+  const rejectDecision = {
+    id: 9,
+    status: 'pending',
+    decision_type: 'reject',
+    confidence: 0.8,
+  };
+
+  it('shows the consequence note under the primary reject button', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={40}
+        decision={rejectDecision}
+        application={{ cv_match_score: 40, workable_stage: null }}
+        canDecide
+        onApprove={vi.fn()}
+      />,
+    );
+    const reject = screen.getByRole('button', { name: /Reject/i });
+    expect(reject).toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));
+    expect(screen.getByText(/Disqualifies them in Workable and sends the rejection email\./i)).toBeInTheDocument();
+  });
+
+  it('does not show the consequence note for a non-reject decision', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={72}
+        decision={{ ...rejectDecision, decision_type: 'advance_to_interview' }}
+        application={{ cv_match_score: 72, workable_stage: null }}
+        canDecide
+        onApprove={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Disqualifies them in Workable/i)).not.toBeInTheDocument();
+  });
+
+  it('lets the stale warning take precedence over the reject note in the button title', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={40}
+        decision={{ ...rejectDecision, is_stale: true }}
+        application={{ cv_match_score: 40, workable_stage: null }}
+        canDecide
+        onApprove={vi.fn()}
+      />,
+    );
+    const reject = screen.getByRole('button', { name: /Reject/i });
+    expect(reject).toHaveAttribute('title', expect.stringMatching(/Inputs changed since this was decided/i));
+    // The visible consequence note still renders under the button.
+    expect(screen.getByText(/Disqualifies them in Workable/i)).toBeInTheDocument();
+  });
+});
+
+describe('DecisionRail pre-screen escalation', () => {
+  const preScreenApp = { cv_match_score: null, workable_stage: null };
+
+  it('renders the pre-screen context + Run full evaluation action, not the generic hint', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide
+        preScreenedOut
+        preScreenScore={31}
+        preScreenReason="Missing the core Kubernetes requirement."
+        onRunFullEvaluation={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/Filtered out by pre-screen · 31\/100/i)).toBeInTheDocument();
+    expect(screen.getByText(/Missing the core Kubernetes requirement\./i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run full evaluation/i })).toBeInTheDocument();
+    // The generic "score this candidate" hint is suppressed — the pre-screen
+    // block replaces it.
+    expect(screen.queryByText(/No agent decision yet/i)).not.toBeInTheDocument();
+  });
+
+  it('fires onRunFullEvaluation when the action is clicked', () => {
+    const onRun = vi.fn();
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide
+        preScreenedOut
+        onRunFullEvaluation={onRun}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Run full evaluation/i }));
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the in-flight state and disables the action while evaluating', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide
+        preScreenedOut
+        evaluating
+        onRunFullEvaluation={vi.fn()}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /Evaluating/i });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(/Running a full CV evaluation now/i)).toBeInTheDocument();
+  });
+
+  it('does not render the pre-screen block for a client / interview view', () => {
+    render(
+      <DecisionRail
+        candidateName="Sam Patel"
+        candidateInitials="SP"
+        taaliScore={null}
+        application={preScreenApp}
+        canDecide={false}
+        preScreenedOut
+        onRunFullEvaluation={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /Run full evaluation/i })).not.toBeInTheDocument();
   });
 });
