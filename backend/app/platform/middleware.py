@@ -7,13 +7,21 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from .request_context import set_client_meta, set_request_id
+from .config import settings
 from ..domains.identity_access.access_policy import evaluate_login_access
+from ..models.api_key import KEY_PREFIX_LIVE, KEY_PREFIX_TEST
 
 logger = logging.getLogger("tali.middleware")
 
 # In-memory rate limit: key -> list of request timestamps (pruned to last window_sec)
 _rate_limit_store = defaultdict(list)
 _RATE_WINDOW_SEC = 60
+
+_API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
+# Bucket a tali_* key on a stable slice of the token (never the whole secret,
+# which we do NOT verify here). Mirrors the displayed key prefix length in
+# api_key_service (prefix label + 6 chars) so a bucket maps to one key.
+_MCP_KEY_BUCKET_LEN = len(KEY_PREFIX_LIVE) + 6
 
 
 def _get_client_ip(request: Request) -> str:
@@ -23,7 +31,28 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _rate_limit_key(ip: str, path: str) -> str:
+def _mcp_bucket_id(request: Request, ip: str) -> str:
+    """Stable per-key (else per-IP) identifier for /mcp rate buckets.
+
+    Uses the API-key prefix from the Authorization/X-API-Key header when a
+    tali_* token is presented (prefix string only — the key is NOT verified
+    here); otherwise falls back to client IP for JWT/session users.
+    """
+    candidates = []
+    authz = request.headers.get("authorization")
+    if authz:
+        parts = authz.split()
+        candidates.append(parts[1] if len(parts) == 2 else authz)
+    x_api_key = request.headers.get("x-api-key")
+    if x_api_key:
+        candidates.append(x_api_key)
+    for token in candidates:
+        if token.startswith(_API_KEY_PREFIXES):
+            return f"key:{token[:_MCP_KEY_BUCKET_LEN]}"
+    return f"ip:{ip}"
+
+
+def _rate_limit_key(request: Request, ip: str, path: str) -> str:
     if (
         "/api/v1/auth/login" in path
         or "/api/v1/auth/jwt/login" in path
@@ -37,6 +66,9 @@ def _rate_limit_key(ip: str, path: str) -> str:
         return f"candidate_token:{ip}"
     if "/api/v1/assessments/" in path and ("/start" in path or "/execute" in path or "/submit" in path or "/claude" in path or "/upload-cv" in path):
         return f"assessment:{ip}"
+    # Public /mcp mount (JWT or tali_* API key auth). Bucketed per key, else IP.
+    if path == "/mcp" or path.startswith("/mcp/"):
+        return f"mcp:{_mcp_bucket_id(request, ip)}"
     return ""
 
 
@@ -47,6 +79,8 @@ def _rate_limit_max(key: str) -> int:
         return 15  # Candidate token endpoints: 15 per 60s (prevent brute-force)
     if key.startswith("assessment:"):
         return 30
+    if key.startswith("mcp:"):
+        return settings.MCP_RATE_LIMIT_PER_MINUTE
     return 0
 
 
@@ -56,15 +90,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         ip = _get_client_ip(request)
         path = request.url.path
-        key = _rate_limit_key(ip, path)
+        key = _rate_limit_key(request, ip, path)
         if not key:
+            return await call_next(request)
+
+        max_allowed = _rate_limit_max(key)
+        if max_allowed <= 0:
+            # Disabled bucket (e.g. MCP_RATE_LIMIT_PER_MINUTE=0).
             return await call_next(request)
 
         now = time.time()
         window_start = now - _RATE_WINDOW_SEC
         store = _rate_limit_store[key]
         store[:] = [t for t in store if t > window_start]
-        max_allowed = _rate_limit_max(key)
         if len(store) >= max_allowed:
             logger.warning("Rate limit exceeded key=%s path=%s", key, path)
             return JSONResponse(
