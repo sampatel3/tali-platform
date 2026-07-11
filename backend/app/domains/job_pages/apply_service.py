@@ -12,6 +12,7 @@ service flushes but does NOT commit.
 """
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -40,6 +41,25 @@ class ApplyResult:
     application: CandidateApplication
     created: bool
     knockout_passed: bool
+    # The opaque single-purpose token for the OPTIONAL voluntary-EEO step. It
+    # resolves to exactly this application (no raw application_id is ever accepted
+    # from the public). Always populated for a resolved application.
+    eeo_token: str
+
+
+def _new_eeo_token() -> str:
+    """A random, opaque, single-purpose token — follows the platform's
+    ``prefix_ + secrets.token_urlsafe`` pattern (share/report/submittal links)."""
+    return f"eeo_{secrets.token_urlsafe(24)}"
+
+
+def _ensure_eeo_token(db: Session, application: CandidateApplication) -> None:
+    """Mint the application's EEO token once and reuse it (overwrite-own-only —
+    the applicant may re-submit to correct their self-ID). Pre-existing
+    applications from before this column landed get a token on their next apply."""
+    if not getattr(application, "eeo_token", None):
+        application.eeo_token = _new_eeo_token()
+        db.flush()
 
 
 def _resolve_reject_reason(
@@ -247,10 +267,12 @@ def submit_application(
     )
     if existing is not None and existing.deleted_at is None:
         meta = (existing.screening_answers or {}).get("_knockout", {})
+        _ensure_eeo_token(db, existing)
         return ApplyResult(
             application=existing,
             created=False,
             knockout_passed=bool(meta.get("passed", True)),
+            eeo_token=existing.eeo_token,
         )
 
     questions = list_role_questions(db, org_id, role.id)
@@ -306,8 +328,10 @@ def submit_application(
             ),
         )
 
+    _ensure_eeo_token(db, application)
     return ApplyResult(
         application=application,
         created=True,
         knockout_passed=passed,
+        eeo_token=application.eeo_token,
     )

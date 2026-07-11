@@ -385,6 +385,10 @@ app.include_router(sourcing_assist_router, prefix="/api/v1")
 app.include_router(campaigns_router, prefix="/api/v1")
 app.include_router(offers_router, prefix="/api/v1")
 app.include_router(offer_templates_router, prefix="/api/v1")
+from .domains.compliance import router as compliance_router  # noqa: E402
+
+# GDPR data-subject requests + aggregate EEO report (org-owner-gated).
+app.include_router(compliance_router, prefix="/api/v1")
 app.include_router(hiring_team_router, prefix="/api/v1")
 app.include_router(pipeline_stages_router, prefix="/api/v1")
 app.include_router(pipeline_analytics_router, prefix="/api/v1")

@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import { publicJobApi } from '../requisitions/api';
 import { ChatMarkdown } from '../../shared/chat';
 import { useDocumentMeta } from '../../shared/seo/useDocumentMeta';
+import { ApplyForm } from './ApplyForm';
 import './jobpage.css';
 
 // Public, no-auth careers-style job posting. Reached via /job/:token — the
@@ -121,7 +122,13 @@ export function PublicJobPage() {
         <ChatMarkdown>{job.jd_markdown || ''}</ChatMarkdown>
       </div>
       <footer className="pjp-apply">
-        {applyHref ? (
+        {job.accepts_applications ? (
+          <ApplyForm
+            token={token}
+            questions={job.screening_questions || []}
+            organizationName={job.organization_name}
+          />
+        ) : applyHref ? (
           <a className="pjp-apply-btn" href={applyHref} target="_blank" rel="noreferrer noopener">
             Apply for this role →
           </a>

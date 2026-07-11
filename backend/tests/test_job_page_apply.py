@@ -70,10 +70,15 @@ def test_apply_creates_candidate_and_application(client, db):
     assert "knockout_passed" not in body and "failed_question_ids" not in body
     assert "created" not in body
 
+    # The apply response carries the opaque single-purpose EEO token — the only
+    # key the voluntary self-ID endpoint accepts (never a raw application_id).
+    assert body["eeo_token"] and body["eeo_token"].startswith("eeo_")
+
     db.expire_all()
     app = db.query(CandidateApplication).filter_by(id=body["application_id"]).first()
     assert app.source == "careers" and app.application_outcome == "open"
     assert app.source_strategy == "inbound"
+    assert app.eeo_token == body["eeo_token"]
     assert db.query(Candidate).filter_by(email="casey@x.test").count() == 1
 
 

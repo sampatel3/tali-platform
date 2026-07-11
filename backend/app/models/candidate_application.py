@@ -72,6 +72,13 @@ class CandidateApplication(Base):
     # JSON map), captured at native apply time. The deterministic knockout
     # verdict is stashed under the ``_knockout`` key. Added in migration 154.
     screening_answers = Column(JSON, nullable=True)
+    # Opaque, single-purpose token minted at native apply time and handed back to
+    # the applicant. It is the ONLY key the public voluntary-EEO endpoint accepts:
+    # it resolves to exactly THIS application, so nobody can post demographics for
+    # an application they didn't submit (no raw application_id from the public).
+    # Overwrite-own-only — the applicant may re-submit to correct their answers.
+    # Added in migration 155.
+    eeo_token = Column(String, nullable=True, unique=True, index=True)
     # Denormalized coarse category of the current pipeline_stage (see
     # PipelineStage.kind / STAGE_KINDS). Backfilled from the canonical stage
     # mapping in migration 151. Lets analytics/automation group by ATS-generic

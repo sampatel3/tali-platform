@@ -143,7 +143,7 @@ _NON_USER_AUTH_PREFIXES = (
     "/api/v1/users",       # fastapi-users self / superuser management (own guard)
     "/api/v1/webhooks/",   # provider webhooks — verified by signature
     "/public/v1/",         # public API — authenticated by API key
-    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake; native job-page apply — flag-gated off, rate-limited per IP+job)
+    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake; native job-page apply — flag-gated off, rate-limited per IP+job; voluntary EEO self-ID POST /public/eeo/{token} — flag-gated off, rate-limited, authorised by the opaque per-application eeo_token, never a raw application_id)
     "/careers/",           # public careers pages
 )
 
@@ -585,4 +585,40 @@ def test_configured_and_literal_claude_models_are_priceable() -> None:
         "snapshot-strip) and would mis-price to the env-var default rate. "
         "A retired/absent id (e.g. a stray '-latest') is the classic cause. "
         f"Offending: {sorted(offending)}"
+    )
+
+
+def test_eeo_model_is_segregated_from_scoring_and_decision() -> None:
+    """The voluntary-EEO surface must never be reachable from the scoring/decision
+    path — the agent must not see a protected characteristic. This pins the
+    segregation architecturally: ``EEOResponse`` / the eeo model / eeo_service may
+    be imported ONLY by the compliance domain (which owns them) and the job-pages
+    public route (which mints the token + records the voluntary answer). Any
+    reference from a scoring or decision module fails this gate.
+    """
+    # Files allowed to touch the EEO surface. Everything else — especially
+    # anything under scoring/decision — must not.
+    allowed = {
+        "app/models/__init__.py",
+        "app/models/eeo_response.py",
+        "app/domains/compliance/__init__.py",
+        "app/domains/compliance/eeo_service.py",
+        "app/domains/compliance/routes.py",
+        # The public apply route mints the token + records the voluntary answer.
+        "app/domains/job_pages/routes.py",
+    }
+    needle = re.compile(r"eeo_response|EEOResponse|eeo_service", re.IGNORECASE)
+
+    offenders: list[str] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if rel in allowed:
+            continue
+        if needle.search(path.read_text(encoding="utf-8")):
+            offenders.append(rel)
+
+    assert not offenders, (
+        "EEO self-ID surface referenced outside the compliance domain / apply "
+        "route — it must stay segregated from scoring/decision:\n  "
+        + "\n  ".join(sorted(offenders))
     )
