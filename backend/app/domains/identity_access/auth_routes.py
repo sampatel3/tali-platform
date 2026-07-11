@@ -1,15 +1,32 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi_users.jwt import generate_jwt
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from ...models.organization import Organization
 from ...models.user import User
+from ...platform.config import settings
 from ...platform.database import get_db
+from ...platform.security import get_password_hash
+from ...schemas.user import AcceptInviteRequest, Token
 from .access_policy import email_domain, normalize_allowed_domains
+from .user_routes import decode_invite_token
+from .users_fastapi import auth_backend
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+def _mint_login_token(user: User) -> str:
+    """Mint a JWT identical to the one the FastAPI-Users login endpoint
+    returns, so the frontend can log the user straight in after accepting."""
+    data = {"sub": str(user.id), "aud": auth_backend.get_strategy().token_audience}
+    return generate_jwt(
+        data,
+        settings.SECRET_KEY,
+        settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
 
 
 class SsoCheckRequest(BaseModel):
@@ -86,4 +103,35 @@ def sso_redirect(
     if not payload.get("sso_enabled"):
         raise HTTPException(status_code=404, detail=payload["message"])
     return payload
+
+
+@router.post("/accept-invite", response_model=Token)
+def accept_invite(
+    body: AcceptInviteRequest,
+    db: Session = Depends(get_db),
+):
+    claims = decode_invite_token(body.token)
+    if not claims:
+        raise HTTPException(status_code=400, detail="INVITE_TOKEN_INVALID")
+
+    user = db.query(User).filter(User.id == int(claims.get("sub") or 0)).first()
+    # Bind the token to the exact user it was issued for: sub AND email must
+    # both match, so a re-emailed/changed address can't reuse an old token.
+    if not user or user.email != claims.get("email"):
+        raise HTTPException(status_code=400, detail="INVITE_TOKEN_INVALID")
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="INVITE_ALREADY_ACCEPTED")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="INVITE_REVOKED")
+
+    # Same password rules as the FastAPI-Users config (min 8 chars / 72 bytes).
+    if len(body.password) < 8 or len(body.password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=422, detail="Password must be 8–72 characters")
+
+    user.hashed_password = get_password_hash(body.password)
+    user.is_verified = True
+    db.commit()
+    db.refresh(user)
+
+    return Token(access_token=_mint_login_token(user), token_type="bearer")
 

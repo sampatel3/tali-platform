@@ -12,6 +12,8 @@ export const pathForPage = (page, options = {}) => {
       return `/reset-password${options.resetPasswordToken ? `?token=${encodeURIComponent(options.resetPasswordToken)}` : ''}`;
     case 'verify-email':
       return `/verify-email${options.verifyEmailToken ? `?token=${encodeURIComponent(options.verifyEmailToken)}` : ''}`;
+    case 'accept-invite':
+      return `/accept-invite${options.acceptInviteToken ? `?token=${encodeURIComponent(options.acceptInviteToken)}` : ''}`;
     case 'dashboard':
       return '/dashboard';
     case 'home':

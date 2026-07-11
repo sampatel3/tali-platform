@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../context/AuthContext';
 import {
+  AcceptInvitePage,
   ForgotPasswordPage,
   LoginPage,
   RegisterPage,
@@ -21,6 +22,7 @@ vi.mock('../shared/api', () => ({
     resendVerification: vi.fn(),
     forgotPassword: vi.fn(),
     resetPassword: vi.fn(),
+    acceptInvite: vi.fn(),
     ssoCheck: vi.fn(),
   },
 }));
@@ -171,6 +173,73 @@ describe('Auth page redesign', () => {
     await waitFor(() => {
       expect(auth.resetPassword).toHaveBeenCalledWith('reset-token', 'password123');
       expect(screen.getByRole('heading', { name: /Password updated/i })).toBeInTheDocument();
+    });
+  });
+
+  it('renders the accept-invite page and prompts for a password', () => {
+    renderWithAuth(<AcceptInvitePage token="invite-token" onNavigate={vi.fn()} />);
+
+    expect(screen.getByRole('heading', { name: /Set a password to get started/i })).toBeInTheDocument();
+    expect(screen.getByText(/You've been invited to join your team on Taali/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Set password & continue/i })).toBeInTheDocument();
+  });
+
+  it('shows a friendly missing-token state with a sign-in link', () => {
+    renderWithAuth(<AcceptInvitePage token="" onNavigate={vi.fn()} />);
+
+    expect(screen.getByRole('heading', { name: /Invite link missing/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Go to sign in/i })).toBeInTheDocument();
+  });
+
+  it('accepts the invite, stores the token, loads the profile, and lands on home', async () => {
+    const onNavigate = vi.fn();
+    auth.acceptInvite.mockResolvedValue({ data: { access_token: 'invite_tok', token_type: 'bearer' } });
+    auth.me.mockResolvedValue({ data: { id: 5, email: 'newbie@taali.ai', full_name: 'New Bie' } });
+
+    renderWithAuth(<AcceptInvitePage token="invite-token" onNavigate={onNavigate} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Set password & continue/i }));
+
+    await waitFor(() => {
+      expect(auth.acceptInvite).toHaveBeenCalledWith('invite-token', 'password123');
+      expect(auth.me).toHaveBeenCalled();
+      expect(onNavigate).toHaveBeenCalledWith('home');
+    });
+    expect(localStorage.getItem('taali_access_token')).toBe('invite_tok');
+  });
+
+  it('shows the invalid-token error message when the invite is expired', async () => {
+    auth.acceptInvite.mockRejectedValue({
+      response: { status: 400, data: { detail: 'INVITE_TOKEN_INVALID' } },
+    });
+
+    renderWithAuth(<AcceptInvitePage token="stale-token" onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Set password & continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/This invite link is invalid or has expired/i)).toBeInTheDocument();
+    });
+  });
+
+  it('offers a sign-in link when the invite was already accepted', async () => {
+    auth.acceptInvite.mockRejectedValue({
+      response: { status: 400, data: { detail: 'INVITE_ALREADY_ACCEPTED' } },
+    });
+
+    renderWithAuth(<AcceptInvitePage token="used-token" onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Set password & continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/This invite was already accepted/i)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Go to sign in/i })).toBeInTheDocument();
     });
   });
 

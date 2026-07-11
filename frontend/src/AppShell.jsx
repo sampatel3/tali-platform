@@ -33,6 +33,7 @@ import {
   RegisterPage,
   ResetPasswordPage,
   VerifyEmailPage,
+  AcceptInvitePage,
 } from './features/auth';
 import { Shell as DashboardNav } from './shared/layout/Shell';
 import { PreviewNavGuard } from './shared/layout/PreviewNavGuard';
@@ -271,6 +272,9 @@ function AppContent() {
     ? (searchParams.get('token') || '')
     : '';
   const verifyEmailToken = location.pathname === '/verify-email'
+    ? (searchParams.get('token') || '')
+    : '';
+  const acceptInviteToken = location.pathname === '/accept-invite'
     ? (searchParams.get('token') || '')
     : '';
 
@@ -564,6 +568,7 @@ function AppContent() {
       <Route path="/forgot-password" element={<ForgotPasswordPage onNavigate={navigateToPage} />} />
       <Route path="/reset-password" element={<ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} />} />
       <Route path="/verify-email" element={<VerifyEmailPage onNavigate={navigateToPage} token={verifyEmailToken} />} />
+      <Route path="/accept-invite" element={<AcceptInvitePage onNavigate={navigateToPage} token={acceptInviteToken} />} />
 
       <Route
         path="/dashboard"
