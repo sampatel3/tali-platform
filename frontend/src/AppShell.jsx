@@ -75,6 +75,11 @@ const DemoLeadPage = lazy(() =>
 const DemoShowcasePage = lazy(() =>
   import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
 );
+// Internal, no-auth landing-design preview (/landing-preview?v=a|b). Two
+// value-led landing variants Sam eyeballs in prod; fixture data only, no APIs.
+const LandingPreviewPage = lazy(() =>
+  import('./features/marketing/landing_preview/LandingPreviewPage').then((m) => ({ default: m.LandingPreviewPage }))
+);
 const DeveloperPortalPage = lazy(() =>
   import('./features/developers/DeveloperPortalPage').then((m) => ({ default: m.DeveloperPortalPage }))
 );
@@ -528,6 +533,17 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DemoExperiencePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      {/* Internal landing-design preview. Public, no-auth — not in
+          isProtectedRecruiterPath, and it calls no APIs so no httpClient
+          isPublicPath entry is needed. ?v=a|b picks the variant. */}
+      <Route
+        path="/landing-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <LandingPreviewPage onNavigate={navigateToPage} />
           </Suspense>
         )}
       />
