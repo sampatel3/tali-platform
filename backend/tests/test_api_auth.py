@@ -145,6 +145,19 @@ def test_register_long_valid_inputs(client):
     assert data["full_name"] == long_name
 
 
+def test_register_common_password_rejected(client):
+    resp = client.post("/api/v1/auth/register", json={
+        "email": "commonpw@test.com",
+        "password": "password",
+        "full_name": "Common Pass",
+    })
+    assert resp.status_code in (400, 422)
+    detail = resp.json().get("detail", "")
+    if isinstance(detail, dict):
+        detail = detail.get("reason", "")
+    assert "common" in str(detail).lower()
+
+
 def test_register_password_exactly_8_chars(client):
     resp = client.post("/api/v1/auth/register", json={
         "email": "exact8@test.com",

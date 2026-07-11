@@ -35,6 +35,7 @@ vi.mock('../../shared/api', () => ({
     invite: vi.fn(),
     setRole: vi.fn(),
     resendInvite: vi.fn(),
+    inviteLink: vi.fn(),
     remove: vi.fn(),
   },
 }));
@@ -132,6 +133,7 @@ describe('SettingsPage recruiter surface', () => {
     teamApi.list.mockResolvedValue({ data: [] });
     teamApi.invite.mockResolvedValue({ data: { id: 22, email: 'new@deeplight.ai', full_name: 'New Recruiter', status: 'invited', email_sent: true } });
     teamApi.resendInvite.mockResolvedValue({ data: { email_sent: true } });
+    teamApi.inviteLink.mockResolvedValue({ data: { accept_link: 'https://app.taali.ai/accept-invite?token=abc123' } });
     teamApi.remove.mockResolvedValue({ status: 204 });
   });
 
@@ -317,6 +319,28 @@ describe('SettingsPage recruiter surface', () => {
     await waitFor(() => {
       expect(teamApi.resendInvite).toHaveBeenCalledWith(8);
       expect(showToast).toHaveBeenCalledWith('Invite resent.', 'success');
+    });
+  });
+
+  it('copies the invite link for a pending member and toasts success', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    teamApi.list.mockResolvedValue({
+      data: [{ id: 8, email: 'pending@deeplight.ai', full_name: 'Pending Person', status: 'invited' }],
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending Person')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+
+    await waitFor(() => {
+      expect(teamApi.inviteLink).toHaveBeenCalledWith(8);
+      expect(writeText).toHaveBeenCalledWith('https://app.taali.ai/accept-invite?token=abc123');
+      expect(showToast).toHaveBeenCalledWith('Invite link copied.', 'success');
     });
   });
 

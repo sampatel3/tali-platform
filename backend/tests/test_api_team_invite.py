@@ -160,6 +160,20 @@ def test_accept_invite_short_password_422(client):
     assert resp.status_code == 422
 
 
+def test_accept_invite_common_password_422(client):
+    headers, _ = auth_headers(client)
+    email = "commonpw@example.com"
+    assert _invite(client, headers, email).status_code == 201
+    token = generate_invite_token(_get_user(email))
+
+    resp = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": token, "password": "password123"},
+    )
+    assert resp.status_code == 422
+    assert "common" in str(resp.json().get("detail", "")).lower()
+
+
 def test_accept_invite_revoked_400(client):
     headers, _ = auth_headers(client)
     email = "revoked-accept@example.com"
@@ -225,6 +239,77 @@ def test_resend_invite_cross_org_404(client):
 def test_resend_invite_no_auth_401(client):
     resp = client.post("/api/v1/users/999/resend-invite")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# invite-link (manual-delivery recovery)
+# ---------------------------------------------------------------------------
+
+
+def test_invite_link_pending_returns_accept_link(client):
+    headers, _ = auth_headers(client)
+    email = "copylink@example.com"
+    assert _invite(client, headers, email).status_code == 201
+    user = _get_user(email)
+
+    resp = client.post(f"/api/v1/users/{user.id}/invite-link", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert "/accept-invite?token=" in resp.json()["accept_link"]
+
+
+def test_invite_link_non_pending_400(client):
+    headers, _ = auth_headers(client)
+    email = "copylink-active@example.com"
+    assert _invite(client, headers, email).status_code == 201
+    user = _get_user(email)
+    token = generate_invite_token(user)
+    client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": token, "password": "NewPass123!"},
+    )
+
+    resp = client.post(f"/api/v1/users/{user.id}/invite-link", headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "NOT_PENDING_INVITE"
+
+
+def test_invite_link_cross_org_404(client):
+    headers_a, _ = auth_headers(client, email="link-a@a.com", organization_name="Link Org A")
+    email = "link-invitee-a@a.com"
+    assert _invite(client, headers_a, email).status_code == 201
+    target = _get_user(email)
+
+    headers_b, _ = auth_headers(client, email="link-b@b.com", organization_name="Link Org B")
+    resp = client.post(f"/api/v1/users/{target.id}/invite-link", headers=headers_b)
+    assert resp.status_code == 404
+
+
+def test_invite_link_no_auth_401(client):
+    resp = client.post("/api/v1/users/999/invite-link")
+    assert resp.status_code == 401
+
+
+def test_invite_link_non_owner_member_403(client):
+    # A non-owner member must not be able to mint an invite link (the token
+    # could set a pending teammate's password). Gated like the rest of
+    # member management via require_org_owner.
+    headers, _ = auth_headers(client, email="link-owner@ex.com", organization_name="Link Gate Org")
+    member_email = "link-member@ex.com"
+    assert _invite(client, headers, member_email).status_code == 201
+    member = _get_user(member_email)
+    accept = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": generate_invite_token(member), "password": "MemberPass123!"},
+    )
+    assert accept.status_code == 200, accept.text
+    member_headers = {"Authorization": f"Bearer {accept.json()['access_token']}"}
+
+    target_email = "link-target@ex.com"
+    assert _invite(client, headers, target_email).status_code == 201
+    target = _get_user(target_email)
+
+    resp = client.post(f"/api/v1/users/{target.id}/invite-link", headers=member_headers)
+    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------

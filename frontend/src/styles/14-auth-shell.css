@@ -220,6 +220,28 @@
   margin-top: 4px;
 }
 
+.mc-auth-strength {
+  margin: -8px 0 14px;
+}
+
+.mc-auth-strength-bar {
+  display: flex;
+  gap: 4px;
+}
+
+.mc-auth-strength-seg {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  transition: background 120ms ease;
+}
+
+.mc-auth-strength-hint {
+  font-size: 0.71875rem;
+  color: var(--mute);
+  margin-top: 6px;
+}
+
 .mc-auth-divider {
   margin: 18px 0;
   display: flex;

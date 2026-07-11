@@ -11,6 +11,7 @@ import {
   ResetPasswordPage,
   VerifyEmailPage,
 } from '../features/auth';
+import { PasswordStrength } from '../features/auth/PasswordStrength';
 import { auth } from '../shared/api';
 
 vi.mock('../shared/api', () => ({
@@ -210,6 +211,75 @@ describe('Auth page redesign', () => {
     expect(localStorage.getItem('taali_access_token')).toBe('invite_tok');
   });
 
+  it('surfaces the backend password reason verbatim on a 422 accept-invite', async () => {
+    auth.acceptInvite.mockRejectedValue({
+      response: {
+        status: 422,
+        data: { detail: 'This password is too common. Choose something less predictable.' },
+      },
+    });
+
+    renderWithAuth(<AcceptInvitePage token="invite-token" onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Set password & continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('This password is too common. Choose something less predictable.')).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces the FastAPI-Users {code, reason} password reason on register', async () => {
+    auth.register.mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          detail: {
+            code: 'REGISTER_INVALID_PASSWORD',
+            reason: 'This password is too common. Choose something less predictable.',
+          },
+        },
+      },
+    });
+
+    renderWithAuth(<RegisterPage onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), { target: { value: 'sam@taali.ai' } });
+    fireEvent.change(screen.getByPlaceholderText('Sam Patel'), { target: { value: 'Sam Patel' } });
+    fireEvent.change(screen.getByPlaceholderText('Deeplight AI'), { target: { value: 'Taali' } });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create account →' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('This password is too common. Choose something less predictable.')).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces the FastAPI-Users {code, reason} password reason on reset', async () => {
+    auth.resetPassword.mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          detail: {
+            code: 'RESET_PASSWORD_INVALID_PASSWORD',
+            reason: 'This password is too common. Choose something less predictable.',
+          },
+        },
+      },
+    });
+
+    render(<ResetPasswordPage token="reset-token" onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], { target: { value: 'password123' } });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Update password/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('This password is too common. Choose something less predictable.')).toBeInTheDocument();
+    });
+  });
+
   it('shows the invalid-token error message when the invite is expired', async () => {
     auth.acceptInvite.mockRejectedValue({
       response: { status: 400, data: { detail: 'INVITE_TOKEN_INVALID' } },
@@ -258,6 +328,26 @@ describe('Auth page redesign', () => {
       expect(screen.getByText(/Your workspace requires single sign-on/i)).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /Go to sign in/i })).toBeInTheDocument();
     });
+  });
+
+  it('PasswordStrength renders nothing when the password is empty', () => {
+    const { container } = render(<PasswordStrength password="" />);
+    expect(container.querySelector('.mc-auth-strength')).toBeNull();
+  });
+
+  it('PasswordStrength flags a too-common password', () => {
+    render(<PasswordStrength password="password" />);
+    expect(screen.getByText(/too common/i)).toBeInTheDocument();
+  });
+
+  it('PasswordStrength reports a strong password for a long varied string', () => {
+    render(<PasswordStrength password="Tr0ub4dor-passphrase-xyz" />);
+    expect(screen.getByText(/strong password/i)).toBeInTheDocument();
+  });
+
+  it('PasswordStrength warns when the email is inside the password', () => {
+    render(<PasswordStrength password="samsmith-secret-99" email="samsmith@company.com" />);
+    expect(screen.getByText(/email in your password/i)).toBeInTheDocument();
   });
 
   it('verifies email and lands on the redesigned success screen', async () => {

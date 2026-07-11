@@ -12,6 +12,7 @@ from ...platform.database import get_db
 from ...platform.security import get_password_hash
 from ...schemas.user import AcceptInviteRequest, Token
 from .access_policy import email_domain, normalize_allowed_domains
+from .password_policy import check_password_strength
 from .user_routes import decode_invite_token
 from .users_fastapi import auth_backend
 
@@ -131,9 +132,11 @@ def accept_invite(
         if org and getattr(org, "sso_enforced", False):
             raise HTTPException(status_code=400, detail="INVITE_SSO_REQUIRED")
 
-    # Same password rules as the FastAPI-Users config (min 8 chars / 72 bytes).
-    if len(body.password) < 8 or len(body.password.encode("utf-8")) > 72:
-        raise HTTPException(status_code=422, detail="Password must be 8–72 characters")
+    # Same strength policy as the FastAPI-Users config (length + blocklist +
+    # email-similarity). Reuses the single source of truth in password_policy.
+    reason = check_password_strength(body.password, email=user.email)
+    if reason is not None:
+        raise HTTPException(status_code=422, detail=reason)
 
     user.hashed_password = get_password_hash(body.password)
     user.is_verified = True

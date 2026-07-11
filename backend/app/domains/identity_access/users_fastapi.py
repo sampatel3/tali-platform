@@ -22,6 +22,7 @@ from ...platform.config import settings
 from ...platform.database import get_async_db
 from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...services.pricing_service import FREE_TIER
+from .password_policy import check_password_strength
 
 logger = logging.getLogger("taali.auth")
 
@@ -56,10 +57,12 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
     verification_token_lifetime_seconds = 86400  # 24 hours
 
     async def validate_password(self, password: str, user) -> None:
-        if len(password) < 8:
-            raise InvalidPasswordException(reason="Password should be at least 8 characters")
-        if len(password.encode("utf-8")) > 72:
-            raise InvalidPasswordException(reason="Password must be at most 72 bytes (bcrypt limit)")
+        # FastAPI-Users passes the user / UserCreate as the second arg on both
+        # register and reset-password. Use its email for the similarity check.
+        email = getattr(user, "email", None)
+        reason = check_password_strength(password, email=email)
+        if reason is not None:
+            raise InvalidPasswordException(reason=reason)
 
     async def _create_signup_org(self, session: AsyncSession, organization_name: str) -> Organization:
         """Always create a fresh organization for self-signup with a unique slug."""
