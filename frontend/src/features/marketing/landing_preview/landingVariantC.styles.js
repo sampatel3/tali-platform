@@ -9,6 +9,10 @@
 // restrained lavender glows. Flipping the single `.lvc.is-on` class drives the
 // whole page. Colours are hardcoded from the Taali light purple palette so the
 // look holds regardless of the app's active brand/theme.
+//
+// v3: tighter type scale + rhythm (Gradient Labs / Cursor density, not a
+// poster), a dot-lattice hero motif (replaces the falling CVs), centred section
+// headers in the hero's design language, and denser Pipeline/Standard sections.
 export const VARIANT_C_CSS = `
 .lvc {
   /* Taali light purple family — hardcoded. Purple only, no r/a/g. */
@@ -22,6 +26,9 @@ export const VARIANT_C_CSS = `
   --lvc-ink-2: #3a3343;
   --lvc-mute: #8b8595;
   --lvc-line: #e8e2ee;
+
+  /* Content column — kept tight so folds carry information, not air. */
+  --lvc-maxw: 1140px;
 
   /* Floodable properties — animate on flip. */
   --lvc-glow: 0;                 /* 0 → 1 as agent turns on */
@@ -58,23 +65,23 @@ export const VARIANT_C_CSS = `
   position: relative;
   /* Fill a laptop viewport, but never become a void on tall/zoomed-out
      screens — the next section should always hint from below the fold. */
-  min-height: min(100vh, 920px);
+  min-height: min(100vh, 820px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 88px 20px 160px;
+  padding: 72px 20px 128px;
   overflow: hidden;
 }
-.lvc-hero-inner { position: relative; z-index: 3; max-width: 900px; }
+.lvc-hero-inner { position: relative; z-index: 3; max-width: 860px; }
 
 .lvc-kicker {
   display: inline-flex; align-items: center; gap: 10px;
   font-family: 'Geist Mono', ui-monospace, monospace;
   font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
   color: var(--lvc-purple); opacity: calc(0.4 + 0.6 * var(--lvc-glow));
-  margin-bottom: 22px; transition: opacity 0.9s ease 0.3s;
+  margin-bottom: 20px; transition: opacity 0.9s ease 0.3s;
 }
 .lvc-kicker-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--lvc-purple);
@@ -85,13 +92,13 @@ export const VARIANT_C_CSS = `
 .lvc-h1 {
   position: relative;
   font-weight: 600;
-  font-size: clamp(40px, 8vw, 92px);
-  line-height: 0.98;
-  letter-spacing: -0.045em;
-  margin: 0 0 20px;
+  font-size: clamp(38px, 5vw, 64px);
+  line-height: 1.0;
+  letter-spacing: -0.04em;
+  margin: 0 0 18px;
   /* Reserve space for the taller (wrapped) headline so the OFF↔ON swap
      never shifts layout — a shift here scroll-jumps the whole hero. */
-  min-height: 2.05em;
+  min-height: 2.0em;
   display: grid;
   align-items: center;
 }
@@ -118,8 +125,8 @@ export const VARIANT_C_CSS = `
 .lvc.is-reduced .lvc-word { opacity: 1; transform: none; filter: none; }
 
 .lvc-sub {
-  max-width: 620px; margin: 0 auto 34px;
-  font-size: clamp(15px, 2vw, 19px); line-height: 1.55;
+  max-width: 620px; margin: 0 auto 30px;
+  font-size: clamp(15px, 1.7vw, 17px); line-height: 1.55;
   color: var(--lvc-ink-2);
   opacity: 0; transform: translateY(10px);
   transition: opacity 0.8s ease 0.75s, transform 0.8s ease 0.75s;
@@ -135,7 +142,7 @@ export const VARIANT_C_CSS = `
 
 .lvc-btn {
   display: inline-flex; align-items: center; gap: 8px;
-  height: 50px; padding: 0 26px; border-radius: 999px;
+  height: 48px; padding: 0 24px; border-radius: 999px;
   font-size: 14px; font-weight: 600; cursor: pointer;
   border: 1px solid transparent;
   transition: transform 0.2s ease, box-shadow 0.3s ease, background 0.3s ease;
@@ -154,57 +161,47 @@ export const VARIANT_C_CSS = `
   border-color: var(--lvc-line);
 }
 .lvc-btn--ghost:hover { background: var(--lvc-purple-soft); border-color: rgba(196,165,253,0.6); }
-.lvc-btn--lg { height: 56px; padding: 0 34px; font-size: 15px; }
 
-/* Falling CVs — abstract light-grey paper drifting on white */
-.lvc-cvfield { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
-.lvc-cv {
-  position: absolute; top: -120px; width: 112px; height: 142px;
-  border-radius: 8px; padding: 14px 12px;
-  background: rgba(21,18,26,0.03);
-  border: 1px solid rgba(21,18,26,0.07);
-  box-shadow: 0 8px 24px -16px rgba(21,18,26,0.25);
-  filter: blur(0.6px);
-  display: flex; flex-direction: column; gap: 9px;
-  transform-origin: center;
-  animation-name: lvcFall;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
+/* ── DOT LATTICE (hero motif) ────────────────────────────────────────────
+   ~120 small dots in a loose grid. OFF: static grey, low opacity. On flip a
+   radial pulse ripples from the toggle (bottom-centre): each dot's colour +
+   scale transition is delayed by its distance to the origin (computed per dot
+   at render), so the wave visibly propagates. After it settles the whole field
+   drifts slowly via one keyframe on the container. CSS transitions only. */
+.lvc-lattice {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  animation: lvcLatticeDrift 44s ease-in-out infinite;
   animation-play-state: var(--lvc-motion);
-  opacity: 0.55;
-  transition: opacity 0.6s ease;
+  will-change: transform;
 }
-/* On flip: accelerate + stream toward the toggle (bottom-centre vanishing pt). */
-.lvc-cvfield[data-on="true"] .lvc-cv {
-  animation-name: lvcSuck;
-  animation-duration: 1.4s !important;
-  animation-iteration-count: 1;
-  animation-fill-mode: forwards;
-  animation-timing-function: cubic-bezier(0.5, 0, 0.75, 0);
+.lvc-dot {
+  position: absolute; border-radius: 50%;
+  --d: 0s;                      /* per-dot ripple delay, set inline at render */
+  transform: translate(-50%, -50%) scale(1);
+  background: rgba(21,18,26,0.16);
+  /* Settled ON colour flows in on flip, delayed by distance to the toggle. */
+  transition: background 0.5s ease var(--d), box-shadow 0.5s ease var(--d);
 }
-.lvc-cv-line { height: 6px; border-radius: 3px; background: rgba(21,18,26,0.1); }
-.lvc-cv-line--head { height: 9px; width: 64%; background: rgba(94,58,168,0.22); }
-.lvc-cv-line--short { width: 46%; }
-
-@keyframes lvcFall {
-  0%   { transform: translateY(-10vh) scale(var(--s,1)); }
-  100% { transform: translateY(118vh) scale(var(--s,1)); }
+.lvc.is-on .lvc-dot {
+  background: rgba(94,58,168,0.55);
+  box-shadow: 0 0 6px rgba(124,77,255,0.35);
+  /* Scale pop shares the same per-dot delay so the ripple reads as one wave. */
+  animation: lvcDotPop 0.6s cubic-bezier(0.34,1.56,0.64,1) var(--d) forwards;
 }
-@keyframes lvcSuck {
-  0%   { opacity: 0.55; }
-  60%  { opacity: 0.85; }
-  100% {
-    /* collapse toward bottom-centre where the switch lives */
-    top: 78vh; left: 50% !important;
-    transform: translate(-50%, 0) scale(0.05) !important;
-    opacity: 0;
-  }
+@keyframes lvcDotPop {
+  0%   { transform: translate(-50%, -50%) scale(1); }
+  45%  { transform: translate(-50%, -50%) scale(1.9); }
+  100% { transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes lvcLatticeDrift {
+  0%,100% { transform: translate3d(0, 0, 0); }
+  50%     { transform: translate3d(0, -10px, 0); }
 }
 
 /* The switch — grey when OFF, purple saturates in when ON */
 .lvc-switch-wrap {
   position: relative; z-index: 4;
-  margin-top: 46px;
+  margin-top: 44px;
   display: flex; flex-direction: column; align-items: center; gap: 14px;
 }
 .lvc-switch {
@@ -279,15 +276,40 @@ export const VARIANT_C_CSS = `
 }
 .lvc [data-reveal][data-shown="true"] { opacity: 1; transform: none; }
 
+/* ── Shared section header (hero design language, centred) ─────────────── */
+.lvc-sechead { text-align: center; max-width: 720px; margin: 0 auto; }
+.lvc-eyebrow {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+  color: var(--lvc-purple); margin-bottom: 14px;
+}
+.lvc-eyebrow--center {
+  display: inline-flex; align-items: center; gap: 9px;
+  opacity: calc(0.5 + 0.5 * var(--lvc-glow));
+}
+.lvc-eyebrow-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--lvc-purple);
+  box-shadow: 0 0 0 4px rgba(124,77,255,calc(0.16 * var(--lvc-glow)));
+}
+.lvc-h2 {
+  font-weight: 600; font-size: clamp(26px, 3vw, 38px);
+  line-height: 1.08; letter-spacing: -0.03em; margin: 0; color: var(--lvc-ink);
+}
+.lvc-h2-accent { font-style: normal; color: var(--lvc-purple); }
+.lvc-sechead-sub {
+  max-width: 620px; margin: 14px auto 0;
+  font-size: clamp(15px, 1.6vw, 16px); line-height: 1.6; color: var(--lvc-ink-2);
+}
+
 /* ── PROBLEM ─────────────────────────────────────────────────────────── */
 .lvc-problem {
-  max-width: 1100px; margin: 0 auto;
-  padding: clamp(80px, 14vh, 180px) 24px;
-  display: flex; flex-direction: column; gap: clamp(28px, 5vh, 64px);
+  max-width: var(--lvc-maxw); margin: 0 auto;
+  padding: clamp(72px, 10vh, 96px) 24px;
+  display: flex; flex-direction: column; gap: clamp(20px, 3.5vh, 40px);
 }
 .lvc-problem-line {
-  font-weight: 600; font-size: clamp(28px, 5.4vw, 62px);
-  line-height: 1.05; letter-spacing: -0.03em; margin: 0;
+  font-weight: 600; font-size: clamp(22px, 2.6vw, 36px);
+  line-height: 1.1; letter-spacing: -0.025em; margin: 0;
   color: var(--lvc-ink);
   opacity: 0; transform: translateY(28px);
   transition: opacity 0.85s cubic-bezier(0.16,1,0.3,1), transform 0.85s cubic-bezier(0.16,1,0.3,1);
@@ -306,25 +328,15 @@ export const VARIANT_C_CSS = `
 
 /* ── PIPELINE ────────────────────────────────────────────────────────── */
 .lvc-pipeline {
-  max-width: 1120px; margin: 0 auto;
-  padding: clamp(60px, 9vh, 120px) 24px;
-  display: grid; gap: 40px;
+  max-width: var(--lvc-maxw); margin: 0 auto;
+  padding: clamp(72px, 9vh, 96px) 24px;
+  display: grid; gap: 36px;
 }
-.lvc-eyebrow {
-  font-family: 'Geist Mono', ui-monospace, monospace;
-  font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
-  color: var(--lvc-purple); margin-bottom: 14px;
-}
-.lvc-h2 {
-  font-weight: 600; font-size: clamp(28px, 4vw, 46px);
-  line-height: 1.05; letter-spacing: -0.03em; margin: 0 0 16px; color: var(--lvc-ink);
-}
-.lvc-body { max-width: 620px; font-size: clamp(15px, 1.7vw, 18px); line-height: 1.6; color: var(--lvc-ink-2); margin: 0; }
-.lvc-pipe-copy { max-width: 720px; }
+.lvc-body { max-width: 620px; font-size: clamp(15px, 1.6vw, 16px); line-height: 1.6; color: var(--lvc-ink-2); margin: 0; }
 
 /* Abstract ribbon — pure CSS, animates unconditionally when ON */
 .lvc-ribbon {
-  position: relative; width: 100%; height: 96px;
+  position: relative; width: 100%; height: 84px;
   display: flex; align-items: center;
 }
 .lvc-ribbon-rail {
@@ -376,15 +388,16 @@ export const VARIANT_C_CSS = `
 
 /* Stage cards — light cards, thin borders, purple node numbers */
 .lvc-stage-grid {
-  display: grid; gap: 16px;
+  display: grid; gap: 14px;
   grid-template-columns: 1fr;
 }
 .lvc-stage {
   background: var(--lvc-bg-2);
   border: 1px solid var(--lvc-line);
   border-radius: 14px;
-  padding: 22px 20px;
+  padding: 20px 18px;
   box-shadow: 0 10px 30px -22px rgba(21,18,26,0.3);
+  display: flex; flex-direction: column;
   /* Staggered reveal — parent flips data-shown, cards cascade in. */
   opacity: 0; transform: translateY(14px);
   transition: opacity 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1);
@@ -396,23 +409,44 @@ export const VARIANT_C_CSS = `
   font-size: 12px; letter-spacing: 0.1em; color: var(--lvc-purple);
 }
 .lvc-stage-t {
-  font-weight: 600; font-size: 18px; letter-spacing: -0.01em;
-  margin: 8px 0 6px; color: var(--lvc-ink);
+  font-weight: 600; font-size: 17px; letter-spacing: -0.01em;
+  margin: 7px 0 6px; color: var(--lvc-ink);
 }
-.lvc-stage-d { font-size: 14px; line-height: 1.55; color: var(--lvc-ink-2); margin: 0; }
+.lvc-stage-d { font-size: 13.5px; line-height: 1.5; color: var(--lvc-ink-2); margin: 0; }
+.lvc-stage-meta {
+  margin-top: auto; padding-top: 12px;
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10.5px;
+  letter-spacing: 0.03em; color: var(--lvc-mute);
+}
+
+/* Stats row — big word / small caption, hero-consistent restraint */
+.lvc-stats {
+  display: grid; gap: 14px 20px;
+  grid-template-columns: repeat(2, 1fr);
+  padding-top: 12px; border-top: 1px solid var(--lvc-line);
+  opacity: 0; transform: translateY(14px);
+  transition: opacity 0.7s cubic-bezier(0.16,1,0.3,1), transform 0.7s cubic-bezier(0.16,1,0.3,1);
+}
+.lvc-stats[data-shown="true"] { opacity: 1; transform: none; }
+.lvc-stat { display: flex; flex-direction: column; gap: 4px; }
+.lvc-stat-big {
+  font-weight: 600; font-size: clamp(17px, 1.9vw, 21px);
+  letter-spacing: -0.02em; color: var(--lvc-ink);
+}
+.lvc-stat-cap { font-size: 13px; line-height: 1.4; color: var(--lvc-ink-2); }
 
 /* ── STANDARD ────────────────────────────────────────────────────────── */
 .lvc-standard {
-  max-width: 1120px; margin: 0 auto;
-  padding: clamp(60px, 9vh, 120px) 24px;
-  display: grid; gap: 44px;
+  max-width: var(--lvc-maxw); margin: 0 auto;
+  padding: clamp(72px, 9vh, 96px) 24px;
+  display: grid; gap: 36px;
 }
-.lvc-standard-copy { max-width: 640px; }
+.lvc-standard-body { display: grid; gap: 32px; align-items: start; }
 
 /* Five Ds as information rows */
-.lvc-ds-rows { display: flex; flex-direction: column; margin-top: 30px; }
+.lvc-ds-rows { display: flex; flex-direction: column; }
 .lvc-ds-row {
-  display: grid; grid-template-columns: 1fr; gap: 4px;
+  display: grid; grid-template-columns: 1fr; gap: 6px;
   padding: 16px 0; border-top: 1px solid var(--lvc-line);
   opacity: 0; transform: translateY(10px);
   transition: opacity 0.6s ease, transform 0.6s ease;
@@ -421,7 +455,9 @@ export const VARIANT_C_CSS = `
 .lvc-standard-copy[data-shown="true"] .lvc-ds-row { opacity: 1; transform: none; }
 .lvc-ds-row:last-child { border-bottom: 1px solid var(--lvc-line); }
 .lvc-ds-name { font-weight: 600; font-size: 16px; color: var(--lvc-ink); }
+.lvc-ds-body { display: flex; flex-direction: column; gap: 4px; }
 .lvc-ds-def { font-size: 14px; line-height: 1.5; color: var(--lvc-ink-2); }
+.lvc-ds-evidence { font-size: 12.5px; line-height: 1.5; color: var(--lvc-mute); }
 .lvc-ds-chip {
   justify-self: start;
   margin-top: 4px;
@@ -434,7 +470,7 @@ export const VARIANT_C_CSS = `
 
 /* Trap vignette — light chat, statically composed, CSS-staggered reveal */
 .lvc-chat {
-  max-width: 640px; width: 100%;
+  width: 100%;
   border-radius: 16px; padding: 22px;
   background: var(--lvc-bg-2);
   border: 1px solid var(--lvc-line);
@@ -486,8 +522,7 @@ export const VARIANT_C_CSS = `
 
 /* Claims strip */
 .lvc-claims {
-  grid-column: 1 / -1;
-  display: flex; flex-wrap: wrap; gap: 10px;
+  display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
 }
 .lvc-claim {
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px;
@@ -497,59 +532,46 @@ export const VARIANT_C_CSS = `
   padding: 8px 14px; border-radius: 999px;
 }
 
-/* ── CTA BAND ────────────────────────────────────────────────────────── */
-.lvc-ctaband {
-  padding: clamp(70px, 12vh, 150px) 24px;
-  background: linear-gradient(135deg, var(--lvc-purple-2) 0%, var(--lvc-purple) 55%, var(--lvc-lav) 130%);
-}
-.lvc-ctaband-inner {
-  max-width: 980px; margin: 0 auto; text-align: center;
-  display: flex; flex-direction: column; align-items: center; gap: 30px;
-}
-.lvc-ctaband-h2 {
-  font-weight: 600; font-size: clamp(30px, 5vw, 56px);
-  line-height: 1.02; letter-spacing: -0.035em; margin: 0; color: #fff;
-}
-.lvc-ctaband .lvc-btn--primary {
-  color: var(--lvc-purple);
-  background: #fff;
-  box-shadow: 0 14px 34px -14px rgba(21,18,26,0.4);
-}
-.lvc-ctaband .lvc-btn--primary:hover { box-shadow: 0 18px 44px -14px rgba(21,18,26,0.5); }
-
 /* Footer chrome sits on the light surface. */
 .lvc-footer { position: relative; z-index: 2; }
 
 /* ── Responsive ──────────────────────────────────────────────────────── */
 @media (min-width: 760px) {
   .lvc-stage-grid { grid-template-columns: repeat(2, 1fr); }
-  .lvc-ds-row { grid-template-columns: 168px 1fr auto; align-items: center; gap: 18px; }
-  .lvc-ds-chip { margin-top: 0; }
+  .lvc-stats { grid-template-columns: repeat(4, 1fr); }
+  .lvc-ds-row { grid-template-columns: 150px 1fr auto; align-items: start; gap: 18px; }
+  .lvc-ds-chip { margin-top: 0; align-self: center; }
 }
 @media (min-width: 1024px) {
   .lvc-stage-grid { grid-template-columns: repeat(3, 1fr); }
-  .lvc-standard { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
-  /* Inside the narrow standard column the 3-col row squeezes the
-     definition into a ribbon — stack the chip under it instead. */
+  /* Centred header, two-column body: D rows left, vignette right. */
+  .lvc-standard-body { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 44px; }
+  /* Inside the narrower left column the 3-col row squeezes the definition
+     into a ribbon — stack the chip under the body instead. */
   .lvc-ds-row { grid-template-columns: 140px 1fr; }
-  .lvc-ds-chip { grid-column: 2; justify-self: start; margin-top: 6px; }
+  .lvc-ds-chip { grid-column: 2; justify-self: start; margin-top: 6px; align-self: start; }
 }
 @media (min-width: 1280px) {
   /* Five stages, one row — the 3+2 split leaves a lopsided hole. */
   .lvc-stage-grid { grid-template-columns: repeat(5, 1fr); }
 }
 @media (max-width: 560px) {
-  .lvc-cv { width: 88px; height: 112px; }
   .lvc-switch-track { width: 112px; height: 56px; }
   .lvc-switch-knob { width: 46px; height: 46px; }
   .lvc-switch.is-on .lvc-switch-knob { transform: translateX(56px); }
 }
 
-/* Reduced-motion: static composition, no keyframe scenes. */
+/* Reduced-motion: static composition, no keyframe scenes. The lattice renders
+   in its settled ON state (dots already purple, no drift, no ripple). */
 @media (prefers-reduced-motion: reduce) {
   .lvc, .lvc * { animation: none !important; }
   .lvc { filter: none; }
-  .lvc-cvfield { display: none; }
+  .lvc-lattice { animation: none; }
+  .lvc-dot {
+    background: rgba(94,58,168,0.55);
+    box-shadow: 0 0 6px rgba(124,77,255,0.35);
+    transition: none;
+  }
   .lvc-switch-glow { opacity: 1; }
 }
 `;

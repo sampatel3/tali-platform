@@ -157,6 +157,72 @@
   padding: 0;
 }
 
+/* Tabs (Prospects / Campaigns) */
+.src-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border, #e5e0f0);
+  margin-bottom: 16px;
+}
+
+.src-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted, #6b6b83);
+  cursor: pointer;
+}
+
+.src-tab-active {
+  color: var(--purple, #6b46c1);
+  border-bottom-color: var(--purple, #6b46c1);
+}
+
+/* Status chips — purple-scale only (never red/amber/green), per the design
+   system. Lifecycle states shade from soft (early) to strong (interested). */
+.cmp-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+  background: var(--purple-soft, #efeaf9);
+  color: var(--purple-strong, #5b3aa0);
+}
+
+.cmp-chip-sent,
+.cmp-chip-delivered,
+.cmp-chip-approved {
+  background: #e4dcf7;
+  color: #5b3aa0;
+}
+
+.cmp-chip-opened,
+.cmp-chip-clicked,
+.cmp-chip-sending {
+  background: #d9ccf3;
+  color: #4a2f86;
+}
+
+.cmp-chip-interested {
+  background: var(--purple, #6b46c1);
+  color: #fff;
+}
+
+.cmp-chip-failed,
+.cmp-chip-bounced,
+.cmp-chip-suppressed,
+.cmp-chip-complained,
+.cmp-chip-unsubscribed {
+  /* Problem states stay muted purple — never red. */
+  background: #efeaf9;
+  color: #8a7ab0;
+}
+
 @media (max-width: 640px) {
   .src-form-grid {
     grid-template-columns: 1fr;

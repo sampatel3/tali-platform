@@ -255,3 +255,34 @@ def test_outreach_draft_budget_exhausted_402(client, monkeypatch):
         json={"profile_text": "Senior engineer, 8 years Python.", "tone": "warm", "channel": "linkedin"},
     )
     assert resp.status_code == 402, resp.text
+
+
+def test_outreach_draft_service_fail_open_paths_return_draft_shape(client, monkeypatch):
+    """Direct service callers hitting the budget gate or client-init failure get
+    an empty draft + warning — never an UnboundLocalError (regression)."""
+    from app.services import sourcing_assist_service as service_mod
+
+    headers, _ = auth_headers(client)
+    role_payload = _make_role_with_must_have(client, headers)
+
+    from app.models import Role
+    from app.platform.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        role = db.query(Role).filter(Role.id == role_payload["id"]).first()
+
+        monkeypatch.setattr(service_mod, "can_spend_on_role", lambda db, *, role: False)
+        out = service_mod.draft_outreach(db, role, profile_text="Engineer, 5y Python.")
+        assert out["body"] == "" and out["warnings"]
+
+        monkeypatch.setattr(service_mod, "can_spend_on_role", lambda db, *, role: True)
+
+        def _raise(**k):
+            raise RuntimeError("no api key")
+
+        monkeypatch.setattr(service_mod, "get_metered_client", _raise)
+        out = service_mod.draft_outreach(db, role, profile_text="Engineer, 5y Python.")
+        assert out["body"] == "" and out["warnings"]
+    finally:
+        db.close()

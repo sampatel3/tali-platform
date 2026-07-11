@@ -212,6 +212,12 @@ from .job_hiring_team import (
     TEAM_ROLES,
     JobHiringTeam,
 )
+from .outreach_campaign import (
+    CAMPAIGN_STATUSES,
+    MESSAGE_STATUSES,
+    OutreachCampaign,
+    OutreachMessage,
+)
 
 __all__ = [
     "User",
@@ -360,6 +366,10 @@ __all__ = [
     "SUPPRESSION_REASON_RANK",
     "Prospect",
     "PROSPECT_STATUSES",
+    "OutreachCampaign",
+    "OutreachMessage",
+    "CAMPAIGN_STATUSES",
+    "MESSAGE_STATUSES",
     "Offer",
     "OfferApproval",
     "OfferTemplate",

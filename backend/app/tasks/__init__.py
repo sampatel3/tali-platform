@@ -145,6 +145,14 @@ from .graph_ingest_tasks import (
 # flush. The beat schedule references this task name; without the import the
 # worker NotRegistered's it. No-op unless WORKABLE_PROVIDER_ENABLED is set.
 from .workable_provider_tasks import flush_workable_provider
+# Eager-import outreach_tasks so the worker registers the campaign draft +
+# send tasks. The /outreach/campaigns generate + send routes enqueue these;
+# without this import the worker NotRegistered's them and drafts never get
+# written / approved messages never send. Same trap as the imports above.
+from .outreach_tasks import (
+    generate_campaign_drafts,
+    send_campaign_messages,
+)
 
 __all__ = [
     "celery_app",
@@ -193,4 +201,6 @@ __all__ = [
     "sync_interview_to_graph",
     "sync_event_to_graph",
     "flush_workable_provider",
+    "generate_campaign_drafts",
+    "send_campaign_messages",
 ]
