@@ -896,6 +896,7 @@ def agent_expire_stale_decisions(self) -> dict:
     from sqlalchemy import or_
 
     from ..models.agent_decision import AgentDecision
+    from ..models.candidate_application import CandidateApplication
     from ..models.candidate_application_event import CandidateApplicationEvent
     from ..platform.database import SessionLocal
 
@@ -914,14 +915,27 @@ def agent_expire_stale_decisions(self) -> dict:
             AgentDecision.snoozed_until <= now,
         )
 
-        # 1. Expire stale non-escalation verdicts.
+        # 1. Expire stale non-escalation verdicts — but ONLY for candidates
+        # whose application has already moved on (outcome != 'open'). A
+        # deterministic verdict on a still-OPEN candidate stays correct until
+        # the recruiter acts (the score hasn't changed, so the recommendation
+        # hasn't either) — expiring it silently stranded the candidate as "not
+        # yet decided", which is exactly the limbo it must never produce. So the
+        # SLA sweep now only CLEANS UP cards whose candidate is no longer open
+        # (rejected / hired / withdrawn); an open candidate's card persists as a
+        # pending HITL recommendation until it's actioned or auto-corrected.
         stale = (
             db.query(AgentDecision)
+            .join(
+                CandidateApplication,
+                CandidateApplication.id == AgentDecision.application_id,
+            )
             .filter(
                 AgentDecision.status == "pending",
                 AgentDecision.decision_type != "escalate_low_confidence",
                 AgentDecision.created_at < expiry_cutoff,
                 not_snoozed,
+                CandidateApplication.application_outcome != "open",
             )
             .all()
         )

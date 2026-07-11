@@ -115,8 +115,12 @@ def _run_sweep():
     return agent_expire_stale_decisions.apply().get()
 
 
-def test_stale_pending_decision_expires(db):
+def test_stale_pending_decision_expires_when_candidate_no_longer_open(db):
+    # The SLA sweep only cleans up cards whose candidate has MOVED ON
+    # (outcome != 'open') — a lingering pending verdict on a rejected/hired
+    # candidate is obsolete, so it's aged out.
     org, role, app = _seed(db)
+    app.application_outcome = "rejected"
     stale = _decision(
         db, org, role, app, decision_type="reject", age_days=DECISION_PENDING_SLA_DAYS + 5
     )
@@ -132,6 +136,26 @@ def test_stale_pending_decision_expires(db):
     assert row.status == "expired"
     assert row.resolved_at is not None
     assert "SLA" in (row.resolution_note or "")
+
+
+def test_open_candidate_stale_decision_is_preserved(db):
+    # A deterministic verdict on a still-OPEN candidate stays valid until the
+    # recruiter acts (the score hasn't changed, so the recommendation hasn't
+    # either). Expiring it silently stranded the candidate as "not yet
+    # decided" — the limbo the funnel must never produce. It must persist.
+    org, role, app = _seed(db)  # _seed leaves application_outcome="open"
+    stale = _decision(
+        db, org, role, app, decision_type="reject", age_days=DECISION_PENDING_SLA_DAYS + 5
+    )
+    db.commit()
+    stale_id = int(stale.id)
+
+    result = _run_sweep()
+    assert result["status"] == "ok"
+    assert stale_id not in result["expired_decision_ids"]
+
+    db.expire_all()
+    assert db.get(AgentDecision, stale_id).status == "pending"
 
 
 def test_fresh_pending_decision_untouched(db):
