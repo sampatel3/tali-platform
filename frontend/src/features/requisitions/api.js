@@ -11,6 +11,8 @@
 import api, {
   viewPublicJob,
   viewCareers,
+  applyToJob,
+  submitJobEeo,
   viewClientIntake,
   sendClientIntakeChat,
   submitClientIntake,
@@ -116,6 +118,22 @@ export const requisitionApi = {
 //    salary_min, salary_max, salary_currency, status, organization_name }`.
 export const publicJobApi = {
   get: (token) => viewPublicJob(token).then((r) => r.data),
+  // Submit a native application. `fields` = { full_name, email, phone, answers }
+  // (answers is a plain object, JSON-encoded into the multipart form) plus an
+  // optional `resume` File. Returns `{ status, message, application_id,
+  // eeo_token }`.
+  apply: (token, { full_name, email, phone, answers = {}, resume = null } = {}) => {
+    const form = new FormData();
+    form.append('full_name', full_name ?? '');
+    if (email) form.append('email', email);
+    if (phone) form.append('phone', phone);
+    form.append('answers', JSON.stringify(answers || {}));
+    if (resume) form.append('resume', resume);
+    return applyToJob(token, form).then((r) => r.data);
+  },
+  // Optional voluntary EEO self-ID for a just-submitted application, keyed by the
+  // opaque token the apply response returned. Resolves on 204.
+  submitEeo: (token, payload) => submitJobEeo(token, payload).then((r) => r.data),
 };
 
 // Public, UNAUTHENTICATED careers board — used by the per-org /careers/:slug

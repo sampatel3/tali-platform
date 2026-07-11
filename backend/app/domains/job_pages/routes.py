@@ -19,10 +19,12 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...deps import get_optional_current_user
+from ...models.candidate_application import CandidateApplication
 from ...models.job_page import JOB_PAGE_STATUS_CLOSED, JOB_PAGE_STATUS_OPEN, JobPage
 from ...models.organization import Organization
 from ...models.role import Role
@@ -354,7 +356,12 @@ def apply_to_job_page(
         existing = _find_existing_application(db, page.organization_id, role, email, phone)
         if existing is None:
             raise HTTPException(status_code=409, detail=_APPLY_CLOSED_MESSAGE)
-        return {"status": "received", "message": _APPLY_RECEIVED_MESSAGE, "application_id": existing.id}
+        return {
+            "status": "received",
+            "message": _APPLY_RECEIVED_MESSAGE,
+            "application_id": existing.id,
+            "eeo_token": existing.eeo_token,
+        }
 
     # With a resume on a NEW, knockout-passing application, trigger the platform's
     # normal parse + scoring flow (same entry point the recruiter CV upload uses).
@@ -373,7 +380,74 @@ def apply_to_job_page(
         "status": "received",
         "message": _APPLY_RECEIVED_MESSAGE,
         "application_id": result.application.id,
+        # The applicant carries this back to the OPTIONAL voluntary-EEO step. It
+        # is the only key that endpoint accepts — it resolves to exactly this
+        # application, so nobody can post demographics for someone else's apply.
+        "eeo_token": result.eeo_token,
     }
+
+
+class _EEORequest(BaseModel):
+    gender: str | None = None
+    race_ethnicity: str | None = None
+    veteran_status: str | None = None
+    disability_status: str | None = None
+    declined_to_answer: bool = False
+
+
+@public_router.post("/eeo/{token}", status_code=204)
+def submit_eeo(
+    token: str,
+    payload: _EEORequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: User | None = Depends(get_optional_current_user),
+):
+    """Voluntary EEO / OFCCP self-identification for a just-submitted application.
+
+    Public, no auth. Flag-gated (with apply's flag) and rate-limited per client-IP
+    + token. The ``token`` is the opaque ``eeo_token`` minted at apply time; it
+    resolves to EXACTLY ONE application — NO raw application_id is ever accepted
+    from the public, so nobody can overwrite another applicant's demographics.
+    Overwrite-own-only: re-posting the same token corrects this application's row.
+    The response is empty (204). The value is stored SEGREGATED from scoring.
+    """
+    if not settings.ATS_PUBLIC_APPLY_ENABLED:
+        raise HTTPException(status_code=503, detail=_APPLY_CLOSED_MESSAGE)
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(
+        f"eeo:{token}:{client_ip}",
+        limit=settings.ATS_APPLY_RATE_LIMIT_PER_HOUR,
+        window_seconds=3600,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail="You've submitted this a few times already — please try again later.",
+        )
+
+    tok = (token or "").strip()
+    application = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.eeo_token == tok)
+        .first()
+        if tok
+        else None
+    )
+    # A bad/unknown token reads the same as a missing job — nothing to disclose.
+    if application is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    from ..compliance.eeo_service import record_response
+
+    record_response(
+        db,
+        application.organization_id,
+        application.id,
+        **payload.model_dump(),
+    )
+    db.commit()
+    return None
 
 
 def _find_existing_application(db, org_id, role, email, phone):

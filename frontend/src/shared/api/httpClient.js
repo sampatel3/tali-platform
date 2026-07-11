@@ -49,6 +49,23 @@ export const viewPublicJob = (token) =>
 export const viewCareers = (slug) =>
   axios.get(`${API_URL}/api/v1/public/careers/${encodeURIComponent(slug)}`);
 
+// Public unauth NATIVE APPLY — a candidate submits an application to a published
+// job page. Multipart (name/email/phone + a JSON `answers` field + optional
+// resume file). Bare axios (JWT-free); the browser sets the multipart boundary.
+// Returns `{ status, message, application_id, eeo_token }`.
+export const applyToJob = (token, formData) =>
+  axios.post(
+    `${API_URL}/api/v1/public/job-pages/${encodeURIComponent(token)}/apply`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  );
+
+// Public unauth VOLUNTARY EEO self-ID — keyed by the opaque `eeo_token` the
+// apply response carried (never a raw application_id). Bare axios (JWT-free).
+// Returns 204 (no body).
+export const submitJobEeo = (token, payload) =>
+  axios.post(`${API_URL}/api/v1/public/eeo/${encodeURIComponent(token)}`, payload);
+
 // ---- Public, no-auth CLIENT INTAKE (a consultancy's client describing the
 // role via the conversational agent) ----
 //

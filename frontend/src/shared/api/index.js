@@ -16,6 +16,7 @@ export { agent } from './agentClient';
 export { agentChat } from './agentChatClient';
 export { offers } from './offersClient';
 export { offerTemplates } from './offerTemplatesClient';
+export { compliance } from './complianceClient';
 export { hiringTeam } from './hiringTeamClient';
 export {
   getCachedDocumentBlob,

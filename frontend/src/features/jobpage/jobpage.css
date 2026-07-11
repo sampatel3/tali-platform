@@ -90,3 +90,89 @@
 .pjp-apply-btn:hover {
   filter: brightness(1.05);
 }
+
+/* --- Native apply form (rendered when accepts_applications is true) --- */
+.pjp-form,
+.pjp-applied {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-align: left;
+}
+.pjp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pjp-field-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink, #1c1830);
+}
+.pjp-req {
+  color: var(--purple, #6d28d9);
+}
+.pjp-field input[type='text'],
+.pjp-field input[type='email'],
+.pjp-field input[type='tel'],
+.pjp-field input[type='number'],
+.pjp-field textarea,
+.pjp-field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #e6e6ea);
+  border-radius: 10px;
+  font: inherit;
+  color: var(--ink, #1c1830);
+  background: var(--bg, #fff);
+}
+.pjp-field textarea {
+  resize: vertical;
+}
+.pjp-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pjp-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.pjp-error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(214, 40, 40, 0.08);
+  color: #b02020;
+  font-size: 14px;
+}
+.pjp-link-btn {
+  background: none;
+  border: none;
+  color: var(--purple, #6d28d9);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 12px 8px;
+}
+.pjp-eeo {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line, #e6e6ea);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+}
+.pjp-eeo-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink, #1c1830);
+  margin: 0;
+}
+.pjp-eeo-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
