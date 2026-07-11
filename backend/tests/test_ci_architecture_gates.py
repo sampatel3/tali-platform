@@ -113,6 +113,93 @@ def test_alembic_resolves_to_a_single_head() -> None:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Authz gate: every state-changing route must be authenticated or justified.
+# --------------------------------------------------------------------------- #
+
+# Write routes that are DELIBERATELY not user-authenticated, each guarded by a
+# different mechanism. A NEW write route must either depend on
+# ``get_current_user`` OR be justified here — the gate fails otherwise, so an
+# unguarded write endpoint can't ship by accident.
+_CANDIDATE_ASSESSMENT_WRITES = frozenset({
+    # The candidate assessment-taking surface — the candidate has no login;
+    # access is authorised by the per-assessment token (``X-Assessment-Token``)
+    # via ``validate_assessment_token`` or the demo/token session.
+    "/api/v1/assessments/demo/request",
+    "/api/v1/assessments/demo/start",
+    "/api/v1/assessments/token/{token}/start",
+    "/api/v1/assessments/token/{token}/upload-cv",
+    "/api/v1/assessments/{assessment_id}/claude/chat",
+    "/api/v1/assessments/{assessment_id}/execute",
+    "/api/v1/assessments/{assessment_id}/repo-file",
+    "/api/v1/assessments/{assessment_id}/runtime-event",
+    "/api/v1/assessments/{assessment_id}/submit",
+    "/api/v1/assessments/{assessment_id}/upload-cv",
+})
+
+# Prefixes whose write routes are authenticated by a NON-user mechanism.
+_NON_USER_AUTH_PREFIXES = (
+    "/api/v1/auth/",       # fastapi-users public auth (register/login/reset/verify)
+    "/api/v1/users",       # fastapi-users self / superuser management (own guard)
+    "/api/v1/webhooks/",   # provider webhooks — verified by signature
+    "/public/v1/",         # public API — authenticated by API key
+    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake)
+    "/careers/",           # public careers pages
+)
+
+
+def _authz_allowed_without_user(path: str) -> bool:
+    # ``/admin/`` diagnostics verify an ``X-Admin-Secret`` header in-body (not a
+    # dependency), so dependency introspection can't see it — allow by path.
+    if "/admin/" in path:
+        return True
+    if any(path.startswith(p) for p in _NON_USER_AUTH_PREFIXES):
+        return True
+    return path in _CANDIDATE_ASSESSMENT_WRITES
+
+
+def test_every_write_route_is_authenticated_or_justified() -> None:
+    """Every state-changing route (POST/PUT/PATCH/DELETE) must depend on the
+    authenticated user (``get_current_user`` / ``current_active_user``), unless
+    it's one of the explicitly-justified non-user-auth surfaces above. Catches
+    an unguarded write endpoint slipping in — the authz invariant.
+    """
+    from fastapi.routing import APIRoute
+
+    from app.domains.identity_access.users_fastapi import current_active_user
+    from app.main import app
+
+    write_methods = {"POST", "PUT", "PATCH", "DELETE"}
+
+    def _deep_calls(dependant) -> list:
+        acc, stack = [], [dependant]
+        while stack:
+            node = stack.pop()
+            if getattr(node, "call", None) is not None:
+                acc.append(node.call)
+            stack.extend(getattr(node, "dependencies", []) or [])
+        return acc
+
+    offenders: list[str] = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        methods = (route.methods or set()) & write_methods
+        if not methods:
+            continue
+        if current_active_user in _deep_calls(route.dependant):
+            continue
+        if _authz_allowed_without_user(route.path):
+            continue
+        offenders.append(f"{','.join(sorted(methods))} {route.path}")
+
+    assert not offenders, (
+        "Unauthenticated write route(s) — add `Depends(get_current_user)`, "
+        "or justify in the allowlist in this test:\n  "
+        + "\n  ".join(sorted(offenders))
+    )
+
+
 def test_agent_mutation_tools_call_shared_action_layer() -> None:
     """Every agent mutation tool must call into ``app.actions.<name>.run``,
     not implement business logic inline. The same actions are called by
