@@ -477,7 +477,7 @@ def list_agent_decisions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved"):
+    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved", "decided"):
         raise HTTPException(status_code=422, detail=f"unsupported status={status!r}")
 
     query = (
@@ -508,6 +508,16 @@ def list_agent_decisions(
             # (pending, processing) which are still actionable elsewhere.
             query = query.filter(
                 AgentDecision.status.notin_(("pending", "processing"))
+            )
+        elif status == "decided":
+            # Calls a human actually made — approved or overridden — and
+            # nothing else. Narrower than ``resolved`` on purpose: the Hub's
+            # "Recent decisions" panel shows these under a row limit, and
+            # folding in bulk discarded/expired rows (a purged queue can
+            # produce hundreds at once) would push genuine decisions out of
+            # the window and blank the panel.
+            query = query.filter(
+                AgentDecision.status.in_(("approved", "overridden"))
             )
         else:
             query = query.filter(AgentDecision.status == status)

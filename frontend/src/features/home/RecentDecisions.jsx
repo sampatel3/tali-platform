@@ -25,21 +25,37 @@ const outcomeFor = (row) => {
 
 export const RecentDecisions = ({ roleId = null, collapsedCount = 5, refreshKey = 0 }) => {
   const [expanded, setExpanded] = useState(false);
-  // The hub's main feed loads PENDING decisions, so fetch the RESOLVED ones (the
-  // calls already made) ourselves — scoped to the selected role, newest first.
+  // The hub's main feed loads PENDING decisions, so fetch the human-made calls
+  // (approved / overridden) ourselves — scoped to the selected role, newest
+  // first. Use status=decided rather than the broader ``resolved`` so the row
+  // limit isn't spent on bulk discarded/expired rows, which would push genuine
+  // decisions out of the window and blank this panel.
   // refreshKey is bumped by the hub after every approve/override/snooze so the
   // decision the recruiter just made appears here without a page reload — the
   // whole point of "find a candidate again after they've moved on".
   const [rows, setRows] = useState([]);
   useEffect(() => {
     let cancelled = false;
-    agentApi
-      .listDecisions({ status: 'resolved', role_id: roleId || undefined, limit: 25 })
+    // A background refetch (focus/visibility) must not clobber a good list with
+    // an empty one if the request transiently fails — only replace on success.
+    const load = () => agentApi
+      .listDecisions({ status: 'decided', role_id: roleId || undefined, limit: 25 })
       .then((res) => { if (!cancelled) setRows(Array.isArray(res?.data) ? res.data : []); })
-      .catch(() => { if (!cancelled) setRows([]); });
-    return () => { cancelled = true; };
+      .catch(() => {});
+    void load();
+    // Re-pull when the tab regains focus so a decision made elsewhere (or a
+    // cold-load fetch that lost the auth race and came back empty) shows up
+    // without a manual refresh — refreshKey only covers actions taken here.
+    const refresh = () => { if (document.visibilityState === 'visible') void load(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
   }, [roleId, refreshKey]);
-  // Only resolved HITL calls (defensive — the fetch already scopes to resolved).
+  // Only human-made calls (defensive — the fetch already scopes to decided).
   const decided = rows.filter((r) => {
     const s = String(r?.status || '').toLowerCase();
     return s === 'approved' || s === 'overridden';
