@@ -908,6 +908,35 @@ def test_queue_pre_screen_reject_revives_discarded_card(db):
     assert n == 1
 
 
+def test_queue_pre_screen_reject_revives_expired_card(db):
+    """The 14-day SLA sweep used to age a still-valid pre-screen reject out to
+    'expired', stranding the candidate with no pending card (and re-inflating
+    "not yet decided"). A re-queue must REVIVE the expired row to pending —
+    it's system-expired (no human resolver) and still below threshold.
+    """
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    first = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    db.commit()
+    # Simulate the SLA sweep ageing it out.
+    first.status = "expired"
+    first.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    revived = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    assert revived is not None
+    assert revived.id == first.id  # same row, no duplicate
+    assert revived.status == "pending"
+    assert revived.resolved_at is None
+    n = db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count()
+    assert n == 1
+
+
 def test_queue_pre_screen_reject_does_not_revive_recruiter_resolution(db):
     """A recruiter-resolved (overridden) card must NOT be reopened by a
     re-queue — the cohort tick re-runs reconcile each cycle, so reviving it

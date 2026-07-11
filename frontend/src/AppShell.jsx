@@ -143,6 +143,9 @@ const SettingsPage = lazy(() =>
 const RequisitionTemplatePage = lazy(() =>
   import('./features/settings/RequisitionTemplatePage').then((m) => ({ default: m.RequisitionTemplatePage }))
 );
+const AtsAdminPage = lazy(() =>
+  import('./features/admin/AtsAdminPage').then((m) => ({ default: m.AtsAdminPage }))
+);
 const DecisionPolicyPage = lazy(() =>
   import('./features/decision_policy/DecisionPolicyPage')
 );
@@ -219,6 +222,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     || pathname.startsWith('/chat')
     || pathname.startsWith('/tasks/')
     || pathname.startsWith('/admin')
+    || pathname.startsWith('/ats-admin')
   );
 };
 
@@ -939,6 +943,14 @@ function AppContent() {
       <Route
         path="/reporting"
         element={<Navigate replace to="/analytics" />}
+      />
+      <Route
+        path="/ats-admin"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AtsAdminPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
+          </Suspense>
+        )}
       />
 
       {/* Requisition spec template editor. A dedicated page (not a tab in the

@@ -166,3 +166,15 @@ export const DEFAULT_ACTIONS = {
   primaryIcon: Check,
   alternatives: [],
 };
+
+// The two reject decision types (agent-recommended reject + pre-screen reject).
+export const isRejectDecisionType = (decisionType) =>
+  decisionType === 'reject' || decisionType === 'skip_assessment_reject';
+
+// Consequence surfaced beside every one-click reject — the candidate report
+// rail AND the Home hub card — so a recruiter always sees what confirming does.
+// Single source so the surfaces never drift. Deliberately says nothing about a
+// candidate email: Taali never emails candidates about the job (see backend
+// actions/reject_application.py); any candidate-facing message is the ATS's own
+// disqualify workflow, so we don't claim one on Taali's behalf.
+export const REJECT_CONSEQUENCE_COPY = 'Disqualifies them in Workable.';

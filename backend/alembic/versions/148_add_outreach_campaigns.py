@@ -7,8 +7,8 @@ Revises: 144_add_email_suppressions_and_prospects
 from alembic import op
 import sqlalchemy as sa
 
-revision = "145_add_outreach_campaigns"
-down_revision = "144_add_email_suppressions_and_prospects"
+revision = "148_add_outreach_campaigns"
+down_revision = "147_add_offer_templates"
 branch_labels = None
 depends_on = None
 
