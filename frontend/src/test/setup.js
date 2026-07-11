@@ -11,6 +11,27 @@ if (typeof window !== 'undefined' && !window.ResizeObserver) {
   window.ResizeObserver = ResizeObserverMock;
 }
 
+// jsdom has no IntersectionObserver. Motion's `whileInView` / `useInView`
+// (landing variant E) construct one on mount, so provide a no-op mock: it never
+// fires, which reads as "never in view" — components keep their initial state
+// and stay mounted/queryable. Real browsers have the API.
+class IntersectionObserverMock {
+  constructor(callback) {
+    this.callback = callback;
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+
+if (typeof window !== 'undefined' && !window.IntersectionObserver) {
+  window.IntersectionObserver = IntersectionObserverMock;
+  globalThis.IntersectionObserver = IntersectionObserverMock;
+}
+
 if (typeof window !== 'undefined') {
   window.scrollTo = () => {};
   globalThis.scrollTo = () => {};
