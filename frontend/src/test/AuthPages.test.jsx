@@ -11,6 +11,7 @@ import {
   ResetPasswordPage,
   VerifyEmailPage,
 } from '../features/auth';
+import { PasswordStrength } from '../features/auth/PasswordStrength';
 import { auth } from '../shared/api';
 
 vi.mock('../shared/api', () => ({
@@ -258,6 +259,26 @@ describe('Auth page redesign', () => {
       expect(screen.getByText(/Your workspace requires single sign-on/i)).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /Go to sign in/i })).toBeInTheDocument();
     });
+  });
+
+  it('PasswordStrength renders nothing when the password is empty', () => {
+    const { container } = render(<PasswordStrength password="" />);
+    expect(container.querySelector('.mc-auth-strength')).toBeNull();
+  });
+
+  it('PasswordStrength flags a too-common password', () => {
+    render(<PasswordStrength password="password" />);
+    expect(screen.getByText(/too common/i)).toBeInTheDocument();
+  });
+
+  it('PasswordStrength reports a strong password for a long varied string', () => {
+    render(<PasswordStrength password="Tr0ub4dor-passphrase-xyz" />);
+    expect(screen.getByText(/strong password/i)).toBeInTheDocument();
+  });
+
+  it('PasswordStrength warns when the email is inside the password', () => {
+    render(<PasswordStrength password="samsmith-secret-99" email="samsmith@company.com" />);
+    expect(screen.getByText(/email in your password/i)).toBeInTheDocument();
   });
 
   it('verifies email and lands on the redesigned success screen', async () => {

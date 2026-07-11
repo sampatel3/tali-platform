@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
 import { AuthShell, AuthField } from './AuthShell';
+import { PasswordStrength } from './PasswordStrength';
 
 export const RegisterPage = ({ onNavigate }) => {
   const { register } = useAuth();
@@ -199,19 +200,7 @@ export const RegisterPage = ({ onNavigate }) => {
           helper="At least 8 characters — longer is stronger."
         />
 
-        <div style={{ display: 'flex', gap: 4, margin: '-8px 0 14px' }}>
-          {[1, 2, 3, 4, 5].map((step) => (
-            <span
-              key={step}
-              style={{
-                flex: 1,
-                height: 3,
-                borderRadius: 2,
-                background: step <= Math.min(5, Math.floor(form.password.length / 3)) ? 'var(--purple)' : 'var(--line)',
-              }}
-            />
-          ))}
-        </div>
+        <PasswordStrength password={form.password} email={form.email} />
 
         <button
           type="submit"

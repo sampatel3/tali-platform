@@ -4,6 +4,7 @@ import { AlertTriangle } from 'lucide-react';
 import { auth } from '../../shared/api';
 import { PageLink } from '../../shared/ui/PageLink';
 import { AuthShell, AuthField } from './AuthShell';
+import { PasswordStrength } from './PasswordStrength';
 
 export const ResetPasswordPage = ({ onNavigate, token }) => {
   const [password, setPassword] = useState('');
@@ -110,6 +111,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
           onChange={(e) => setPassword(e.target.value)}
           helper="At least 8 characters. Strong: a string of words you'll remember."
         />
+        <PasswordStrength password={password} />
         <AuthField
           label="Confirm new password"
           name="confirm"

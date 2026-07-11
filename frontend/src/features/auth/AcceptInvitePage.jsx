@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
 import { PageLink } from '../../shared/ui/PageLink';
 import { AuthShell, AuthField } from './AuthShell';
+import { PasswordStrength } from './PasswordStrength';
 
 // Typed accept-invite failures from the backend. INVITE_ALREADY_ACCEPTED and
 // INVITE_SSO_REQUIRED both resolve on the sign-in page, so those get a
@@ -132,6 +133,7 @@ export const AcceptInvitePage = ({ onNavigate, token }) => {
           onChange={(e) => setPassword(e.target.value)}
           helper="At least 8 characters. Strong: a string of words you'll remember."
         />
+        <PasswordStrength password={password} />
         <AuthField
           label="Confirm password"
           name="confirm"
