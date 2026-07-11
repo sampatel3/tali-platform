@@ -32,6 +32,7 @@ from .job_page import (
     JOB_PAGE_STATUSES,
     JobPage,
 )
+from .screening_question import QUESTION_KINDS, ScreeningQuestion
 from .org_criterion import (
     BUCKET_CONSTRAINT,
     BUCKET_MUST,
@@ -250,6 +251,8 @@ __all__ = [
     "DISPOSITION_CATEGORIES",
     "Role",
     "role_tasks",
+    "ScreeningQuestion",
+    "QUESTION_KINDS",
     "RoleBrief",
     "BRIEF_SOURCES",
     "BRIEF_STATUSES",

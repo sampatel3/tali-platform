@@ -46,6 +46,19 @@ class Role(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     source = Column(String, default="manual", nullable=False)
+    # Structured role attributes (migration 153). Promoted out of the
+    # ``workable_job_data`` JSON blob into first-class columns for the native
+    # careers/apply surface. All nullable; the public JobPage carries its own
+    # snapshot, so these are additive foundation, not a live-behaviour change.
+    employment_type = Column(String, nullable=True)
+    workplace_type = Column(String, nullable=True)
+    location_city = Column(String, nullable=True)
+    location_country = Column(String, nullable=True)
+    department = Column(String, nullable=True)
+    salary_min = Column(Integer, nullable=True)
+    salary_max = Column(Integer, nullable=True)
+    salary_currency = Column(String, nullable=True)
+    salary_period = Column(String, nullable=True)
     workable_job_id = Column(String, nullable=True, index=True)
     workable_job_data = Column(JSON, nullable=True)
     # Bullhorn JobOrder linkage (see docs/BULLHORN_BUILD_PLAN.md §3). Unique per

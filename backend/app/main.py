@@ -418,10 +418,14 @@ app.include_router(top_reports_public_router)
 # agency shortlist a recruiter shares with their client for one role.
 app.include_router(submittal_packs_public_router)
 # Public job page: GET /api/v1/public/job/{token} (no auth) — the shareable
-# listing minted when a requisition is published.
+# listing minted when a requisition is published. Also carries the native public
+# apply (POST /api/v1/public/job-pages/{token}/apply, flag-gated off).
 from .domains.job_pages import public_router as job_pages_public_router  # noqa: E402
+from .domains.job_pages import screening_router as job_pages_screening_router  # noqa: E402
 
 app.include_router(job_pages_public_router)
+# Recruiter-facing screening-question CRUD (authed) for the apply form.
+app.include_router(job_pages_screening_router, prefix="/api/v1")
 
 # Public client intake: GET/POST /api/v1/public/intake/{token} (no auth) — the
 # scoped share link a consultancy sends to its client to describe the role.
