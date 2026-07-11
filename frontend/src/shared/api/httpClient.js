@@ -139,7 +139,11 @@ const maybeRefreshToken = () => {
   refreshInFlight = api
     .post('/auth/jwt/refresh')
     .then(({ data }) => {
-      if (data?.access_token) setAccessToken(data.access_token);
+      // The user may have logged out while this was in flight — storing the
+      // fresh token then would resurrect the cleared session.
+      if (data?.access_token && localStorage.getItem(TOKEN_KEY)) {
+        setAccessToken(data.access_token);
+      }
     })
     // A 401 here means the token is already dead — the response interceptor
     // below handles the logout; any other failure just retries next trigger.
