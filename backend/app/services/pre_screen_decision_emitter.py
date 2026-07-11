@@ -250,11 +250,15 @@ def queue_pre_screen_reject(
                 .filter(AgentDecision.idempotency_key == key)
                 .first()
             )
-            # Revive a previously system-discarded card only when ALL hold:
-            #  1. status == 'discarded' with NO human resolver. A recruiter
-            #     resolution (``overridden`` / ``approved`` /
+            # Revive a previously system-terminated card only when ALL hold:
+            #  1. status is 'discarded' OR 'expired' with NO human resolver. A
+            #     recruiter resolution (``overridden`` / ``approved`` /
             #     ``reverted_for_feedback``, or the toggle-off bulk discard
             #     which sets ``resolved_by_user_id``) must never be reopened.
+            #     'expired' is included because the SLA sweep used to age out a
+            #     still-valid pre-screen reject after 14 days, stranding the
+            #     candidate with no pending card — reviving it (rather than
+            #     leaving it expired) keeps the reject actionable.
             #  2. the candidate is STILL below the current threshold by the
             #     same deterministic rule reconcile discards on. Without this,
             #     a card discarded because the threshold was *cleared*
@@ -266,7 +270,7 @@ def queue_pre_screen_reject(
             #     ``_below_threshold`` keeps revive and discard in agreement.
             if (
                 existing is not None
-                and existing.status == "discarded"
+                and existing.status in ("discarded", "expired")
                 and existing.resolved_by_user_id is None
                 and _below_threshold(
                     pre_screen_score,
