@@ -24,13 +24,31 @@ def upgrade() -> None:
         "users",
         sa.Column("role", sa.String(), nullable=False, server_default="member"),
     )
-    # First registered user of each org (lowest id — ids are monotonic) owns it.
+    # Earliest ACTIVE user of each org (lowest id — ids are monotonic) owns it;
+    # a disabled first account must not become the only owner, or no active
+    # member could pass require_org_owner after the upgrade.
     op.execute(
         """
         UPDATE users SET role = 'owner'
         WHERE id IN (
             SELECT MIN(id) FROM users
+            WHERE organization_id IS NOT NULL AND is_active = true
+            GROUP BY organization_id
+        )
+        """
+    )
+    # Orgs whose every account is disabled still get their earliest user as
+    # owner, so ownership is well-defined if the account is ever re-enabled.
+    op.execute(
+        """
+        UPDATE users SET role = 'owner'
+        WHERE id IN (
+            SELECT MIN(id) FROM users u
             WHERE organization_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM users a
+                  WHERE a.organization_id = u.organization_id AND a.is_active = true
+              )
             GROUP BY organization_id
         )
         """

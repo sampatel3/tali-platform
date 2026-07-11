@@ -95,18 +95,20 @@ def update_team_user_role(
         raise HTTPException(status_code=404, detail="User not found")
     if target.role == data.role:
         return target
-    # Never leave the org without an owner.
+    # Never leave the org without an owner. Lock the org's owner rows so two
+    # concurrent demotions can't both observe "another owner exists" and
+    # commit a zero-owner workspace (FOR UPDATE on Postgres; no-op on SQLite).
     if target.role == "owner" and data.role == "member":
-        other_owners = (
+        owners = (
             db.query(User)
             .filter(
                 User.organization_id == current_user.organization_id,
                 User.role == "owner",
-                User.id != target.id,
             )
-            .count()
+            .with_for_update()
+            .all()
         )
-        if other_owners == 0:
+        if not any(owner.id != target.id for owner in owners):
             raise HTTPException(status_code=400, detail="An organization needs at least one owner")
     target.role = data.role
     try:
