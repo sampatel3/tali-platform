@@ -10,7 +10,6 @@ import { MessageSquare } from 'lucide-react';
 import { agent as agentApi, agentChat } from '../../shared/api';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
@@ -571,42 +570,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     );
   }, [rolesBreakdown]);
 
-  // The hub's KPI band — the four decision metrics that lead /home-preview,
-  // rendered with the shared KpiTile so it's pixel-identical to the preview
-  // (and to the Jobs strip). All four values come from the org-status poll the
-  // page already runs, so no extra reporting query fires. "Awaiting you" is the
-  // one action tile (glows purple while the queue has work); the rest are the
-  // day's throughput, org budget, and how often you override the agent.
-  const kpiTiles = useMemo(() => [
-    {
-      key: 'awaiting',
-      label: 'Awaiting you',
-      value: formatCount(pendingDecisions),
-      emph: pendingDecisions > 0,
-      sub: `${formatCount(orgNotYetDecided)} not yet decided by the agent`,
-    },
-    {
-      key: 'today',
-      label: 'Decisions today',
-      value: formatCount(Number(kpis.today || 0)),
-      sub: `${formatCount(Number(kpis.auto_applied_today || 0))} auto-applied`,
-    },
-    {
-      key: 'budget',
-      label: 'Org budget · MTD',
-      value: orgBudget.value,
-      unit: orgBudget.unit,
-      bar: orgBudget.pct != null ? { pct: orgBudget.pct, over: orgBudget.over } : null,
-      sub: orgBudget.sub,
-    },
-    {
-      key: 'override',
-      label: 'Override rate · 7d',
-      value: `${Math.round(Number(kpis.override_rate_pct || 0))}%`,
-      sub: `${Math.round(Number(kpis.teach_rate_pct || 0))}% taught`,
-    },
-  ], [pendingDecisions, orgNotYetDecided, kpis.today, kpis.auto_applied_today, kpis.override_rate_pct, kpis.teach_rate_pct, orgBudget]);
-
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
@@ -639,12 +602,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         <div className="ac-main">
 
       <div className="home-body">
-        {/* KPI band — the four decision metrics that lead /home-preview. The
-            hero kicker carries "awaiting you" too, but the band gives the day's
-            throughput, budget and override rate at a glance before the queue. */}
-        <div className="reveal" style={{ '--reveal-delay': '0.02s' }}>
-          <KpiStrip columns={4} tiles={kpiTiles} />
-        </div>
+        {/* No top KPI strip — the hub leads with the funnel + the review queue
+            (the preview dropped the KPI row; the hero kicker carries "awaiting
+            you" and the full metrics live on the Analytics page). */}
         <HomeNow
           decisions={decisions}
           pendingOrdered={pendingOrdered}
