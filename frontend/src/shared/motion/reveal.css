@@ -1,0 +1,40 @@
+/* reveal.css — production one-shot entrance + stagger for real pages.
+   Sibling of the preview-only .pv-reveal (previewMotion.css). Same reliable
+   mechanism: a plain CSS keyframe with animation-fill-mode: both that runs
+   once on mount, so it can never get stuck mid-fade the way a JS state-gated
+   wrapper can. Gated behind prefers-reduced-motion → reduced-motion users get
+   the final state with no movement.
+
+   Public API:
+     .reveal            single element fades + rises in on mount.
+     .reveal-stagger    parent; each direct child animates in, offset by --i.
+   Per-element / per-container custom properties (all optional):
+     --i           child index for stagger (default 0)
+     --reveal-dur   animation duration (default 0.48s)
+     --reveal-delay single-element start delay (default 0s)
+     --reveal-step  per-index stagger step (default 0.06s)
+     --reveal-y     rise distance (default 14px)
+   Ease is fixed to the EASE_OUT cubic-bezier(0.16,1,0.3,1) shared with the kit. */
+
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    animation: revealUp var(--reveal-dur, 0.48s) cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--reveal-delay, 0s);
+  }
+
+  .reveal-stagger > * {
+    animation: revealUp var(--reveal-dur, 0.48s) cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: calc(var(--i, 0) * var(--reveal-step, 0.06s));
+  }
+
+  @keyframes revealUp {
+    from {
+      opacity: 0;
+      transform: translateY(var(--reveal-y, 14px));
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
