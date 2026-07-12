@@ -2,12 +2,13 @@
   position: sticky;
   top: 0;
   z-index: 40;
-  /* Same clean, bar-free treatment as the recruiter shell nav (.mc-nav):
-     page-tinted translucent fill + backdrop blur, and no border-bottom, so
-     the header melts into the page instead of reading as a stark bar. Uses
-     the shared --taali-nav-bg token so marketing and app stay one system. */
-  background: var(--taali-nav-bg);
-  backdrop-filter: saturate(1.2) blur(14px);
+  /* Seamless header — same bar-free treatment as the recruiter shell nav
+     (.mc-nav): fully transparent background so the header floats on the
+     page with no visible bar, slab, or border. A light backdrop blur is the
+     only treatment kept, softening content that scrolls under the sticky
+     nav. Marketing and app stay one system. */
+  background: transparent;
+  backdrop-filter: saturate(1.1) blur(10px);
 }
 
 .app-nav-inner {

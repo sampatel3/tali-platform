@@ -56,6 +56,14 @@
   font-size: var(--fs-h3);
 }
 
+/* Home hub only: the founder wants the stage counts to read as big KPI
+   numbers (matching the home-preview), not the compact card-heading size.
+   Scoped to `.home-body` so the shared flat FunnelBoard used elsewhere
+   (JobPipelinePage, which is NOT under `.home-body`) stays at --fs-h3. */
+.home-body .fb-flat .fb-v {
+  font-size: var(--fs-stat);
+}
+
 /* Inline per-stage decision chips. Reuses the .fb-dchip vocabulary (purple for
    positive, grey for terminal/negative). */
 .fb-stchips {
@@ -112,6 +120,12 @@
   }
   .fb-flat .fb-v {
     font-size: var(--fs-subtitle);
+  }
+  /* Phone step-down for the enlarged home counts so they stay proportionate
+     to the narrow viewport (keeps them bigger than the base, smaller than
+     the desktop --fs-stat). */
+  .home-body .fb-flat .fb-v {
+    font-size: var(--fs-h2);
   }
 }
 
