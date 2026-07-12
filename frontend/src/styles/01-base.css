@@ -95,6 +95,33 @@
   --taali-runtime-terminal-text: color-mix(in oklab, var(--bg) 90%, transparent);
 }
 
+/* ------------------------------------------------------------------
+   Canonical type-scale tokens (rem-based). Added here — not in the
+   vendored/generated 00-tokens.css — so they live alongside Taali's
+   own tokens. rem is 80%-scaled by html{font-size:0.8rem} (see the
+   base layer below); the comment on each step shows the RENDERED px
+   after that root. Additive only: no existing selector consumes these
+   yet, so adding them changes zero rendering. Per-page agents opt in.
+   ------------------------------------------------------------------ */
+:root {
+  /* Type scale — rem is 80%-scaled by html{font-size:0.8rem}; comment shows rendered px */
+  --fs-eyebrow:  0.65625rem;  /* 8.4px  · uppercase mono kickers, badge labels */
+  --fs-caption:  0.75rem;     /* 9.6px  · captions, table sub-text, meta, timestamps */
+  --fs-body:     0.8125rem;   /* 10.4px · DEFAULT body, table cells, inputs, buttons */
+  --fs-body-lg:  0.875rem;    /* 11.2px · emphasized body, small card titles */
+  --fs-subtitle: 0.9375rem;   /* 12px   · lead paragraphs, list-item titles */
+  --fs-h3:       1.125rem;    /* 14.4px · card / panel headings */
+  --fs-h2:       1.375rem;    /* 17.6px · section titles */
+  --fs-h1:       1.75rem;     /* 22.4px · in-page titles */
+  --fs-stat:     2rem;        /* 25.6px · big KPI / dashboard numbers (kept prominent) */
+  --fs-display:  clamp(30px, 3vw, 44px); /* hero display only — stays responsive */
+
+  --lh-tight:  1.15;  /* h1/h2/stat/display */
+  --lh-snug:   1.3;   /* h3/subtitle */
+  --lh-normal: 1.5;   /* body/body-lg */
+  --lh-label:  1.25;  /* eyebrow/caption */
+}
+
 /* Generic dark-mode surfaces / accent / shadows come from 00-tokens.css
    (html[data-theme="dark"][data-brand="taali"]). Only the hiring-specific
    Workable accent needs a dark override here. */
