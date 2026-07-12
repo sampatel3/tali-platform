@@ -1,9 +1,7 @@
 import React, { useEffect } from 'react';
-import { Check } from 'lucide-react';
 
-import { AssessmentRuntimePreviewView } from '../assessment_runtime/AssessmentRuntimePreviewView';
-import { ActivityFeed } from '../home/ActivityFeed';
 import { AgentScene } from './landing_preview/variant_g/AgentScene';
+import { FUNNEL, DDS, COMPOSITE } from './landing_preview/variant_g/variantG.data';
 import {
   consumePendingMarketingSection,
   scrollToMarketingSection,
@@ -11,130 +9,51 @@ import {
 import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
 import '../../shared/motion/reveal.css';
 import './heroAgentScene.css';
+import './landingVariantGSections.css';
 
 // The production homepage — the ORIGINAL agentic-first landing restored (the
-// live <ActivityFeed> decision feed, the 5-Ds standing report, the real
-// <AssessmentRuntimePreviewView> IDE walkthrough) with four learnings grafted
-// in from the /landing-preview variant G experiment:
-//   1. Refined, inclusive copy — the "screens, assesses, and decides — with
-//      you" headline, and phrasing that covers engineering AND knowledge work
-//      ("works with AI", never "engineers who ship with AI").
+// hero with the animated agent-ON <AgentScene>, the closing CTA, the real
+// footer) with variant G's two strongest product sections grafted in from the
+// /landing-preview variant G experiment, replacing the earlier 3-step + live
+// decision-feed and IDE-walkthrough bands:
+//   1. Refined, inclusive copy + the "screens, assesses, and decides — with
+//      you" headline; phrasing that covers engineering AND knowledge work.
 //   2. The animated agent-ON <AgentScene> (job flips OFF→ON on first scroll,
 //      candidates flow into the decision lane, verdicts stamp) as the hero's
-//      product graphic, beside the copy (styles in heroAgentScene.css).
-//   3. Subtle scroll-in entrances via the shared production reveal.css .reveal
-//      one-shot CSS animation (NOT motion/react — only AgentScene needs that).
-//   4. A clean 5-Ds scorecard (Delegation / Description / Discernment /
-//      Diligence / Deliverable).
-// Chrome is the shared, site-wide <MarketingNav> (white nav, real TaaliLogo)
-// and a footer whose every link resolves to a real destination. CTAs route
-// through `onNavigate` (AppShell's navigateToPage): "See it live" → showcase,
-// "Book a demo" → demo-lead.
+//      product graphic (styles in heroAgentScene.css).
+//   3. Variant G's 5-step FUNNEL ("One agent, your whole funnel." — Source /
+//      Screen / Assess / Decide / Hand back) in the #how-it-works band.
+//   4. Variant G's 5-Ds AI-fluency scorecard ("Measure how people actually work
+//      with AI." — Delegation / Description / Discernment / Diligence /
+//      Deliverable) in the #platform band — the single assessment section.
+// The funnel + scorecard markup is a plain-JSX re-render of variant G's sections
+// driven by the SAME data model (variantG.data.js), styled by
+// landingVariantGSections.css (variant G's CSS re-scoped `.lvg` → `.mc-vg`), and
+// animated by the shared production reveal.css .reveal (NOT motion/react — only
+// AgentScene needs that). Chrome is the shared <MarketingNav> and a footer whose
+// every link resolves. CTAs route through `onNavigate`.
 
 const containerClass = 'mx-auto max-w-[85rem] px-6 md:px-10 xl:px-16';
 
-// Mock rows for the marketing decision feed. Shape mirrors the
-// AgentDecisionPayload the live <ActivityFeed> consumes on /home, so the
-// feed renders with the same score chips, role pills, confidence line, and
-// decision-type badges the recruiter sees in product. Each row carries
-// role_name (drives RolePill), taali_score (ScoreChip — null for pre-screen
-// rejects, which aren't scored), and confidence (drives "agent N% confident").
-// The decision types span the agent's real vocabulary: advance_to_interview
-// (ADVANCE), escalate_low_confidence (ESCALATE — sub-agents disagreed),
-// skip_assessment_reject (pre-screen REJECT, deeper red, unscored), and a
-// post-assessment reject overridden + taught back to the agent. Timestamps
-// are anchored to a recent moment so formatRelativeAge renders "Xm/h ago".
-const _NOW = Date.now();
-// Score-provenance the live <ActivityFeed> renders under each score (a "v2.1.0"
-// pill in the list). Mirrors production — the agent scores on the current
-// holistic engine. Pre-screen rejects are unscored, so they carry none.
-const _prov = (hoursAgo) => ({
-  engine_version: '2.1.0',
-  scored_at: new Date(_NOW - hoursAgo * 60 * 60 * 1000).toISOString(),
-});
-const MARKETING_DECISION_FEED_ROWS = [
-  {
-    id: 312,
-    status: 'pending',
-    decision_type: 'advance_to_interview',
-    candidate_name: 'Maya Chen',
-    application_id: 1042,
-    role_id: 109,
-    role_name: 'Senior Backend Engineer',
-    taali_score: 88,
-    score_summary: { score_provenance: _prov(0.2) },
-    confidence: 0.91,
-    reasoning:
-      "She clears every must-have — the AWS and Python evidence is strong, and she scored 88 on the task, top of this role's pipeline. I'd put her in front of the technical panel.",
-    created_at: new Date(_NOW - 6 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 311,
-    status: 'pending',
-    decision_type: 'escalate_low_confidence',
-    candidate_name: 'Aisha Bello',
-    application_id: 1031,
-    role_id: 109,
-    role_name: 'Senior Backend Engineer',
-    taali_score: 64,
-    score_summary: { score_provenance: _prov(0.6) },
-    confidence: 0.5,
-    reasoning:
-      "I'm split on her systems-design depth — two of my checks said advance, one said assess again. I don't want to call this one for you. Take a look?",
-    created_at: new Date(_NOW - 23 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 309,
-    status: 'pending',
-    decision_type: 'skip_assessment_reject',
-    candidate_name: 'Marco Rossi',
-    application_id: 1024,
-    role_id: 112,
-    role_name: 'Data Engineer',
-    taali_score: null,
-    reasoning:
-      "On pre-screen I couldn't find the Spark or streaming experience the role needs, and the AI-tooling claims have no projects behind them. I wouldn't spend an assessment seat here.",
-    created_at: new Date(_NOW - 38 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 305,
-    status: 'approved',
-    decision_type: 'advance_to_interview',
-    candidate_name: 'Priya Raman',
-    application_id: 1003,
-    role_id: 112,
-    role_name: 'Data Engineer',
-    taali_score: 84,
-    score_summary: { score_provenance: _prov(0.5) },
-    human_disposition: 'approved',
-    resolved_at: new Date(_NOW - 18 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 301,
-    status: 'overridden',
-    decision_type: 'reject',
-    candidate_name: 'Jonas Weber',
-    application_id: 994,
-    role_id: 109,
-    role_name: 'Senior Backend Engineer',
-    taali_score: 58,
-    score_summary: { score_provenance: _prov(1.4) },
-    human_disposition: 'taught',
-    resolution_note: 'override → advance',
-    resolved_at: new Date(_NOW - 52 * 60 * 1000).toISOString(),
-  },
-];
-
-// The five recruiter-facing axes the live CandidateStandingReportPage renders —
-// the 5 Ds. Mock scores; verdict uses the production band vocabulary
-// (Strong Hire >= 80).
-const SCORECARD_5DS = [
-  { label: 'Delegation', score: 86 },
-  { label: 'Description', score: 88 },
-  { label: 'Discernment', score: 90 },
-  { label: 'Diligence', score: 82 },
-  { label: 'Deliverable', score: 84 },
-];
+// Glimpse chip(s) pinned to each funnel card's foot — rendered from the `viz`
+// data model on each FUNNEL step (no dangerouslySetInnerHTML).
+const FunnelViz = ({ viz }) => {
+  if (viz.kind === 'evidence') {
+    return (
+      <div className="evid-row"><span className="tick">✓</span><span>{viz.text}</span></div>
+    );
+  }
+  if (viz.kind === 'score') {
+    return <div className="mini-score">{viz.value}<small>{viz.unit}</small></div>;
+  }
+  return (
+    <div className="fchip-row">
+      {viz.chips.map((c) => (
+        <span key={c.label} className={`fchip${c.variant === 'plain' ? ' plain' : c.variant === 'ok' ? ' ok' : ''}`}>{c.label}</span>
+      ))}
+    </div>
+  );
+};
 
 // Footer link columns. Every destination is real and resolves: `section`
 // scrolls to an in-page anchor that EXISTS on this page (#how-it-works,
@@ -272,166 +191,72 @@ export const LandingPage = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* HOW THE AGENT WORKS — 3-step section + the live decision feed */}
-      <section id="how-it-works" className="border-t border-[var(--line)] bg-[var(--bg-2)]">
+      {/* HOW THE AGENT WORKS — variant G's 5-step funnel ("One agent, your
+          whole funnel."), re-rendered as plain JSX from the FUNNEL data model
+          and styled by landingVariantGSections.css (scoped `.mc-vg`). */}
+      <section id="how-it-works" className="mc-vg border-t border-[var(--line)] bg-[var(--bg-2)]">
         <div className={`${containerClass} py-20`}>
-          <div className="reveal">
-            <div className="font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.14em] text-[var(--purple)]">
-              HOW THE AGENT WORKS
-            </div>
-            <h2 className="mt-3 max-w-[52.5rem] font-[var(--font-display)] text-[clamp(32px,4vw,42px)] font-semibold leading-[1.1] tracking-[-0.025em] text-[var(--ink)]">
-              An autonomous agent in your pipeline. <em className="not-italic text-[var(--purple)]">Built for the AI-native hire.</em>
-            </h2>
-            <p className="mt-5 max-w-[42.5rem] text-[0.96875rem] leading-[1.6] text-[var(--ink-2)]">
-              Taali runs three loops continuously — triage, assess, decide — and pauses the moment your judgment is needed.
-              Every assessment puts the candidate in a real workspace with AI in their hand, then measures how well they wield it.
+          <div className="reveal section-head">
+            <span className="eyebrow">AGENTIC HIRING</span>
+            <h2 className="display mt-3">One agent, <span className="grad-text">your whole funnel.</span></h2>
+            <p className="lede">
+              It sources, reads every CV, runs the assessment, and puts a decision in front of you with
+              the evidence attached. You approve. It executes.
             </p>
           </div>
-          <div className="reveal-stagger mt-14 grid gap-7 lg:grid-cols-3">
-            {[
-              {
-                n: '01',
-                t: 'Triage — autonomously',
-                d: "Every cycle, the agent surveys the role, decides where the work is — fetch CVs, pre-screen, score, send assessments, queue advances or rejects — and pauses to ask you when it needs input it can't derive on its own. You set the criteria once; it works the pipeline 24/7 within the budget you set.",
-              },
-              {
-                n: '02',
-                t: 'Assess — for the AI era',
-                d: 'Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate’s hands, engineering or knowledge work. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually work with AI — and whether they verified before calling it done. Every task is battle-tested in a sandbox before a candidate ever sees it.',
-              },
-              {
-                n: '03',
-                t: 'Decide — with you in charge',
-                d: 'A standing report per candidate: score, dimension radar, AI-usage trace, interview-ready questions. The agent recommends; you approve. Every consequential call is yours.',
-              },
-            ].map((step) => (
-              <div key={step.n} className="border-t border-[var(--ink)] pt-7">
-                <div className="font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.1em] text-[var(--purple)]">
-                  {step.n} · TAALI
-                </div>
-                <h3 className="mt-2.5 font-[var(--font-display)] text-[1.625rem] font-semibold tracking-[-0.015em] text-[var(--ink)]">
-                  {step.t}
-                </h3>
-                <p className="mt-2.5 text-[0.90625rem] leading-[1.55] text-[var(--ink-2)]">{step.d}</p>
+
+          <div className="reveal-stagger funnel mt-4">
+            {FUNNEL.map((s, i) => (
+              <div key={s.n} className="fstep" style={{ '--i': i }}>
+                {i < FUNNEL.length - 1 ? <span className="fflow-track" aria-hidden="true" /> : null}
+                <span className="fnum">{s.n}</span>
+                <h3>{s.key}</h3>
+                <p>{s.body}</p>
+                <div className="fviz"><FunnelViz viz={s.viz} /></div>
               </div>
             ))}
-          </div>
-
-          {/* Decision feed — the live <ActivityFeed /> from features/home (the
-              same component rendered on the Hub at /home), fed mock rows that
-              match its shape. Wrapped in browser chrome so it reads as a
-              product snapshot, not a marketing illustration. */}
-          <div className="reveal mt-14 overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
-            <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[0.6875rem] text-[var(--mute)]">
-              <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#f06' }} />
-              <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#ffb020' }} />
-              <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#39c66d' }} />
-              <span className="ml-3">app.taali.ai/home</span>
-              <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--mute)]">Locked preview</span>
-            </div>
-            <div className="px-5 py-5">
-              <ActivityFeed
-                rows={MARKETING_DECISION_FEED_ROWS}
-                selectedId={null}
-                onSelect={() => {}}
-                onNavigate={() => {}}
-                subtitle="Every call the agent made across your open roles today — advance, escalate, pre-screen reject. Approve, override, or teach it back in one click."
-              />
-            </div>
           </div>
         </div>
       </section>
 
-      {/* WE MEASURE HOW PEOPLE USE AI — the differentiator + the 5-Ds scorecard */}
-      <section id="platform" className="border-t border-[var(--line)] bg-white">
+      {/* AI-NATIVE ASSESSMENT — variant G's single 5-Ds scorecard ("Measure how
+          people actually work with AI." — Delegation / Description /
+          Discernment / Diligence / Deliverable), the one assessment section. */}
+      <section id="platform" className="mc-vg border-t border-[var(--line)] bg-white">
         <div className={`${containerClass} py-20`}>
-          <div className="grid gap-16 lg:grid-cols-[1fr_1.1fr] lg:items-center">
-            <div className="reveal">
-              <div className="font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.14em] text-[var(--purple)]">
-                AI-NATIVE ASSESSMENT
-              </div>
-              <h2 className="mt-3 font-[var(--font-display)] text-[clamp(34px,4.6vw,44px)] font-semibold leading-[1.05] tracking-[-0.03em] text-[var(--ink)]">
-                You hire people <em className="not-italic text-[var(--purple)]">who use AI.</em><br />
-                We&apos;re the only platform that measures it.
-              </h2>
-              <p className="mt-5 text-[1rem] leading-[1.6] text-[var(--ink-2)]">
-                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a sandboxed runtime around it — exactly the way people work now, engineering or knowledge work.
-                Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
-                Those traces feed one scorecard — five dimensions, the 5 Ds: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
-              </p>
-              <ul className="reveal-stagger mt-7 flex flex-col gap-3.5">
-                {[
-                  { t: 'AI collaboration score', d: 'Did they prompt well? Catch the trap we planted? Know when not to use it?' },
-                  { t: 'Prompt-by-prompt replay', d: 'See exactly how they worked the agent — not just the final output.' },
-                  { t: 'Full session telemetry', d: 'Edit timeline, sandboxed test runs, file opens — everything tied back to the final report.' },
-                  { t: 'Autopilot detection', d: 'We flag candidates who pasted without reading. Calibrated, not punitive.' },
-                ].map((bullet) => (
-                  <li key={bullet.t} className="flex items-start gap-3">
-                    <span className="mt-0.5 inline-flex h-[1.375rem] w-[1.375rem] flex-shrink-0 items-center justify-center rounded-full bg-[var(--purple)] text-white">
-                      <Check size={13} strokeWidth={2.6} aria-hidden="true" />
-                    </span>
-                    <div>
-                      <div className="text-[0.90625rem] font-medium text-[var(--ink)]">{bullet.t}</div>
-                      <div className="mt-0.5 text-[0.8125rem] leading-[1.5] text-[var(--ink-2)]">{bullet.d}</div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* The 5-Ds standing-report scorecard (Delegation / Description /
-                Discernment / Diligence / Deliverable). Verdict band vocabulary
-                (Strong Hire >= 80). Mock scores. */}
-            <div className="reveal overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
-              <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[0.71875rem] text-[var(--mute)]">
-                <span>MAYA CHEN · CANDIDATE REPORT</span>
-                <span className="font-semibold text-[var(--purple)]">Strong Hire · Taali 86</span>
-              </div>
-              <div className="space-y-4 px-5 py-6">
-                {SCORECARD_5DS.map(({ label, score }) => (
-                  <div
-                    key={label}
-                    className="grid grid-cols-[184px_minmax(0,1fr)] items-center gap-3"
-                  >
-                    <div className="text-[0.875rem] text-[var(--ink)]">{label}</div>
-                    <div className="h-2 overflow-hidden rounded-full bg-[var(--line)]">
-                      <div className="h-2 rounded-full bg-[var(--purple)]" style={{ width: `${score}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="reveal section-head">
+            <span className="eyebrow">AI-NATIVE ASSESSMENTS</span>
+            <h2 className="display mt-3">Measure how people <span className="grad-text">actually work with AI.</span></h2>
+            <p className="lede">
+              Five dimensions, scored from the real session. Planted traps they should catch. Same
+              rubric, every candidate — engineering or knowledge work.
+            </p>
           </div>
 
-          {/* IDE preview — the real workspace component
-              (AssessmentRuntimePreviewView) in staticPreview mode: a
-              non-interactive snapshot of a live candidate session, scaled to
-              80% via CSS transform so the IDE renders at its natural ~1440-wide
-              layout and fits the band without cramping. */}
-          <p className="reveal mt-12 mb-3 text-[0.875rem] text-[var(--ink-2)]">
-            <strong className="text-[var(--ink)]">Candidates work here.</strong>{' '}
-            The AI assistant sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a sandboxed runtime. We watch every prompt.
-          </p>
-          <div className="reveal overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
-            <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[0.6875rem] text-[var(--mute)]">
-              <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#f06' }} />
-              <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#ffb020' }} />
-              <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#39c66d' }} />
-              <span className="ml-3">app.taali.ai/assess/preview</span>
-              <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--mute)]">Locked preview</span>
-            </div>
-            <div className="mc-landing-ide">
-              <div className="mc-landing-ide-scale">
-                <AssessmentRuntimePreviewView
-                  staticPreview
-                  heightClass="h-full"
-                  lightMode={false}
-                  taskName="Revenue Recovery Incident"
-                  taskRole="Senior Backend Engineer"
-                  taskContext="Restore the batch revenue-recovery flow before finance close."
-                />
+          <div className="reveal scorecard">
+            <div className="sc-head">
+              <div className="who">
+                <div className="avatar">MC</div>
+                <div>
+                  <div className="sc-title">Maya Chen · AI-fluency</div>
+                  <div className="sc-sub">SCORED FROM SESSION · AI ENGINEER #312</div>
+                </div>
+              </div>
+              <div className="sc-total">
+                <div className="big">{COMPOSITE}</div>
+                <div className="lbl">Composite / 100</div>
               </div>
             </div>
+            {DDS.map((d) => (
+              <div className="dd-row" key={d.name}>
+                <div>
+                  <div className="dd-name">{d.name}</div>
+                  <div className="dd-def">{d.def}</div>
+                </div>
+                <div className="dd-track"><div className="dd-fill" style={{ width: `${d.val}%` }} /></div>
+                <div className="dd-val">{d.val}</div>
+              </div>
+            ))}
           </div>
         </div>
       </section>

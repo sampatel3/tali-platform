@@ -1,0 +1,131 @@
+/* landingVariantGSections.css — the funnel (5-step "One agent, your whole
+   funnel.") and the 5-Ds AI-fluency scorecard, lifted from
+   landing_preview/variant_g/variantG.styles.js and re-scoped under `.mc-vg` so
+   the SAME sections can be grafted onto the real `/` landing without dragging
+   the rest of variant G's `.lvg` design system in (same pattern as
+   heroAgentScene.css for the hero scene).
+
+   Only the two sections' own rules are here (the shared section-head / display /
+   grad-text / eyebrow / lede helpers, the funnel grid + cards, and the 5-Ds
+   scorecard). Everything consumes the shared taali brand tokens (--purple,
+   --surface, --line, the app --fs-* product type scale, the --grad-agent-on
+   vocabulary); the bespoke marketing `--l-*` type scale is redeclared locally on
+   `.mc-vg` so these bands read at the same confident marketing size as the rest
+   of the landing. The gradient-shimmer keyframe is renamed (`mcVgFlow`) so it
+   never collides with variant G's `lvgAgentFlow` on the preview route. */
+
+.mc-vg {
+  /* aliases + the bespoke MARKETING type scale the rules below reference */
+  --purple-deep: var(--purple-2);
+  --lavender: var(--purple-lav);
+  --agent-on-flow: var(--grad-agent-on-animated);
+  --mono: var(--font-mono);
+  --font: var(--font-sans);
+
+  --l-h2: clamp(26px, 3vw, 32px);
+  --l-h3: 20px;
+  --l-lead: 18px;
+  --l-body: 16px;
+  --l-small: 14px;
+  --l-eyebrow: 12px;
+
+  --r: 14px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --sh-sm: 0 1px 2px rgba(21, 18, 26, 0.05), 0 1px 0 rgba(21, 18, 26, 0.02);
+  --sh-lg: 0 4px 8px rgba(21, 18, 26, 0.04), 0 30px 60px -22px rgba(74, 45, 128, 0.22);
+}
+.mc-vg *, .mc-vg *::before, .mc-vg *::after { box-sizing: border-box; }
+
+/* ── shared headline helpers ── */
+.mc-vg .eyebrow {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .14em;
+  text-transform: uppercase; color: var(--purple); font-weight: 500;
+  padding: 5px 11px; border-radius: 999px;
+  background: var(--purple-soft); border: 1px solid color-mix(in oklab, var(--purple) 16%, var(--line));
+}
+.mc-vg .display {
+  font-family: var(--font); font-weight: 600; letter-spacing: -.035em;
+  line-height: 1.04; color: var(--ink); margin: 0; text-wrap: balance;
+}
+.mc-vg .lede { color: var(--ink-2); font-size: var(--l-lead); line-height: 1.6; margin: 0; }
+.mc-vg .grad-text {
+  background: linear-gradient(96deg, #6a3fb8, #5e3aa8 40%, #8b5cf6);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.mc-vg .section-head { max-width: 760px; margin: 0 auto 30px; text-align: center; }
+.mc-vg .section-head .eyebrow { margin-bottom: 12px; }
+.mc-vg .section-head h2 { font-size: var(--l-h2); }
+.mc-vg .section-head .lede { margin: 14px auto 0; max-width: 600px; }
+
+/* ============================================================
+   FUNNEL — 5 steps
+   ============================================================ */
+.mc-vg .funnel { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; align-items: stretch; }
+.mc-vg .fstep {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 22px 20px; display: flex; flex-direction: column; position: relative; box-shadow: var(--sh-sm);
+}
+.mc-vg .fstep .fnum { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; color: var(--purple); }
+.mc-vg .fstep h3 { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.02em; margin: 12px 0 8px; }
+.mc-vg .fstep p { font-size: var(--l-body); line-height: 1.55; color: var(--mute); margin: 0 0 16px; }
+.mc-vg .fstep .fviz { margin-top: auto; }
+.mc-vg .fchip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .04em;
+  padding: 4px 9px; border-radius: 7px; background: var(--purple-soft); color: var(--purple-deep);
+}
+.mc-vg .fchip.plain { background: var(--bg); color: var(--ink-2); border: 1px solid var(--line); }
+.mc-vg .fchip.ok { background: var(--purple); color: #fff; }
+.mc-vg .fchip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.mc-vg .evid-row {
+  display: flex; align-items: center; gap: 8px; font-size: var(--l-small); color: var(--ink-2);
+  padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+}
+.mc-vg .evid-row .tick { color: var(--purple); font-weight: 700; }
+.mc-vg .mini-score { font-family: var(--mono); font-size: var(--l-h3); font-weight: 600; color: var(--purple); letter-spacing: -.02em; }
+.mc-vg .mini-score small { font-size: var(--l-small); color: var(--mute); }
+.mc-vg .fflow-track { position: absolute; top: 50%; right: -14px; width: 14px; height: 2px; background: var(--line); z-index: 1; }
+@media (max-width: 1000px) { .mc-vg .funnel { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .mc-vg .funnel { grid-template-columns: 1fr; } }
+
+/* ============================================================
+   AI-FLUENCY SCORECARD (the 5 Ds)
+   ============================================================ */
+.mc-vg .scorecard {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl);
+  box-shadow: var(--sh-lg); overflow: hidden; max-width: 680px; margin: 0 auto;
+}
+.mc-vg .sc-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 15px 28px; border-bottom: 1px solid var(--line); background: var(--bg);
+}
+.mc-vg .sc-head .who { display: flex; align-items: center; gap: 12px; }
+.mc-vg .sc-head .who .avatar { width: 40px; height: 40px; }
+.mc-vg .avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  display: grid; place-items: center; font-size: var(--fs-body); font-weight: 600;
+  background: var(--purple-soft); color: var(--purple-deep);
+}
+.mc-vg .sc-title { font-size: var(--fs-body-lg); font-weight: 600; }
+.mc-vg .sc-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; }
+.mc-vg .sc-total { text-align: right; }
+.mc-vg .sc-total .big { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -.03em; color: var(--purple); line-height: 1; font-variant-numeric: tabular-nums; }
+.mc-vg .sc-total .lbl { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+.mc-vg .dd-row {
+  display: grid; grid-template-columns: 232px 1fr 46px; gap: 20px; align-items: center;
+  padding: 10px 28px; border-bottom: 1px solid var(--line);
+}
+.mc-vg .dd-row:last-child { border-bottom: 0; }
+.mc-vg .dd-name { font-size: var(--fs-body-lg); font-weight: 600; letter-spacing: -.01em; }
+.mc-vg .dd-def { font-size: var(--fs-caption); line-height: 1.35; color: var(--mute); margin-top: 2px; }
+.mc-vg .dd-track { height: 8px; border-radius: 999px; background: var(--purple-soft); overflow: hidden; }
+.mc-vg .dd-fill { height: 100%; border-radius: 999px; background: var(--agent-on-flow); background-size: 200% 100%; transform-origin: left; }
+.mc-vg .dd-val { font-family: var(--mono); font-size: var(--fs-body-lg); font-weight: 500; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+@media (max-width: 620px) { .mc-vg .dd-row { grid-template-columns: 1fr 44px; } .mc-vg .dd-track { grid-column: 1 / -1; order: 3; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .mc-vg .dd-fill { animation: mcVgFlow 6s linear infinite; }
+  @keyframes mcVgFlow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+}

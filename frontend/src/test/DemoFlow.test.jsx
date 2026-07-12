@@ -99,13 +99,15 @@ describe('Demo flow redesign', () => {
     expect(onNavigate).toHaveBeenCalledWith('demo-lead');
   });
 
-  it('renders the restored original landing (hero + agent scene, decision feed, 5 Ds, walkthrough) with no preview chip', async () => {
+  it('renders the landing (hero + agent scene, variant G funnel + 5-Ds, closing CTA) with no preview chip', async () => {
     const { container } = renderLanding();
 
-    // The original agentic-first landing, NOT variant G's scoped `.lvg` shell.
-    // The only scoped subtree is `.lvg-scene` around the grafted hero AgentScene.
+    // The production landing, NOT variant G's scoped `.lvg` shell. The only
+    // scoped subtrees are `.lvg-scene` (the grafted hero AgentScene) and the
+    // `.mc-vg` funnel + 5-Ds bands grafted from variant G.
     expect(container.querySelector('.lvg')).toBeNull();
     expect(container.querySelector('.lvg-scene')).toBeTruthy();
+    expect(container.querySelectorAll('.mc-vg').length).toBe(2);
     // The internal preview switcher chip lives only on /landing-preview.
     expect(screen.queryByRole('group', { name: /Landing preview variant/i })).toBeNull();
 
@@ -116,20 +118,28 @@ describe('Demo flow redesign', () => {
     expect(screen.getAllByRole('button', { name: /See it live/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
 
-    // Restored structure: the 3-step "how the agent works" band, the live
-    // decision feed, and the closing CTA.
-    expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
-    expect(screen.getByText(/Triage — autonomously/i)).toBeInTheDocument();
-    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeInTheDocument();
+    // Variant G's 5-step funnel replaces the old 3-step + decision-feed band.
+    expect(screen.getByText(/your whole funnel\./i)).toBeInTheDocument();
+    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
+      expect(screen.getByText(step)).toBeInTheDocument();
+    });
+    // No leftover decision-feed / 3-step copy.
+    expect(screen.queryByText(/HOW THE AGENT WORKS/i)).toBeNull();
+    expect(screen.queryByText(/Triage — autonomously/i)).toBeNull();
 
-    // The 5-Ds scorecard (Delegation / Description / Discernment / Diligence /
-    // Deliverable).
+    // The single assessment section — variant G's 5-Ds scorecard (Delegation /
+    // Description / Discernment / Diligence / Deliverable), one section only.
+    expect(screen.getByText(/actually work with AI\./i)).toBeInTheDocument();
     ['Delegation', 'Description', 'Discernment', 'Diligence', 'Deliverable'].forEach((d) => {
       expect(screen.getByText(d)).toBeInTheDocument();
     });
+    // The IDE walkthrough band is gone.
+    expect(screen.queryByText(/Candidates work here\./i)).toBeNull();
 
-    // Maya Chen threads the design — the live ActivityFeed decision feed, the
-    // hero decision lane, and the 5-Ds report header.
+    // The closing CTA is intact.
+    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeInTheDocument();
+
+    // Maya Chen threads the design — the hero decision lane and the 5-Ds card.
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
   });
 
@@ -149,14 +159,20 @@ describe('Demo flow redesign', () => {
     });
   });
 
-  it('uses shared nav buttons on the demo page to jump back to landing sections', async () => {
-    const onNavigate = vi.fn();
-    renderDemo(onNavigate);
+  it('trims the shared marketing nav to Developers / Sign in / Book a demo', async () => {
+    renderDemo();
 
-    fireEvent.click(screen.getByRole('button', { name: 'How it works' }));
+    // The only marketing-nav destinations now are Developers, Sign in, and
+    // Book a demo — the old "How it works" section jump is gone.
+    expect(screen.queryByRole('button', { name: 'How it works' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'How it works' })).toBeNull();
 
-    expect(onNavigate).toHaveBeenCalledWith('landing');
-    expect(sessionStorage.getItem('taali.pendingMarketingSection')).toBe('how-it-works');
+    const developers = screen.getAllByRole('link', { name: /^Developers$/i });
+    expect(developers.length).toBeGreaterThan(0);
+    developers.forEach((link) => expect(link).toHaveAttribute('href', '/developers'));
+
+    expect(screen.getAllByRole('link', { name: /Sign in/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: /Book a demo/i }).length).toBeGreaterThan(0);
   });
 
   it('gates the walkthrough on /demo until details are submitted', async () => {
