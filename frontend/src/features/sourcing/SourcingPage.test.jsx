@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../shared/api/prospectsClient', () => ({
@@ -92,6 +92,27 @@ describe('SourcingPage', () => {
     expect(
       await screen.findByRole('button', { name: /generate search strings/i }),
     ).toBeInTheDocument();
+  });
+
+  it('keeps closed and filled roles out of the Find candidates picker', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [
+        { id: 7, name: 'Senior Data Engineer', job_status: 'open' },
+        { id: 8, name: 'Filled Role', job_status: 'filled' },
+        { id: 9, name: 'Cancelled Role', job_status: 'cancelled' },
+        { id: 10, name: 'Archived Workable Role', workable_job_state: 'archived' },
+      ],
+    });
+    render(<SourcingPage />);
+    await screen.findByText('Alice One');
+
+    fireEvent.click(screen.getByRole('tab', { name: /find candidates/i }));
+    const picker = await screen.findByLabelText('Pick a role');
+
+    expect(within(picker).getByRole('option', { name: /Senior Data Engineer/ })).toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: /Filled Role/ })).not.toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: /Cancelled Role/ })).not.toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: /Archived Workable Role/ })).not.toBeInTheDocument();
   });
 
   it('renders prospect rows with a suppressed badge', async () => {

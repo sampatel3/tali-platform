@@ -44,6 +44,21 @@ function formatDate(iso) {
 // SourceCandidatesPanel (the same LinkedIn search-string generator + paste-a-
 // profile outreach drafter that lives on the job page). Everything it produces
 // is copy-paste text the recruiter runs by hand; nothing is sent or automated.
+// A role is worth sourcing for only while it's still recruiting. `rolesApi.list()`
+// returns every non-deleted role (the backend filters only `deleted_at`), so we
+// drop the terminal ones here: filled/cancelled requisitions and closed/archived
+// Workable jobs. Roles with no status yet (draft/manual) are kept — they may still
+// be sourced for before publishing.
+const TERMINAL_JOB_STATUS = new Set(['filled', 'filled_external', 'cancelled']);
+const TERMINAL_WORKABLE_STATE = new Set(['closed', 'archived']);
+function isSourceableRole(role) {
+  const jobStatus = String(role?.job_status || '').toLowerCase();
+  const workableState = String(role?.workable_job_state || '').toLowerCase();
+  if (TERMINAL_JOB_STATUS.has(jobStatus)) return false;
+  if (TERMINAL_WORKABLE_STATE.has(workableState)) return false;
+  return true;
+}
+
 function FindCandidatesTab() {
   const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -57,7 +72,8 @@ function FindCandidatesTab() {
       .list()
       .then((res) => {
         if (!active) return;
-        setRoles(Array.isArray(res.data) ? res.data : []);
+        const all = Array.isArray(res.data) ? res.data : [];
+        setRoles(all.filter(isSourceableRole));
         setError('');
       })
       .catch(() => active && setError('Could not load your roles.'))
