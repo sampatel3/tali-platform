@@ -91,6 +91,27 @@ const deriveRawCvSections = (cvText) => {
   return { introLines, sections };
 };
 
+// Sort experience most-recent-first. Some CVs (and the reversed reading order
+// certain PDFs extract with) list roles oldest-first; the parse preserves that
+// source order, so a CV can render with the current job at the bottom. Key off
+// the end date (falling back to start), treating "Present"/"Current" as the
+// newest and undated roles as the oldest. A stable sort leaves an already
+// most-recent-first CV unchanged.
+const CV_MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+const experienceSortKey = (entry) => {
+  const end = String(entry?.end || '').toLowerCase();
+  if (/present|current|now|ongoing/.test(end)) return Number.POSITIVE_INFINITY;
+  const src = end || String(entry?.start || '').toLowerCase();
+  const yearMatch = src.match(/(19|20)\d{2}/);
+  if (!yearMatch) return Number.NEGATIVE_INFINITY;
+  const monthMatch = src.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);
+  return Number(yearMatch[0]) * 12 + (monthMatch ? CV_MONTHS[monthMatch[1]] : 0);
+};
+const sortExperienceRecentFirst = (entries) => entries
+  .map((entry, index) => ({ entry, index, key: experienceSortKey(entry) }))
+  .sort((a, b) => (b.key - a.key) || (a.index - b.index))
+  .map((item) => item.entry);
+
 const normalizeExperienceEntries = (entries) => asArray(entries).map((entry, index) => {
   if (typeof entry === 'string') {
     return { key: `experience-${index}`, title: entry, company: '', start: '', end: '', bullets: [] };
@@ -174,9 +195,9 @@ const normalizeCvSections = ({ parsedSections, cvText, application }) => {
       ...asArray(application?.candidate_social_profiles).map((item) => asCleanText(item?.url || item?.name || item)),
       application?.candidate_profile_url,
     ].map(asCleanText).filter(Boolean))).slice(0, 6),
-    experience: normalizeExperienceEntries(
+    experience: sortExperienceRecentFirst(normalizeExperienceEntries(
       asArray(parsed.experience).length ? parsed.experience : application?.candidate_experience
-    ),
+    )),
     education: normalizeEducationEntries(
       asArray(parsed.education).length ? parsed.education : application?.candidate_education
     ),
@@ -190,7 +211,15 @@ const normalizeCvSections = ({ parsedSections, cvText, application }) => {
     skills: uniqueSkills,
     certifications: asArray(parsed.certifications).map(asCleanText).filter(Boolean),
     languages: asArray(parsed.languages).map(asCleanText).filter(Boolean),
-    rawSections: raw.sections.filter((section) => !['summary', 'skills'].includes(section.key)),
+    // Only fall back to the heuristic raw-text split when there's NO structured
+    // parse. When cv_sections parsed successfully it already carries every
+    // section (experience/education/certs/languages/links/projects), so the raw
+    // split adds only duplicates — and for column or reversed-reading-order PDFs
+    // it mis-attributes content to the wrong heading (e.g. work history rendered
+    // under an "Education" heading). Trust the parse; never append raw noise.
+    rawSections: Object.keys(parsed).length
+      ? []
+      : raw.sections.filter((section) => !['summary', 'skills'].includes(section.key)),
   };
 };
 
