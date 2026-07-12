@@ -315,10 +315,6 @@ from .domains.outreach import (
 )
 from .domains.assessments_runtime.pool_rescore_routes import router as pool_rescore_router
 from .domains.outreach import router as sourcing_assist_router
-from .domains.assessments_runtime.offer_routes import router as offers_router
-from .domains.assessments_runtime.offer_template_routes import (
-    router as offer_templates_router,
-)
 from .domains.assessments_runtime.job_hiring_team_routes import (
     router as hiring_team_router,
 )
@@ -383,8 +379,6 @@ app.include_router(submittal_packs_router, prefix="/api/v1")
 app.include_router(prospects_router, prefix="/api/v1")
 app.include_router(sourcing_assist_router, prefix="/api/v1")
 app.include_router(campaigns_router, prefix="/api/v1")
-app.include_router(offers_router, prefix="/api/v1")
-app.include_router(offer_templates_router, prefix="/api/v1")
 from .domains.compliance import router as compliance_router  # noqa: E402
 
 # GDPR data-subject requests + aggregate EEO report (org-owner-gated).

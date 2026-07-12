@@ -35,5 +35,5 @@ def get_time_to_fill(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Days from application to accepted offer — overall summary + per-role breakdown."""
+    """Days from application to hired — overall summary + per-role breakdown."""
     return time_to_fill(db, current_user.organization_id, role_id=role_id)

@@ -1,9 +1,9 @@
 """P2 core analytics: native pipeline funnel + time-to-fill.
 
 Read-only aggregates over the ATS's *own* data (configurable ``pipeline_stages``
-and accepted ``offers``) — distinct from the Workable-stage conversion in
-``analytics_routes`` which mirrors the external pipeline. Pure functions so the
-maths is unit-testable without HTTP.
+and the ATS-synced hired outcome) — distinct from the Workable-stage conversion
+in ``analytics_routes`` which mirrors the external pipeline. Pure functions so
+the maths is unit-testable without HTTP.
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ...models.candidate_application import CandidateApplication
-from ...models.offer import Offer, OFFER_STATUS_ACCEPTED
 from ...models.pipeline_stage import CANONICAL_SEED_STAGES, PipelineStage
 
 
@@ -121,26 +120,27 @@ def pipeline_funnel(
 def time_to_fill(
     db: Session, org_id: int, role_id: Optional[int] = None
 ) -> Dict[str, Any]:
-    """Days from application created to offer accepted, over accepted offers.
+    """Days from application created to hired, over hired applications.
 
-    Uses ``offers.accepted_at`` (the ATS's own signal) against the application's
-    ``created_at``. Returns a duration summary plus a per-role breakdown so a
-    slow-to-fill role stands out.
+    Uses the ATS-synced hired signal — ``application_outcome == 'hired'`` with
+    ``application_outcome_updated_at`` as the fill timestamp (the moment the
+    outcome flipped to hired, stamped by the Workable/Bullhorn sync and the
+    native pipeline) — against the application's ``created_at``. Returns a
+    duration summary plus a per-role breakdown so a slow-to-fill role stands out.
     """
     if not org_id:
         return {"overall": _duration_summary([]), "by_role": []}
 
     q = (
         db.query(
-            Offer.accepted_at,
+            CandidateApplication.application_outcome_updated_at,
             CandidateApplication.created_at,
             CandidateApplication.role_id,
         )
-        .join(CandidateApplication, Offer.application_id == CandidateApplication.id)
         .filter(
-            Offer.organization_id == org_id,
-            Offer.status == OFFER_STATUS_ACCEPTED,
-            Offer.accepted_at.isnot(None),
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.application_outcome == "hired",
+            CandidateApplication.application_outcome_updated_at.isnot(None),
             CandidateApplication.created_at.isnot(None),
         )
     )
@@ -149,8 +149,8 @@ def time_to_fill(
 
     overall_days: List[float] = []
     per_role: Dict[int, List[float]] = {}
-    for accepted_at, created_at, r_id in q.all():
-        days = _days_between(created_at, accepted_at)
+    for hired_at, created_at, r_id in q.all():
+        days = _days_between(created_at, hired_at)
         if days is None or days < 0:
             continue
         overall_days.append(days)

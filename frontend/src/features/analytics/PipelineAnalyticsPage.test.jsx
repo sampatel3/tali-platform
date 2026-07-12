@@ -51,6 +51,6 @@ describe('PipelineAnalyticsPage', () => {
 
     render(<PipelineAnalyticsPage />);
     expect(await screen.findByText(/No applications yet/)).toBeInTheDocument();
-    expect(screen.getByText(/No accepted offers yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No hires yet/)).toBeInTheDocument();
   });
 });

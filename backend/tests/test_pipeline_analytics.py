@@ -6,7 +6,6 @@ from app.domains.assessments_runtime.pipeline_analytics_service import (
     time_to_fill,
 )
 from app.models import Candidate, CandidateApplication, Organization, Role
-from app.models.offer import Offer, OFFER_STATUS_ACCEPTED, OFFER_STATUS_SENT
 from app.models.pipeline_stage import PipelineStage, STAGE_KIND_APPLIED, STAGE_KIND_HIRED
 from tests.conftest import auth_headers
 
@@ -25,7 +24,7 @@ def _role(db, org, name="Eng"):
     return role
 
 
-def _app(db, org, role, *, stage="applied", outcome="open", created_at=None):
+def _app(db, org, role, *, stage="applied", outcome="open", created_at=None, outcome_updated_at=None):
     cand = Candidate(organization_id=org.id, email=f"c{db.query(Candidate).count()}@t.test", full_name="C")
     db.add(cand)
     db.flush()
@@ -36,6 +35,8 @@ def _app(db, org, role, *, stage="applied", outcome="open", created_at=None):
     )
     if created_at is not None:
         app.created_at = created_at
+    if outcome_updated_at is not None:
+        app.application_outcome_updated_at = outcome_updated_at
     db.add(app)
     db.flush()
     return app
@@ -95,20 +96,19 @@ def test_pipeline_funnel_scopes_to_org_and_role(db):
     assert pipeline_funnel(db, org.id, role_id=role_a.id)["total"] == 1
 
 
-def test_time_to_fill_over_accepted_offers(db):
+def test_time_to_fill_over_hired_applications(db):
     org = _org(db, "acme-ttf")
     role = _role(db, org)
     now = datetime.now(timezone.utc)
-    # Two accepted offers: 10 and 20 days from application to acceptance.
+    # Two hired applications: 10 and 20 days from application to hired.
     for days in (10, 20):
-        app = _app(db, org, role, created_at=now - timedelta(days=days))
-        db.add(Offer(
-            organization_id=org.id, application_id=app.id,
-            status=OFFER_STATUS_ACCEPTED, accepted_at=now,
-        ))
-    # A sent-but-not-accepted offer is ignored.
-    app3 = _app(db, org, role, created_at=now - timedelta(days=99))
-    db.add(Offer(organization_id=org.id, application_id=app3.id, status=OFFER_STATUS_SENT))
+        _app(
+            db, org, role, outcome="hired",
+            created_at=now - timedelta(days=days), outcome_updated_at=now,
+        )
+    # An open (not-yet-hired) application is ignored.
+    _app(db, org, role, outcome="open", created_at=now - timedelta(days=99),
+         outcome_updated_at=now)
     db.flush()
 
     out = time_to_fill(db, org.id)

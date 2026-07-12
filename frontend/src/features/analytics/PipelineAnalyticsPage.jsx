@@ -91,7 +91,7 @@ export const PipelineAnalyticsPage = ({ onNavigate, NavComponent }) => {
             <section>
               <h2 className="mb-3 text-sm font-semibold text-[var(--taali-text)]">Time to fill</h2>
               {!overall || overall.count === 0 ? (
-                <EmptyState title="No accepted offers yet" description="Time-to-fill appears once offers are accepted." className="py-8" />
+                <EmptyState title="No hires yet" description="Time-to-fill appears once applications are marked hired." className="py-8" />
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   <Stat label="Hires" value={overall.count} />
