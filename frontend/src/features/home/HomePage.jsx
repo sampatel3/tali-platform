@@ -377,7 +377,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     await Promise.all([loadDecisions(), loadRoles()]);
     try {
       const res = await agentApi.orgStatus();
-      setOrgStatus(res?.data || null);
+      const next = res?.data || null;
+      setOrgStatus(next);
+      // Keep the cross-navigation cache in step with a manual reload, or a
+      // return to /home would paint the pre-reload value until the next poll.
+      if (next != null) writeCache('home:org-status', next);
     } catch { /* silent */ }
   }, [loadDecisions, loadRoles]);
 
