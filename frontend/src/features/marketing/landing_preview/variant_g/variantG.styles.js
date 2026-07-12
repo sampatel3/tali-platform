@@ -198,9 +198,9 @@ export const VARIANT_G_CSS = `
 @keyframes lvgAgentFlow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
 
 .lvg .agent-pill {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 5px 11px 5px 9px; border-radius: 999px;
-  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  padding: 5px 10px 5px 8px; border-radius: 999px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
   color: #efe7ff; font-weight: 500;
   background: var(--agent-on-flow); background-size: 200% 100%;
   box-shadow: var(--sh-glow);
@@ -384,7 +384,7 @@ export const VARIANT_G_CSS = `
    one viewport. Left: eyebrow/H1/lede/CTAs. Right: the agent-ON stage.
    ============================================================ */
 .lvg .heroC { position: relative; overflow: hidden; display: flex; align-items: center; padding: var(--sec-pad) 0; scroll-margin-top: 68px; }
-.lvg .heroC-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 48px; align-items: center; }
+.lvg .heroC-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: center; }
 .lvg .heroC-copy { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
 .lvg .heroC .eyebrow { margin-bottom: 26px; }
 .lvg .heroC .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
@@ -394,10 +394,10 @@ export const VARIANT_G_CSS = `
 .lvg .heroC-stage-col { min-width: 0; }
 
 /* the scene on a dark agent-ON gradient stage that glows against the light page */
-.lvg .stage { position: relative; max-width: 340px; width: 100%; margin: 0 0 0 auto; border-radius: var(--r-lg); padding: 13px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74,45,128,.55); }
+.lvg .stage { position: relative; max-width: 340px; width: 100%; margin: 0 auto; border-radius: var(--r-lg); padding: 13px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74,45,128,.55); }
 .lvg .stage::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.14); pointer-events: none; }
 .lvg .stage .stage-cap { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
-.lvg .stage .stage-cap .t { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.7); }
+.lvg .stage .stage-cap .t { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.7); white-space: nowrap; }
 .lvg .heroC-orb { position: absolute; z-index: 0; border-radius: 50%; filter: blur(60px); pointer-events: none; }
 .lvg .heroC-orb.a { width: 420px; height: 420px; right: -60px; top: -80px; background: rgba(196,165,253,.4); }
 .lvg .heroC-orb.b { width: 320px; height: 320px; left: 30%; bottom: -140px; background: rgba(94,58,168,.18); }
@@ -412,15 +412,6 @@ export const VARIANT_G_CSS = `
   .lvg .heroC-actions { justify-content: center; }
   .lvg .stage { margin: 0 auto; }
 }
-
-/* replay button for the hero scene (in the stage cap, on dark) */
-.lvg .replay {
-  display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; text-transform: uppercase;
-  color: rgba(255,255,255,.8); padding: 6px 12px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: rgba(255,255,255,.1);
-  transition: color .16s, border-color .16s;
-}
-.lvg .replay:hover { color: #fff; border-color: #fff; }
 
 /* ── FLUENCY tinted band ── */
 .lvg .fluencyC { background: linear-gradient(180deg, transparent, var(--purple-soft) 40%, transparent); }

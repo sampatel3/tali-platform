@@ -150,10 +150,10 @@ describe('Demo flow redesign', () => {
     const onNavigate = vi.fn();
     renderDemo(onNavigate);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Product' }));
+    fireEvent.click(screen.getByRole('button', { name: 'How it works' }));
 
     expect(onNavigate).toHaveBeenCalledWith('landing');
-    expect(sessionStorage.getItem('taali.pendingMarketingSection')).toBe('platform');
+    expect(sessionStorage.getItem('taali.pendingMarketingSection')).toBe('how-it-works');
   });
 
   it('gates the walkthrough on /demo until details are submitted', async () => {
