@@ -126,7 +126,7 @@ export const VerdictPill = ({ type }) => {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 4,
-        fontSize: 'var(--fs-body)',
+        fontSize: 'var(--fs-eyebrow)',
         fontWeight: 500,
         borderRadius: 999,
         padding: '2px 8px',

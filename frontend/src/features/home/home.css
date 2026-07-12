@@ -497,6 +497,7 @@
   gap: 6px;
   margin: 3px 0 5px;
   min-width: 0;
+  font-size: var(--fs-caption);
 }
 
 .rq-qage {
@@ -567,6 +568,7 @@
 }
 .rq-invited-name {
   font-weight: 600;
+  font-size: var(--fs-subtitle);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
