@@ -454,6 +454,59 @@ def test_workable_lookup_endpoints_return_configuration_data(client, db, monkeyp
     assert captured == {"shortcode": "ENG-1", "stage_shortcode": "ENG-1"}
 
 
+class _FakeRedis:
+    """Minimal in-memory stand-in for the Redis lookup cache."""
+
+    def __init__(self):
+        self.store: dict[str, bytes] = {}
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def set(self, key, value, ex=None):  # noqa: ARG002 - ttl irrelevant in-memory
+        self.store[key] = value.encode() if isinstance(value, str) else value
+
+
+def test_account_lookup_serves_last_known_good_on_rate_limit(client, db, monkeypatch):
+    """A transient Workable 429 on an account-level lookup falls back to the
+    cached value instead of surfacing a 502 error toast."""
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    # Force every call to revalidate so the second request exercises the live
+    # path (and thus the 429 fallback) rather than being served as still-fresh.
+    monkeypatch.setattr(workable_routes, "_LOOKUP_CACHE_FRESH_SECONDS", 0)
+    shared = _FakeRedis()
+    monkeypatch.setattr(workable_routes, "_lookup_cache_redis", lambda: shared)
+
+    headers, email = auth_headers(client, email="ratelimit@example.com", organization_name="RL Org")
+    owner = db.query(User).filter(User.email == email).first()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "rl-example"
+    db.commit()
+
+    calls = {"n": 0}
+
+    def flaky_reasons(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [{"id": "reason-1", "name": "Below threshold"}]
+        raise workable_routes.WorkableRateLimitError("Workable API rate limited (429)")
+
+    monkeypatch.setattr(workable_routes.WorkableService, "list_disqualification_reasons", flaky_reasons)
+
+    # First call fetches live and warms the cache.
+    first = client.get("/api/v1/workable/disqualification-reasons", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json() == {"disqualification_reasons": [{"id": "reason-1", "name": "Below threshold"}]}
+
+    # Second call: Workable 429s, but the cached value is served — no 502.
+    rate_limited = client.get("/api/v1/workable/disqualification-reasons", headers=headers)
+    assert rate_limited.status_code == 200, rate_limited.text
+    assert rate_limited.json() == {"disqualification_reasons": [{"id": "reason-1", "name": "Below threshold"}]}
+    assert calls["n"] == 2  # both requests reached the live path (fresh window = 0)
+
+
 def test_stages_endpoint_serves_cached_pipeline_without_calling_workable(client, db, monkeypatch):
     """A role with cached workable_stages is served from the DB — no live call."""
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
