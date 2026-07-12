@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -9,7 +11,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ...components.integrations.workable.service import WorkableService
+from ...components.integrations.workable.service import (
+    WorkableRateLimitError,
+    WorkableService,
+)
 from ...deps import get_current_user
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -539,6 +544,75 @@ def workable_sync_jobs(
     return {"total": len(out), "jobs": out}
 
 
+# Account-level Workable lookups (hiring-team members, disqualification reasons,
+# pipeline stages) are near-static but were fetched live on every Settings load.
+# Workable rate-limits per OAuth token (~10 req/10s), and our limiter is
+# per-process, so a background per-role sync bursting in a worker collides with
+# these user-facing lookups and 429s them — surfaced as a red "Failed to load"
+# toast. Caching them in Redis cuts the call volume (fewer collisions) and, on a
+# transient 429, falls back to the last-known-good value so the blip never
+# reaches the UI. Fresh window is short so real Workable edits still show quickly.
+_LOOKUP_CACHE_FRESH_SECONDS = 600  # serve from cache without a live call
+_LOOKUP_CACHE_RETAIN_SECONDS = 86400  # keep as stale-but-usable fallback for 24h
+
+
+def _lookup_cache_redis():
+    try:
+        import redis  # type: ignore
+
+        return redis.Redis.from_url(settings.REDIS_URL)
+    except Exception:
+        return None
+
+
+def _cached_account_lookup(subdomain: str | None, kind: str, fetch_fn):
+    """Serve a near-static account-level Workable lookup through a short Redis
+    cache, falling back to the last-known-good value when Workable is momentarily
+    rate-limiting. Only non-empty results are cached, so a swallowed-error empty
+    list never evicts a good value."""
+    client = _lookup_cache_redis()
+    key = f"workable_lookup:{(subdomain or '').strip().lower()}:{kind}"
+    cached: dict | None = None
+    if client is not None:
+        try:
+            raw = client.get(key)
+            if raw:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
+                    cached = parsed
+        except Exception:
+            cached = None
+
+    now = time.time()
+    if cached and (now - float(cached.get("synced_at") or 0)) < _LOOKUP_CACHE_FRESH_SECONDS:
+        return cached["data"]
+
+    try:
+        data = fetch_fn()
+    except WorkableRateLimitError:
+        if cached:
+            logger.warning("Workable %s rate-limited; serving cached value", kind)
+            return cached["data"]
+        raise
+
+    if isinstance(data, list) and data:
+        if client is not None:
+            try:
+                client.set(
+                    key,
+                    json.dumps({"data": data, "synced_at": now}),
+                    ex=_LOOKUP_CACHE_RETAIN_SECONDS,
+                )
+            except Exception:
+                pass
+        return data
+    # Live came back empty (genuinely empty, or a swallowed non-429 error):
+    # prefer a good cached copy over an empty one.
+    if cached:
+        return cached["data"]
+    return data
+
+
 @router.get("/members")
 def workable_members(
     shortcode: str | None = Query(default=None),
@@ -551,7 +625,14 @@ def workable_members(
     _assert_workable_connected(org)
     client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
     try:
-        members = client.list_members(shortcode=shortcode)
+        # Only the account-level (no-shortcode) list is near-static and worth
+        # caching; a job-scoped request bypasses the cache and fetches live.
+        if shortcode:
+            members = client.list_members(shortcode=shortcode)
+        else:
+            members = _cached_account_lookup(
+                org.workable_subdomain, "members", client.list_members
+            )
     except Exception as exc:
         logger.exception("Failed listing Workable members for org_id=%s: %s", org.id, exc)
         raise HTTPException(status_code=502, detail="Failed to load Workable members.") from exc
@@ -569,7 +650,11 @@ def workable_disqualification_reasons(
     _assert_workable_connected(org)
     client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
     try:
-        reasons = client.list_disqualification_reasons()
+        reasons = _cached_account_lookup(
+            org.workable_subdomain,
+            "disqualification_reasons",
+            client.list_disqualification_reasons,
+        )
     except Exception as exc:
         logger.exception("Failed listing Workable disqualification reasons for org_id=%s: %s", org.id, exc)
         raise HTTPException(status_code=502, detail="Failed to load Workable disqualification reasons.") from exc
@@ -610,7 +695,14 @@ def workable_stages(
     _assert_workable_connected(org)
     client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
     try:
-        stages = client.list_job_stages(shortcode) if shortcode else client.list_stages()
+        if shortcode:
+            stages = client.list_job_stages(shortcode)
+        else:
+            # Account-level stage list is near-static: cache it and fall back to
+            # the last-known-good value on a transient Workable 429.
+            stages = _cached_account_lookup(
+                org.workable_subdomain, "stages", client.list_stages
+            )
     except Exception as exc:
         logger.exception("Failed listing Workable stages for org_id=%s: %s", org.id, exc)
         raise HTTPException(status_code=502, detail="Failed to load Workable stages.") from exc
