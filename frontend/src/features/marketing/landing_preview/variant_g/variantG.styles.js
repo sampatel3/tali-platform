@@ -197,7 +197,7 @@ export const VARIANT_G_CSS = `
 /* job / role card */
 .lvg .job-card {
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r-lg); padding: 20px; box-shadow: var(--sh-md);
+  border-radius: var(--r-lg); padding: 16px; box-shadow: var(--sh-md);
   transition: box-shadow .5s, border-color .5s;
 }
 .lvg .job-card.is-on { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); box-shadow: var(--sh-lg); }
@@ -206,22 +206,26 @@ export const VARIANT_G_CSS = `
 .lvg .job-meta { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 4px; letter-spacing: .02em; }
 
 /* funnel stat row */
-.lvg .funnel-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 18px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-.lvg .fstat { background: var(--surface); padding: 12px 14px; }
-.lvg .fstat .k { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
-.lvg .fstat .v { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.02em; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.lvg .funnel-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.lvg .fstat { background: var(--surface); padding: 8px 8px; }
+.lvg .fstat .k { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
+.lvg .fstat .v { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .lvg .fstat.hot .v { color: var(--purple); }
 
 /* decision lane */
-.lvg .lane { margin-top: 16px; }
-.lvg .lane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.lvg .lane { margin-top: 12px; }
+.lvg .lane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .lvg .lane-title { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
 .lvg .lane-await { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; color: var(--purple); }
 .lvg .cand-row {
   display: grid; grid-template-columns: 34px 1fr auto auto; gap: 12px; align-items: center;
-  padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--r);
-  background: var(--surface); margin-top: 8px;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--surface); margin-top: 6px;
 }
+/* keep each row a single, tidy line (name + one-line sub) so the card stays
+   compact and the hero columns balance */
+.lvg .cand-row > div { min-width: 0; }
+.lvg .cand-name, .lvg .cand-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lvg .avatar {
   width: 34px; height: 34px; border-radius: 50%;
   display: grid; place-items: center; font-size: var(--fs-body); font-weight: 600;
@@ -361,17 +365,17 @@ export const VARIANT_G_CSS = `
 .lvg .heroC { position: relative; overflow: hidden; display: flex; align-items: center; padding: var(--sec-pad) 0; scroll-margin-top: 68px; }
 .lvg .heroC-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 56px; align-items: center; }
 .lvg .heroC-copy { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
-.lvg .heroC .eyebrow { margin-bottom: 20px; }
+.lvg .heroC .eyebrow { margin-bottom: 26px; }
 .lvg .heroC .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
-.lvg .heroC h1 { font-size: var(--fs-stat); letter-spacing: -.045em; line-height: 1.02; max-width: 15ch; }
-.lvg .heroC .lede { margin: 22px 0 0; max-width: 500px; font-size: var(--fs-subtitle); }
-.lvg .heroC-actions { display: flex; gap: 14px; align-items: center; justify-content: flex-start; margin-top: 30px; flex-wrap: wrap; }
+.lvg .heroC h1 { font-size: var(--fs-stat); letter-spacing: -.045em; line-height: 1.08; max-width: 15ch; }
+.lvg .heroC .lede { margin: 26px 0 0; max-width: 500px; font-size: var(--fs-subtitle); line-height: 1.65; }
+.lvg .heroC-actions { display: flex; gap: 14px; align-items: center; justify-content: flex-start; margin-top: 48px; flex-wrap: wrap; }
 .lvg .heroC-stage-col { min-width: 0; }
 
 /* the scene on a dark agent-ON gradient stage that glows against the light page */
-.lvg .stage { position: relative; max-width: 360px; width: 100%; margin: 0 0 0 auto; border-radius: var(--r-lg); padding: 16px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74,45,128,.55); }
+.lvg .stage { position: relative; max-width: 400px; width: 100%; margin: 0 0 0 auto; border-radius: var(--r-lg); padding: 16px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74,45,128,.55); }
 .lvg .stage::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.14); pointer-events: none; }
-.lvg .stage .stage-cap { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.lvg .stage .stage-cap { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
 .lvg .stage .stage-cap .t { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.7); }
 .lvg .heroC-orb { position: absolute; z-index: 0; border-radius: 50%; filter: blur(60px); pointer-events: none; }
 .lvg .heroC-orb.a { width: 420px; height: 420px; right: -60px; top: -80px; background: rgba(196,165,253,.4); }
