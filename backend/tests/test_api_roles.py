@@ -1054,6 +1054,30 @@ def test_application_manual_interview_and_fireflies_link_endpoints(client, db, m
     assert app_detail["tech_interview_summary"]["fireflies"]["invite_email"] == "taali@fireflies.ai"
     assert app_detail["interview_evidence_summary"]["fireflies"]["latest_provider_meeting_id"] == "meeting-123"
 
+    # Each ingest path drops a summary note onto the candidate timeline, with a
+    # Fireflies "view full transcript" link where a provider URL is available.
+    from app.services.application_notes import list_recruiter_notes
+
+    db.expire_all()
+    transcript_notes = [
+        note
+        for note in list_recruiter_notes(db, application_id=app_row.id)
+        if (note.event_metadata or {}).get("interview_transcript_id")
+    ]
+    assert len(transcript_notes) == 2
+    fireflies_note = next(
+        note for note in transcript_notes if (note.event_metadata or {}).get("interview_source") == "fireflies"
+    )
+    assert "Technical interview transcript attached" in fireflies_note.event_metadata["note"]
+    assert "architecture tradeoffs" in fireflies_note.event_metadata["note"]
+    assert fireflies_note.event_metadata["transcript_url"] == "https://fireflies.ai/view/meeting-123"
+    assert fireflies_note.event_metadata["for_agent"] is True
+    manual_note = next(
+        note for note in transcript_notes if (note.event_metadata or {}).get("interview_source") == "manual"
+    )
+    assert "Screening call transcript attached" in manual_note.event_metadata["note"]
+    assert "clear backend examples" in manual_note.event_metadata["note"]
+
 
 def test_pipeline_stage_and_outcome_endpoints_enforce_guards_and_events(client):
     headers, _ = auth_headers(client)

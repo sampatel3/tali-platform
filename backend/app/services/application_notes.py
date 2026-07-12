@@ -20,13 +20,16 @@ assessment exists).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.user import User
+
+if TYPE_CHECKING:
+    from ..models.application_interview import ApplicationInterview
 
 RECRUITER_NOTE_EVENT = "recruiter_note"
 
@@ -36,6 +39,17 @@ RECRUITER_NOTE_EVENT = "recruiter_note"
 # role_feedback_notes caps so the two surfaces behave alike.
 AGENT_VISIBLE_NOTE_LIMIT = 10
 AGENT_VISIBLE_NOTE_BODY_CHARS = 600
+
+# Body cap for the auto-generated interview transcript note. Generous enough
+# for a Fireflies short-summary, but bounded so a pasted transcript summary
+# can't balloon the timeline.
+TRANSCRIPT_NOTE_BODY_CHARS = 900
+
+# How a stored ``stage`` reads in the note headline.
+_INTERVIEW_STAGE_LABELS = {
+    "screening": "Screening call",
+    "tech_stage_2": "Technical interview",
+}
 
 
 def _actor_name(author: User | None) -> str:
@@ -193,10 +207,90 @@ def recruiter_notes_for_agent(app: CandidateApplication) -> list[dict[str, Any]]
     return notes[:AGENT_VISIBLE_NOTE_LIMIT]
 
 
+def _interview_stage_label(stage: str | None) -> str:
+    return _INTERVIEW_STAGE_LABELS.get(str(stage or "").strip().lower(), "Interview")
+
+
+def create_interview_transcript_note(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    interview: "ApplicationInterview",
+    author: User | None = None,
+    source_label: str | None = None,
+    now: datetime | None = None,
+) -> CandidateApplicationEvent | None:
+    """Drop a timeline note summarising a just-linked interview transcript.
+
+    Fired once per interview from each ingest path — manual paste, manual
+    Fireflies link, and webhook auto-match. The note lands in the candidate's
+    Notes & timeline and, being ``for_agent``, rides in the ``get_application``
+    payload as standing guidance for Stage-2 follow-ups. ``transcript_url`` in
+    the metadata gives the FE a "View full transcript" link back to Fireflies.
+
+    Idempotent per interview: a redelivered webhook (which upserts the same
+    interview row) or a re-link won't spawn a duplicate note. Returns the new
+    event, or ``None`` when a note for this interview already exists. Does not
+    commit — the caller owns the transaction.
+    """
+    interview_id = int(getattr(interview, "id", 0) or 0)
+    # Dedup: skip if this interview already carries a transcript note. The
+    # scan is bounded (an application rarely holds hundreds of notes) and
+    # avoids JSON-path filters that diverge across SQLite/Postgres.
+    if interview_id:
+        for existing in list_recruiter_notes(db, application_id=app.id, limit=200):
+            meta = getattr(existing, "event_metadata", None) or {}
+            if int(meta.get("interview_transcript_id") or 0) == interview_id:
+                return None
+
+    stage_label = _interview_stage_label(getattr(interview, "stage", None))
+    summary = str(getattr(interview, "summary", None) or "").strip()
+    if not summary:
+        transcript_text = str(getattr(interview, "transcript_text", None) or "").strip()
+        summary = (transcript_text[:280].rstrip() + "…") if len(transcript_text) > 280 else transcript_text
+    meeting_date = getattr(interview, "meeting_date", None)
+    date_suffix = f" ({meeting_date.date().isoformat()})" if isinstance(meeting_date, datetime) else ""
+
+    headline = f"{stage_label} transcript attached{date_suffix}."
+    body = f"{headline} {summary}".strip() if summary else headline
+    if len(body) > TRANSCRIPT_NOTE_BODY_CHARS:
+        body = body[:TRANSCRIPT_NOTE_BODY_CHARS].rstrip() + "…"
+
+    transcript_url = str(getattr(interview, "provider_url", None) or "").strip()
+
+    meta: dict[str, Any] = {
+        "note": body,
+        "actor_name": source_label or _actor_name(author),
+        "for_agent": True,
+        "kind": "note",
+        "interview_transcript_id": interview_id or None,
+        "interview_stage": str(getattr(interview, "stage", None) or "") or None,
+        "interview_source": str(getattr(interview, "source", None) or "") or None,
+    }
+    if transcript_url:
+        meta["transcript_url"] = transcript_url
+
+    row = CandidateApplicationEvent(
+        application_id=app.id,
+        organization_id=app.organization_id,
+        event_type=RECRUITER_NOTE_EVENT,
+        actor_type="recruiter",
+        actor_id=int(getattr(author, "id", 0) or 0) or None,
+        reason=body,
+        event_metadata=meta,
+        created_at=now or datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
 __all__ = [
     "AGENT_VISIBLE_NOTE_BODY_CHARS",
     "AGENT_VISIBLE_NOTE_LIMIT",
     "RECRUITER_NOTE_EVENT",
+    "TRANSCRIPT_NOTE_BODY_CHARS",
+    "create_interview_transcript_note",
     "create_recruiter_note",
     "list_recruiter_notes",
     "recruiter_notes_for_agent",
