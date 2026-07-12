@@ -100,9 +100,9 @@ function OutreachResult({ draft }) {
   );
 }
 
-export function SourceCandidatesPanel({ roleId }) {
+export function SourceCandidatesPanel({ roleId, defaultOpen = false }) {
   const { showToast } = useToast();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   const [searches, setSearches] = useState(null);
   const [loadingSearches, setLoadingSearches] = useState(false);

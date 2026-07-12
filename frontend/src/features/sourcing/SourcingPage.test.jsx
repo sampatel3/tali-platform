@@ -12,7 +12,22 @@ vi.mock('../../shared/api/prospectsClient', () => ({
   },
 }));
 
+// The "Find candidates" tab lists roles and reuses SourceCandidatesPanel,
+// which pulls roles + a toast helper. Mock both so the tab can render.
+vi.mock('../../shared/api', () => ({
+  roles: {
+    list: vi.fn(),
+    sourcingSearches: vi.fn(),
+    outreachDraft: vi.fn(),
+  },
+}));
+
+vi.mock('../../context/ToastContext', () => ({
+  useToast: () => ({ showToast: vi.fn() }),
+}));
+
 import { prospects as prospectsApi } from '../../shared/api/prospectsClient';
+import { roles as rolesApi } from '../../shared/api';
 import SourcingPage from './SourcingPage';
 
 const ROWS = [
@@ -44,6 +59,39 @@ describe('SourcingPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prospectsApi.list.mockResolvedValue({ data: { prospects: ROWS, total: 2 } });
+    rolesApi.list.mockResolvedValue({ data: [{ id: 7, name: 'Senior Data Engineer' }] });
+  });
+
+  it('shows a plain-English explainer of what Sourcing is for', async () => {
+    render(<SourcingPage />);
+    await screen.findByText('Alice One');
+    expect(screen.getByText(/candidates you go out and find/i)).toBeInTheDocument();
+  });
+
+  it('orients the user with an empty state that links to Find candidates', async () => {
+    prospectsApi.list.mockResolvedValue({ data: { prospects: [], total: 0 } });
+    render(<SourcingPage />);
+    await waitFor(() => expect(prospectsApi.list).toHaveBeenCalled());
+    expect(await screen.findByText(/No prospects yet\./i)).toBeInTheDocument();
+    // The empty state offers a button that jumps to the Find candidates tab.
+    fireEvent.click(screen.getByRole('button', { name: /find candidates/i }));
+    expect(await screen.findByText(/ready-to-paste search strings/i)).toBeInTheDocument();
+  });
+
+  it('lists roles on the Find candidates tab and mounts the search-string panel', async () => {
+    render(<SourcingPage />);
+    await screen.findByText('Alice One');
+
+    fireEvent.click(screen.getByRole('tab', { name: /find candidates/i }));
+    await waitFor(() => expect(rolesApi.list).toHaveBeenCalled());
+
+    const picker = await screen.findByLabelText('Pick a role');
+    fireEvent.change(picker, { target: { value: '7' } });
+
+    // The reused SourceCandidatesPanel renders its search-string generator.
+    expect(
+      await screen.findByRole('button', { name: /generate search strings/i }),
+    ).toBeInTheDocument();
   });
 
   it('renders prospect rows with a suppressed badge', async () => {
