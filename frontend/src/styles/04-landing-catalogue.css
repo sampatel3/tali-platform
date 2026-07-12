@@ -247,12 +247,12 @@
 .job-card:hover {
   border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
   box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
+  transform: translateY(-4px);
 }
 
 .job-card .role-name {
   font-family: var(--font-display);
-  font-size: 1.0625rem;
+  font-size: var(--fs-h3);
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--ink);

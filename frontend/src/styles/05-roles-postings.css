@@ -19,7 +19,7 @@
   border-radius: 999px;
   padding: 0 11px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-body);
   font-weight: 700;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -75,7 +75,7 @@
 }
 
 .job-head h3 {
-  font-size: 1.125rem;
+  font-size: var(--fs-h3);
   letter-spacing: -0.01em;
   margin: 0 0 4px;
   font-weight: 600;
@@ -83,7 +83,7 @@
 
 .job-head .sub {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
 }
 
@@ -113,7 +113,7 @@
 
 .js-cell .k {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   color: var(--mute);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -121,7 +121,7 @@
 
 .js-cell .v {
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: var(--fs-h2);
   font-weight: 600;
   line-height: 1.1;
   margin-top: 2px;
@@ -135,7 +135,7 @@
   align-items: center;
   gap: 10px;
   margin-top: 14px;
-  font-size: 12px;
+  font-size: var(--fs-subtitle);
   color: var(--mute);
 }
 .job-foot-pending {
@@ -160,7 +160,7 @@
 .filter-row-label {
   align-self: center;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-caption);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--mute);
@@ -176,14 +176,14 @@
   background: linear-gradient(135deg, #2d8cff 0%, #1a5fbf 100%);
   color: #fff;
   font-family: var(--font-mono);
-  font-size: 0.59375rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   font-weight: 600;
 }
 
 .wk-sync {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   color: var(--mute);
   display: inline-flex;
   align-items: center;
@@ -220,7 +220,7 @@
 
 .wk-strip .meta {
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   display: flex;
   gap: 14px;
@@ -244,7 +244,7 @@
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--bg-2);
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   cursor: pointer;
   display: inline-flex;
@@ -271,7 +271,7 @@
 
 .f-chip .ct {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   padding: 1px 6px;
   border-radius: 5px;
   background: var(--bg-3);
@@ -295,7 +295,7 @@
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--bg-2);
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   cursor: pointer;
 }
@@ -312,7 +312,7 @@
   border-radius: 10px;
   background: var(--purple-soft);
   border: 1px solid color-mix(in oklab, var(--purple) 16%, transparent);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
 }
 .client-rollup-name {
@@ -328,7 +328,7 @@
 
 /* Job lifecycle badge on a role card (draft/open/filled/external/cancelled). */
 .job-status-badge {
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   font-weight: 600;
   letter-spacing: 0.02em;
   padding: 2px 7px;
@@ -362,7 +362,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   color: var(--ink-2);
   background: var(--bg-2);
   border: 1px solid var(--line);
@@ -394,7 +394,7 @@
 }
 .jsc-label {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--mute);
@@ -409,7 +409,7 @@
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--bg-2);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--ink-2);
   cursor: pointer;
 }
@@ -434,7 +434,7 @@
   align-items: center;
   padding: 3px 10px;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   font-weight: 600;
   background: var(--purple-soft);
   color: var(--purple-2);
@@ -458,7 +458,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   letter-spacing: 0.08em;
   color: var(--mute);
   text-transform: uppercase;
@@ -553,14 +553,14 @@
 
 .role-facts .f .k {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.12em;
   color: var(--mute);
   text-transform: uppercase;
 }
 
 .role-facts .f .v {
-  font-size: 0.84375rem;
+  font-size: var(--fs-body);
   font-weight: 500;
 }
 
@@ -585,7 +585,7 @@
 }
 
 .role-desc-summary {
-  font-size: 0.90625rem;
+  font-size: var(--fs-subtitle);
   line-height: 1.6;
   color: var(--ink-2);
   margin: 0 0 18px;
@@ -613,7 +613,7 @@
 
 .role-sec-title {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.12em;
   color: var(--purple);
   text-transform: uppercase;
@@ -638,13 +638,13 @@
   color: var(--purple);
   display: grid;
   place-items: center;
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   font-weight: 600;
 }
 
 .role-sec p,
 .role-sec li {
-  font-size: 0.84375rem;
+  font-size: var(--fs-body);
   line-height: 1.6;
   color: var(--ink-2);
   margin: 0 0 8px;
@@ -662,7 +662,7 @@
   justify-content: space-between;
   gap: 12px;
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.1em;
   color: var(--mute);
   text-transform: uppercase;
@@ -706,7 +706,7 @@
 }
 .req-ref {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--fs-caption);
   color: var(--purple);
   background: var(--bg-2);
   border: 1px solid color-mix(in oklab, var(--purple) 24%, transparent);
@@ -714,11 +714,11 @@
   border-radius: 5px;
 }
 .req-client {
-  font-size: 0.78rem;
+  font-size: var(--fs-caption);
   color: var(--ink-2);
 }
 .req-complete {
-  font-size: 0.72rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
 }
 .req-group {
@@ -726,7 +726,7 @@
 }
 .req-subhead {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--purple);
@@ -748,7 +748,7 @@
   border-radius: 10px;
   background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
   color: var(--red-deep);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
 }
 .role-edit-inline-actions {
   display: flex;
@@ -763,8 +763,8 @@
   margin: 14px 0 0;
   padding-top: 12px;
   border-top: 1px dashed var(--line);
-  font-size: 0.8125rem;
-  line-height: 1.5;
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
   color: var(--mute);
 }
 .req-reqs-note strong { color: var(--purple-2); font-weight: 600; }
@@ -775,7 +775,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   letter-spacing: 0.08em;
   color: var(--purple);
   text-transform: uppercase;
@@ -808,7 +808,7 @@
 
 .role-highlights h4 {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.12em;
   color: var(--purple);
   text-transform: uppercase;
@@ -839,13 +839,13 @@
 }
 
 .role-highlights .hi .t {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 600;
   margin-bottom: 2px;
 }
 
 .role-highlights .hi .d {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   line-height: 1.45;
 }
@@ -916,7 +916,7 @@
 }
 
 .score-action .sa-label {
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.1em;
   color: var(--mute);
   text-transform: uppercase;
@@ -924,14 +924,14 @@
 }
 
 .score-action .sa-headline {
-  font-size: 0.9375rem;
+  font-size: var(--fs-subtitle);
   font-weight: 600;
   letter-spacing: -0.005em;
   margin-bottom: 3px;
 }
 
 .score-action .sa-meta {
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
   display: flex;
   flex-wrap: wrap;
@@ -965,7 +965,7 @@
 
 .score-panel h3 {
   font-family: var(--font-display);
-  font-size: 1.25rem;
+  font-size: var(--fs-h3);
   font-weight: 600;
   letter-spacing: -0.02em;
   margin: 0 0 4px;
@@ -977,7 +977,7 @@
 }
 
 .score-panel .sp-sub {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
   margin: 0 0 16px;
 }
@@ -1009,8 +1009,8 @@
   border-radius: 10px;
   background: var(--bg);
   border: 1px solid var(--line-2);
-  font-size: 0.84375rem;
-  line-height: 1.5;
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 10px;
@@ -1018,7 +1018,7 @@
 }
 
 .req-item .num {
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   color: var(--mute);
   letter-spacing: 0.06em;
   padding-top: 2px;
@@ -1035,7 +1035,7 @@
 }
 
 .req-item .tag-src {
-  font-size: 0.59375rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   padding: 2px 7px;
   border-radius: 999px;
@@ -1058,7 +1058,7 @@
   border: 1px dashed var(--line);
   border-radius: 10px;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   letter-spacing: 0.04em;
   color: var(--mute);
   text-align: center;
@@ -1085,7 +1085,7 @@
   padding: 10px 14px;
   border-bottom: 1px solid var(--line-2);
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
@@ -1102,7 +1102,7 @@
   background: var(--bg-2);
   padding: 14px;
   resize: vertical;
-  line-height: 1.5;
+  line-height: var(--lh-normal);
 }
 
 .criteria-textarea[readonly] {
@@ -1116,7 +1116,7 @@
   border-top: 1px solid var(--line-2);
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.03em;
 }
 
@@ -1141,7 +1141,7 @@
 }
 
 .thr-label {
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   color: var(--mute);
   text-transform: uppercase;
@@ -1219,7 +1219,7 @@
   justify-content: space-between;
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
 }
 
 .thr-dots {
@@ -1243,7 +1243,7 @@
 }
 
 .thr-caption {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   margin: 14px 0 0;
   line-height: 1.6;
@@ -1319,7 +1319,7 @@
   padding: 4px 0 16px;
 }
 .src-help {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
   margin: 0 0 14px;
 }
@@ -1335,7 +1335,7 @@
 }
 .src-tool-title {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-2);
@@ -1352,13 +1352,13 @@
 }
 .src-string-label {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--purple);
 }
 .src-string-hint {
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   color: var(--mute);
 }
 .src-copy {
@@ -1370,8 +1370,8 @@
 .src-string-value {
   display: block;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  line-height: 1.5;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-normal);
   color: var(--ink);
   background: var(--surface, #fff);
   border: 1px solid var(--line-2);
@@ -1384,7 +1384,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   margin: 0 0 10px;
 }
@@ -1393,13 +1393,13 @@
   padding-top: 10px;
 }
 .src-refined-label {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--ink);
   margin: 0 0 6px;
 }
 .src-warn {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   background: color-mix(in oklab, var(--purple) 10%, transparent);
   border-radius: 8px;
@@ -1421,20 +1421,20 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
 }
 .src-draft {
   margin-top: 12px;
 }
 .src-draft-subject {
-  font-size: 0.84375rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   margin: 0 0 8px;
 }
 .src-draft-body {
   font-family: inherit;
-  font-size: 0.84375rem;
+  font-size: var(--fs-body);
   line-height: 1.6;
   color: var(--ink);
   background: var(--surface, #fff);
