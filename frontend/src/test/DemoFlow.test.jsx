@@ -77,7 +77,7 @@ describe('Demo flow redesign', () => {
     assessments.requestDemo.mockResolvedValue({ data: { success: true, candidate_id: 321 } });
   });
 
-  it('wires the variant G landing CTAs to the same marketing targets as before', async () => {
+  it('wires the landing CTAs to the same marketing targets as before', async () => {
     const onNavigate = vi.fn();
     renderLanding(onNavigate);
 
@@ -99,34 +99,37 @@ describe('Demo flow redesign', () => {
     expect(onNavigate).toHaveBeenCalledWith('demo-lead');
   });
 
-  it('renders variant G as the production landing (hero, funnel, 5 Ds, control) with no preview chip', async () => {
+  it('renders the restored original landing (hero + agent scene, decision feed, 5 Ds, walkthrough) with no preview chip', async () => {
     const { container } = renderLanding();
 
-    // Scoped variant G shell mounts; the internal preview switcher chip does not
-    // (that lives only on /landing-preview).
-    expect(container.querySelector('.lvg')).toBeTruthy();
+    // The original agentic-first landing, NOT variant G's scoped `.lvg` shell.
+    // The only scoped subtree is `.lvg-scene` around the grafted hero AgentScene.
+    expect(container.querySelector('.lvg')).toBeNull();
+    expect(container.querySelector('.lvg-scene')).toBeTruthy();
+    // The internal preview switcher chip lives only on /landing-preview.
     expect(screen.queryByRole('group', { name: /Landing preview variant/i })).toBeNull();
 
-    // Hero eyebrow + H1 (grad-text split) + CTAs.
+    // Grafted hero copy: eyebrow + refined H1 (purple split) + the two CTAs.
     expect(screen.getByText(/AGENT-NATIVE HIRING/i)).toBeInTheDocument();
     expect(screen.getByText(/The hiring agent that screens, assesses, and/i)).toBeInTheDocument();
     expect(screen.getByText(/decides — with you\./i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /See it live/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
 
-    // The five funnel steps and the 5 Ds scorecard.
-    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
-      expect(screen.getByText(step)).toBeInTheDocument();
-    });
+    // Restored structure: the 3-step "how the agent works" band, the live
+    // decision feed, and the closing CTA.
+    expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
+    expect(screen.getByText(/Triage — autonomously/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeInTheDocument();
+
+    // The 5-Ds scorecard (Delegation / Description / Discernment / Diligence /
+    // Deliverable).
     ['Delegation', 'Description', 'Discernment', 'Diligence', 'Deliverable'].forEach((d) => {
       expect(screen.getByText(d)).toBeInTheDocument();
     });
 
-    // Control section + the closing CTA band (which now lives inside Control).
-    expect(screen.getByText(/The agent advises\./i)).toBeInTheDocument();
-    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeInTheDocument();
-
-    // Decision-lane candidate threads the design (also proves the shared data).
+    // Maya Chen threads the design — the live ActivityFeed decision feed, the
+    // hero decision lane, and the 5-Ds report header.
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
   });
 
