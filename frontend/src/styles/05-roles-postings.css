@@ -1444,3 +1444,19 @@
   white-space: pre-wrap;
   margin: 0 0 8px;
 }
+
+/* Distribute-this-role panel — reuses the .src-panel shell above. */
+.dist-post {
+  font-size: 0.84375rem;
+  line-height: 1.5;
+}
+.dist-share {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dist-share .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
