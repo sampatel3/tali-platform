@@ -20,6 +20,12 @@
 //   --l-small  meta / captions / chips / footer links-meta
 //   --l-eyebrow  uppercase mono pills, kickers, verdict/lane labels
 //
+// ONE deliberate exception: the mock PRODUCT cards (hero agent scene, the 5-Ds
+// scorecard, the white decision card) are meant to look like real product
+// screenshots, so their INTERNAL text uses the app's small `--fs-*` product
+// tokens — not this bigger `--l-*` marketing scale. Their card shapes/paddings
+// and the surrounding landing copy stay on `--l-*`.
+//
 // What differs from F: the hero is a two-column grid (copy + CTAs | agent stage)
 // and every body section is `.section-vp` — content-height with ONE uniform
 // vertical rhythm (--sec-pad, same top & bottom on every section incl. hero).
@@ -217,21 +223,21 @@ export const VARIANT_G_CSS = `
 }
 .lvg .job-card.is-on { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); box-shadow: var(--sh-lg); }
 .lvg .job-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.lvg .job-title { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.02em; }
-.lvg .job-meta { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 4px; letter-spacing: .02em; }
+.lvg .job-title { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.02em; }
+.lvg .job-meta { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 4px; letter-spacing: .02em; }
 
 /* funnel stat row */
 .lvg .funnel-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .lvg .fstat { background: var(--surface); padding: 8px 6px; }
-.lvg .fstat .k { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
-.lvg .fstat .v { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.lvg .fstat .k { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
+.lvg .fstat .v { font-size: var(--fs-h2); font-weight: 600; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .lvg .fstat.hot .v { color: var(--purple); }
 
 /* decision lane */
 .lvg .lane { margin-top: 12px; }
 .lvg .lane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.lvg .lane-title { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
-.lvg .lane-await { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; color: var(--purple); }
+.lvg .lane-title { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+.lvg .lane-await { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; color: var(--purple); }
 .lvg .cand-row {
   display: grid; grid-template-columns: 30px 1fr auto auto; gap: 10px; align-items: center;
   padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r);
@@ -243,19 +249,19 @@ export const VARIANT_G_CSS = `
 .lvg .cand-name, .lvg .cand-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lvg .avatar {
   width: 30px; height: 30px; border-radius: 50%;
-  display: grid; place-items: center; font-size: var(--l-body); font-weight: 600;
+  display: grid; place-items: center; font-size: var(--fs-body); font-weight: 600;
   background: var(--purple-soft); color: var(--purple-deep);
 }
-.lvg .cand-name { font-size: var(--l-body); font-weight: 550; letter-spacing: -.01em; }
-.lvg .cand-sub { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 1px; }
+.lvg .cand-name { font-size: var(--fs-body-lg); font-weight: 550; letter-spacing: -.01em; }
+.lvg .cand-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 1px; }
 .lvg .score-chip {
-  font-family: var(--mono); font-size: var(--l-small); font-weight: 500;
+  font-family: var(--mono); font-size: var(--fs-eyebrow); font-weight: 500;
   padding: 4px 9px; border-radius: 8px; background: var(--purple-soft); color: var(--purple-deep);
   font-variant-numeric: tabular-nums;
 }
 .lvg .score-chip.low { background: var(--bg); color: var(--mute); }
 .lvg .verdict {
-  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; text-transform: uppercase;
+  font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase;
   padding: 5px 11px; border-radius: 999px; font-weight: 500;
 }
 .lvg .verdict.advance { background: var(--purple); color: #fff; }
@@ -319,21 +325,21 @@ export const VARIANT_G_CSS = `
 }
 .lvg .sc-head .who { display: flex; align-items: center; gap: 12px; }
 .lvg .sc-head .who .avatar { width: 40px; height: 40px; }
-.lvg .sc-title { font-size: var(--l-h3); font-weight: 600; }
-.lvg .sc-sub { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 2px; }
+.lvg .sc-title { font-size: var(--fs-body-lg); font-weight: 600; }
+.lvg .sc-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; }
 .lvg .sc-total { text-align: right; }
-.lvg .sc-total .big { font-size: var(--l-h2); font-weight: 600; letter-spacing: -.03em; color: var(--purple); line-height: 1; font-variant-numeric: tabular-nums; }
-.lvg .sc-total .lbl { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+.lvg .sc-total .big { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -.03em; color: var(--purple); line-height: 1; font-variant-numeric: tabular-nums; }
+.lvg .sc-total .lbl { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
 .lvg .dd-row {
   display: grid; grid-template-columns: 232px 1fr 46px; gap: 20px; align-items: center;
   padding: 10px 28px; border-bottom: 1px solid var(--line);
 }
 .lvg .dd-row:last-child { border-bottom: 0; }
-.lvg .dd-name { font-size: var(--l-body); font-weight: 600; letter-spacing: -.01em; }
-.lvg .dd-def { font-size: var(--l-small); line-height: 1.35; color: var(--mute); margin-top: 2px; }
+.lvg .dd-name { font-size: var(--fs-body-lg); font-weight: 600; letter-spacing: -.01em; }
+.lvg .dd-def { font-size: var(--fs-caption); line-height: 1.35; color: var(--mute); margin-top: 2px; }
 .lvg .dd-track { height: 8px; border-radius: 999px; background: var(--purple-soft); overflow: hidden; }
 .lvg .dd-fill { height: 100%; border-radius: 999px; background: var(--agent-on-flow); background-size: 200% 100%; transform-origin: left; }
-.lvg .dd-val { font-family: var(--mono); font-size: var(--l-body); font-weight: 500; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.lvg .dd-val { font-family: var(--mono); font-size: var(--fs-body-lg); font-weight: 500; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
 @media (max-width: 620px) { .lvg .dd-row { grid-template-columns: 1fr 44px; } .lvg .dd-track { grid-column: 1 / -1; order: 3; } }
 
 /* ============================================================
@@ -425,15 +431,15 @@ export const VARIANT_G_CSS = `
    decision cards (was a dark-purple glow card). Agent advises → you decide, on a
    clean surface: candidate + evidence + the Advance verdict pill. */
 .lvg .glow-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl); padding: 28px; color: var(--ink); box-shadow: var(--sh-lg); }
-.lvg .glow-card .dg-head { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; color: var(--mute); margin-bottom: 18px; }
+.lvg .glow-card .dg-head { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; color: var(--mute); margin-bottom: 18px; }
 .lvg .glow-card .dg-card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }
 .lvg .glow-card .dg-row { display: flex; align-items: center; gap: 12px; }
 .lvg .glow-card .avatar { background: var(--purple-soft); color: var(--purple-deep); }
-.lvg .glow-card .dg-name { font-weight: 600; font-size: var(--l-body); color: var(--ink); }
-.lvg .glow-card .dg-sub { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 2px; }
-.lvg .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--purple); color: #fff; font-weight: 600; }
-.lvg .glow-card .dg-ev { display: flex; gap: 9px; align-items: center; font-size: var(--l-small); color: var(--ink-2); margin-top: 10px; }
-.lvg .glow-card .dg-ev .lk { font-family: var(--mono); font-size: var(--l-eyebrow); color: var(--purple); letter-spacing: .06em; }
+.lvg .glow-card .dg-name { font-weight: 600; font-size: var(--fs-body-lg); color: var(--ink); }
+.lvg .glow-card .dg-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; }
+.lvg .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--purple); color: #fff; font-weight: 600; }
+.lvg .glow-card .dg-ev { display: flex; gap: 9px; align-items: center; font-size: var(--fs-caption); color: var(--ink-2); margin-top: 10px; }
+.lvg .glow-card .dg-ev .lk { font-family: var(--mono); font-size: var(--fs-eyebrow); color: var(--purple); letter-spacing: .06em; }
 .lvg .control-copy .display { font-size: var(--l-h2); margin: 16px 0 6px; }
 .lvg .control-points { margin-top: 20px; }
 /* the relocated closing CTA — Control's finale */
