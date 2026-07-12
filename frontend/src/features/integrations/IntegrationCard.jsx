@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 // Presentational shell for one ATS provider on the unified Integrations
 // surface: icon + title + connection-status chip, then the provider's own
@@ -19,8 +19,21 @@ export const IntegrationCard = ({
   defaultOpen = null,
   children,
 }) => {
-  const [open, setOpen] = useState(defaultOpen == null ? connected : defaultOpen);
+  const isAuto = defaultOpen == null;
+  const [open, setOpen] = useState(isAuto ? connected : defaultOpen);
   const bodyId = `integration-body-${String(title || '').toLowerCase().replace(/\s+/g, '-')}`;
+
+  // On first mount `orgData` is still null, so a genuinely-connected provider
+  // arrives as `connected=false` and the card would seed collapsed and stay that
+  // way (a useState initializer runs once). Auto-open on the false→true
+  // connection transition so an existing customer's connected card reveals itself
+  // once org data loads. Only fires on the transition, so a manual collapse of a
+  // connected card is not undone by later re-renders.
+  const prevConnected = useRef(connected);
+  useEffect(() => {
+    if (isAuto && connected && !prevConnected.current) setOpen(true);
+    prevConnected.current = connected;
+  }, [connected, isAuto]);
 
   return (
     <div className={`settings-integration-card ${open ? 'is-open' : 'is-collapsed'}`}>

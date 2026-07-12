@@ -90,4 +90,21 @@ describe('IntegrationsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /Bullhorn integration/i }));
     expect(bullhornBody).not.toHaveAttribute('hidden');
   });
+
+  it('opens a connected card once org data loads (mounts with org=null first)', () => {
+    // First mount: org still loading → Workable arrives unconnected → collapsed.
+    const bodies = { workable: <div>WORKABLE_BODY</div> };
+    const { rerender } = render(<IntegrationsSection org={null} bodies={bodies} />);
+    expect(
+      screen.getByText('WORKABLE_BODY').closest('.settings-integration-card-body'),
+    ).toHaveAttribute('hidden');
+
+    // Org data arrives connected → the card reveals itself.
+    rerender(
+      <IntegrationsSection org={{ active_ats: 'workable', workable_connected: true }} bodies={bodies} />,
+    );
+    expect(
+      screen.getByText('WORKABLE_BODY').closest('.settings-integration-card-body'),
+    ).not.toHaveAttribute('hidden');
+  });
 });
