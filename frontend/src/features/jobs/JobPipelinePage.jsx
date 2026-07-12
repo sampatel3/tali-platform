@@ -1718,7 +1718,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               {/* Distribute this role — copy-paste LinkedIn post + share links +
                   the careers XML feed URL. Points at the public job page; no
                   LinkedIn API/automation. */}
-              {role?.id ? <DistributeRolePanel roleId={role.id} /> : null}
+              {role?.id ? <DistributeRolePanel key={role.id} roleId={role.id} /> : null}
 
               <button
                 type="button"

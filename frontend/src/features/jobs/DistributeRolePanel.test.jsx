@@ -87,4 +87,19 @@ describe('DistributeRolePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /Distribute this role/i }));
     await waitFor(() => expect(rolesApi.distribution).toHaveBeenCalledWith(101));
   });
+
+  it('shows a Retry affordance on failure and does NOT auto-retry', async () => {
+    rolesApi.distribution.mockRejectedValueOnce(new Error('boom'));
+    open();
+    // Error state renders, not the publish note.
+    expect(await screen.findByText(/Could not load distribution options/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Publish this role to distribute it/i)).not.toBeInTheDocument();
+    // The failed fetch fired exactly once — no render-loop retry.
+    await waitFor(() => expect(rolesApi.distribution).toHaveBeenCalledTimes(1));
+    // Manual Retry re-fetches (and succeeds).
+    rolesApi.distribution.mockResolvedValueOnce({ data: publishedPayload });
+    fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
+    expect(await screen.findByLabelText('LinkedIn post draft')).toBeInTheDocument();
+    expect(rolesApi.distribution).toHaveBeenCalledTimes(2);
+  });
 });

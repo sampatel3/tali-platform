@@ -111,21 +111,27 @@ export function DistributeRolePanel({ roleId, defaultOpen = false }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(false);
     try {
       const { data: body } = await rolesApi.distribution(roleId);
       setData(body);
-      setLoaded(true);
     } catch (err) {
+      setError(true);
       showToast('Could not load distribution options.', 'error');
     } finally {
+      // Mark the fetch as attempted regardless of outcome so a failure shows a
+      // Retry affordance instead of the effect re-firing load() every render.
+      setLoaded(true);
       setLoading(false);
     }
   }, [roleId, showToast]);
 
-  // Fetch once, the first time the panel is opened.
+  // Fetch once, the first time the panel is opened. On failure `loaded` still
+  // flips true (in finally), so this does not auto-retry — the user retries.
   useEffect(() => {
     if (open && !loaded && !loading) load();
   }, [open, loaded, loading, load]);
@@ -160,11 +166,20 @@ export function DistributeRolePanel({ roleId, defaultOpen = false }) {
             </div>
           ) : null}
 
-          {loaded && !published ? (
+          {!loading && error ? (
+            <div className="src-warn">
+              Could not load distribution options.{' '}
+              <button type="button" className="src-retry-link" onClick={() => load()}>
+                Retry
+              </button>
+            </div>
+          ) : null}
+
+          {!error && loaded && !published ? (
             <div className="src-warn">Publish this role to distribute it — a public job page is created on publish.</div>
           ) : null}
 
-          {loaded && published ? <Artefacts data={data} /> : null}
+          {!error && loaded && published ? <Artefacts data={data} /> : null}
         </div>
       ) : null}
     </div>
