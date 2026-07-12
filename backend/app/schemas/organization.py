@@ -203,6 +203,15 @@ class OrgResponse(BaseModel):
     bullhorn_connected: bool = False
     bullhorn_last_sync_at: Optional[datetime] = None
     bullhorn_last_sync_status: Optional[str] = None
+    # Per-org ATS posture (organization.sync_mode column). Pass-through for the
+    # unified Integrations surface; defaults to "standalone" when the column is
+    # null. See SYNC_MODE_* on the Organization model.
+    sync_mode: str = "standalone"
+    # Which ATS the org is actively on, following the resolver's precedence
+    # (Workable wins; Bullhorn only when BULLHORN_ENABLED and connected; else
+    # standalone). Computed at serialization time so the UI's "active" label can
+    # never disagree with what resolve_ats_provider actually dispatches to.
+    active_ats: str = "standalone"
     active_claude_model: str
     active_claude_scoring_model: str
     plan: str

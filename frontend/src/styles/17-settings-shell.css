@@ -481,3 +481,70 @@
 .bh-stage-reject input[type="checkbox"] {
   accent-color: var(--purple);
 }
+
+/* ============================================================
+   Unified Integrations surface — one tab listing every ATS
+   provider. Active-ATS indicator + per-provider cards. Scoped to
+   settings-* classes so nothing else is touched. Purple tones only.
+   ============================================================ */
+.settings-integrations-active {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.settings-integration-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--line-2);
+  color: var(--mute);
+  background: var(--bg-2);
+}
+.settings-integration-chip.on {
+  color: var(--purple-2);
+  background: var(--purple-soft);
+  border-color: color-mix(in oklab, var(--purple) 30%, var(--line));
+}
+.settings-integrations-standalone {
+  margin-bottom: 16px;
+}
+.settings-integrations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.settings-integration-card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 18px);
+  padding: 18px 20px 20px;
+}
+.settings-integration-card-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.settings-integration-card-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-integration-card-heading h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.settings-integration-card-heading .sub {
+  margin: 3px 0 0;
+  font-size: 0.8125rem;
+  color: var(--mute);
+}
+.settings-integration-card-head .settings-integration-chip {
+  flex: 0 0 auto;
+}
