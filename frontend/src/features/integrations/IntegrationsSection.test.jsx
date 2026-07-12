@@ -50,22 +50,21 @@ describe('IntegrationsSection', () => {
   });
 
   it('always renders the Workable card and its body slot', () => {
-    // Title lives in the toggle button now, so query by text (a button flattens
-    // its descendant heading out of the accessibility tree).
+    // The title stays a real heading (accordion pattern: <h3> wraps the toggle).
     renderSection({ active_ats: 'standalone' });
-    expect(screen.getByText('Workable integration')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     expect(screen.getByText('WORKABLE_BODY')).toBeInTheDocument();
   });
 
   it('hides the Bullhorn card when bullhorn_enabled is falsy', () => {
     renderSection({ active_ats: 'standalone' });
-    expect(screen.queryByText('Bullhorn integration')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Bullhorn integration/i })).not.toBeInTheDocument();
     expect(screen.queryByText('BULLHORN_BODY')).not.toBeInTheDocument();
   });
 
   it('shows the Bullhorn card (from the registry Component) when bullhorn_enabled is true', () => {
     renderSection({ active_ats: 'standalone', bullhorn_enabled: true });
-    expect(screen.getByText('Bullhorn integration')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Bullhorn integration/i })).toBeInTheDocument();
     expect(screen.getByText('BULLHORN_BODY')).toBeInTheDocument();
   });
 

@@ -418,7 +418,7 @@ describe('SettingsPage recruiter surface', () => {
     renderSettingsRoute('/settings/workable');
 
     await waitFor(() => {
-      expect(screen.getByText(/Workable integration/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     });
     // The actor-member control is now the styled portal dropdown, so its
     // options only mount once it's opened. Open it to confirm the member
@@ -460,7 +460,7 @@ describe('SettingsPage recruiter surface', () => {
     renderSettingsRoute('/settings/workable');
 
     await waitFor(() => {
-      expect(screen.getByText(/Workable integration/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     });
 
     // The mode card is now the write-back binary (write back / read-only).
@@ -574,22 +574,22 @@ describe('SettingsPage recruiter surface', () => {
       expect(screen.getByRole('heading', { name: /^Integrations\.?$/i })).toBeInTheDocument();
     });
     // The Workable card still renders under the unified surface.
-    expect(screen.getByText(/Workable integration/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
   });
 
   it('hides the Bullhorn card when bullhorn_enabled is off (default)', async () => {
     renderSettingsRoute('/settings/workable');
     await waitFor(() => {
-      expect(screen.getByText(/Workable integration/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     });
-    expect(screen.queryByText(/Bullhorn integration/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Bullhorn integration/i })).not.toBeInTheDocument();
   });
 
   it('shows the Bullhorn card only when bullhorn_enabled is on', async () => {
     orgsApi.get.mockResolvedValue({ data: { ...baseOrgData, bullhorn_enabled: true } });
     renderSettingsRoute('/settings/workable');
     await waitFor(() => {
-      expect(screen.getByText(/Bullhorn integration/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Bullhorn integration/i })).toBeInTheDocument();
     });
   });
 

@@ -524,29 +524,13 @@
   border-radius: var(--radius-card, 18px);
   padding: 18px 20px 20px;
 }
-/* The head is a full-width toggle button — reset the native button chrome so it
-   reads as the card header, and show a pointer to signal it collapses. */
 .settings-integration-card-head {
   display: flex;
   align-items: center;
   gap: 14px;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  background: none;
-  border: 0;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 .settings-integration-card.is-open .settings-integration-card-head {
   margin-bottom: 14px;
-}
-.settings-integration-card-chevron {
-  flex: 0 0 auto;
-  font-size: 0.75rem;
-  color: var(--mute);
 }
 .settings-integration-card-heading {
   flex: 1 1 auto;
@@ -557,6 +541,32 @@
   font-size: 1.0625rem;
   font-weight: 600;
   color: var(--ink);
+}
+/* The toggle sits inside the <h3> (accordion pattern). Reset the native button
+   chrome and stretch it across the title column so the whole heading row is an
+   easy collapse target, with the chevron pushed to the right. */
+.settings-integration-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-integration-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-integration-card-chevron {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--mute);
 }
 .settings-integration-card-heading .sub {
   margin: 3px 0 0;

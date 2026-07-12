@@ -35,18 +35,30 @@ export const IntegrationCard = ({
     prevConnected.current = connected;
   }, [connected, isAuto]);
 
+  // Accordion pattern (WAI-ARIA): the heading WRAPS the toggle button, so the
+  // provider name stays exposed as a real heading (a <button> flattens its
+  // descendants out of the accessibility tree, so an <h3> inside a button would
+  // not be) while the button remains the collapse control. The button stretches
+  // across the title column for a large, easy-to-hit target.
   return (
     <div className={`settings-integration-card ${open ? 'is-open' : 'is-collapsed'}`}>
-      <button
-        type="button"
-        className="settings-integration-card-head"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls={bodyId}
-      >
+      <div className="settings-integration-card-head">
         {Icon ? <Icon size={40} /> : null}
         <div className="settings-integration-card-heading">
-          <h3>{title}</h3>
+          <h3>
+            <button
+              type="button"
+              className="settings-integration-card-toggle"
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              aria-controls={bodyId}
+            >
+              <span className="settings-integration-card-title">{title}</span>
+              <span className="settings-integration-card-chevron" aria-hidden="true">
+                {open ? '▾' : '▸'}
+              </span>
+            </button>
+          </h3>
           {subtitle ? <p className="sub">{subtitle}</p> : null}
         </div>
         <span
@@ -55,10 +67,7 @@ export const IntegrationCard = ({
         >
           {connected ? 'Connected' : 'Not connected'}
         </span>
-        <span className="settings-integration-card-chevron" aria-hidden="true">
-          {open ? '▾' : '▸'}
-        </span>
-      </button>
+      </div>
       <div id={bodyId} className="settings-integration-card-body" hidden={!open}>
         {children}
       </div>
