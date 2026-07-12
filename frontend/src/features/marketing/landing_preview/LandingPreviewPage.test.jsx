@@ -280,8 +280,8 @@ describe('LandingPreviewPage', () => {
     expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeTruthy();
     expect(screen.getAllByText('Delegation').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Live component/i).length).toBeGreaterThan(0);
-    // Real decision-outcome atoms (VerdictPill "Advance") appear in the scenes.
-    expect(screen.getAllByText('Advance').length).toBeGreaterThan(0);
+    // Real decision-outcome atoms use status wording, not a command label.
+    expect(screen.getAllByText('Advance recommended').length).toBeGreaterThan(0);
   });
 
   it('renders variant E with final scene states (never armed) under reduced-motion', () => {

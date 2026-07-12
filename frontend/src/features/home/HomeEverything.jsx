@@ -533,7 +533,7 @@ export const HomeEverything = ({ onSelect, onNavigate }) => {
         </div>
         <button
           type="button"
-          className="home-section-toggle"
+          className="home-section-toggle taali-btn taali-btn-secondary taali-btn-xs"
           onClick={() => setSectionOpen((v) => !v)}
           aria-expanded={sectionOpen}
         >

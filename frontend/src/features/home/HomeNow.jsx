@@ -6,7 +6,7 @@
 // opens TeachModal which POSTs /agent/feedback.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Select } from '../../shared/ui/TaaliPrimitives';
+import { Button, Select } from '../../shared/ui/TaaliPrimitives';
 import {
   AlertTriangle,
   ArrowRight,
@@ -160,17 +160,21 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
           the home-preview's second `.tlabel`. */}
       <span className="kicker mute" style={{ margin: '0 2px 0 6px' }}>FILTER</span>
       <div className="rq-tabset" role="group" aria-label="Filter by decision type">
-        {TYPE_OPTIONS.map((o) => (
-          <button
-            key={o.id || 'all'}
-            type="button"
-            className={(!filters.view && (filters.type || '') === o.id) ? 'on' : ''}
-            title={o.hint}
-            onClick={() => setFilters((f) => ({ ...f, type: o.id || null, view: null }))}
-          >
-            {o.label}
-          </button>
-        ))}
+        {TYPE_OPTIONS.map((o) => {
+          const selected = !filters.view && (filters.type || '') === o.id;
+          return (
+            <button
+              key={o.id || 'all'}
+              type="button"
+              className={selected ? 'on' : ''}
+              aria-pressed={selected}
+              title={o.hint}
+              onClick={() => setFilters((f) => ({ ...f, type: o.id || null, view: null }))}
+            >
+              {o.label}
+            </button>
+          );
+        })}
       </div>
       {/* Not a decision-type — switches the queue to the invited-candidate
           tracker (sent-but-not-completed assessments). A standalone toggle
@@ -270,7 +274,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
   <aside className="rq-split-list">
     <div className="rq-split-list-head">
       <span style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--fs-body-lg)', fontWeight: 600, color: 'var(--ink)' }}>
-        {staleOnly ? 'Needs re-eval' : 'Pending'} <span style={{ color: 'var(--purple)', marginLeft: 4 }}>{pending.length}</span>
+        {staleOnly ? 'Scores out of date' : 'Pending'} <span style={{ color: 'var(--purple)', marginLeft: 4 }}>{pending.length}</span>
       </span>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-eyebrow)', color: 'var(--mute)', letterSpacing: '.06em' }}>
         {oldestCreatedAt ? `OLDEST ${formatRelativeAge(oldestCreatedAt)}` : ''}
@@ -293,11 +297,12 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
           // uses for its history rows.
           // Row layout mirrors the home-preview `.qitem`: an avatar, then the
           // candidate name + score on one line, the role · age beneath, and the
-          // agent's verdict pill. The stale "re-eval" chip + score-provenance
+          // agent's recommendation pill. The stale score-status chip + score-provenance
           // pill are kept (real, load-bearing signal the preview omits).
           <div
             key={p.id}
             role="button"
+            aria-pressed={selectedId === p.id}
             tabIndex={0}
             style={{ '--i': idx }}
             className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
@@ -347,9 +352,9 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                 ) : p.is_stale ? (
                   <span
                     className="rq-qstale"
-                    title="Score out of date — re-evaluate"
+                    title="Score out of date — re-evaluate before acting"
                   >
-                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> re-eval
+                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> score out of date
                   </span>
                 ) : null}
               </div>
@@ -415,6 +420,7 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
           <div
             key={c.id}
             role="button"
+            aria-pressed={selectedId === c.id}
             tabIndex={0}
             className={`rq-split-row rq-invited-row ${selectedId === c.id ? 'on' : ''}`.trim()}
             onClick={() => onSelect(c.id)}
@@ -1041,26 +1047,26 @@ export const HomeNow = ({
   // re-evaluate instead.
   const bulkActionEl = !invitedView && filters.status === 'pending' && visiblePending.length > 0 ? (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      <button
-        type="button"
-        className="btn btn-purple btn-sm"
+      <Button
+        variant="primary"
+        size="sm"
         onClick={handleBulkApprove}
         disabled={bulkBusy}
       >
-        <Check size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
+        <Check size={13} strokeWidth={2} aria-hidden="true" />
         {bulkBusy ? 'Approving…' : `Approve ${visiblePending.length} visible`}
-      </button>
+      </Button>
       {filters.type === 'assessment' && skipAdvanceTargets.length > 0 ? (
-        <button
-          type="button"
-          className="btn btn-outline btn-sm"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={handleBulkSkipAdvance}
           disabled={bulkBusy}
           title="Skip the assessment and move these candidates to the advance queue (you pick the Workable stage when approving each advance)"
         >
-          <ArrowRight size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
+          <ArrowRight size={13} strokeWidth={2} aria-hidden="true" />
           {bulkBusy ? 'Working…' : `Skip & advance ${skipAdvanceTargets.length} visible`}
-        </button>
+        </Button>
       ) : null}
     </div>
   ) : null;

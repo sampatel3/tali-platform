@@ -71,7 +71,9 @@ export function AgentSidebar({
     return (
       <button
         key={a.role_id}
+        type="button"
         className={`ac-agent ac-${rowStatus} ${!bulkMode && a.role_id === activeRoleId ? 'is-active' : ''} ${selected ? 'is-selected' : ''}`}
+        aria-pressed={bulkMode ? Boolean(selected) : a.role_id === activeRoleId}
         onClick={() => (bulkMode ? onToggleSelected?.(a.role_id) : onSelect?.(a.role_id))}
         title={!bulkMode && a.role_id === activeRoleId ? `${a.role_name} — click to deselect (view all roles)` : a.role_name}
       >
@@ -134,6 +136,7 @@ export function AgentSidebar({
           <button
             type="button"
             className={`ac-bulk-toggle ${bulkMode ? 'on' : ''}`}
+            aria-pressed={bulkMode}
             onClick={onToggleBulkMode}
             title={bulkMode ? 'Cancel multi-select' : 'Message several agents at once'}
           >
@@ -158,6 +161,7 @@ export function AgentSidebar({
               <button
                 type="button"
                 className={`ac-allroles ${activeRoleId ? '' : 'is-active'}`}
+                aria-pressed={!activeRoleId}
                 onClick={() => onSelect?.(null)}
                 title="View every role's queue — clears the agent filter"
               >

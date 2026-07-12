@@ -78,6 +78,48 @@ describe('HomeNow — applied-date freshness', () => {
   });
 });
 
+describe('HomeNow — action and selection semantics', () => {
+  beforeEach(() => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+  });
+
+  it('uses the shared action styles while exposing filters and rows as pressed choices', () => {
+    const { container } = renderHome();
+
+    const filterGroup = screen.getByRole('group', { name: /filter by decision type/i });
+    expect(within(filterGroup).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(filterGroup).getByRole('button', { name: 'Advance' })).toHaveAttribute('aria-pressed', 'false');
+
+    const selectedRow = container.querySelector('.rq-qrow');
+    expect(selectedRow).toHaveAttribute('aria-pressed', 'true');
+
+    const approveVisible = screen.getByRole('button', { name: /Approve 1 visible/i });
+    expect(approveVisible).toHaveClass('taali-btn-primary', 'taali-btn-sm');
+
+    const recommendation = screen.getByText('Advance recommended');
+    expect(recommendation.tagName).toBe('SPAN');
+    expect(recommendation.closest('button')).toBeNull();
+  });
+
+  it('styles the secondary bulk action canonically and labels stale state as status', () => {
+    const decision = {
+      ...mkAdvance(1, 'Miguel Parracho'),
+      decision_type: 'send_assessment',
+      is_stale: true,
+    };
+    const { container } = renderHome({
+      decisions: [decision],
+      pendingOrdered: [decision],
+      filters: { status: 'pending', role_id: null, type: 'assessment', q: null },
+    });
+
+    expect(screen.getByRole('button', { name: /Skip & advance 1 visible/i }))
+      .toHaveClass('taali-btn-secondary', 'taali-btn-sm');
+    expect(container.querySelector('.rq-qstale')).toHaveTextContent('score out of date');
+    expect(screen.getByText('Assessment recommended').closest('button')).toBeNull();
+  });
+});
+
 describe('HomeNow — bulk-approve Enter gate', () => {
   beforeEach(() => {
     bulkApproveDecisions.mockReset().mockResolvedValue({ data: { approved: 1, failures: [] } });

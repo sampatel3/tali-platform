@@ -288,7 +288,6 @@
 .ac-btn-ghost { background: var(--bg-2); border-color: var(--line-2); color: var(--mute); }
 .ac-btn-ghost:hover:not(:disabled) { border-color: var(--ink-soft); color: var(--ink); }
 .ac-btn-soft { background: var(--purple-soft); color: var(--purple-2); }
-.ac-btn-soft:hover:not(:disabled) { filter: brightness(0.98); }
 
 /* The composer is the shared <ChatComposer> (`.tk-composer`), wrapped by
    `.ac-dock-composer` above — no dock-local composer styles needed. */

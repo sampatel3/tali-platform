@@ -360,7 +360,7 @@ export const HomeShowcaseView = () => {
                 onNavigate={() => {}}
                 subtitle="Click any pending decision to review it on the right — approve, override, or send it back to teach the agent."
               />
-              <div className="lg:sticky lg:top-4">
+              <div className="min-w-0 lg:sticky lg:top-4">
                 <DecisionDetail
                   decision={selected}
                   onApprove={handleApprove}

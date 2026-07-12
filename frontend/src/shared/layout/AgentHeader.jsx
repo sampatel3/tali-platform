@@ -3,6 +3,7 @@ import { Pause, Play, Power, Settings as SettingsIcon, Sparkles } from 'lucide-r
 
 import { useAgentStatus } from './AgentBar';
 import { BreadcrumbsRow } from '../ui/Breadcrumbs';
+import { Button } from '../ui/TaaliPrimitives';
 
 // AgentHeader — the single compact LIGHT header at the top of every recruiter
 // page (redesign 2026-06). One fixed height (96px) across every page so the
@@ -83,10 +84,10 @@ const AgentOffActivator = ({ onActivate, currentBudgetCents }) => {
         />
         <span className="sfx">/mo</span>
       </span>
-      <button type="button" className="ab-btn primary" onClick={submit}>
+      <Button variant="primary" size="sm" className="ab-btn primary" onClick={submit}>
         <Play size={11} strokeWidth={2} fill="currentColor" />
         Turn on
-      </button>
+      </Button>
     </span>
   );
 };
@@ -191,65 +192,77 @@ const AgentStrip = ({
           {hasBulkCounts ? (
             <>
               {Number(pauseAllCount) > 0 ? (
-                <button type="button" className="ab-btn" onClick={onPause} disabled={!onPause}>
+                <Button
+                  variant={status === 'on' ? 'inverse' : 'secondary'}
+                  size="sm"
+                  className="ab-btn"
+                  onClick={onPause}
+                  disabled={!onPause}
+                >
                   <Pause size={11} strokeWidth={2} />
                   {pauseLabel}
-                </button>
+                </Button>
               ) : null}
               {Number(resumeAllCount) > 0 ? (
-                <button type="button" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
                   <Play size={11} strokeWidth={2} fill="currentColor" />
                   {resumeLabel}
-                </button>
+                </Button>
               ) : null}
             </>
           ) : status === 'on' ? (
             <>
-              <button type="button" className="ab-btn" onClick={onPause} disabled={!onPause}>
+              <Button variant="inverse" size="sm" className="ab-btn" onClick={onPause} disabled={!onPause}>
                 <Pause size={11} strokeWidth={2} />
                 {pauseLabel}
-              </button>
+              </Button>
               {onTurnOff ? (
-                <button
-                  type="button"
+                <Button
+                  variant="inverse"
+                  size="sm"
+                  iconOnly
                   className="ab-btn ic"
                   title="Turn off agent for this role"
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
                 >
                   <Power size={13} strokeWidth={2} />
-                </button>
+                </Button>
               ) : null}
             </>
           ) : status === 'paused' ? (
             <>
-              <button type="button" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+              <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
                 <Play size={11} strokeWidth={2} fill="currentColor" />
                 {resumeLabel}
-              </button>
+              </Button>
               {onTurnOff ? (
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  iconOnly
                   className="ab-btn ic"
                   title="Turn off agent for this role"
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
                 >
                   <Power size={13} strokeWidth={2} />
-                </button>
+                </Button>
               ) : null}
             </>
           ) : null}
           {onSettings ? (
-            <button
-              type="button"
+            <Button
+              variant={status === 'on' ? 'inverse' : 'secondary'}
+              size="sm"
+              iconOnly
               className="ab-btn ic"
               title="Configure agent"
               aria-label="Configure agent"
               onClick={onSettings}
             >
               <SettingsIcon size={13} strokeWidth={1.7} />
-            </button>
+            </Button>
           ) : null}
         </span>
       )}

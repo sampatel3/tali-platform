@@ -96,3 +96,33 @@ describe('AgentDecisionCard reject consequence copy', () => {
     expect(screen.queryByText(/Disqualifies them in Workable/i)).not.toBeInTheDocument();
   });
 });
+
+describe('AgentDecisionCard button design-system contract', () => {
+  it('renders report and pipeline navigation as canonical secondary links', () => {
+    renderCard(baseDecision);
+
+    const report = screen.getByRole('link', { name: 'Candidate report' });
+    expect(report).toHaveAttribute('href', '/candidates/7?from=home');
+    expect(report).toHaveAttribute('target', '_blank');
+    expect(report).toHaveClass('taali-btn', 'taali-btn-secondary', 'taali-btn-sm');
+
+    const pipeline = screen.getByRole('link', { name: 'Job pipeline' });
+    expect(pipeline).toHaveAttribute('href', '/jobs/3');
+    expect(pipeline).toHaveClass('taali-btn', 'taali-btn-secondary', 'taali-btn-sm');
+  });
+
+  it('uses the agent treatment for the recommendation and canonical support actions', () => {
+    renderCard(baseDecision);
+
+    expect(screen.getByRole('button', { name: 'Reject' }))
+      .toHaveClass('taali-btn-agent', 'taali-btn-md', 'rq-rec-btn');
+    expect(screen.getByRole('button', { name: 'Send assessment' }))
+      .toHaveClass('taali-btn-secondary', 'taali-btn-sm');
+    expect(screen.getByRole('button', { name: 'Advance instead' }))
+      .toHaveClass('taali-btn-secondary', 'taali-btn-sm');
+    expect(screen.getByRole('button', { name: 'Send back & teach' }))
+      .toHaveClass('taali-btn-secondary', 'taali-btn-sm');
+    expect(screen.getByRole('button', { name: 'Snooze 1h' }))
+      .toHaveClass('taali-btn-ghost', 'taali-btn-sm');
+  });
+});

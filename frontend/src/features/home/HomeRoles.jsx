@@ -124,7 +124,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
       </div>
       <button
         type="button"
-        className="home-section-toggle"
+        className="home-section-toggle taali-btn taali-btn-secondary taali-btn-xs"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
