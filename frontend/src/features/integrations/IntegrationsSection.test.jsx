@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 // Stub the Bullhorn body so we exercise the section's gating/indicator logic
@@ -50,6 +50,7 @@ describe('IntegrationsSection', () => {
   });
 
   it('always renders the Workable card and its body slot', () => {
+    // The title stays a real heading (accordion pattern: <h3> wraps the toggle).
     renderSection({ active_ats: 'standalone' });
     expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     expect(screen.getByText('WORKABLE_BODY')).toBeInTheDocument();
@@ -70,5 +71,39 @@ describe('IntegrationsSection', () => {
   it('shows a Connected chip on a connected provider card', () => {
     renderSection({ active_ats: 'workable', workable_connected: true });
     expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
+  });
+
+  it('expands a connected card and collapses an unconnected one by default', () => {
+    // Workable connected → open; Bullhorn enabled-but-unconnected → collapsed.
+    renderSection({ active_ats: 'workable', workable_connected: true, bullhorn_enabled: true });
+    const workableBody = screen.getByText('WORKABLE_BODY').closest('.settings-integration-card-body');
+    const bullhornBody = screen.getByText('BULLHORN_BODY').closest('.settings-integration-card-body');
+    expect(workableBody).not.toHaveAttribute('hidden');
+    expect(bullhornBody).toHaveAttribute('hidden');
+  });
+
+  it('expands a collapsed card when its header is clicked', () => {
+    renderSection({ active_ats: 'standalone', bullhorn_enabled: true });
+    const bullhornBody = screen.getByText('BULLHORN_BODY').closest('.settings-integration-card-body');
+    expect(bullhornBody).toHaveAttribute('hidden');
+    fireEvent.click(screen.getByRole('button', { name: /Bullhorn integration/i }));
+    expect(bullhornBody).not.toHaveAttribute('hidden');
+  });
+
+  it('opens a connected card once org data loads (mounts with org=null first)', () => {
+    // First mount: org still loading → Workable arrives unconnected → collapsed.
+    const bodies = { workable: <div>WORKABLE_BODY</div> };
+    const { rerender } = render(<IntegrationsSection org={null} bodies={bodies} />);
+    expect(
+      screen.getByText('WORKABLE_BODY').closest('.settings-integration-card-body'),
+    ).toHaveAttribute('hidden');
+
+    // Org data arrives connected → the card reveals itself.
+    rerender(
+      <IntegrationsSection org={{ active_ats: 'workable', workable_connected: true }} bodies={bodies} />,
+    );
+    expect(
+      screen.getByText('WORKABLE_BODY').closest('.settings-integration-card-body'),
+    ).not.toHaveAttribute('hidden');
   });
 });
