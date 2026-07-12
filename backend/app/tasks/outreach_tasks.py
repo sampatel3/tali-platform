@@ -297,6 +297,11 @@ def send_campaign_messages(campaign_id: int) -> dict:
         OutreachMessage,
     )
     from ..models.organization import Organization
+    from ..models.prospect import (
+        PROSPECT_STATUS_CONTACTED,
+        PROSPECT_STATUS_NEW,
+        Prospect,
+    )
     from ..models.user import User
     from ..platform.config import settings
     from ..platform.database import SessionLocal
@@ -377,6 +382,23 @@ def send_campaign_messages(campaign_id: int) -> dict:
                 message.status = MESSAGE_STATUS_SENT
                 message.sent_at = datetime.now(timezone.utc)
                 message.error = None
+                if message.prospect_id is not None:
+                    # Compare-and-set protects stronger lifecycle states even if
+                    # an interest/conversion/archive event lands while the email
+                    # provider call is in flight. Only a genuinely new prospect
+                    # becomes contacted, and only after a successful send.
+                    (
+                        db.query(Prospect)
+                        .filter(
+                            Prospect.id == message.prospect_id,
+                            Prospect.organization_id == org_id,
+                            Prospect.status == PROSPECT_STATUS_NEW,
+                        )
+                        .update(
+                            {Prospect.status: PROSPECT_STATUS_CONTACTED},
+                            synchronize_session=False,
+                        )
+                    )
                 sent += 1
             else:
                 message.status = MESSAGE_STATUS_FAILED

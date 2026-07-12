@@ -287,7 +287,9 @@ def list_prospects(
     org_id = current_user.organization_id
     query = db.query(Prospect).filter(Prospect.organization_id == org_id)
 
-    if status:
+    if status == "active":
+        query = query.filter(Prospect.status != PROSPECT_STATUS_ARCHIVED)
+    elif status:
         query = query.filter(Prospect.status == status)
     if q:
         like = f"%{q.strip().lower()}%"

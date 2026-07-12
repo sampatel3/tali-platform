@@ -207,6 +207,8 @@ def generate_drafts(
     campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
     if svc.is_archived(campaign):
         raise HTTPException(status_code=409, detail="Campaign is archived")
+    if campaign.status == CAMPAIGN_STATUS_GENERATING:
+        raise HTTPException(status_code=409, detail="Campaign is already generating")
 
     pending = (
         db.query(OutreachMessage)
@@ -225,13 +227,31 @@ def generate_drafts(
     if pending == 0:
         raise HTTPException(status_code=400, detail="No pending messages to draft")
 
-    campaign.status = CAMPAIGN_STATUS_GENERATING
+    # Claim the campaign with a conditional update. The early status check gives
+    # sequential callers a clear conflict response; this compare-and-set also
+    # closes the window where two concurrent confirms both read the campaign
+    # before either transaction commits and would otherwise enqueue two tasks.
+    claimed = (
+        db.query(OutreachCampaign)
+        .filter(
+            OutreachCampaign.id == campaign.id,
+            OutreachCampaign.organization_id == current_user.organization_id,
+            OutreachCampaign.status != CAMPAIGN_STATUS_GENERATING,
+        )
+        .update(
+            {OutreachCampaign.status: CAMPAIGN_STATUS_GENERATING},
+            synchronize_session=False,
+        )
+    )
+    if claimed != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Campaign is already generating")
     db.commit()
 
     from ...tasks.outreach_tasks import generate_campaign_drafts
 
     generate_campaign_drafts.delay(campaign.id)
-    return {**estimate, "status": campaign.status}
+    return {**estimate, "status": CAMPAIGN_STATUS_GENERATING}
 
 
 # --------------------------------------------------------------------------- #
