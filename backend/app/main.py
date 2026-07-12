@@ -421,6 +421,16 @@ app.include_router(job_pages_public_router)
 # Recruiter-facing screening-question CRUD (authed) for the apply form.
 app.include_router(job_pages_screening_router, prefix="/api/v1")
 
+# Role distribution: GET /api/v1/roles/{id}/distribution (authed) returns the
+# copy-paste artefacts (LinkedIn post + share URLs + feed URL); GET
+# /api/v1/public/careers/{slug}/feed.xml (no auth) is the JobPosting XML feed the
+# boards pull — same open pages as the public careers board. No LinkedIn API.
+from .domains.distribution import public_router as distribution_public_router  # noqa: E402
+from .domains.distribution import router as distribution_router  # noqa: E402
+
+app.include_router(distribution_router, prefix="/api/v1")
+app.include_router(distribution_public_router)
+
 # Public client intake: GET/POST /api/v1/public/intake/{token} (no auth) — the
 # scoped share link a consultancy sends to its client to describe the role.
 from .domains.client_intake import public_router as client_intake_public_router  # noqa: E402

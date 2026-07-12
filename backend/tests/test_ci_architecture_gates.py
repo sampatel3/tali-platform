@@ -143,7 +143,7 @@ _NON_USER_AUTH_PREFIXES = (
     "/api/v1/users",       # fastapi-users self / superuser management (own guard)
     "/api/v1/webhooks/",   # provider webhooks — verified by signature
     "/public/v1/",         # public API — authenticated by API key
-    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake; native job-page apply — flag-gated off, rate-limited per IP+job; voluntary EEO self-ID POST /public/eeo/{token} — flag-gated off, rate-limited, authorised by the opaque per-application eeo_token, never a raw application_id)
+    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake; native job-page apply — flag-gated off, rate-limited per IP+job; voluntary EEO self-ID POST /public/eeo/{token} — flag-gated off, rate-limited, authorised by the opaque per-application eeo_token, never a raw application_id; careers JobPosting feed GET /public/careers/{slug}/feed.xml — read-only, public-by-design like the careers board it mirrors)
     "/careers/",           # public careers pages
 )
 

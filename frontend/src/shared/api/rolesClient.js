@@ -237,6 +237,9 @@ export const roles = {
   sourcingSearches: (roleId) => api.post(`/roles/${roleId}/sourcing-searches`),
   // Paste-a-profile first-touch outreach draft. tone: warm|direct, channel: linkedin|email.
   outreachDraft: (roleId, data) => api.post(`/roles/${roleId}/outreach-draft`, data),
+  // Distribute a PUBLISHED role: copy-paste artefacts (LinkedIn post + share URLs)
+  // + the org careers XML feed URL. Returns { published: false } before publish.
+  distribution: (roleId) => api.get(`/roles/${roleId}/distribution`),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),
   retakeAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments/retake`, data),
 };
