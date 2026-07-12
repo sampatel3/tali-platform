@@ -82,10 +82,15 @@
    it re-skins per brand and inverts under the dark theme.
    ================================================================ */
 
+/* The page-header band sits directly on the page background — no separate
+   white block. On EVERY recruiter page (home, jobs, analytics, candidates,
+   settings, tasks…) the band blends into --bg: transparent fill, no divider,
+   no left-accent bar — matching the seamless home Hub greeting. Layout, text,
+   back-links, the agent-ON strip and the compact variant are unchanged. */
 .agent-header {
   color: var(--ink);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--line);
+  background: transparent;
+  border-bottom: none;
   position: relative;
   overflow: hidden;
   /* +3px left pad clears the accent bar; vertical padding is 0 because the
@@ -96,17 +101,7 @@
   align-items: center;
 }
 
-/* Home Hub greeting band ("Good morning, …") sits directly on the page
-   background — no separate white block. Drop the white fill, the divider and
-   the left-accent bar so the greeting blends into --bg; text + layout unchanged.
-   Scoped to .home-app so every other recruiter page keeps its white header. */
-.home-app .agent-header {
-  background: transparent;
-  border-bottom: none;
-}
-.home-app .agent-header::before { display: none; }
-
-/* Thin purple left-accent — the brand cue on the light header. */
+/* Left-accent bar is off by default so the band is seamless everywhere. */
 .agent-header::before {
   content: "";
   position: absolute;
@@ -116,6 +111,7 @@
   width: 3px;
   background: var(--purple);
   z-index: 2;
+  display: none;
 }
 
 .agent-header-inner {
