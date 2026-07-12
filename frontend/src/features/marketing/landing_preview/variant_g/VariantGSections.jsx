@@ -1,12 +1,12 @@
 import React from 'react';
 
 import { Reveal } from '../../../../shared/motion/previewMotion';
-import { CANDIDATES, FUNNEL, DDS, CONTROL, PROOF, COMPOSITE } from './variantG.data';
+import { CANDIDATES, FUNNEL, DDS, CONTROL, COMPOSITE } from './variantG.data';
 
 // The body sections — each its OWN one-screen destination for a nav item, in
 // order: #g-funnel (the 5-step funnel) → #g-fluency (the 5-Ds scorecard) →
-// #g-control (the agent advises, you decide) → #g-proof (proof row + closing
-// CTA). Every section is `.section-vp` (min-height min(100svh,900px), content
+// #g-control (the agent advises, you decide — closing with the CTA band). Every
+// section is `.section-vp` (min-height min(100svh,900px), content
 // vertically centred) so clicking its nav item shows the whole section without
 // further scrolling. Entrances reuse the shared one-shot CSS <Reveal>. Copy is
 // verbatim from F, ledes trimmed for density.
@@ -106,61 +106,47 @@ export const FluencySection = ({ reduced }) => (
   </section>
 );
 
-// ── #g-control — YOU STAY IN CONTROL: its own destination, one screen. ──
-export const ControlSection = ({ reduced }) => (
-  <section className="section-vp" id="g-control">
-    <div className="wrap section-vp-in">
-      <div className="controlC-grid">
-        <div className="control-copy">
-          <span className="eyebrow">YOU STAY IN CONTROL</span>
-          <h2 className="display">The agent advises. <span className="grad-text">You decide.</span></h2>
-          <div className="control-points">
-            {CONTROL.map((c, i) => (
-              <Reveal key={c} className="control-point" reduced={reduced} delay={i * 0.05}>
-                <span className="cp-ico">{TICK}</span>
-                <p>{c}</p>
-              </Reveal>
-            ))}
-          </div>
-        </div>
-        <Reveal className="glow-card" reduced={reduced} y={24}>
-          <div className="dg-head">DECISION · AWAITING YOU</div>
-          <div className="dg-card">
-            <div className="dg-row">
-              <div className="avatar">MC</div>
-              <div>
-                <div className="dg-name">Maya Chen</div>
-                <div className="dg-sub">AI ENGINEER #312 · 88/100</div>
-              </div>
-              <span className="dg-verdict">Advance</span>
-            </div>
-            <div className="dg-ev"><span className="lk">EV·1</span>Caught the unsafe default in the eval gate.</div>
-            <div className="dg-ev"><span className="lk">EV·2</span>Verified before claiming done — ran the suite twice.</div>
-          </div>
-        </Reveal>
-      </div>
-    </div>
-  </section>
-);
-
-// ── #g-proof — PROOF row + the closing CTA band, one screen. ──
-export const ProofSection = ({ reduced, onNavigate }) => {
+// ── #g-control — YOU STAY IN CONTROL: the last content section, one screen.
+// The agent-advises grid, then the closing CTA band as its finale (relocated
+// here when the standalone Proof section was dropped). ──
+export const ControlSection = ({ reduced, onNavigate }) => {
   const go = (target) => () => onNavigate && onNavigate(target);
   return (
-    <section className="section-vp" id="g-proof">
+    <section className="section-vp" id="g-control">
       <div className="wrap section-vp-in">
-        <div className="proof-grid">
-          {PROOF.map((p, i) => (
-            <Reveal key={p.num} className="proof-item" reduced={reduced} delay={i * 0.06}>
-              <div className="proof-num">{p.num}</div>
-              <div className="proof-lbl">{p.lbl}</div>
-            </Reveal>
-          ))}
+        <div className="controlC-grid">
+          <div className="control-copy">
+            <span className="eyebrow">YOU STAY IN CONTROL</span>
+            <h2 className="display">The agent advises. <span className="grad-text">You decide.</span></h2>
+            <div className="control-points">
+              {CONTROL.map((c, i) => (
+                <Reveal key={c} className="control-point" reduced={reduced} delay={i * 0.05}>
+                  <span className="cp-ico">{TICK}</span>
+                  <p>{c}</p>
+                </Reveal>
+              ))}
+            </div>
+          </div>
+          <Reveal className="glow-card" reduced={reduced} y={24}>
+            <div className="dg-head">DECISION · AWAITING YOU</div>
+            <div className="dg-card">
+              <div className="dg-row">
+                <div className="avatar">MC</div>
+                <div>
+                  <div className="dg-name">Maya Chen</div>
+                  <div className="dg-sub">AI ENGINEER #312 · 88/100</div>
+                </div>
+                <span className="dg-verdict">Advance</span>
+              </div>
+              <div className="dg-ev"><span className="lk">EV·1</span>Caught the unsafe default in the eval gate.</div>
+              <div className="dg-ev"><span className="lk">EV·2</span>Verified before claiming done — ran the suite twice.</div>
+            </div>
+          </Reveal>
         </div>
 
-        <Reveal className="cta-band dark" reduced={reduced} y={24}>
+        <Reveal className="cta-band dark control-cta" reduced={reduced} y={24}>
           <span className="eyebrow" style={{ color: 'var(--lavender)' }}>SEE IT LIVE</span>
-          <h2 className="display" style={{ fontSize: 'clamp(30px,3.4vw,44px)', marginTop: 14 }}>
+          <h2 className="display" style={{ fontSize: 'clamp(28px,3vw,40px)', marginTop: 12 }}>
             Ready to put the agent to work?
           </h2>
           <div className="cta-actions">

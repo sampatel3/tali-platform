@@ -6,7 +6,7 @@ import { VARIANT_G_CSS } from './variantG.styles';
 import { VariantGNav, NAV_LINKS } from './VariantGNav';
 import { VariantGHero } from './VariantGHero';
 import { VariantGFooter } from './VariantGFooter';
-import { FunnelSection, FluencySection, ControlSection, ProofSection } from './VariantGSections';
+import { FunnelSection, FluencySection, ControlSection } from './VariantGSections';
 
 // ---------------------------------------------------------------------------
 // VARIANT G — F's "Vivid Purple" look + E's tight, one-screen-per-section
@@ -15,8 +15,8 @@ import { FunnelSection, FluencySection, ControlSection, ProofSection } from './V
 //
 //   1. NAV THAT NAVIGATES. Every nav item maps 1:1 to a real section id
 //      (Agentic hiring → #g-funnel, AI fluency → #g-fluency, Control →
-//      #g-control, Proof → #g-proof). Clicking smooth-scrolls to that section's
-//      top, landing just below the sticky nav (offset by nav height). Uses
+//      #g-control). Clicking smooth-scrolls to that section's top, landing just
+//      below the sticky nav (via each section's scroll-margin-top). Uses
 //      Lenis.scrollTo when Lenis is live; falls back to scrollIntoView (with
 //      scroll-margin-top) under reduced motion or when Lenis isn't present.
 //      An IntersectionObserver scroll-spy emphasises the active link.
@@ -68,14 +68,17 @@ export const LandingVariantG = ({ onNavigate }) => {
     };
   }, [reduced]);
 
-  // Smooth-scroll a section to just below the sticky nav. Lenis when live;
-  // native scrollIntoView (+ CSS scroll-margin-top) otherwise.
+  // Smooth-scroll a section to just below the sticky nav. Both paths rely on the
+  // section's CSS `scroll-margin-top: 68px` for the nav offset: Lenis subtracts
+  // scrollMarginTop itself (so we pass NO extra offset — a -NAV_HEIGHT here would
+  // double-count and land the section ~136px down), and native scrollIntoView
+  // honours scroll-margin-top directly.
   const scrollToSection = useCallback((id) => {
     if (typeof document === 'undefined') return;
     const el = document.getElementById(id);
     if (!el) return;
     if (lenisRef.current) {
-      lenisRef.current.scrollTo(el, { offset: -NAV_HEIGHT });
+      lenisRef.current.scrollTo(el);
     } else {
       el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
     }
@@ -111,8 +114,7 @@ export const LandingVariantG = ({ onNavigate }) => {
           <VariantGHero onNavigate={onNavigate} />
           <FunnelSection reduced={reduced} />
           <FluencySection reduced={reduced} />
-          <ControlSection reduced={reduced} />
-          <ProofSection reduced={reduced} onNavigate={onNavigate} />
+          <ControlSection reduced={reduced} onNavigate={onNavigate} />
           <VariantGFooter onSection={scrollToSection} />
         </div>
       </MotionConfig>

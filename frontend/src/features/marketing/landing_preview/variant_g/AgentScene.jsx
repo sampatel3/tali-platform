@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { stagger, useAnimate, useInView } from 'motion/react';
+import { stagger, useAnimate } from 'motion/react';
 
 import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
 import { CANDIDATES, FUNNEL_STATS, verdictLabel } from './variantG.data';
@@ -9,19 +9,22 @@ import { CANDIDATES, FUNNEL_STATS, verdictLabel } from './variantG.data';
 // desaturated, "AGENT OFF"), flips ON, then three candidate rows flow into a
 // decision lane and each verdict pill "stamps" in.
 //
-// TECHNIQUE — a Motion `useAnimate` timeline, armed by `useInView`, autoplays
-// ONCE on enter then holds. Mirrors the merged /home HomeMotionPreview + variant
-// E hero pattern (agent-on → populate). Beats are the handoff's playAgentScene:
+// TECHNIQUE — a Motion `useAnimate` timeline that holds in its AGENT-OFF beat at
+// the top of the page and fires ONCE, on the user's FIRST scroll down past a
+// small threshold (SCROLL_TRIGGER). It never autoplays on load — the hero reads
+// OFF until the visitor engages. Beats are the handoff's playAgentScene:
 //   • 700ms  — card flips ON (gradient border/glow + purple "hot" cell), pill
 //              swaps OFF→ON.
 //   • 1150ms — candidate rows animate in from translateY(10px)/opacity 0,
 //              staggered +480ms each.
 //   • +180ms after each row lands — its verdict pill stamps (scale .7→1.06→1).
-// A "↻ Replay" affordance re-runs it. `completedRef` gates the settled state so
-// a play interrupted by scrolling away replays on re-entry (never stuck).
+// A "↻ Replay" affordance re-runs the whole OFF→ON sequence. `completedRef`
+// gates the settled state so it holds once played.
 //
-// Reduced motion → render the settled ON state (rows visible, no data-armed, no
-// timeline, no replay button). The scoped CSS hides rows only while `data-armed`.
+// Reduced motion → render the settled ON state immediately (rows visible,
+// verdicts stamped, no data-armed, no timeline, no replay button) so meaningful
+// content is never gated behind a scroll the user can't trigger. The scoped CSS
+// hides rows only while `data-armed`.
 // ---------------------------------------------------------------------------
 
 // Handoff timings, in seconds.
@@ -29,23 +32,45 @@ const FLIP_ON = 0.7; // card + pill flip ON
 const ROWS_AT = 1.15; // first row lands
 const ROW_STAGGER = 0.48; // each subsequent row
 const STAMP_OFFSET = 0.18; // verdict stamps after its row lands
+const SCROLL_TRIGGER = 24; // px scrolled down before the OFF→ON timeline fires
 
 export const AgentScene = () => {
   const [scope, animate] = useAnimate();
-  const inView = useInView(scope, { amount: 0.4 });
   const reduced = useReducedMotionSync();
   // `on` drives the card frame (.is-on) + the OFF→ON pill swap. Reduced motion
   // seeds it ON so the scene reads as its settled final state.
   const [on, setOn] = useState(reduced);
   const [replayNonce, setReplayNonce] = useState(0);
+  // `triggered` arms the timeline. Starts false so the scene holds OFF at the
+  // top of the page; the first scroll past SCROLL_TRIGGER flips it true (once).
+  const [triggered, setTriggered] = useState(false);
   const completedRef = useRef(false);
+
+  // Fire on the user's first scroll down. If the page is already scrolled on
+  // mount (deep-link / restored position) arm immediately. Detaches after one
+  // trigger. Lenis drives native window scroll, so a plain listener suffices.
+  useEffect(() => {
+    if (reduced || typeof window === 'undefined') return undefined;
+    if (window.scrollY > SCROLL_TRIGGER) {
+      setTriggered(true);
+      return undefined;
+    }
+    const onScroll = () => {
+      if (window.scrollY > SCROLL_TRIGGER) {
+        setTriggered(true);
+        window.removeEventListener('scroll', onScroll);
+      }
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [reduced]);
 
   useEffect(() => {
     if (reduced) {
       setOn(true);
       return undefined;
     }
-    if (!inView || completedRef.current) return undefined;
+    if (!triggered || completedRef.current) return undefined;
 
     let cancelled = false;
     const timers = [];
@@ -68,7 +93,7 @@ export const AgentScene = () => {
         ]);
         if (!cancelled) completedRef.current = true; // settled — hold it
       } catch {
-        /* stopped on cleanup (scrolled away mid-play) — replays on re-entry */
+        /* stopped on cleanup (unmounted mid-play) */
       }
     })();
 
@@ -76,10 +101,13 @@ export const AgentScene = () => {
       cancelled = true;
       timers.forEach(clearTimeout);
     };
-  }, [inView, reduced, replayNonce, animate]);
+  }, [triggered, reduced, replayNonce, animate]);
 
+  // Replay always re-runs the full OFF→ON sequence — arming the timeline even if
+  // the user hasn't scrolled yet.
   const replay = () => {
     completedRef.current = false;
+    setTriggered(true);
     setReplayNonce((n) => n + 1);
   };
 
