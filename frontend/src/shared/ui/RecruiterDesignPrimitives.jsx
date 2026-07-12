@@ -100,6 +100,23 @@ export const WorkableLogo = ({ size = 36, className = '' }) => (
   </div>
 );
 
+export const BullhornLogo = ({ size = 36, className = '' }) => (
+  <div
+    className={cx(
+      'inline-flex items-center justify-center rounded-[14px] text-[var(--taali-inverse-text)] shadow-[0_12px_30px_rgba(90,60,200,0.18)]',
+      className
+    )}
+    style={{
+      width: size,
+      height: size,
+      background: 'linear-gradient(135deg, var(--taali-purple) 0%, var(--taali-purple-dark, var(--taali-purple)) 100%)',
+    }}
+    aria-hidden
+  >
+    <span className="text-[0.92em] font-semibold tracking-[-0.04em]">B</span>
+  </div>
+);
+
 const pulseTone = {
   healthy: {
     bg: 'var(--taali-success)',

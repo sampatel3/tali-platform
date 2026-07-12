@@ -20,11 +20,10 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import {
   SyncPulse,
-  WorkableLogo,
   formatRelativeDateTime,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import BackgroundJobsPanel from './BackgroundJobsPanel';
-import { BullhornConnection } from '../integrations/BullhornConnection';
+import { IntegrationsSection } from '../integrations/IntegrationsSection';
 import MembersSection from './MembersSection';
 import UsagePanel from './UsagePanel';
 import ApiKeysPanel from './ApiKeysPanel';
@@ -75,8 +74,12 @@ const SECTION_ALIASES = {
   'hiring-departments': 'clients',
   departments: 'clients',
   department: 'clients',
-  workable: 'workable',
-  bullhorn: 'bullhorn',
+  // ATS integrations were two separate tabs (Workable + conditional Bullhorn);
+  // they're now one unified "Integrations" tab. Legacy deep links / bookmarks
+  // to #workable and #bullhorn redirect onto it.
+  integrations: 'integrations',
+  workable: 'integrations',
+  bullhorn: 'integrations',
   billing: 'billing',
   usage: 'usage',
   team: 'members',
@@ -675,7 +678,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     if (activeSection === 'members') {
       void loadTeam();
     }
-    if (activeSection === 'workable') {
+    if (activeSection === 'integrations') {
       void fetchWorkableSyncStatus();
       void loadWorkableSyncJobs();
       void loadWorkableLookups();
@@ -1378,10 +1381,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 { k: 'clients', l: 'Hiring departments' },
                 { k: 'members', l: 'Members' },
                 { k: 'agent', l: 'AI agent' },
-                { k: 'workable', l: 'Workable' },
-                // Bullhorn tab only appears once the platform flag exposes it
-                // (bullhorn_enabled in the org payload); off in every env today.
-                ...(orgData?.bullhorn_enabled ? [{ k: 'bullhorn', l: 'Bullhorn' }] : []),
+                // One unified surface for every ATS. Providers list inside it,
+                // gated per-provider (Bullhorn hidden until bullhorn_enabled).
+                { k: 'integrations', l: 'Integrations' },
                 { k: 'email', l: 'Email & transcripts' },
                 { k: 'notifications', l: 'Notifications' },
                 { k: 'billing', l: 'Billing' },
@@ -1545,14 +1547,22 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.workable = node; }} hidden={activeSection !== "workable"}>
+              <div ref={(node) => { sectionRefs.current.integrations = node; }} hidden={activeSection !== "integrations"}>
                 <SectionPanel
-                  id="workable"
-                  title="Workable integration"
-                  subtitle="Pull jobs and candidates from Workable, then write invite and outcome actions back."
+                  id="integrations"
+                  title="Integrations"
+                  subtitle="Connect your ATS and see which one Taali is working with."
                 >
+                  <IntegrationsSection
+                    org={orgData}
+                    bodies={{
+                      workable: (
+                        <>
+                  {/* Workable card body — kept inline because it's coupled to
+                      the page's Workable state/handlers. The IntegrationCard
+                      shell now renders the provider icon + title + status chip,
+                      so the in-body logo is dropped to avoid duplication. */}
                   <div className="wk-status">
-                    <WorkableLogo size={44} />
                     <div>
                       <h4>{workableConnected ? `${orgData?.workable_subdomain || 'workspace'}.workable.com` : 'Workable not connected'}</h4>
                       <div className="meta">
@@ -1866,20 +1876,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       return label ? <option key={`${label}-${index}`} value={label} /> : null;
                     })}
                   </datalist>
+                        </>
+                      ),
+                    }}
+                  />
                 </SectionPanel>
               </div>
-
-              {orgData?.bullhorn_enabled ? (
-                <div ref={(node) => { sectionRefs.current.bullhorn = node; }} hidden={activeSection !== "bullhorn"}>
-                  <SectionPanel
-                    id="bullhorn"
-                    title="Bullhorn integration"
-                    subtitle="Connect your Bullhorn ATS to pull job orders and candidates, then write outcomes back. The API-user password is used once for sign-in and never stored."
-                  >
-                    <BullhornConnection orgData={orgData} />
-                  </SectionPanel>
-                </div>
-              ) : null}
 
               <div ref={(node) => { sectionRefs.current.security = node; }} hidden={activeSection !== "security"}>
                 <SectionPanel

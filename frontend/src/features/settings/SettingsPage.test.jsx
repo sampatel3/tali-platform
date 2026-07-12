@@ -567,4 +567,38 @@ describe('SettingsPage recruiter surface', () => {
     expect(screen.getByRole('link', { name: /Open audit log/i })).toBeInTheDocument();
     expect(screen.getAllByText(/SAML SSO/i).length).toBeGreaterThan(0);
   });
+
+  it('lands legacy /settings/workable and /settings/bullhorn deep links on the unified Integrations tab', async () => {
+    renderSettingsRoute('/settings/bullhorn');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /^Integrations\.?$/i })).toBeInTheDocument();
+    });
+    // The Workable card still renders under the unified surface.
+    expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
+  });
+
+  it('hides the Bullhorn card when bullhorn_enabled is off (default)', async () => {
+    renderSettingsRoute('/settings/workable');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('heading', { name: /Bullhorn integration/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the Bullhorn card only when bullhorn_enabled is on', async () => {
+    orgsApi.get.mockResolvedValue({ data: { ...baseOrgData, bullhorn_enabled: true } });
+    renderSettingsRoute('/settings/workable');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Bullhorn integration/i })).toBeInTheDocument();
+    });
+  });
+
+  it('shows the Active ATS indicator from active_ats', async () => {
+    orgsApi.get.mockResolvedValue({ data: { ...baseOrgData, active_ats: 'standalone' } });
+    renderSettingsRoute('/settings/integrations');
+    await waitFor(() => {
+      expect(screen.getByText('Active ATS')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Taali runs standalone/i)).toBeInTheDocument();
+  });
 });

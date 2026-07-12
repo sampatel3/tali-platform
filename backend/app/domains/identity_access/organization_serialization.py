@@ -139,6 +139,30 @@ def resolved_workable_mode(org: Organization) -> str:
     return "read_only"
 
 
+def resolve_active_ats(org: Organization) -> str:
+    """Which ATS the org is actively on, mirroring ``resolve_ats_provider``.
+
+    Kept in lock-step with ``components/integrations/resolver.py`` so the UI's
+    "Active ATS" label can never disagree with what the resolver actually
+    dispatches reads/writes to. Precedence: Workable wins; Bullhorn only when
+    ``BULLHORN_ENABLED`` and the org is Bullhorn-connected; otherwise standalone.
+    The resolver additionally requires a ``db`` session for the Bullhorn arm —
+    that's a provider-construction need, not a connection condition, so it isn't
+    mirrored here.
+    """
+    if org.workable_connected and org.workable_access_token and org.workable_subdomain:
+        return "workable"
+    if (
+        settings.BULLHORN_ENABLED
+        and getattr(org, "bullhorn_connected", False)
+        and getattr(org, "bullhorn_client_id", None)
+        and getattr(org, "bullhorn_refresh_token", None)
+        and getattr(org, "bullhorn_username", None)
+    ):
+        return "bullhorn"
+    return "standalone"
+
+
 def org_response_payload(org: Organization) -> OrgResponse:
     response = OrgResponse.model_validate(org)
     response.workable_config = WorkableConfigBase(**resolved_workable_config(org))
@@ -152,5 +176,9 @@ def org_response_payload(org: Organization) -> OrgResponse:
     # whether to show the Bullhorn settings section (off in every environment
     # until the integration is enabled).
     response.bullhorn_enabled = bool(settings.BULLHORN_ENABLED)
+    # Per-org ATS posture + the resolver-derived active ATS, for the unified
+    # Integrations settings surface.
+    response.sync_mode = getattr(org, "sync_mode", None) or "standalone"
+    response.active_ats = resolve_active_ats(org)
     response.has_billing_account = bool(getattr(org, "stripe_customer_id", None))
     return response
