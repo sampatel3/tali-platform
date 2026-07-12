@@ -6,14 +6,19 @@
 // `prefers-reduced-motion: no-preference` (the gradients themselves always paint
 // — only the motion is gated).
 //
-// TYPE — the landing runs on the SAME app `--fs-*` rem scale as the login /
-// product (01-base.css, 80%-scaled root), so it renders at the same density and
-// reads as one unified design system rather than an oversized marketing page.
-// Every font-size here is a `--fs-*` role token — no raw px / clamp / bespoke
-// literals. Roles: hero H1 = --fs-stat (product-sized, ~login "Sign in" feel),
-// EVERY section heading = --fs-h1 (identical), card titles = --fs-h3, big
-// numbers = --fs-stat/--fs-h3, ledes = --fs-subtitle, body = --fs-body,
-// meta/chips = --fs-caption, mono eyebrows = --fs-eyebrow.
+// TYPE — the landing is MARKETING, not the app. It runs on its OWN bespoke,
+// bigger `--l-*` px scale (defined in the `.lvg` block below), NOT the app
+// `--fs-*` rem tokens: a landing is allowed — expected — to read larger and more
+// confident than the login / product. The one rule is INTERNAL consistency: the
+// scale is a small closed set of role tokens and every same-role element uses the
+// same token. No raw px / one-off literals anywhere — every font-size is one of:
+//   --l-hero   hero H1 (the single biggest headline)
+//   --l-h2     EVERY section heading + prominent card totals — all identical
+//   --l-h3     card / step titles + stat numbers
+//   --l-lead   hero + section ledes
+//   --l-body   body copy, buttons, nav, names
+//   --l-small  meta / captions / chips / footer links-meta
+//   --l-eyebrow  uppercase mono pills, kickers, verdict/lane labels
 //
 // What differs from F: the hero is a two-column grid (copy + CTAs | agent stage)
 // and every body section is `.section-vp` — content-height with ONE uniform
@@ -38,9 +43,19 @@ export const VARIANT_G_CSS = `
   --agent-on:      var(--grad-agent-on);
   --agent-on-flow: var(--grad-agent-on-animated);
 
-  /* ── TYPE — the landing consumes the app --fs-* rem scale directly (see the
-     header note). No bespoke landing type tokens: same density as login/product.
-     ── ONE uniform section rhythm — every band (hero + body sections + footer)
+  /* ── TYPE — bespoke MARKETING scale (see the header note). Bigger + confident
+     than the app, and internally consistent: a small closed set of role tokens,
+     every same-role element on the same token. px/clamp on purpose — the landing
+     does NOT track the app --fs-* rem density. ── */
+  --l-hero:    clamp(40px, 5vw, 54px);
+  --l-h2:      clamp(26px, 3vw, 32px);
+  --l-h3:      20px;
+  --l-lead:    18px;
+  --l-body:    16px;
+  --l-small:   14px;
+  --l-eyebrow: 12px;
+
+  /* ── ONE uniform section rhythm — every band (hero + body sections + footer)
      pads by this single value top & bottom so the vertical spacing is even. */
   --sec-pad: 64px;
 
@@ -83,14 +98,14 @@ export const VARIANT_G_CSS = `
 .lvg .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 var(--pad); }
 
 /* ── eyebrow — ONE crisp pill everywhere (section heads, hero, CTA). Consistent
-   padding, --fs-eyebrow, tidy soft-purple fill + hairline border so every kicker
+   padding, --l-eyebrow, tidy soft-purple fill + hairline border so every kicker
    reads the same, tidy way. Dark bands get a translucent variant below. ── */
 .lvg .eyebrow {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   font-family: var(--mono);
-  font-size: var(--fs-eyebrow);
+  font-size: var(--l-eyebrow);
   letter-spacing: .14em;
   text-transform: uppercase;
   color: var(--purple);
@@ -113,7 +128,7 @@ export const VARIANT_G_CSS = `
   text-wrap: balance;
 }
 .lvg .display .accent { color: var(--purple); }
-.lvg .lede { color: var(--ink-2); font-size: var(--fs-subtitle); line-height: 1.6; margin: 0; }
+.lvg .lede { color: var(--ink-2); font-size: var(--l-lead); line-height: 1.6; margin: 0; }
 
 .lvg .grad-text {
   background: linear-gradient(96deg, #6a3fb8, #5e3aa8 40%, #8b5cf6);
@@ -124,7 +139,7 @@ export const VARIANT_G_CSS = `
 .lvg .btn {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 12px 20px; border-radius: 10px;
-  font-size: var(--fs-body); font-weight: 500; letter-spacing: -.01em;
+  font-size: var(--l-body); font-weight: 500; letter-spacing: -.01em;
   transition: transform .1s ease, background .16s ease, border-color .16s, color .16s, box-shadow .16s;
   white-space: nowrap;
 }
@@ -137,7 +152,7 @@ export const VARIANT_G_CSS = `
 .lvg .btn-outline:hover { border-color: var(--purple); color: var(--purple); }
 .lvg .btn-ghost { color: var(--ink-2); padding-left: 6px; padding-right: 6px; }
 .lvg .btn-ghost:hover { color: var(--purple); }
-.lvg .btn-lg { padding: 15px 26px; font-size: var(--fs-body); }
+.lvg .btn-lg { padding: 15px 26px; font-size: var(--l-body); }
 
 /* ── nav ── */
 .lvg .nav {
@@ -155,13 +170,13 @@ export const VARIANT_G_CSS = `
   width: 30px; height: 30px; border-radius: 8px;
   background: var(--agent-on); background-size: 200% 200%;
   display: grid; place-items: center; color: #fff;
-  font-weight: 600; font-size: var(--fs-h3); letter-spacing: -.04em;
+  font-weight: 600; font-size: var(--l-h3); letter-spacing: -.04em;
   box-shadow: var(--sh-sm);
 }
-.lvg .brand-word { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.03em; color: var(--ink); }
+.lvg .brand-word { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.03em; color: var(--ink); }
 .lvg .brand-word .dot { color: var(--purple); }
 .lvg .nav-links { display: flex; gap: 30px; }
-.lvg .nav-links a { color: var(--ink-2); font-size: var(--fs-body); font-weight: 500; position: relative; padding: 4px 0; transition: color .16s; }
+.lvg .nav-links a { color: var(--ink-2); font-size: var(--l-body); font-weight: 500; position: relative; padding: 4px 0; transition: color .16s; }
 .lvg .nav-links a:hover { color: var(--purple); }
 .lvg .nav-links a.is-active { color: var(--purple); }
 .lvg .nav-links a.is-active::after {
@@ -179,7 +194,7 @@ export const VARIANT_G_CSS = `
 .lvg .agent-pill {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 5px 11px 5px 9px; border-radius: 999px;
-  font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em;
+  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em;
   color: #efe7ff; font-weight: 500;
   background: var(--agent-on-flow); background-size: 200% 100%;
   box-shadow: var(--sh-glow);
@@ -202,21 +217,21 @@ export const VARIANT_G_CSS = `
 }
 .lvg .job-card.is-on { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); box-shadow: var(--sh-lg); }
 .lvg .job-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.lvg .job-title { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.02em; }
-.lvg .job-meta { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 4px; letter-spacing: .02em; }
+.lvg .job-title { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.02em; }
+.lvg .job-meta { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 4px; letter-spacing: .02em; }
 
 /* funnel stat row */
 .lvg .funnel-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .lvg .fstat { background: var(--surface); padding: 8px 8px; }
-.lvg .fstat .k { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
-.lvg .fstat .v { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.lvg .fstat .k { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
+.lvg .fstat .v { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .lvg .fstat.hot .v { color: var(--purple); }
 
 /* decision lane */
 .lvg .lane { margin-top: 12px; }
 .lvg .lane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.lvg .lane-title { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
-.lvg .lane-await { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; color: var(--purple); }
+.lvg .lane-title { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+.lvg .lane-await { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; color: var(--purple); }
 .lvg .cand-row {
   display: grid; grid-template-columns: 34px 1fr auto auto; gap: 12px; align-items: center;
   padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r);
@@ -228,19 +243,19 @@ export const VARIANT_G_CSS = `
 .lvg .cand-name, .lvg .cand-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lvg .avatar {
   width: 34px; height: 34px; border-radius: 50%;
-  display: grid; place-items: center; font-size: var(--fs-body); font-weight: 600;
+  display: grid; place-items: center; font-size: var(--l-body); font-weight: 600;
   background: var(--purple-soft); color: var(--purple-deep);
 }
-.lvg .cand-name { font-size: var(--fs-body); font-weight: 550; letter-spacing: -.01em; }
-.lvg .cand-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 1px; }
+.lvg .cand-name { font-size: var(--l-body); font-weight: 550; letter-spacing: -.01em; }
+.lvg .cand-sub { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 1px; }
 .lvg .score-chip {
-  font-family: var(--mono); font-size: var(--fs-caption); font-weight: 500;
+  font-family: var(--mono); font-size: var(--l-small); font-weight: 500;
   padding: 4px 9px; border-radius: 8px; background: var(--purple-soft); color: var(--purple-deep);
   font-variant-numeric: tabular-nums;
 }
 .lvg .score-chip.low { background: var(--bg); color: var(--mute); }
 .lvg .verdict {
-  font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase;
+  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; text-transform: uppercase;
   padding: 5px 11px; border-radius: 999px; font-weight: 500;
 }
 .lvg .verdict.advance { background: var(--purple); color: #fff; }
@@ -259,8 +274,8 @@ export const VARIANT_G_CSS = `
 .lvg .section-vp-in { width: 100%; }
 .lvg .section-head { max-width: 760px; margin: 0 auto 30px; text-align: center; }
 .lvg .section-head .eyebrow { margin-bottom: 12px; }
-.lvg .section-head h2 { font-size: var(--fs-h1); }
-.lvg .section-head .lede { margin: 14px auto 0; max-width: 600px; font-size: var(--fs-subtitle); }
+.lvg .section-head h2 { font-size: var(--l-h2); }
+.lvg .section-head .lede { margin: 14px auto 0; max-width: 600px; font-size: var(--l-lead); }
 
 /* ============================================================
    FUNNEL — 5 steps
@@ -270,25 +285,25 @@ export const VARIANT_G_CSS = `
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
   padding: 22px 20px; display: flex; flex-direction: column; position: relative; box-shadow: var(--sh-sm);
 }
-.lvg .fstep .fnum { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; color: var(--purple); }
-.lvg .fstep h3 { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.02em; margin: 12px 0 8px; }
-.lvg .fstep p { font-size: var(--fs-body); line-height: 1.55; color: var(--mute); margin: 0 0 16px; }
+.lvg .fstep .fnum { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; color: var(--purple); }
+.lvg .fstep h3 { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.02em; margin: 12px 0 8px; }
+.lvg .fstep p { font-size: var(--l-body); line-height: 1.55; color: var(--mute); margin: 0 0 16px; }
 .lvg .fstep .fviz { margin-top: auto; }
 .lvg .fchip {
   display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .04em;
+  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .04em;
   padding: 4px 9px; border-radius: 7px; background: var(--purple-soft); color: var(--purple-deep);
 }
 .lvg .fchip.plain { background: var(--bg); color: var(--ink-2); border: 1px solid var(--line); }
 .lvg .fchip.ok { background: var(--purple); color: #fff; }
 .lvg .fchip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .lvg .evid-row {
-  display: flex; align-items: center; gap: 8px; font-size: var(--fs-caption); color: var(--ink-2);
+  display: flex; align-items: center; gap: 8px; font-size: var(--l-small); color: var(--ink-2);
   padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
 }
 .lvg .evid-row .tick { color: var(--purple); font-weight: 700; }
-.lvg .mini-score { font-family: var(--mono); font-size: var(--fs-h3); font-weight: 600; color: var(--purple); letter-spacing: -.02em; }
-.lvg .mini-score small { font-size: var(--fs-caption); color: var(--mute); }
+.lvg .mini-score { font-family: var(--mono); font-size: var(--l-h3); font-weight: 600; color: var(--purple); letter-spacing: -.02em; }
+.lvg .mini-score small { font-size: var(--l-small); color: var(--mute); }
 .lvg .fflow-track { position: absolute; top: 50%; right: -14px; width: 14px; height: 2px; background: var(--line); z-index: 1; }
 @media (max-width: 1000px) { .lvg .funnel { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 560px) { .lvg .funnel { grid-template-columns: 1fr; } }
@@ -304,21 +319,21 @@ export const VARIANT_G_CSS = `
 }
 .lvg .sc-head .who { display: flex; align-items: center; gap: 12px; }
 .lvg .sc-head .who .avatar { width: 40px; height: 40px; }
-.lvg .sc-title { font-size: var(--fs-h3); font-weight: 600; }
-.lvg .sc-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; }
+.lvg .sc-title { font-size: var(--l-h3); font-weight: 600; }
+.lvg .sc-sub { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 2px; }
 .lvg .sc-total { text-align: right; }
-.lvg .sc-total .big { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -.03em; color: var(--purple); line-height: 1; font-variant-numeric: tabular-nums; }
-.lvg .sc-total .lbl { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+.lvg .sc-total .big { font-size: var(--l-h2); font-weight: 600; letter-spacing: -.03em; color: var(--purple); line-height: 1; font-variant-numeric: tabular-nums; }
+.lvg .sc-total .lbl { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
 .lvg .dd-row {
   display: grid; grid-template-columns: 232px 1fr 46px; gap: 20px; align-items: center;
   padding: 10px 28px; border-bottom: 1px solid var(--line);
 }
 .lvg .dd-row:last-child { border-bottom: 0; }
-.lvg .dd-name { font-size: var(--fs-body); font-weight: 600; letter-spacing: -.01em; }
-.lvg .dd-def { font-size: var(--fs-caption); line-height: 1.35; color: var(--mute); margin-top: 2px; }
+.lvg .dd-name { font-size: var(--l-body); font-weight: 600; letter-spacing: -.01em; }
+.lvg .dd-def { font-size: var(--l-small); line-height: 1.35; color: var(--mute); margin-top: 2px; }
 .lvg .dd-track { height: 8px; border-radius: 999px; background: var(--purple-soft); overflow: hidden; }
 .lvg .dd-fill { height: 100%; border-radius: 999px; background: var(--agent-on-flow); background-size: 200% 100%; transform-origin: left; }
-.lvg .dd-val { font-family: var(--mono); font-size: var(--fs-body); font-weight: 500; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.lvg .dd-val { font-family: var(--mono); font-size: var(--l-body); font-weight: 500; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
 @media (max-width: 620px) { .lvg .dd-row { grid-template-columns: 1fr 44px; } .lvg .dd-track { grid-column: 1 / -1; order: 3; } }
 
 /* ============================================================
@@ -333,7 +348,7 @@ export const VARIANT_G_CSS = `
   width: 30px; height: 30px; border-radius: 9px; background: var(--purple-soft); color: var(--purple-deep);
   display: grid; place-items: center;
 }
-.lvg .control-point p { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--ink); letter-spacing: -.01em; }
+.lvg .control-point p { margin: 0; font-size: var(--l-body); line-height: 1.5; color: var(--ink); letter-spacing: -.01em; }
 
 /* ============================================================
    CTA + FOOTER
@@ -350,12 +365,12 @@ export const VARIANT_G_CSS = `
 .lvg .foot-grid { display: grid; grid-template-columns: 1.8fr 1fr 1fr 1fr; gap: 48px; }
 .lvg .foot-brand .brand { margin-bottom: 16px; }
 .lvg .foot-brand .logo { color: var(--ink); }
-.lvg .foot-brand p { font-size: var(--fs-caption); color: var(--mute); line-height: 1.6; max-width: 300px; margin: 0; }
-.lvg .foot-col h5 { font-family: var(--mono); font-size: var(--fs-caption); letter-spacing: .14em; text-transform: uppercase; color: var(--mute); margin: 0 0 16px; font-weight: 500; }
+.lvg .foot-brand p { font-size: var(--l-small); color: var(--mute); line-height: 1.6; max-width: 300px; margin: 0; }
+.lvg .foot-col h5 { font-family: var(--mono); font-size: var(--l-small); letter-spacing: .14em; text-transform: uppercase; color: var(--mute); margin: 0 0 16px; font-weight: 500; }
 .lvg .foot-col ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 11px; }
-.lvg .foot-col a { color: var(--ink-2); font-size: var(--fs-body); }
+.lvg .foot-col a { color: var(--ink-2); font-size: var(--l-body); }
 .lvg .foot-col a:hover { color: var(--purple); }
-.lvg .foot-bottom { display: flex; justify-content: space-between; align-items: center; margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); letter-spacing: .04em; }
+.lvg .foot-bottom { display: flex; justify-content: space-between; align-items: center; margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: var(--l-small); color: var(--mute); letter-spacing: .04em; }
 @media (max-width: 880px) { .lvg .foot-grid { grid-template-columns: 1fr 1fr; gap: 32px; } }
 
 /* ============================================================
@@ -367,8 +382,8 @@ export const VARIANT_G_CSS = `
 .lvg .heroC-copy { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
 .lvg .heroC .eyebrow { margin-bottom: 26px; }
 .lvg .heroC .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
-.lvg .heroC h1 { font-size: var(--fs-stat); letter-spacing: -.045em; line-height: 1.08; max-width: 15ch; }
-.lvg .heroC .lede { margin: 26px 0 0; max-width: 500px; font-size: var(--fs-subtitle); line-height: 1.65; }
+.lvg .heroC h1 { font-size: var(--l-hero); letter-spacing: -.045em; line-height: 1.08; max-width: 15ch; }
+.lvg .heroC .lede { margin: 26px 0 0; max-width: 500px; font-size: var(--l-lead); line-height: 1.65; }
 .lvg .heroC-actions { display: flex; gap: 14px; align-items: center; justify-content: flex-start; margin-top: 48px; flex-wrap: wrap; }
 .lvg .heroC-stage-col { min-width: 0; }
 
@@ -376,7 +391,7 @@ export const VARIANT_G_CSS = `
 .lvg .stage { position: relative; max-width: 400px; width: 100%; margin: 0 0 0 auto; border-radius: var(--r-lg); padding: 16px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74,45,128,.55); }
 .lvg .stage::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.14); pointer-events: none; }
 .lvg .stage .stage-cap { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
-.lvg .stage .stage-cap .t { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.7); }
+.lvg .stage .stage-cap .t { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.7); }
 .lvg .heroC-orb { position: absolute; z-index: 0; border-radius: 50%; filter: blur(60px); pointer-events: none; }
 .lvg .heroC-orb.a { width: 420px; height: 420px; right: -60px; top: -80px; background: rgba(196,165,253,.4); }
 .lvg .heroC-orb.b { width: 320px; height: 320px; left: 30%; bottom: -140px; background: rgba(94,58,168,.18); }
@@ -395,7 +410,7 @@ export const VARIANT_G_CSS = `
 /* replay button for the hero scene (in the stage cap, on dark) */
 .lvg .replay {
   display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase;
+  font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; text-transform: uppercase;
   color: rgba(255,255,255,.8); padding: 6px 12px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: rgba(255,255,255,.1);
   transition: color .16s, border-color .16s;
 }
@@ -410,16 +425,16 @@ export const VARIANT_G_CSS = `
    decision cards (was a dark-purple glow card). Agent advises → you decide, on a
    clean surface: candidate + evidence + the Advance verdict pill. */
 .lvg .glow-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl); padding: 28px; color: var(--ink); box-shadow: var(--sh-lg); }
-.lvg .glow-card .dg-head { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; color: var(--mute); margin-bottom: 18px; }
+.lvg .glow-card .dg-head { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; color: var(--mute); margin-bottom: 18px; }
 .lvg .glow-card .dg-card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }
 .lvg .glow-card .dg-row { display: flex; align-items: center; gap: 12px; }
 .lvg .glow-card .avatar { background: var(--purple-soft); color: var(--purple-deep); }
-.lvg .glow-card .dg-name { font-weight: 600; font-size: var(--fs-body); color: var(--ink); }
-.lvg .glow-card .dg-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; }
-.lvg .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--purple); color: #fff; font-weight: 600; }
-.lvg .glow-card .dg-ev { display: flex; gap: 9px; align-items: center; font-size: var(--fs-caption); color: var(--ink-2); margin-top: 10px; }
-.lvg .glow-card .dg-ev .lk { font-family: var(--mono); font-size: var(--fs-eyebrow); color: var(--purple); letter-spacing: .06em; }
-.lvg .control-copy .display { font-size: var(--fs-h1); margin: 16px 0 6px; }
+.lvg .glow-card .dg-name { font-weight: 600; font-size: var(--l-body); color: var(--ink); }
+.lvg .glow-card .dg-sub { font-family: var(--mono); font-size: var(--l-small); color: var(--mute); margin-top: 2px; }
+.lvg .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--purple); color: #fff; font-weight: 600; }
+.lvg .glow-card .dg-ev { display: flex; gap: 9px; align-items: center; font-size: var(--l-small); color: var(--ink-2); margin-top: 10px; }
+.lvg .glow-card .dg-ev .lk { font-family: var(--mono); font-size: var(--l-eyebrow); color: var(--purple); letter-spacing: .06em; }
+.lvg .control-copy .display { font-size: var(--l-h2); margin: 16px 0 6px; }
 .lvg .control-points { margin-top: 20px; }
 /* the relocated closing CTA — Control's finale */
 .lvg .cta-band.control-cta { margin-top: 48px; padding: 40px 44px; }
