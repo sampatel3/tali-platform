@@ -16,20 +16,18 @@
 // the reject state is a muted grey, never red. No CSS zoom; no horizontal scroll.
 export const VARIANT_G_CSS = `
 .lvg {
-  /* ── palette (founder-approved), hardcoded ── */
-  --purple:       #5e3aa8;
-  --purple-deep:  #4a2d80;
-  --purple-soft:  #ede5f8;
-  --lavender:     #c4a5fd;
-  --bg:           #f7f4fb;
-  --surface:      #ffffff;
-  --ink:          #15121a;
-  --ink-2:        #3a3343;
-  --mute:         #8b8595;
-  --line:         #e8e2ee;
+  /* ── palette — consume the SHARED taali brand tokens (00-tokens.css,
+     data-brand="taali") instead of hardcoded literals, so the landing tracks
+     the brand palette AND dark mode exactly like the rest of the site. The
+     colour/surface tokens (--purple, --purple-soft, --bg, --surface, --ink,
+     --ink-2, --mute, --line) inherit from <html data-brand="taali">; the two
+     aliases below map the scoped names this file uses onto the shared tokens,
+     and --agent-on(-flow) point at the shared agent-ON gradient vocabulary. ── */
+  --purple-deep:   var(--purple-2);
+  --lavender:      var(--purple-lav);
 
-  --agent-on:      linear-gradient(150deg, #3a1d6e, #241147);
-  --agent-on-flow: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  --agent-on:      var(--grad-agent-on);
+  --agent-on-flow: var(--grad-agent-on-animated);
 
   --sh-sm: 0 1px 2px rgba(21,18,26,.05), 0 1px 0 rgba(21,18,26,.02);
   --sh-md: 0 2px 4px rgba(21,18,26,.04), 0 12px 28px -10px rgba(21,18,26,.12);
@@ -41,8 +39,8 @@ export const VARIANT_G_CSS = `
   --r-lg: 18px;
   --r-xl: 24px;
 
-  --font: "Geist", system-ui, -apple-system, sans-serif;
-  --mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+  --font: var(--font-sans);
+  --mono: var(--font-mono);
 
   --maxw: 1200px;
   --pad:  40px;
@@ -340,7 +338,7 @@ export const VARIANT_G_CSS = `
 .lvg .heroC { position: relative; overflow: hidden; min-height: min(100svh, 900px); display: flex; align-items: center; padding: 40px 0; scroll-margin-top: 68px; }
 .lvg .heroC-grid { display: grid; grid-template-columns: 1.02fr 0.98fr; gap: 56px; align-items: center; }
 .lvg .heroC-copy { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
-.lvg .heroC .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: #fff; border: 1px solid var(--line); box-shadow: var(--sh-sm); margin-bottom: 22px; }
+.lvg .heroC .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--sh-sm); margin-bottom: 22px; }
 .lvg .heroC .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
 .lvg .heroC h1 { font-size: clamp(38px, 4.4vw, 60px); letter-spacing: -.045em; line-height: 1; max-width: 15ch; }
 .lvg .heroC .lede { margin: 22px 0 0; max-width: 500px; font-size: 18px; }
