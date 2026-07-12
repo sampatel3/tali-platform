@@ -9,9 +9,9 @@ import {
   Button,
   Input,
   Panel,
+  PageLoader,
   Select,
 } from '../../shared/ui/TaaliPrimitives';
-import { Skeleton, SkeletonReport } from '../../shared/ui/Skeleton';
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { DecisionRail } from './DecisionRail';
 import { useReportInFlight } from './useReportInFlight';
@@ -1044,7 +1044,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       <div>
         {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
         <div className="page">
-          <SkeletonReport />
+          <PageLoader />
         </div>
       </div>
     );
@@ -1572,7 +1572,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               }
             >
-              <Suspense fallback={<Skeleton width="100%" height="12rem" />}>
+              <Suspense fallback={<PageLoader minHeight="12rem" />}>
                 <AssessmentEvidencePanels candidate={candidateView} />
               </Suspense>
             </ErrorBoundary>
@@ -1600,7 +1600,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     Optional manual rubric, strengths and improvements
                   </span>
                 </summary>
-                <Suspense fallback={<Skeleton width="100%" height="8rem" />}>
+                <Suspense fallback={<PageLoader minHeight="8rem" />}>
                   <EvaluatePanel
                     candidate={candidateView}
                     evaluationRubric={evaluationRubric}
@@ -2071,7 +2071,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   {!isShareRoute ? (
                     <div className="mc-notes-input" data-internal-only style={{ marginTop: 14 }}>
                       <div className="mc-kicker" style={{ marginBottom: 6 }}>INTERVIEW TRANSCRIPT</div>
-                      <Suspense fallback={<Skeleton width="100%" height="5rem" />}>
+                      <Suspense fallback={<PageLoader minHeight="5rem" />}>
                         <InterviewTranscriptCapture
                           application={application}
                           firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}

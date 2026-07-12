@@ -27,8 +27,7 @@ import {
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Select } from '../../shared/ui/TaaliPrimitives';
-import { Skeleton } from '../../shared/ui/Skeleton';
+import { Select, PageLoader } from '../../shared/ui/TaaliPrimitives';
 import {
   safeNum,
   pct,
@@ -311,10 +310,8 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         {tab === 'outcomes' ? (
           loading && !summary
             ? (
-              <div className="an-empty" aria-busy="true" aria-label="Loading outcomes" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <Skeleton width="100%" height="8rem" />
-                <Skeleton width="90%" height="1.2rem" />
-                <Skeleton width="100%" height="6rem" />
+              <div className="an-empty" aria-label="Loading outcomes">
+                <PageLoader minHeight="16rem" label="Loading outcomes" />
               </div>
             )
             : <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} />
