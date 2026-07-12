@@ -26,6 +26,8 @@ import {
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
+import '../../shared/motion/reveal.css';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Select, PageLoader } from '../../shared/ui/TaaliPrimitives';
 import {
@@ -158,6 +160,20 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   const budgetCents = safeNum(spend.budget_cents);
   const budgetPctValue = budgetCents > 0 ? Math.round((spentCents / budgetCents) * 100) : null;
 
+  // ── Pulse-band number tickers. useCountUp re-runs when `to` changes, so each
+  //    cell counts 0 → real once the summary fetch settles; reduced motion
+  //    lands on the final formatted value immediately. Formats mirror the
+  //    static render exactly (locale-grouped int, "N%", fmtUsd). ──────────────
+  const reduced = useReducedMotionSync();
+  const asInt = (n) => Math.round(n).toLocaleString();
+  const asPct = (n) => `${Math.round(n)}%`;
+  const decisionsTick = useCountUp(decisions, { reduced, format: asInt });
+  const autoAdvancedTick = useCountUp(autoAdvanced, { reduced, format: asInt });
+  const advanceHireTick = useCountUp(advanceHirePct ?? 0, { reduced, format: asPct });
+  const overrideRateTick = useCountUp(overrideRate, { reduced, format: asPct });
+  const teachRateTick = useCountUp(teachRate, { reduced, format: asPct });
+  const spendTick = useCountUp(spentCents, { reduced, format: fmtUsd });
+
   const roleName = useMemo(() => {
     if (!roleId) return null;
     const r = rolesBreakdown.find((x) => String(x.role_id) === String(roleId));
@@ -248,39 +264,39 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         {/* 6-stat pulse band. Dims + shows a spinner while a scope change is
             in-flight so the numbers under the new label aren't read as final. */}
         <div
-          className="an-pulse"
+          className="an-pulse reveal-stagger"
           aria-busy={loading && hasLoaded ? 'true' : undefined}
           style={loading && hasLoaded ? { opacity: 0.5, transition: 'opacity 120ms' } : undefined}
         >
-          <div className="an-pcell">
+          <div className="an-pcell" style={{ '--i': 0 }}>
             <div className="k">Decisions</div>
-            <div className="v">{decisions.toLocaleString()}</div>
+            <div className="v">{decisionsTick}</div>
             <div className="s">{approved.toLocaleString()} approved</div>
           </div>
-          <div className="an-pcell">
+          <div className="an-pcell" style={{ '--i': 1 }}>
             <div className="k">Auto-advanced</div>
-            <div className="v">{autoAdvanced.toLocaleString()}</div>
+            <div className="v">{autoAdvancedTick}</div>
             <div className="s">{autoRejected.toLocaleString()} auto-rejected</div>
           </div>
-          <div className="an-pcell">
+          <div className="an-pcell" style={{ '--i': 2 }}>
             <div className="k">Advance → hire</div>
-            <div className="v attn">{advanceHirePct != null ? `${advanceHirePct}%` : '—'}</div>
+            <div className="v attn">{advanceHirePct != null ? advanceHireTick : '—'}</div>
             <div className="s">{hired.toLocaleString()} of {advancedTotal.toLocaleString()} advanced</div>
           </div>
-          <div className="an-pcell">
+          <div className="an-pcell" style={{ '--i': 3 }}>
             <div className="k">Override rate</div>
-            <div className="v">{overrideRate}%</div>
+            <div className="v">{overrideRateTick}</div>
             <div className="s">{overridden.toLocaleString()} override{overridden === 1 ? '' : 's'}</div>
           </div>
-          <div className="an-pcell">
+          <div className="an-pcell" style={{ '--i': 4 }}>
             <div className="k">Taught</div>
-            <div className="v">{teachRate}%</div>
+            <div className="v">{teachRateTick}</div>
             <div className="s">{taught.toLocaleString()} teaching event{taught === 1 ? '' : 's'}</div>
           </div>
-          <div className="an-pcell">
+          <div className="an-pcell" style={{ '--i': 5 }}>
             <div className="k">Spend · MTD</div>
             <div className="v">
-              {fmtUsd(spentCents)}
+              {spendTick}
               {budgetCents > 0 ? <small> / {fmtUsd(budgetCents)}</small> : null}
             </div>
             <div className="s">{budgetPctValue != null ? `${budgetPctValue}%` : 'no cap set'}</div>
