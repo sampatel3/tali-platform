@@ -5,7 +5,7 @@
 // (the dossier: sticky DecisionRail on the left, the report body on the right),
 // fed by the SAME AI_SHOWCASE fixtures via the SAME real view-model builder
 // (buildStandingCandidateReportModel). The API-coupled panels (ScorecardPanel,
-// OfferPanel, the Evaluate/Notes self-fetching panes) are intentionally skipped.
+// the Evaluate/Notes self-fetching panes) are intentionally skipped.
 //
 // Motion is the signature here: the DecisionRail slides in, the 5-Ds scorecard
 // bars fill from 0 and its rows stagger in on mount (scoped CSS keyframes so the

@@ -21,7 +21,6 @@ import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
-import { OfferPanel } from './OfferPanel';
 import { ScorecardPanel } from './ScorecardPanel';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
@@ -93,9 +92,6 @@ const REPORT_TABS = [
   // interview transcript capture, ranking / link quick-adds, and the audit
   // timeline.
   { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
-  // Offer lifecycle (create/approve/send + HRIS & e-sign handoff). Recruiter
-  // app only — never shown on a share link.
-  { id: 'offer', label: 'Offer', internalOnly: true },
   // Interviewer scorecards: draft/submit your own card + the panel summary.
   // Recruiter app only — never shown on a share link.
   { id: 'scorecards', label: 'Scorecards', internalOnly: true },
@@ -2200,19 +2196,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             );
           })()}
         </div>
-
-        {!isShareRoute && application?.id ? (
-          <div
-            className={`pane ${activeTab === 'offer' ? 'active' : ''}`}
-            data-p="offer"
-            data-internal-only=""
-            id="report-pane-offer"
-            role="tabpanel"
-            aria-labelledby="report-tab-offer"
-          >
-            <OfferPanel applicationId={application.id} />
-          </div>
-        ) : null}
 
         {!isShareRoute && application?.id ? (
           <div
