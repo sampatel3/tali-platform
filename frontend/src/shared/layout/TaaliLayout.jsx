@@ -25,7 +25,6 @@ const APP_TABS = [
 ];
 
 const MARKETING_TABS = [
-  { id: 'platform', label: 'Product' },
   { id: 'how-it-works', label: 'How it works' },
 ];
 
@@ -222,12 +221,6 @@ export const MarketingNav = ({ onNavigate }) => {
               {tab.label}
             </button>
           ))}
-          <PageLink page="developers" className="btn btn-ghost btn-sm" onClick={closeMenu}>
-            Developers
-          </PageLink>
-          <PageLink page="blog" className="btn btn-ghost btn-sm">
-            Blog
-          </PageLink>
         </div>
         <div className="row" style={{ gap: 10 }}>
           <PageLink page="login" className="btn btn-ghost btn-sm !hidden sm:!inline-flex">
@@ -271,20 +264,6 @@ export const MarketingNav = ({ onNavigate }) => {
                 {tab.label}
               </button>
             ))}
-            <PageLink
-              page="developers"
-              className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
-              onClick={closeMenu}
-            >
-              Developers
-            </PageLink>
-            <PageLink
-              page="blog"
-              className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
-              onClick={closeMenu}
-            >
-              Blog
-            </PageLink>
           </div>
           <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
             <PageLink

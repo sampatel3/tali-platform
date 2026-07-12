@@ -417,10 +417,11 @@ describe('LandingPreviewPage', () => {
     expect(container.querySelector('.app-nav')).toBeTruthy();
     expect(container.querySelector('.lvg .nav-links')).toBeNull();
     expect(screen.getByRole('button', { name: /How it works/i })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: /^Product$/i }).length).toBeGreaterThan(0);
-    // Those tabs resolve to the site's canonical marketing anchors, now carried
-    // by variant G's first two body sections; the closing section + hero anchor
-    // also exist.
+    // The nav is trimmed to only "How it works" — Product/Developers/Blog removed.
+    expect(screen.queryByRole('button', { name: /^Product$/i })).toBeNull();
+    // The section anchors still resolve to the site's canonical marketing anchors,
+    // now carried by variant G's first two body sections; the closing section +
+    // hero anchor also exist.
     ['how-it-works', 'platform', 'g-control', 'g-top'].forEach((id) => {
       expect(container.querySelector(`#${id}`)).toBeTruthy();
     });

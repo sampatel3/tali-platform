@@ -18,13 +18,12 @@ import { CANDIDATES, FUNNEL_STATS, verdictLabel } from './variantG.data';
 //   • 1150ms — candidate rows animate in from translateY(10px)/opacity 0,
 //              staggered +480ms each.
 //   • +180ms after each row lands — its verdict pill stamps (scale .7→1.06→1).
-// A "↻ Replay" affordance re-runs the whole OFF→ON sequence. `completedRef`
-// gates the settled state so it holds once played.
+// `completedRef` gates the settled state so it holds once played.
 //
 // Reduced motion → render the settled ON state immediately (rows visible,
-// verdicts stamped, no data-armed, no timeline, no replay button) so meaningful
-// content is never gated behind a scroll the user can't trigger. The scoped CSS
-// hides rows only while `data-armed`.
+// verdicts stamped, no data-armed, no timeline) so meaningful content is never
+// gated behind a scroll the user can't trigger. The scoped CSS hides rows only
+// while `data-armed`.
 // ---------------------------------------------------------------------------
 
 // Handoff timings, in seconds.
@@ -40,7 +39,6 @@ export const AgentScene = () => {
   // `on` drives the card frame (.is-on) + the OFF→ON pill swap. Reduced motion
   // seeds it ON so the scene reads as its settled final state.
   const [on, setOn] = useState(reduced);
-  const [replayNonce, setReplayNonce] = useState(0);
   // `triggered` arms the timeline. Starts false so the scene holds OFF at the
   // top of the page; the first scroll past SCROLL_TRIGGER flips it true (once).
   const [triggered, setTriggered] = useState(false);
@@ -101,23 +99,12 @@ export const AgentScene = () => {
       cancelled = true;
       timers.forEach(clearTimeout);
     };
-  }, [triggered, reduced, replayNonce, animate]);
-
-  // Replay always re-runs the full OFF→ON sequence — arming the timeline even if
-  // the user hasn't scrolled yet.
-  const replay = () => {
-    completedRef.current = false;
-    setTriggered(true);
-    setReplayNonce((n) => n + 1);
-  };
+  }, [triggered, reduced, animate]);
 
   return (
     <div className="stage" ref={scope} {...(reduced ? {} : { 'data-armed': 'true' })}>
       <div className="stage-cap">
         <span className="t">Agent · live</span>
-        {!reduced ? (
-          <button type="button" className="replay" onClick={replay}>↻ Replay</button>
-        ) : null}
       </div>
 
       <div className={`job-card${on ? ' is-on' : ''}`}>
