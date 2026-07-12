@@ -68,38 +68,6 @@ const csvEscape = (v) => {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-// Bespoke SVG line/area chart — agent decisions per day. No chart lib and no
-// motion/react (the real app animates via CSS, not Motion); the line draws in
-// with a scoped stroke-dashoffset keyframe (gated on prefers-reduced-motion in
-// 25-analytics.css). Mirrors the /analytics-preview DecisionsChart look: purple
-// line, soft area fill, end-point dot.
-const DecisionsChart = ({ data }) => {
-  const W = 640;
-  const H = 190;
-  const PAD = 14;
-  const max = Math.max(1, ...data);
-  const stepX = (W - PAD * 2) / Math.max(1, data.length - 1);
-  const x = (i) => PAD + i * stepX;
-  const y = (v) => H - PAD - (v / max) * (H - PAD * 2);
-  const line = data.map((v, i) => `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
-  const area = `${line} L ${x(data.length - 1).toFixed(1)} ${H - PAD} L ${x(0).toFixed(1)} ${H - PAD} Z`;
-  const lastX = x(data.length - 1);
-  const lastY = y(data[data.length - 1]);
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="an-chart-svg" role="img" aria-label="Agent decisions per day" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="anChartFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--purple)" stopOpacity="0.28" />
-          <stop offset="100%" stopColor="var(--purple)" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill="url(#anChartFill)" />
-      <path className="an-chart-line" d={line} fill="none" stroke="var(--purple)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={lastX} cy={lastY} r="4.5" fill="var(--purple)" />
-    </svg>
-  );
-};
-
 export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   const { showToast } = useToast();
   const [roleId, setRoleId] = useState('');
@@ -110,7 +78,6 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   const [summary, setSummary] = useState(null);
   const [breakdown, setBreakdown] = useState(null);
   const [trend, setTrend] = useState(null);
-  const [timeseries, setTimeseries] = useState(null);
   const [rolesBreakdown, setRolesBreakdown] = useState([]);
   const [feedback, setFeedback] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -157,18 +124,14 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
       analyticsApi.decisionsBreakdown(scope),
       analyticsApi.decisionTrend(roleId ? { role_id: roleId } : {}),
       agentApi.listFeedback({ limit: 30, ...(roleId ? { role_id: roleId } : {}) }),
-      // Real per-day decision volume for the decisions-per-day chart card. Same
-      // windowed/role scope as the rest; keeps its prior value on failure.
-      analyticsApi.activityTimeseries({ days: days || 30, ...(roleId ? { role_id: roleId } : {}) }),
     ])
-      .then(([s, b, t, f, ts]) => {
+      .then(([s, b, t, f]) => {
         if (cancelled) return;
         const summaryOk = s.status === 'fulfilled';
         if (summaryOk) setSummary(s.value?.data || null);
         if (b.status === 'fulfilled') setBreakdown(b.value?.data || null);
         if (t.status === 'fulfilled') setTrend(t.value?.data || null);
         if (f.status === 'fulfilled') setFeedback(Array.isArray(f.value?.data) ? f.value.data : []);
-        if (ts.status === 'fulfilled') setTimeseries(ts.value?.data || null);
         setLoadError(!summaryOk);
         if (summaryOk) setHasLoaded(true);
       })
@@ -210,13 +173,6 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   const overrideRateTick = useCountUp(overrideRate, { reduced, format: asPct });
   const teachRateTick = useCountUp(teachRate, { reduced, format: asPct });
   const spendTick = useCountUp(spentCents, { reduced, format: fmtUsd });
-
-  // Per-day decision volume for the chart card = sum of every decision type in
-  // each day's bucket (real /analytics/activity-timeseries data).
-  const decisionsPerDay = useMemo(() => {
-    const series = Array.isArray(timeseries?.series) ? timeseries.series : [];
-    return series.map((d) => Object.values(d?.by_type || {}).reduce((n, v) => n + safeNum(v), 0));
-  }, [timeseries]);
 
   const roleName = useMemo(() => {
     if (!roleId) return null;
@@ -375,23 +331,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
               </div>
             )
             : (
-              <>
-                {/* Agent decisions per day — real per-day volume, drawn as a
-                    line/area chart card above the outcomes bars (mirrors the
-                    /analytics-preview placement + card style). */}
-                {decisionsPerDay.length >= 2 ? (
-                  <div className="an-card an-chart-card">
-                    <div className="ch">
-                      <div>
-                        <div className="ct2">Agent decisions per day</div>
-                        <div className="cd">{windowLabel(windowKey)} · {roleName || 'all roles'}</div>
-                      </div>
-                    </div>
-                    <DecisionsChart data={decisionsPerDay} />
-                  </div>
-                ) : null}
-                <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} />
-              </>
+              <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} />
             )
         ) : tab === 'fleet' ? (
           <FleetTab />
