@@ -6,6 +6,7 @@ import {
   formatCount,
   funnelDecisionRow,
   awaitingHitlFromDecisions,
+  invitedStageValue,
 } from '../metrics';
 import './FunnelBoard.css';
 
@@ -47,23 +48,33 @@ export const FunnelBoard = ({
       <div className="funnel-board fb-flat">
         <div className="fb-grid fb-stages">
           {PIPELINE_FUNNEL_STAGES.map((stage) => {
-            const value = Number(stageCounts?.[stage.key] || 0);
+            // Invited is the whole Assess step: its value sums invited +
+            // completed (assessment out + done), so `completed` counts here
+            // instead of in its own tile.
+            const value = stage.key === 'invited'
+              ? invitedStageValue(stageCounts)
+              : Number(stageCounts?.[stage.key] || 0);
             const tone = funnelStageTone(stage.key, value);
-            const chips = decisionRow[stage.key] || [];
-            // Assessment lifecycle sub-counts beneath the Invited stage. Each
-            // sub-stage is shown EXPLICITLY — delivered, opened, started — so the
-            // recruiter sees the full progression (cumulative: delivered ≥ opened
-            // ≥ started). "Sent" is the stage value itself; "completed" is the
-            // Completed stage. (When delivery-webhook data is sparse the three
-            // can coincide; that's the real data, not a display collapse.)
+            // `completed` lost its own tile, so its pending-decision chips fold
+            // in under Invited alongside Invited's own.
+            const chips = stage.key === 'invited'
+              ? [...(decisionRow.invited || []), ...(decisionRow.completed || [])]
+              : (decisionRow[stage.key] || []);
+            // Assessment lifecycle sub-counts beneath the Invited stage — the
+            // nested funnel of the value above: delivered ≥ opened ≥ started ≥
+            // completed. Each renders only when it has real data (delivery/open
+            // come from the Resend webhook); a stage with no data just doesn't
+            // show, so the chips never claim progress that didn't happen.
             const invitedChips = [];
             if (stage.key === 'invited') {
-              const started = Number(stageCounts?.in_assessment || 0);
-              const opened = Number(stageCounts?.invited_opened || 0);
               const delivered = Number(stageCounts?.invited_delivered || 0);
+              const opened = Number(stageCounts?.invited_opened || 0);
+              const started = Number(stageCounts?.in_assessment || 0);
+              const completed = Number(stageCounts?.completed || 0);
               if (delivered > 0) invitedChips.push({ key: 'delivered', count: delivered, label: 'delivered', tone: 'pending', tip: 'Invite emails delivered to the candidate — a sub-count of Invited' });
               if (opened > 0) invitedChips.push({ key: 'opened', count: opened, label: 'opened', tone: 'pending', tip: 'Invite emails opened — a sub-count of Invited' });
               if (started > 0) invitedChips.push({ key: 'started', count: started, label: 'started', tone: 'send', tip: 'Assessments started, not yet completed — a sub-count of Invited' });
+              if (completed > 0) invitedChips.push({ key: 'completed', count: completed, label: 'completed', tone: 'advance', tip: 'Assessments completed, awaiting your decision — a sub-count of Invited' });
             }
             return (
               <div
@@ -115,7 +126,9 @@ export const FunnelBoard = ({
 
       <div className="fb-grid fb-stages">
         {PIPELINE_FUNNEL_STAGES.map((stage) => {
-          const value = Number(stageCounts?.[stage.key] || 0);
+          const value = stage.key === 'invited'
+            ? invitedStageValue(stageCounts)
+            : Number(stageCounts?.[stage.key] || 0);
           const tone = funnelStageTone(stage.key, value);
           return (
             <div
@@ -132,7 +145,9 @@ export const FunnelBoard = ({
       <div className="fb-drow-hdr">Awaiting your decision</div>
       <div className="fb-grid fb-drow">
         {PIPELINE_FUNNEL_STAGES.map((stage) => {
-          const chips = decisionRow[stage.key] || [];
+          const chips = stage.key === 'invited'
+            ? [...(decisionRow.invited || []), ...(decisionRow.completed || [])]
+            : (decisionRow[stage.key] || []);
           return (
             <div key={stage.key} className="fb-dcell">
               {OUTCOME_KEYS.has(stage.key) ? (
