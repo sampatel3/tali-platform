@@ -66,26 +66,26 @@ export const HistoryTable = ({ rows, onSelect, onNavigate }) => (
                   {row.candidate_name || `Application #${row.application_id}`}
                 </a>
               </div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body)', color: 'var(--mute)', letterSpacing: '.04em' }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-caption)', color: 'var(--mute)', letterSpacing: '.04em' }}>
                 D-{row.id}
               </div>
             </span>
           </span>
-          <span style={{ fontSize: 'var(--fs-subtitle)', color: row.status === 'pending' ? 'var(--purple)' : 'var(--ink-2)', fontWeight: row.status === 'pending' ? 600 : 400 }}>
+          <span style={{ fontSize: 'var(--fs-body)', color: row.status === 'pending' ? 'var(--purple)' : 'var(--ink-2)', fontWeight: row.status === 'pending' ? 600 : 400 }}>
             {humanizeStatus(row.status)}
           </span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-subtitle)', fontWeight: 600, color: 'var(--ink-2)' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body)', fontWeight: 600, color: 'var(--ink-2)' }}>
             {row.confidence != null ? `${Math.round(row.confidence * 100)}%` : '—'}
           </span>
-          <span style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--ink-2)' }}>
+          <span style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-2)' }}>
             {row.resolved_by_user_id ? `User #${row.resolved_by_user_id}` : '—'}
           </span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
             {row.status === 'overridden' ? <FeedbackPill kind="override" /> : null}
             {row.human_disposition === 'taught' ? <FeedbackPill /> : null}
-            {row.status === 'approved' ? <span style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--mute)' }}>Approved</span> : null}
+            {row.status === 'approved' ? <span style={{ fontSize: 'var(--fs-body)', color: 'var(--mute)' }}>Approved</span> : null}
           </span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)', letterSpacing: '.04em' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-caption)', color: 'var(--mute)', letterSpacing: '.04em' }}>
             {formatRelativeAge(row.resolved_at || row.created_at)}
           </span>
         </div>
@@ -190,7 +190,7 @@ const RoleRow = ({ role, expanded, onToggle }) => {
             </div>
             <div className="hbr-chips">
               {advancedStages.length === 0 ? (
-                <span style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--mute)' }}>No advances yet</span>
+                <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)' }}>No advances yet</span>
               ) : (
                 advancedStages.map(([key, n]) => (
                   <span key={key} className="hbr-chip">
@@ -204,7 +204,7 @@ const RoleRow = ({ role, expanded, onToggle }) => {
             <div className="kicker" style={{ marginBottom: 8 }}>Decisions by type · approved / total</div>
             <div className="hbr-chips">
               {byType.length === 0 ? (
-                <span style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--mute)' }}>None</span>
+                <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)' }}>None</span>
               ) : (
                 byType.map(([key, v]) => (
                   <span key={key} className="hbr-chip">
@@ -218,7 +218,7 @@ const RoleRow = ({ role, expanded, onToggle }) => {
             <div className="kicker" style={{ marginBottom: 8 }}>Current Workable stage mix</div>
             <div className="hbr-chips">
               {stages.length === 0 ? (
-                <span style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--mute)' }}>No Workable data</span>
+                <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)' }}>No Workable data</span>
               ) : (
                 stages.map(([key, n]) => (
                   <span key={key} className="hbr-chip">
@@ -228,7 +228,7 @@ const RoleRow = ({ role, expanded, onToggle }) => {
               )}
             </div>
             {safeNumber(s.count) > 0 ? (
-              <div style={{ fontSize: 'var(--fs-body-lg)', color: 'var(--mute)', marginTop: 8 }}>
+              <div style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)', marginTop: 8 }}>
                 Headline score · n={safeNumber(s.count).toLocaleString()} · min {s.min} · p25 {s.p25} · median {s.median} · p75 {s.p75} · max {s.max}
               </div>
             ) : null}

@@ -35,7 +35,7 @@
 
 .home-section-title {
   font-family: var(--font-display);
-  font-size: 1.375rem;
+  font-size: var(--fs-h2);
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--ink);
@@ -53,14 +53,14 @@
    Callers keep their own margins so spacing is unchanged. */
 .home-title-md {
   font-family: var(--font-display);
-  font-size: 1.375rem;
+  font-size: var(--fs-h2);
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--ink);
 }
 
 .home-section-sub {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
   margin: 0;
   max-width: 720px;
@@ -69,7 +69,7 @@
 
 .home-section-toggle {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
@@ -98,7 +98,7 @@
    ActivityFeed is rendered standalone outside the Hub. */
 .home-body .kicker {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.1em;
   color: var(--mute);
   text-transform: uppercase;
@@ -165,7 +165,7 @@
 
 .rq-standing-kicker {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   color: var(--purple);
   text-transform: uppercase;
@@ -180,7 +180,7 @@
 }
 
 .rq-standing-item {
-  font-size: 0.78125rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   white-space: nowrap;
 }
@@ -194,7 +194,7 @@
 
 .rq-standing-item.is-emph b {
   color: var(--purple);
-  font-size: 0.875rem;
+  font-size: var(--fs-body-lg);
 }
 
 /* Terminal bucket (Rejected) — muted and divided off from the active stages
@@ -216,7 +216,7 @@
   border-radius: 8px;
   padding: 6px 28px 6px 10px;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--ink-2);
   cursor: pointer;
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%236e6580' stroke-width='1.4' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
@@ -244,7 +244,7 @@
   outline: none;
   background: transparent;
   font: inherit;
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
   flex: 1;
   min-width: 0;
@@ -261,7 +261,7 @@
 .rq-key {
   display: inline-block;
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.05em;
   background: var(--bg-3);
   color: var(--mute);
@@ -288,7 +288,7 @@
   border: 0;
   background: transparent;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   letter-spacing: 0.04em;
   color: var(--ink-2);
   padding: 6px 10px;
@@ -304,7 +304,7 @@
 }
 
 .rq-tabset button span {
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   color: var(--mute-2);
 }
 
@@ -321,7 +321,7 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   letter-spacing: 0.04em;
   font-weight: 600;
   color: var(--purple);
@@ -352,7 +352,7 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   letter-spacing: 0.04em;
   color: var(--ink-2);
   background: var(--bg);
@@ -481,7 +481,7 @@
 
 .rq-qname {
   font-weight: 500;
-  font-size: 0.8125rem;
+  font-size: var(--fs-subtitle);
   color: var(--ink);
   line-height: 1.3;
   min-width: 0;
@@ -501,7 +501,7 @@
 
 .rq-qage {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -519,7 +519,7 @@
   align-items: center;
   gap: 3px;
   font-family: var(--font-mono);
-  font-size: 0.5625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--purple);
@@ -584,7 +584,7 @@
   flex-wrap: wrap;
 }
 .rq-invited-age {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   white-space: nowrap;
   flex-shrink: 0;
@@ -608,14 +608,14 @@
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
 }
 .rq-invite-timeline-list li span:first-child { color: var(--mute); }
 .rq-invite-timeline-list li.is-danger span { color: #8a1d1d; font-weight: 600; }
 .rq-invite-note {
   margin-top: 10px;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   font-style: italic;
 }
@@ -660,7 +660,7 @@
 
 .rq-ev-k {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   color: var(--mute);
   text-transform: uppercase;
@@ -668,7 +668,7 @@
 
 .rq-ev-v {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--ink);
 }
@@ -726,13 +726,13 @@
 }
 
 .rq-trace-t {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
   font-weight: 500;
 }
 
 .rq-trace-m {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   margin-top: 2px;
   line-height: 1.45;
@@ -767,7 +767,7 @@
   justify-content: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--purple);
@@ -779,7 +779,7 @@
 .rq-rec-conf {
   max-width: 340px;
   margin: 9px auto 0;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   line-height: 1.45;
   color: var(--purple);
 }
@@ -801,7 +801,7 @@
   border-radius: 11px;
   padding: 10px 22px;
   font-family: inherit;
-  font-size: 0.875rem;
+  font-size: var(--fs-body-lg);
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 3px 12px rgba(36, 17, 71, 0.28);
@@ -817,7 +817,7 @@
   background: none;
   border: 0;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--purple);
   cursor: pointer;
@@ -835,7 +835,7 @@
   flex: 1;
   min-width: 0;
   font-weight: 500;
-  font-size: 0.875rem;
+  font-size: var(--fs-subtitle);
   color: var(--ink);
   text-decoration: none;
   overflow: hidden;
@@ -844,7 +844,7 @@
 }
 .rq-recent-name:hover { color: var(--purple); text-decoration: underline; }
 .rq-recent-outcome {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   font-weight: 500;
   border-radius: 999px;
   padding: 2px 10px;
@@ -853,7 +853,7 @@
 }
 .rq-recent-outcome--purple { background: var(--purple-soft); color: var(--purple-2); }
 .rq-recent-outcome--mute { background: var(--bg-3); color: var(--mute); }
-.rq-recent-age { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--mute); white-space: nowrap; flex: none; }
+.rq-recent-age { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--mute); white-space: nowrap; flex: none; }
 
 /* Requirement bars on the decision card — the candidate's top requirement
    grades, mirroring the candidate report / preview (label · bar · score). */
@@ -863,7 +863,7 @@
   position: relative;
   width: 150px;
   flex: none;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
 }
 /* Ellipsis lives on an inner span: overflow:hidden on the anchor itself would
@@ -888,7 +888,7 @@
   border-radius: 8px;
   background: var(--ink-2);
   color: var(--bg-2);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   line-height: 1.5;
   white-space: normal;
   box-shadow: var(--shadow-md);
@@ -904,7 +904,7 @@
 .rq-req-track { flex: 1; height: 6px; border-radius: 999px; background: var(--bg-3); overflow: hidden; }
 .rq-req-fill { display: block; height: 100%; border-radius: 999px; background: var(--purple); }
 .rq-req-fill.is-low { background: var(--purple-lav); }
-.rq-req-val { flex: none; width: 28px; text-align: right; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; color: var(--ink); }
+.rq-req-val { flex: none; width: 28px; text-align: right; font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: 500; color: var(--ink); }
 
 /* ---------------- Action bar ---------------- */
 .rq-action-bar {
@@ -931,7 +931,7 @@
   background: var(--bg-2);
   color: var(--ink);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   padding: 7px 12px;
   border-radius: 8px;
@@ -949,7 +949,7 @@
 }
 
 .rq-btn.sm {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   padding: 5px 9px;
 }
 
@@ -1009,7 +1009,7 @@
   background: var(--purple-soft);
   color: var(--purple);
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   font-weight: 600;
   text-transform: uppercase;
@@ -1023,7 +1023,7 @@
   background: color-mix(in oklab, var(--amber) 18%, transparent);
   color: var(--amber);
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   font-weight: 600;
   text-transform: uppercase;
@@ -1037,7 +1037,7 @@
   background: var(--purple-soft);
   color: var(--purple);
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   font-weight: 600;
   text-transform: uppercase;
@@ -1124,14 +1124,14 @@
 }
 
 .rq-stream-title {
-  font-size: 0.875rem;
+  font-size: var(--fs-subtitle);
   font-weight: 600;
   color: var(--ink);
   line-height: 1.35;
 }
 
 .rq-stream-sub {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   display: flex;
   flex-wrap: wrap;
@@ -1139,7 +1139,7 @@
 }
 
 .rq-stream-reason {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   line-height: 1.5;
   margin-top: 2px;
@@ -1153,7 +1153,7 @@
 }
 
 .rq-stream-resolved-line {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
 }
 
@@ -1193,7 +1193,7 @@
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   color: var(--mute);
   text-transform: uppercase;
@@ -1201,7 +1201,7 @@
 
 .rq-roletable-row {
   border-top: 1px solid var(--line-2);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
 }
 
@@ -1223,7 +1223,7 @@
 
 .rq-r-flag {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   font-weight: 600;
   display: inline-block;
@@ -1253,12 +1253,12 @@
   color: var(--purple);
   font-weight: 700;
   font-family: var(--font-display);
-  font-size: 1rem;
+  font-size: var(--fs-subtitle);
 }
 
 .rq-r-num {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
 }
 
 .rq-r-num.warn {
@@ -1277,7 +1277,7 @@
   background: transparent;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   color: var(--purple);
   cursor: pointer;
   text-align: right;
@@ -1341,12 +1341,12 @@
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
 }
 
 .signal-li-body {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   line-height: 1.5;
 }
@@ -1365,7 +1365,7 @@
 }
 
 .signal-empty {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
   padding: 10px 0;
 }
@@ -1406,7 +1406,7 @@
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   color: var(--mute);
   text-transform: uppercase;
@@ -1414,7 +1414,7 @@
 
 .rq-history-row {
   border-top: 1px solid var(--line-2);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   cursor: pointer;
 }
@@ -1442,7 +1442,7 @@
   cursor: pointer;
   font: inherit;
   font-family: var(--font-display);
-  font-size: 0.875rem;
+  font-size: var(--fs-body-lg);
   font-weight: 600;
   color: var(--ink);
 }
@@ -1471,7 +1471,7 @@
 
 .ht-select {
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--line);
@@ -1497,7 +1497,7 @@
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   line-height: 1.5;
   color: var(--ink-2);
 }
@@ -1523,7 +1523,7 @@
 
 .ht-callout-chip {
   font: inherit;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--ink-2);
   background: var(--bg);
   border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--line));
@@ -1574,7 +1574,7 @@
 
 .hm-window-btn {
   font: inherit;
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   padding: 7px 13px;
   background: transparent;
   border: 0;
@@ -1615,7 +1615,7 @@
 
 .hm-stat-label {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--mute);
@@ -1624,14 +1624,14 @@
 
 .hm-stat-value {
   font-family: var(--font-display);
-  font-size: 1.5rem;
+  font-size: var(--fs-stat);
   font-weight: 600;
   color: var(--ink);
   line-height: 1;
 }
 
 .hm-stat-sub {
-  font-size: 0.6875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   margin-top: 4px;
 }
@@ -1646,7 +1646,7 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
 }
 
@@ -1658,7 +1658,7 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   line-height: 1.45;
   padding: 9px 12px;
   border-radius: 10px;
@@ -1706,7 +1706,7 @@
 
 .hm-tab {
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   padding: 8px 14px;
   background: transparent;
@@ -1733,7 +1733,7 @@
 }
 
 .hm-tab-caption {
-  font-size: 0.78125rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   line-height: 1.5;
   margin: 0 0 12px;
@@ -1798,13 +1798,13 @@
 
 .hm-acard-title {
   font-family: var(--font-display);
-  font-size: 0.90625rem;
+  font-size: var(--fs-body-lg);
   font-weight: 600;
   color: var(--ink);
 }
 
 .hm-acard-desc {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   margin-top: 2px;
 }
@@ -1832,7 +1832,7 @@
 }
 .hm-conv-l {
   width: 96px;
-  font-size: 0.78125rem;
+  font-size: var(--fs-caption);
   color: var(--ink-2);
 }
 .hm-conv-track {
@@ -1850,7 +1850,7 @@
   padding-left: 11px;
   border-radius: 7px;
   color: #fff;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   font-weight: 600;
   background: linear-gradient(90deg, var(--purple), var(--purple-lav));
   white-space: nowrap;
@@ -1858,14 +1858,14 @@
 .hm-conv-pct {
   width: 92px;
   text-align: right;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
 }
 
 /* Narrator paragraph beneath the funnel (real summary.narrator). */
 .hm-narrator {
   margin-top: 14px;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   line-height: 1.55;
   padding: 12px;
@@ -1882,14 +1882,14 @@
 }
 .hm-bigstat-n {
   font-family: var(--font-display);
-  font-size: 2.5rem;
+  font-size: var(--fs-stat);
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--purple-2);
   line-height: 1;
 }
 .hm-bigstat-sub {
-  font-size: 0.78125rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   line-height: 1.5;
 }
@@ -1919,20 +1919,20 @@
 
 .hbr-card-value {
   font-family: var(--font-mono);
-  font-size: 1.25rem;
+  font-size: var(--fs-stat);
   font-weight: 600;
   color: var(--ink);
   line-height: 1.1;
 }
 
 .hbr-card-sub {
-  font-size: 0.6875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   margin-top: 3px;
 }
 
 .hbr-caption {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   line-height: 1.55;
   color: var(--mute);
   margin: 0 2px 14px;
@@ -1972,7 +1972,7 @@
 
 .hbr-head span {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--mute);
@@ -1982,7 +1982,7 @@
   background: var(--bg-2);
   border-top: 1px solid var(--line);
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
 }
 
@@ -1996,7 +1996,7 @@
 
 .hbr-num {
   font-family: var(--font-mono);
-  font-size: 0.78125rem;
+  font-size: var(--fs-caption);
   color: var(--ink-2);
 }
 
@@ -2025,7 +2025,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   padding: 3px 9px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--purple) 9%, transparent);
@@ -2086,7 +2086,7 @@
 
 .rq-modal-label {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   color: var(--mute);
   text-transform: uppercase;
@@ -2117,13 +2117,13 @@
 }
 
 .rq-modal-tag .l {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
   font-weight: 500;
 }
 
 .rq-modal-tag .d {
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
 }
 
@@ -2134,7 +2134,7 @@
   border-radius: 10px;
   padding: 10px 12px;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
   resize: vertical;
   min-height: 110px;
@@ -2174,14 +2174,14 @@
 }
 
 .rq-modal-radio .l {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
   font-weight: 500;
   grid-column: 2;
 }
 
 .rq-modal-radio .d {
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   grid-column: 2;
   grid-row: 2;
@@ -2202,7 +2202,7 @@
   color: var(--ink-2);
   border-radius: 999px;
   padding: 6px 12px;
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   cursor: pointer;
   display: inline-flex;
@@ -2229,7 +2229,7 @@
 
 .rq-modal-pill .rq-modal-pill-sub {
   font-family: var(--font-mono);
-  font-size: 0.59375rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--mute);
@@ -2247,7 +2247,7 @@
   border: 1px solid color-mix(in oklab, var(--amber) 28%, var(--line));
   border-radius: 10px;
   padding: 10px 12px;
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
   line-height: 1.5;
 }
@@ -2268,7 +2268,7 @@
   padding: 24px;
   text-align: center;
   color: var(--mute);
-  font-size: 0.84375rem;
+  font-size: var(--fs-body);
 }
 
 /* ---------------- Platform updates ---------------- */
@@ -2300,7 +2300,7 @@
   border: 1px solid var(--line);
   background: var(--bg);
   color: var(--mute);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
@@ -2324,7 +2324,7 @@
 
 .home-platform-chip .count {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.04em;
   color: var(--mute);
   margin-left: 2px;
@@ -2332,7 +2332,7 @@
 
 .home-platform-hint {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   color: var(--mute);
   letter-spacing: 0.04em;
   margin-left: auto;
@@ -2353,7 +2353,7 @@
   gap: 12px;
   padding: 8px 4px;
   border-top: 1px solid var(--line-2);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink);
 }
 
@@ -2380,7 +2380,7 @@
 
 .home-platform-row .age {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   letter-spacing: 0.04em;
 }
@@ -2483,7 +2483,7 @@
     flex: 1 1 auto;
     justify-content: center;
     min-height: 44px;
-    font-size: 0.875rem;
+    font-size: var(--fs-body-lg);
   }
   .rq-action-bar > .rq-defer {
     width: 100%;
@@ -2516,7 +2516,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   font-weight: 500;
   color: var(--purple-2);
   background: var(--bg-2);
@@ -2535,24 +2535,24 @@
 }
 .home-pulse-k {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--mute);
 }
 .home-pulse-v {
-  font-size: 1.1875rem;
+  font-size: var(--fs-stat);
   font-weight: 600;
   margin-top: 3px;
   letter-spacing: -0.01em;
 }
 .home-pulse-unit {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 400;
   color: var(--mute);
 }
 .home-pulse-note {
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   line-height: 1.5;
   margin: 14px 0 0;

@@ -86,7 +86,7 @@ export const TypeBadge = ({ type, size = 'md' }) => {
         background: `color-mix(in oklab, ${cfg.color} 18%, transparent)`,
         color: cfg.color,
         fontFamily: 'var(--font-mono)',
-        fontSize: small ? 'var(--fs-body)' : 'var(--fs-body-lg)',
+        fontSize: 'var(--fs-eyebrow)',
         letterSpacing: small ? '.06em' : '.08em',
         fontWeight: 600,
       }}
@@ -174,7 +174,7 @@ export const ScoreChip = ({ score, size = 'md' }) => {
         background: 'color-mix(in oklab, var(--purple) 12%, transparent)',
         color: 'var(--purple)',
         fontFamily: 'var(--font-mono)',
-        fontSize: small ? 'var(--fs-body)' : 'var(--fs-body-lg)',
+        fontSize: 'var(--fs-eyebrow)',
         fontWeight: 600,
         letterSpacing: '.04em',
         lineHeight: 1.4,
@@ -263,7 +263,7 @@ export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
     </span>
     {value ? (
       <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
+        <span style={{ fontSize: 'var(--fs-eyebrow)', color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
           {label}
         </span>
         <span style={{ fontSize: 'var(--fs-body)', color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -304,7 +304,7 @@ export const RolePill = ({ roleName, roleId, onClick }) => {
     background: 'color-mix(in oklab, var(--purple) 12%, transparent)',
     color: 'var(--purple)',
     fontFamily: 'var(--font-mono)',
-    fontSize: 'var(--fs-body)',
+    fontSize: 'var(--fs-eyebrow)',
     fontWeight: 600,
     letterSpacing: '.04em',
     lineHeight: 1.4,

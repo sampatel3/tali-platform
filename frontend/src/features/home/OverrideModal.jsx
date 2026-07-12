@@ -213,7 +213,7 @@ export const OverrideModal = ({
             <h3 id="rq-override-title" className="home-title-md" style={{ margin: '6px 0 2px' }}>
               {alternative.headline.replace('{name}', candidateName)}
             </h3>
-            <p style={{ margin: 0, fontSize: 'var(--fs-subtitle)', color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>
+            <p style={{ margin: 0, fontSize: 'var(--fs-body)', color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>
               {alternative.body}
             </p>
           </div>
@@ -229,7 +229,7 @@ export const OverrideModal = ({
                 Move to which Workable stage? (required)
               </span>
               {stageOptions.length === 0 ? (
-                <span style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--mute)' }}>
+                <span style={{ fontSize: 'var(--fs-body)', color: 'var(--mute)' }}>
                   This Workable job has no advance stages — only pre-application stages (Sourced / Applied) exist. The candidate advances on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                 </span>
               ) : (
@@ -283,7 +283,7 @@ export const OverrideModal = ({
           </div>
 
           {error ? (
-            <div style={{ color: 'var(--red)', fontSize: 'var(--fs-subtitle)' }}>{error}</div>
+            <div style={{ color: 'var(--red)', fontSize: 'var(--fs-body)' }}>{error}</div>
           ) : null}
         </div>
 

@@ -49,10 +49,10 @@ const PendingCosignTray = ({ rows, currentUserId, onCosign }) => {
                 <div style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--ink)', fontWeight: 500 }}>
                   Org-wide correction from <strong>{row.reviewer_name || `User #${row.reviewer_id}`}</strong>
                 </div>
-                <div style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--mute)', marginTop: 2 }}>
+                <div style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)', marginTop: 2 }}>
                   {FAILURE_LABEL[row.failure_mode] || row.failure_mode} · D-{row.decision_id} · {formatRelativeAge(row.created_at)} ago
                 </div>
-                <div style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>
                   &ldquo;{row.correction_text}&rdquo;
                 </div>
               </div>
@@ -99,7 +99,7 @@ const FeedbackList = ({ rows, currentUserId, onRevert }) => {
               <span className="rq-stream-teachpill" style={{ marginRight: 8 }}>{FAILURE_LABEL[row.failure_mode] || row.failure_mode}</span>
               {row.correction_text}
             </div>
-            <div style={{ fontSize: 'var(--fs-body-lg)', color: 'var(--mute)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <span>D-{row.decision_id}</span>
               {row.role_name ? <span>· {row.role_name}</span> : null}
               {row.cosign_required ? (
@@ -169,7 +169,7 @@ const OutcomesList = ({ rows }) => {
               </span>
             </div>
             {row.decision_id ? (
-              <div style={{ fontSize: 'var(--fs-body-lg)', color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
+              <div style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
                 D-{row.decision_id}
                 {row.application_id ? ` · A-${row.application_id}` : ''}
               </div>
