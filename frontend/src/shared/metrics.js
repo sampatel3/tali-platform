@@ -4,20 +4,31 @@
 // strips — imports from here so labels, ordering, number/money formatting and
 // colour semantics stay identical wherever a number is surfaced.
 
-// Canonical funnel — forward order. Stages are where a candidate IS;
-// `advanced` and `rejected` are terminal OUTCOMES, divided off from the
-// active flow. Keys are the display buckets the backend's role_pipeline_counts
-// emits (applied/scored split by whether the CV is scored; `invited` folds in
-// the old `in_assessment`; `completed` = the old `review`). "Assessing" is
-// gone — a candidate is Invited (assessment out) or Completed.
+// Canonical funnel — forward order, mirroring the landing-page flow
+// (Source · Screen · Assess · Decide/Hand-back). Stages are where a candidate
+// IS; `advanced` and `rejected` are terminal OUTCOMES, divided off from the
+// active flow. `Invited` is the whole Assess step: it folds in the old
+// `in_assessment` (started) AND `completed` (the old `review`, assessment
+// done) — completed is shown as a sub-count of Invited, not its own tile, so
+// the assessment lifecycle reads as one nested funnel. `completed` stays a
+// backend bucket (see FUNNEL_INVITED_SUBSUMED / OPEN_FUNNEL_STAGE_KEYS) — it's
+// just not a top-level tile.
 export const PIPELINE_FUNNEL_STAGES = [
   { key: 'applied', label: 'Applied' },
   { key: 'scored', label: 'Scored' },
   { key: 'invited', label: 'Invited' },
-  { key: 'completed', label: 'Completed' },
   { key: 'advanced', label: 'Advanced' },
   { key: 'rejected', label: 'Rejected' },
 ];
+
+// Buckets the `Invited` tile subsumes — its displayed value is the sum of these
+// (assessment out + in progress + done), so a `completed` candidate still
+// counts in the Assess step instead of vanishing when its tile was removed.
+export const FUNNEL_INVITED_SUBSUMED = ['invited', 'completed'];
+
+// The value the `Invited` tile shows: everyone who reached the assessment step.
+export const invitedStageValue = (stageCounts) =>
+  FUNNEL_INVITED_SUBSUMED.reduce((acc, k) => acc + (Number(stageCounts?.[k]) || 0), 0);
 
 // Agent pending-decision types, mapped to the stage they act on. The funnel's
 // "awaiting your decision" row shows these as chips under each stage —

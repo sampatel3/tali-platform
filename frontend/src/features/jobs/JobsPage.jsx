@@ -15,6 +15,7 @@ import {
 import * as apiClient from '../../shared/api';
 import {
   PIPELINE_FUNNEL_STAGES,
+  invitedStageValue,
   funnelStageTone,
   formatCount,
   budgetTile,
@@ -1035,7 +1036,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
 
                   <div className="job-stats">
                     {STAGES.map((stage) => {
-                      const value = Number(stageCounts?.[stage.key] || 0);
+                      const value = stage.key === 'invited'
+                        ? invitedStageValue(stageCounts)
+                        : Number(stageCounts?.[stage.key] || 0);
                       const tone = funnelStageTone(stage.key, value);
                       return (
                         <div key={stage.key} className={`js-cell${tone === 'term' ? ' is-term' : ''}`}>
