@@ -141,12 +141,12 @@ describe('LandingPreviewPage', () => {
     ).toBe('true');
   });
 
-  it('falls back to variant E (the default) for an unknown ?v value', () => {
+  it('falls back to variant F (the default) for an unknown ?v value', () => {
     const { container } = renderAt('?v=zzz');
-    // Variant E is now the default; its conventional B2B shell mounts.
-    expect(container.querySelector('.lve')).toBeTruthy();
+    // Variant F ("Vivid Purple") is now the default; its scoped `.lvf` shell mounts.
+    expect(container.querySelector('.lvf')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: /E · Watch it work/i }).getAttribute('aria-pressed'),
+      screen.getByRole('button', { name: /F · Vivid/i }).getAttribute('aria-pressed'),
     ).toBe('true');
   });
 
@@ -214,9 +214,9 @@ describe('LandingPreviewPage', () => {
   });
 
   // ── Variant E · v4 — rebuilt to the narrative spine (job-on hero, no repeat) ─
-  it('renders variant E as the default (?v empty) with its nav, hero scene and six-section spine', () => {
-    const { container } = renderAt('');
-    // Scoped `.lve` root + the E switcher chip is active by default.
+  it('renders variant E at ?v=e with its nav, hero scene and six-section spine', () => {
+    const { container } = renderAt('?v=e');
+    // Scoped `.lve` root + the E switcher chip is active at ?v=e.
     expect(container.querySelector('.lve')).toBeTruthy();
     expect(
       screen.getByRole('button', { name: /E · Watch it work/i }).getAttribute('aria-pressed'),
@@ -299,5 +299,75 @@ describe('LandingPreviewPage', () => {
     // affordance is suppressed under reduced motion.
     expect(container.querySelector('.lve-hs-card.agent-on')).toBeTruthy();
     expect(container.querySelector('.lve-hs-replay')).toBeNull();
+  });
+
+  // ── Variant F · "Vivid Purple" design handoff (the new default) ──────────
+  it('renders variant F as the default (?v empty) with its scoped shell, nav, hero scene and sections', () => {
+    const { container } = renderAt('');
+    // Scoped `.lvf` root + the F switcher chip is active by default.
+    expect(container.querySelector('.lvf')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /F · Vivid/i }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    // Sticky nav: brand wordmark + the primary "See it live" CTA + "Log in".
+    expect(screen.getByRole('button', { name: /^Log in$/i })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /See it live/i }).length).toBeGreaterThan(0);
+    // Verbatim hero eyebrow + H1 + lede (split across grad-text spans).
+    expect(screen.getByText(/AGENT-NATIVE HIRING/i)).toBeTruthy();
+    expect(screen.getByText(/The hiring agent that screens, assesses, and/i)).toBeTruthy();
+    expect(screen.getByText(/decides — with you\./i)).toBeTruthy();
+    expect(screen.getByText(/You stay in control of every call that matters\./i)).toBeTruthy();
+    // HERO AGENT SCENE — the OFF→ON job card on its gradient stage.
+    expect(container.querySelector('.lvf .stage .job-card')).toBeTruthy();
+    expect(screen.getByText('AI Engineer')).toBeTruthy();
+    // Problem beat (verbatim, purple family — never red).
+    expect(screen.getByText(/Everyone works with AI now\./i)).toBeTruthy();
+    expect(screen.getByText(/You need to see the real work\./i)).toBeTruthy();
+    // Funnel — the five steps, said once.
+    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
+      expect(screen.getByText(step)).toBeTruthy();
+    });
+    expect(screen.getByText(/One agent,/i)).toBeTruthy();
+    // Control block + the 5 Ds + proof + close, all present.
+    expect(screen.getByText(/The agent advises\./i)).toBeTruthy();
+    expect(screen.getByText(/Measure how people/i)).toBeTruthy();
+    ['Delegation', 'Description', 'Discernment', 'Diligence', 'Deliverable'].forEach((d) => {
+      expect(screen.getByText(d)).toBeTruthy();
+    });
+    expect(screen.getByText(/webcams or lockdown browsers/i)).toBeTruthy();
+    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeTruthy();
+    // Footer contact.
+    expect(screen.getByText(/hello@taali\.ai/i)).toBeTruthy();
+    // Purple family only — never red/amber/green vocabulary in the reject path.
+    expect(screen.getByText('Tariq Al-Ahmad')).toBeTruthy();
+    expect(screen.getByText('Reject')).toBeTruthy();
+  });
+
+  it('renders variant F at ?v=f with the armed autoplay hero scene (replay affordance present)', () => {
+    const { container } = renderAt('?v=f');
+    expect(container.querySelector('.lvf')).toBeTruthy();
+    // Armed scene: data-armed marks the stage so the timeline can reveal rows;
+    // the OFF-state pill + Replay affordance render under normal motion.
+    expect(container.querySelector('.lvf .stage[data-armed]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Replay/i })).toBeTruthy();
+    // The decision-lane candidates thread the scene (Maya also appears in the
+    // control glimpse card, so allow more than one match).
+    expect(screen.getAllByText('Maya Chen').length).toBeGreaterThan(0);
+    expect(screen.getByText('Jordan Patel')).toBeTruthy();
+  });
+
+  it('renders variant F in its settled ON state (never armed, no replay) under reduced-motion', () => {
+    stubMatchMedia(true);
+    const { container } = renderAt('?v=f');
+    // Reduced motion → the scene shows its settled ON state: the job card is
+    // is-on, the stage is NOT armed (rows visible with no timeline), and the
+    // replay affordance is suppressed.
+    expect(container.querySelector('.lvf .job-card.is-on')).toBeTruthy();
+    expect(container.querySelector('.lvf .stage[data-armed]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Replay/i })).toBeNull();
+    // The agent-ON pill renders (not the OFF variant).
+    expect(container.querySelector('.lvf .agent-pill:not(.off)')).toBeTruthy();
+    // Key copy still present without any animation.
+    expect(screen.getByText(/decides — with you\./i)).toBeTruthy();
   });
 });
