@@ -22,13 +22,14 @@
   align-items: center;
   gap: 0;
   padding: 0 var(--pad-x);
-  /* Seamless header (founder: "i want no header, i want it to look
-     seamless"). No bar at all: transparent background so the logo + tabs +
-     search + avatar float directly on the page — the nav is invisible at
-     rest and blends into the page --bg. A light backdrop blur is the only
-     treatment kept, so content scrolling *under* the sticky nav is softened
-     rather than reading crisply through it. No border-bottom, no fill. */
-  background: transparent;
+  /* Visible, clean header bar — NOT white. A subtle on-brand lavender fill
+     (--taali-nav-bg, shared with the marketing .app-nav so the whole product
+     stays one system) that is clearly distinct from the near-white lavender
+     page bg, plus a hairline border-bottom so the header separates from the
+     content below it. Slight translucency + backdrop blur keeps it legible
+     while frosting content that scrolls under it. */
+  background: var(--taali-nav-bg);
+  border-bottom: 1px solid var(--line);
   backdrop-filter: saturate(1.1) blur(10px);
 }
 
