@@ -64,6 +64,15 @@ describe('DecisionRail re-score / staleness guarding', () => {
   });
 });
 
+describe('DecisionRail entrance motion', () => {
+  it('carries the slide-in reveal class on the rail (gated to reduced-motion in CSS)', () => {
+    const { container } = renderRail();
+    const rail = container.querySelector('.dossier-rail');
+    expect(rail).not.toBeNull();
+    expect(rail).toHaveClass('dr-reveal');
+  });
+});
+
 describe('DecisionRail score ring', () => {
   it('reads "—" (not 0/100) when the Taali score is unscored', () => {
     render(
