@@ -26,7 +26,14 @@ from app.models.outreach_campaign import (
     OutreachCampaign,
     OutreachMessage,
 )
-from app.models.prospect import Prospect
+from app.models.prospect import (
+    PROSPECT_STATUS_ARCHIVED,
+    PROSPECT_STATUS_CONTACTED,
+    PROSPECT_STATUS_CONVERTED,
+    PROSPECT_STATUS_INTERESTED,
+    PROSPECT_STATUS_NEW,
+    Prospect,
+)
 from app.models.user import User
 from app.services.email_suppression_service import suppress
 from app.services.resend_webhook_service import apply_resend_event
@@ -213,20 +220,72 @@ def test_send_rechecks_suppression(db):
     assert m.status == MESSAGE_STATUS_SUPPRESSED
 
 
+def test_successful_send_marks_only_new_linked_prospects_contacted(db):
+    org, user = _org_and_user(db)
+    c = _campaign(db, org.id, user.id)
+    expected = {
+        PROSPECT_STATUS_NEW: PROSPECT_STATUS_CONTACTED,
+        PROSPECT_STATUS_INTERESTED: PROSPECT_STATUS_INTERESTED,
+        PROSPECT_STATUS_CONVERTED: PROSPECT_STATUS_CONVERTED,
+        PROSPECT_STATUS_ARCHIVED: PROSPECT_STATUS_ARCHIVED,
+    }
+    prospects = []
+    for index, initial_status in enumerate(expected):
+        prospect = Prospect(
+            organization_id=org.id,
+            full_name=f"Prospect {index}",
+            email=f"prospect-{index}@example.com",
+            status=initial_status,
+        )
+        db.add(prospect)
+        db.flush()
+        _msg(
+            db,
+            c,
+            org.id,
+            prospect.email,
+            status=MESSAGE_STATUS_QUEUED,
+            body="B {{cta_url}}",
+            prospect_id=prospect.id,
+        )
+        prospects.append((prospect, initial_status))
+
+    # Multiple successful rows need distinct provider ids in production. For
+    # this lifecycle test, omit the optional id so the unique correlation
+    # constraint does not distract from the state transition under test.
+    fake_email = _run_send(db, c.id, send_result={"success": True})
+
+    assert fake_email.send_outreach_email.call_count == len(prospects)
+    for prospect, initial_status in prospects:
+        db.refresh(prospect)
+        assert prospect.status == expected[initial_status]
+
+
 def test_send_failure_isolated(db):
     org, user = _org_and_user(db)
     c = _campaign(db, org.id, user.id)
+    prospect = Prospect(
+        organization_id=org.id,
+        full_name="Failed send",
+        email="fail@example.com",
+        status=PROSPECT_STATUS_NEW,
+    )
+    db.add(prospect)
+    db.commit()
+    db.refresh(prospect)
     m = _msg(
         db, c, org.id, "fail@example.com",
-        status=MESSAGE_STATUS_QUEUED, body="B {{cta_url}}",
+        status=MESSAGE_STATUS_QUEUED, body="B {{cta_url}}", prospect_id=prospect.id,
     )
     fake_email = _run_send(
         db, c.id, send_result={"success": False, "error": "resend down"}
     )
     assert fake_email.send_outreach_email.call_count == 1
     db.refresh(m)
+    db.refresh(prospect)
     assert m.status == MESSAGE_STATUS_FAILED
     assert "resend down" in (m.error or "")
+    assert prospect.status == PROSPECT_STATUS_NEW
 
 
 def test_email_client_sets_list_unsubscribe_header_and_reply_to():

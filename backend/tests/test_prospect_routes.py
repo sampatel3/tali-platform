@@ -214,6 +214,21 @@ def test_list_search_and_status_filter(client):
     archived = client.get("/api/v1/prospects", params={"status": "archived"}, headers=headers)
     assert [p["email"] for p in archived.json()["prospects"]] == ["sam@example.com"]
 
+    # "active" is the convenience filter used by the default sourcing view:
+    # it excludes archived rows without hiding any other lifecycle status.
+    active = client.get("/api/v1/prospects", params={"status": "active"}, headers=headers)
+    assert active.status_code == 200, active.text
+    assert [p["email"] for p in active.json()["prospects"]] == ["other@example.com"]
+    assert active.json()["total"] == 1
+
+    # Omitting status remains the All view and includes soft-archived rows.
+    all_prospects = client.get("/api/v1/prospects", headers=headers)
+    assert {p["email"] for p in all_prospects.json()["prospects"]} == {
+        "sam@example.com",
+        "other@example.com",
+    }
+    assert all_prospects.json()["total"] == 2
+
 
 # ---------------------------------------------------------------------------
 # update + archive

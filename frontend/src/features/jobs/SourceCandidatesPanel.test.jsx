@@ -117,4 +117,28 @@ describe('SourceCandidatesPanel', () => {
     expect(rolesApi.outreachDraft).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith('Paste a profile first.', 'error');
   });
+
+  it('hands pasted profile context back to the sourcing workflow', async () => {
+    const onPrepareProspect = vi.fn();
+    render(
+      <SourceCandidatesPanel
+        roleId={101}
+        defaultOpen
+        onPrepareProspect={onPrepareProspect}
+      />,
+    );
+
+    const saveButton = screen.getByRole('button', { name: /continue to save prospect/i });
+    expect(saveButton).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Candidate profile or CV text'), {
+      target: { value: 'Staff Spark engineer in Dubai.' },
+    });
+    fireEvent.click(saveButton);
+
+    expect(onPrepareProspect).toHaveBeenCalledWith({
+      profileText: 'Staff Spark engineer in Dubai.',
+      draft: null,
+      roleId: 101,
+    });
+  });
 });
