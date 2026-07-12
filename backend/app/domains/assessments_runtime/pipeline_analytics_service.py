@@ -122,11 +122,20 @@ def time_to_fill(
 ) -> Dict[str, Any]:
     """Days from application created to hired, over hired applications.
 
-    Uses the ATS-synced hired signal — ``application_outcome == 'hired'`` with
+    Uses the canonical hired signal — ``application_outcome == 'hired'`` with
     ``application_outcome_updated_at`` as the fill timestamp (the moment the
-    outcome flipped to hired, stamped by the Workable/Bullhorn sync and the
-    native pipeline) — against the application's ``created_at``. Returns a
-    duration summary plus a per-role breakdown so a slow-to-fill role stands out.
+    outcome flipped to hired) — against the application's ``created_at``. Returns
+    a duration summary plus a per-role breakdown so a slow-to-fill role stands out.
+
+    Coverage note: the Workable sync and the native pipeline stamp the ``hired``
+    outcome, so this is accurate for Workable and standalone orgs. The Bullhorn
+    sync currently maps a placed/confirmed candidate to the ``advanced`` STAGE
+    only and never writes ``application_outcome='hired'`` (a mere advance must not
+    write placement — see bullhorn/stage_map.py), so Bullhorn placements are not
+    yet counted here. Wiring Bullhorn placement → hired outcome is a follow-up for
+    when the Bullhorn integration is activated (it's dark today, so no org is
+    affected). The prior offers-based metric did not capture Bullhorn placements
+    either, so this is a pre-existing coverage gap, not a regression.
     """
     if not org_id:
         return {"overall": _duration_summary([]), "by_role": []}
