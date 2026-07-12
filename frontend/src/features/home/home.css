@@ -829,7 +829,22 @@
 
 /* Recent decisions — minimal HITL-decision rows (who · outcome · when · report).
    Deliberately sparse: a recruiter just needs to re-find a candidate, not the
-   full evidence. */
+   full evidence.
+
+   The block sits on a proper card surface (the platform card vocabulary shared
+   by KpiTile and the analytics `.an-card`: --bg-2 fill, hairline border, card
+   radius, soft shadow) so it reads as its own panel — matching how the previews
+   present a decision list, rather than a bare list bleeding into the column.
+   Scoped to this modifier so the shared `.home-section` (ActivityFeed et al.)
+   is untouched. */
+.home-section.rq-recent-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px 8px;
+  box-shadow: var(--shadow-sm);
+}
+
 .rq-recent-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; }
 .rq-recent-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
 .rq-recent-row:first-child { border-top: none; }
