@@ -89,7 +89,7 @@
 
 .job-stats {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   margin-top: 16px;
   border: 1px solid var(--line);
   border-radius: 11px;
