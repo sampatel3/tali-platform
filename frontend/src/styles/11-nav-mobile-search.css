@@ -22,8 +22,17 @@
   align-items: center;
   gap: 0;
   padding: 0 var(--pad-x);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--line);
+  /* Melt the nav into the page instead of stacking a stark opaque white
+     slab (var(--bg-2)) with a hard hairline on top of the soft page bg —
+     the "white bar" reads heavy and out of place next to the Motion
+     previews, which have no top bar at all. A page-tinted translucent fill
+     + backdrop blur (the design-system --taali-nav-bg, shared with the
+     marketing nav) keeps the nav sticky and legible over scrolling content
+     while blending into the page at rest. No border-bottom — the blur is
+     the only separation, so at the top of the page the nav disappears into
+     the background like the previews. */
+  background: var(--taali-nav-bg);
+  backdrop-filter: saturate(1.2) blur(14px);
 }
 
 @media (max-width: 720px) {
@@ -85,7 +94,6 @@
   cursor: pointer;
   font-family: inherit;
   border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
   position: relative;
 }
 

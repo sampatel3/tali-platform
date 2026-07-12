@@ -2,9 +2,12 @@
   position: sticky;
   top: 0;
   z-index: 40;
-  background: color-mix(in oklab, var(--bg) 82%, transparent);
+  /* Same clean, bar-free treatment as the recruiter shell nav (.mc-nav):
+     page-tinted translucent fill + backdrop blur, and no border-bottom, so
+     the header melts into the page instead of reading as a stark bar. Uses
+     the shared --taali-nav-bg token so marketing and app stay one system. */
+  background: var(--taali-nav-bg);
   backdrop-filter: saturate(1.2) blur(14px);
-  border-bottom: 1px solid var(--line);
 }
 
 .app-nav-inner {
