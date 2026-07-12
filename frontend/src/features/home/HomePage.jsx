@@ -580,7 +580,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           whole width, above the agent rail + chat dock). */}
       <AgentHeader
         className="reveal"
-        breadcrumbs={[{ label: 'Home' }]}
+        // No breadcrumb strip on Home: a lone "Home" crumb below the nav just
+        // repeats the active "Home" nav tab, and the /home-preview target
+        // header omits it. Detail pages keep their (multi-level) trails.
         kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
         subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."

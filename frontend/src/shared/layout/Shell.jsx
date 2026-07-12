@@ -17,6 +17,7 @@ import {
 
 import { useAuth } from '../../context/AuthContext';
 import { agent as agentApi, organizations as organizationsApi } from '../api';
+import { readCache, writeCache } from '../api/resourceCache';
 import {
   readDarkModePreference,
   setDarkModePreference,
@@ -63,8 +64,19 @@ const initialsFor = (name, org) => {
 
 // Poll the org-wide pending count for the Home tab badge. 30s cadence is
 // the same as AgentBar — cheap aggregation, fine for a top-of-page nav.
+//
+// The nav (this Shell) re-mounts on every tab switch, so a plain useState(0)
+// reset the badge to 0 and re-fetched on each navigation — the number
+// flickered away and popped back. Seed the initial value from the shared
+// SWR cache (the same 'home:org-status' entry the Home page fills — PR #949)
+// so a warm re-mount paints the last-known count instantly, with no flash to
+// 0, while the poll below revalidates in the background. Each successful poll
+// also refreshes that cache so Home and the badge stay in lockstep and any
+// surface re-mount reads a warm value.
+const readCachedPending = () => Number(readCache('home:org-status')?.data?.pending || 0);
+
 const useHomePendingCount = (isAuthenticated) => {
-  const [count, setCount] = useState(0);
+  const [count, setCount] = useState(readCachedPending);
   useEffect(() => {
     if (!isAuthenticated) {
       setCount(0);
@@ -75,7 +87,11 @@ const useHomePendingCount = (isAuthenticated) => {
       try {
         const res = await agentApi.orgStatus();
         if (cancelled) return;
-        setCount(Number(res?.data?.pending || 0));
+        const data = res?.data || null;
+        if (data) {
+          setCount(Number(data.pending || 0));
+          writeCache('home:org-status', data);
+        }
       } catch {
         // Silent — a transient 401/5xx shouldn't make the nav badge flicker.
       }
