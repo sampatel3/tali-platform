@@ -212,7 +212,7 @@ export const VARIANT_G_CSS = `
 /* job / role card */
 .lvg .job-card {
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r-lg); padding: 16px; box-shadow: var(--sh-md);
+  border-radius: var(--r-lg); padding: 13px; box-shadow: var(--sh-md);
   transition: box-shadow .5s, border-color .5s;
 }
 .lvg .job-card.is-on { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); box-shadow: var(--sh-lg); }
@@ -222,7 +222,7 @@ export const VARIANT_G_CSS = `
 
 /* funnel stat row */
 .lvg .funnel-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-.lvg .fstat { background: var(--surface); padding: 8px 8px; }
+.lvg .fstat { background: var(--surface); padding: 8px 6px; }
 .lvg .fstat .k { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
 .lvg .fstat .v { font-size: var(--l-h3); font-weight: 600; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .lvg .fstat.hot .v { color: var(--purple); }
@@ -233,8 +233,8 @@ export const VARIANT_G_CSS = `
 .lvg .lane-title { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
 .lvg .lane-await { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .08em; color: var(--purple); }
 .lvg .cand-row {
-  display: grid; grid-template-columns: 34px 1fr auto auto; gap: 12px; align-items: center;
-  padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r);
+  display: grid; grid-template-columns: 30px 1fr auto auto; gap: 10px; align-items: center;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r);
   background: var(--surface); margin-top: 6px;
 }
 /* keep each row a single, tidy line (name + one-line sub) so the card stays
@@ -242,7 +242,7 @@ export const VARIANT_G_CSS = `
 .lvg .cand-row > div { min-width: 0; }
 .lvg .cand-name, .lvg .cand-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lvg .avatar {
-  width: 34px; height: 34px; border-radius: 50%;
+  width: 30px; height: 30px; border-radius: 50%;
   display: grid; place-items: center; font-size: var(--l-body); font-weight: 600;
   background: var(--purple-soft); color: var(--purple-deep);
 }
@@ -312,7 +312,7 @@ export const VARIANT_G_CSS = `
    AI-FLUENCY SCORECARD (the 5 Ds)
    ============================================================ */
 .lvg .scorecard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl); box-shadow: var(--sh-lg); overflow: hidden; }
-.lvg .scorecard { max-width: 820px; margin: 0 auto; }
+.lvg .scorecard { max-width: 680px; margin: 0 auto; }
 .lvg .sc-head {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 15px 28px; border-bottom: 1px solid var(--line); background: var(--bg);
@@ -378,7 +378,7 @@ export const VARIANT_G_CSS = `
    one viewport. Left: eyebrow/H1/lede/CTAs. Right: the agent-ON stage.
    ============================================================ */
 .lvg .heroC { position: relative; overflow: hidden; display: flex; align-items: center; padding: var(--sec-pad) 0; scroll-margin-top: 68px; }
-.lvg .heroC-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 56px; align-items: center; }
+.lvg .heroC-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 48px; align-items: center; }
 .lvg .heroC-copy { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
 .lvg .heroC .eyebrow { margin-bottom: 26px; }
 .lvg .heroC .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
@@ -388,7 +388,7 @@ export const VARIANT_G_CSS = `
 .lvg .heroC-stage-col { min-width: 0; }
 
 /* the scene on a dark agent-ON gradient stage that glows against the light page */
-.lvg .stage { position: relative; max-width: 400px; width: 100%; margin: 0 0 0 auto; border-radius: var(--r-lg); padding: 16px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74,45,128,.55); }
+.lvg .stage { position: relative; max-width: 340px; width: 100%; margin: 0 0 0 auto; border-radius: var(--r-lg); padding: 13px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74,45,128,.55); }
 .lvg .stage::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.14); pointer-events: none; }
 .lvg .stage .stage-cap { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
 .lvg .stage .stage-cap .t { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .14em; text-transform: uppercase; color: rgba(255,255,255,.7); }
@@ -420,7 +420,7 @@ export const VARIANT_G_CSS = `
 .lvg .fluencyC { background: linear-gradient(180deg, transparent, var(--purple-soft) 40%, transparent); }
 
 /* ── CONTROL §5 ── */
-.lvg .controlC-grid { display: grid; grid-template-columns: 1fr 440px; gap: 56px; align-items: center; }
+.lvg .controlC-grid { display: grid; grid-template-columns: 1fr 380px; gap: 56px; align-items: center; }
 /* WHITE decision card — matches the hero's white job-card and the app's white
    decision cards (was a dark-purple glow card). Agent advises → you decide, on a
    clean surface: candidate + evidence + the Advance verdict pill. */
@@ -441,7 +441,7 @@ export const VARIANT_G_CSS = `
 .lvg .cta-band.control-cta .cta-actions { margin-top: 24px; }
 @media (max-width: 940px) {
   .lvg .controlC-grid { grid-template-columns: 1fr; }
-  .lvg .glow-card { max-width: 440px; }
+  .lvg .glow-card { max-width: 380px; }
 }
 
 /* ── hero agent scene: OFF is quiet/desaturated, ON lights up ── */
