@@ -149,7 +149,7 @@ export const ControlSection = ({ reduced, onNavigate }) => {
 
         <Reveal className="cta-band dark control-cta" reduced={reduced} y={24}>
           <span className="eyebrow" style={{ color: 'var(--lavender)' }}>SEE IT LIVE</span>
-          <h2 className="display" style={{ fontSize: 'var(--l-h2)', marginTop: 12 }}>
+          <h2 className="display" style={{ fontSize: 'var(--fs-h1)', marginTop: 12 }}>
             Ready to put the agent to work?
           </h2>
           <div className="cta-actions">
