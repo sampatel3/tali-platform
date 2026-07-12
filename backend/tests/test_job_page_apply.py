@@ -11,7 +11,6 @@ from app.models import (
     Candidate,
     CandidateApplication,
     CandidateApplicationEvent,
-    DisqualificationReason,
     JobPage,
     Organization,
     Role,
@@ -99,13 +98,7 @@ def test_knockout_failure_queues_decision_on_hub(client, db):
         prompt="Are you authorized to work locally?", kind="boolean",
         required=True, knockout=True, knockout_expected=[True],
     )
-    reason = DisqualificationReason(
-        organization_id=org.id, label="Missing required skills",
-        category="we_rejected", position=1, is_active=True,
-    )
-    db.add(reason)
     db.commit()
-    reason_id = reason.id
 
     r = client.post(
         _url(page), data={"full_name": "B", "email": "b@x.test", "answers": "{}"}
@@ -131,7 +124,9 @@ def test_knockout_failure_queues_decision_on_hub(client, db):
     assert decision is not None
     assert decision.decision_type == "skip_assessment_reject"
     assert decision.evidence.get("source") == "knockout_screening"
-    assert decision.evidence.get("disqualification_reason_id") == reason_id
+    # The ATS owns any structured disposition catalog — the knockout reject
+    # carries only the free-text reason, no catalog id.
+    assert decision.evidence.get("disqualification_reason_id") is None
 
     event = (
         db.query(CandidateApplicationEvent)

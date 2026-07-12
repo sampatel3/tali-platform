@@ -6,15 +6,13 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm import Session
 
 from ...models.agent_decision import AgentDecision
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
-from ...platform.config import settings
-from .pipeline_stages_service import resolve_org_stages, resolve_stage_slugs
 
 # An application is described by TWO independent axes:
 #
@@ -224,31 +222,17 @@ def _normalize_stage_against(
 def _configurable_stage_slugs(
     db: Session, app: CandidateApplication
 ) -> tuple[str, ...] | None:
-    """The org's configurable stage slugs when ATS_CONFIGURABLE_STAGES_ENABLED is
-    on; ``None`` when off (callers then use the legacy ``PIPELINE_STAGES``)."""
-    if not settings.ATS_CONFIGURABLE_STAGES_ENABLED:
-        return None
-    return resolve_stage_slugs(db, app.organization_id)
+    """Always ``None`` — callers use the legacy ``PIPELINE_STAGES``. The ATS owns
+    the pipeline; Tali no longer keeps an org-configurable stage set."""
+    return None
 
 
 def _resolve_allowed_slugs_for_app(
     app: CandidateApplication,
 ) -> tuple[str, ...] | None:
-    """Org-configured slugs for a session-attached application when the flag is
-    ON; ``None`` otherwise (legacy ``PIPELINE_STAGES``). The in-normalization
-    resolver for the many ``ensure_pipeline_fields`` callers that don't thread
-    ``allowed_slugs`` — without it, any touch of an application sitting in a
-    custom stage (e.g. ``transition_outcome`` closing it) would treat that stage
-    as invalid and remap it from ``status``, clobbering the recruiter's move.
-    Detached instances fall back to the legacy tuple (flag-off-identical
-    behaviour for objects with no session to query). Flag OFF short-circuits
-    before any session access, keeping the legacy path byte-identical."""
-    if not settings.ATS_CONFIGURABLE_STAGES_ENABLED:
-        return None
-    session = object_session(app)
-    if session is None:
-        return None
-    return resolve_stage_slugs(session, app.organization_id)
+    """Always ``None`` — callers use the legacy ``PIPELINE_STAGES``. The ATS owns
+    the pipeline; Tali no longer keeps an org-configurable stage set."""
+    return None
 
 
 def map_legacy_status_to_pipeline(status: str | None) -> tuple[str, str]:
@@ -1003,11 +987,9 @@ def funnel_bucket_for_kind(kind: str | None, is_scored: bool) -> str | None:
 
 
 def _org_stage_kind_map(db: Session, organization_id: int) -> dict[str, str] | None:
-    """{slug: kind} for the org's configurable stages when the flag is on; None
-    when off (callers then bucket by the legacy slug mapping, unchanged)."""
-    if not settings.ATS_CONFIGURABLE_STAGES_ENABLED:
-        return None
-    return {s.slug: s.kind for s in resolve_org_stages(db, organization_id)}
+    """Always ``None`` — callers bucket by the legacy slug mapping. The ATS owns
+    the pipeline; Tali no longer keeps an org-configurable stage set."""
+    return None
 
 
 # pipeline_stage values that normalise to the "invited" funnel stage (sent, not

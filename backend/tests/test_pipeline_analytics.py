@@ -6,7 +6,6 @@ from app.domains.assessments_runtime.pipeline_analytics_service import (
     time_to_fill,
 )
 from app.models import Candidate, CandidateApplication, Organization, Role
-from app.models.pipeline_stage import PipelineStage, STAGE_KIND_APPLIED, STAGE_KIND_HIRED
 from tests.conftest import auth_headers
 
 
@@ -62,21 +61,17 @@ def test_pipeline_funnel_counts_by_stage_and_outcome(db):
     assert out["outcomes"] == {"open": 3, "hired": 1}
 
 
-def test_pipeline_funnel_uses_configured_stage_order(db):
+def test_pipeline_funnel_reconciles_unknown_slug_to_other(db):
     org = _org(db, "acme-cfg")
     role = _role(db, org)
-    db.add_all([
-        PipelineStage(organization_id=org.id, slug="applied", name="Applied",
-                      kind=STAGE_KIND_APPLIED, position=0, is_active=True),
-        PipelineStage(organization_id=org.id, slug="hired", name="Hired",
-                      kind=STAGE_KIND_HIRED, position=1, is_active=True),
-    ])
-    db.flush()
     _app(db, org, role, stage="applied")
-    _app(db, org, role, stage="legacy_stage")  # slug the org no longer lists
+    _app(db, org, role, stage="legacy_stage")  # slug outside the canonical funnel
 
     out = pipeline_funnel(db, org.id)
-    assert [s["slug"] for s in out["stages"][:2]] == ["applied", "hired"]
+    # The funnel is the fixed canonical Tali stage set, in order.
+    assert [s["slug"] for s in out["stages"][:5]] == [
+        "applied", "invited", "in_assessment", "review", "advanced",
+    ]
     # The unknown-slug application is surfaced under _other, not dropped.
     other = [s for s in out["stages"] if s["slug"] == "_other"]
     assert other and other[0]["count"] == 1

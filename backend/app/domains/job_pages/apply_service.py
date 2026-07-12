@@ -21,19 +21,15 @@ from sqlalchemy.orm import Session
 
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
-from ...models.disqualification_reason import (
-    DISPOSITION_WE_REJECTED,
-    DisqualificationReason,
-)
 from ...models.role import Role
 from ...services.candidate_identity_service import normalize_phone, resolve_candidate
 from ...services.pre_screen_decision_emitter import queue_knockout_reject
 from .screening_service import evaluate_knockouts, list_role_questions
 
-# The catalog reason a knockout failure is dispositioned under. Prefer a
-# skills-specific label; fall back to any active ``we_rejected`` reason the org
-# has, so the emitted card always carries a real catalog reason.
-_PREFERRED_KNOCKOUT_REASON = "Missing required skills"
+# The recruiter-facing free-text reason a knockout failure is rejected under. A
+# plain constant — the ATS owns any structured disposition-reason catalog, so
+# Tali no longer resolves a catalog row here.
+_KNOCKOUT_REJECT_REASON = "Missing required skills"
 
 
 @dataclass
@@ -60,35 +56,6 @@ def _ensure_eeo_token(db: Session, application: CandidateApplication) -> None:
     if not getattr(application, "eeo_token", None):
         application.eeo_token = _new_eeo_token()
         db.flush()
-
-
-def _resolve_reject_reason(
-    db: Session, organization_id: int
-) -> DisqualificationReason | None:
-    """Pick the org's disqualification-reason for a knockout failure: the
-    preferred skills label if present, else the lowest-position active
-    ``we_rejected`` reason, else None (org has no catalog rows)."""
-    preferred = (
-        db.query(DisqualificationReason)
-        .filter(
-            DisqualificationReason.organization_id == organization_id,
-            DisqualificationReason.label == _PREFERRED_KNOCKOUT_REASON,
-            DisqualificationReason.is_active.is_(True),
-        )
-        .first()
-    )
-    if preferred is not None:
-        return preferred
-    return (
-        db.query(DisqualificationReason)
-        .filter(
-            DisqualificationReason.organization_id == organization_id,
-            DisqualificationReason.category == DISPOSITION_WE_REJECTED,
-            DisqualificationReason.is_active.is_(True),
-        )
-        .order_by(DisqualificationReason.position, DisqualificationReason.id)
-        .first()
-    )
 
 
 def _backfill_identity(
@@ -208,8 +175,6 @@ def _restore_soft_deleted_application(
     application.auto_reject_state = None
     application.auto_reject_reason = None
     application.auto_reject_triggered_at = None
-    application.disposition_reason_id = None
-    application.disposition_category = None
     db.flush()
     append_application_event(
         db,
@@ -307,25 +272,19 @@ def submit_application(
         db.flush()
 
     if not passed:
-        reason_row = _resolve_reject_reason(db, org_id)
-        reason_label = (
-            reason_row.label if reason_row is not None else "Missing required skills"
-        )
         # Stamp the recommended-reject state (free-text), mirroring the
-        # pre-screen reject path; the structured disposition is applied when the
-        # recruiter approves the card (via the shared decision side-effects).
+        # pre-screen reject path. The Decision Hub card emits identically via the
+        # free-text reason; the ATS owns any structured disposition reason.
         application.auto_reject_state = "awaiting_recruiter_approval"
-        application.auto_reject_reason = reason_label
+        application.auto_reject_reason = _KNOCKOUT_REJECT_REASON
         queue_knockout_reject(
             db,
             organization_id=org_id,
             role=role,
             application=application,
-            reason=reason_label,
+            reason=_KNOCKOUT_REJECT_REASON,
             failed_question_ids=failed,
-            disqualification_reason_id=(
-                reason_row.id if reason_row is not None else None
-            ),
+            disqualification_reason_id=None,
         )
 
     _ensure_eeo_token(db, application)
