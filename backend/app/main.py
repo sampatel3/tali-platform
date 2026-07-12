@@ -318,9 +318,6 @@ from .domains.outreach import router as sourcing_assist_router
 from .domains.assessments_runtime.job_hiring_team_routes import (
     router as hiring_team_router,
 )
-from .domains.assessments_runtime.pipeline_stages_routes import (
-    router as pipeline_stages_router,
-)
 from .domains.assessments_runtime.pipeline_analytics_routes import (
     router as pipeline_analytics_router,
 )
@@ -384,7 +381,6 @@ from .domains.compliance import router as compliance_router  # noqa: E402
 # GDPR data-subject requests + aggregate EEO report (org-owner-gated).
 app.include_router(compliance_router, prefix="/api/v1")
 app.include_router(hiring_team_router, prefix="/api/v1")
-app.include_router(pipeline_stages_router, prefix="/api/v1")
 app.include_router(pipeline_analytics_router, prefix="/api/v1")
 from .decision_policy.routes import router as decision_policy_router  # noqa: E402
 from .domains.capabilities.routes import router as capability_flags_router  # noqa: E402

@@ -129,12 +129,6 @@ class Organization(Base):
     users = relationship("User", back_populates="organization")
     assessments = relationship("Assessment", back_populates="organization")
     roles = relationship("Role", cascade="all, delete-orphan")
-    pipeline_stages = relationship(
-        "PipelineStage",
-        back_populates="organization",
-        cascade="all, delete-orphan",
-        order_by="PipelineStage.position",
-    )
     criteria = relationship(
         "OrganizationCriterion",
         back_populates="organization",

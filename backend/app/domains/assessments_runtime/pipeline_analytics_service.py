@@ -1,9 +1,9 @@
 """P2 core analytics: native pipeline funnel + time-to-fill.
 
-Read-only aggregates over the ATS's *own* data (configurable ``pipeline_stages``
-and the ATS-synced hired outcome) — distinct from the Workable-stage conversion
-in ``analytics_routes`` which mirrors the external pipeline. Pure functions so
-the maths is unit-testable without HTTP.
+Read-only aggregates over the ATS's *own* data (the fixed Tali funnel stages and
+the ATS-synced hired outcome) — distinct from the Workable-stage conversion in
+``analytics_routes`` which mirrors the external pipeline. Pure functions so the
+maths is unit-testable without HTTP.
 """
 from __future__ import annotations
 
@@ -14,7 +14,19 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ...models.candidate_application import CandidateApplication
-from ...models.pipeline_stage import CANONICAL_SEED_STAGES, PipelineStage
+
+# The canonical Tali funnel stages, in order. Mirrors
+# ``pipeline_service.PIPELINE_STAGES`` (the fixed legacy pipeline) with each
+# stage's display name + coarse kind. The ATS owns any further pipeline
+# customization; Tali reports against this fixed funnel. Each entry is
+# ``(slug, name, kind)``.
+_CANONICAL_STAGES: tuple[tuple[str, str, str], ...] = (
+    ("applied", "Applied", "applied"),
+    ("invited", "Invited", "assessment"),
+    ("in_assessment", "In assessment", "assessment"),
+    ("review", "Review", "review"),
+    ("advanced", "Advanced", "interview"),
+)
 
 
 def _percentile(sorted_values: Sequence[float], pct: float) -> float:
@@ -46,22 +58,12 @@ def _duration_summary(days: Sequence[float]) -> Dict[str, Any]:
 
 
 def _ordered_stages(db: Session, org_id: int) -> List[Dict[str, Any]]:
-    """The org's active pipeline stages in funnel order. Falls back to the
-    canonical seed when an org has no configured rows yet (pre-seed / tests)."""
-    rows = (
-        db.query(PipelineStage)
-        .filter(
-            PipelineStage.organization_id == org_id,
-            PipelineStage.is_active.is_(True),
-        )
-        .order_by(PipelineStage.position, PipelineStage.id)
-        .all()
-    )
-    if rows:
-        return [{"slug": r.slug, "name": r.name, "kind": r.kind} for r in rows]
+    """The canonical Tali funnel stages in order. ``db``/``org_id`` are unused —
+    the funnel is a fixed set (the ATS owns any further customization) — but kept
+    in the signature so callers don't change."""
     return [
         {"slug": slug, "name": name, "kind": kind}
-        for slug, name, kind, _pos in CANONICAL_SEED_STAGES
+        for slug, name, kind in _CANONICAL_STAGES
     ]
 
 

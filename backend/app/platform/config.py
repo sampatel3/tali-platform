@@ -268,13 +268,6 @@ class Settings(BaseSettings):
     # Task authoring API guardrail (tasks are backend-authored by default).
     TASK_AUTHORING_API_ENABLED: bool = False
 
-    # ATS: per-org configurable pipeline stages. Off by default — pipeline_service
-    # keeps its legacy strict PIPELINE_STAGES graph, freeze logic and slug-based
-    # funnel bucketing byte-for-byte. When on, stage resolution + the funnel are
-    # org-aware (see pipeline_stages_service). The stage-management API is always
-    # mounted (inert until the flag flips); the frontend surfaces it only then.
-    ATS_CONFIGURABLE_STAGES_ENABLED: bool = False
-
     # ATS: native public apply on published job pages. Off by default — the
     # public apply endpoint returns 503 until deliberately enabled, so the live
     # platform is unaffected. The screening-question management API and the

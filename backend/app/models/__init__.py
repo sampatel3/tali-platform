@@ -7,17 +7,6 @@ from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
 from .interview_feedback import INTERVIEW_RECOMMENDATIONS, InterviewFeedback
-from .pipeline_stage import (
-    CANONICAL_SEED_STAGES,
-    LEGACY_STAGE_KIND,
-    STAGE_KINDS,
-    PipelineStage,
-)
-from .disqualification_reason import (
-    CANONICAL_DISQUALIFICATION_REASONS,
-    DISPOSITION_CATEGORIES,
-    DisqualificationReason,
-)
 from .role import Role, role_tasks
 from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
 from .client import (
@@ -237,13 +226,6 @@ __all__ = [
     "ApplicationInterview",
     "InterviewFeedback",
     "INTERVIEW_RECOMMENDATIONS",
-    "PipelineStage",
-    "CANONICAL_SEED_STAGES",
-    "LEGACY_STAGE_KIND",
-    "STAGE_KINDS",
-    "DisqualificationReason",
-    "CANONICAL_DISQUALIFICATION_REASONS",
-    "DISPOSITION_CATEGORIES",
     "Role",
     "role_tasks",
     "ScreeningQuestion",
