@@ -113,7 +113,7 @@ const LEGACY_COUNTUP_IMPORT_PATTERN = /from\s+['"][^'"]*shared\/motion\/useCount
 // These names belonged to the retired CSS implementation of live-agent
 // motion. Reintroducing one would bypass AgentLoop's tokens, in-view pause,
 // and explicit reduced-motion rest state.
-const RETIRED_AGENT_KEYFRAME_PATTERN = /@keyframes\s+(?:abar(?:Pulse|Flow|Ring)|agentChipPulse|mc-(?:aurora|pulse-ring|blink)|rqRecFlow|drFlow|aw-pulse|bgJobsPulse|agzSoft|an-pulse|ac-pulse|tk-dot|lv[fg]AgentFlow|lvc(?:SwitchFlow|Ring|RibbonFlow|NodePulse)|lvd(?:SwitchFlow|Ring))\b/gi;
+const RETIRED_AGENT_KEYFRAME_PATTERN = /@keyframes\s+(?:abar(?:Pulse|Flow|Ring)|agentChipPulse|mc-(?:aurora|pulse-ring|blink)|mc(?:AgentFlow|VgFlow)|rqRecFlow|drFlow|aw-pulse|bgJobsPulse|agzSoft|an-pulse|ac-pulse|tk-dot|lv[fg]AgentFlow|lvc(?:SwitchFlow|Ring|RibbonFlow|NodePulse)|lvd(?:SwitchFlow|Ring))\b/gi;
 const CSS_VAR_USAGE_PATTERN = /var\(\s*(--[\w-]+)\s*(?:,[^)]+)?\)/g;
 const CSS_VAR_DEFINITION_PATTERN = /(--[\w-]+)\s*:/g;
 

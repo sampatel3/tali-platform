@@ -252,6 +252,35 @@ def test_generate_confirm_enqueues(client, db):
     delay.assert_called_once_with(cid)
 
 
+def test_generate_while_generating_conflicts_without_duplicate_enqueue(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    p = _make_prospect(db, org_id, "gen-once@example.com")
+    client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"prospect_ids": [p.id]},
+        headers=headers,
+    )
+
+    with patch("app.tasks.outreach_tasks.generate_campaign_drafts.delay") as delay:
+        first = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/generate",
+            json={"confirm": True},
+            headers=headers,
+        )
+        duplicate = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/generate",
+            json={"confirm": True},
+            headers=headers,
+        )
+
+    assert first.status_code == 200, first.text
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["detail"] == "Campaign is already generating"
+    delay.assert_called_once_with(cid)
+
+
 # ---------------------------------------------------------------------------
 # Edit / approve / reject transitions
 # ---------------------------------------------------------------------------

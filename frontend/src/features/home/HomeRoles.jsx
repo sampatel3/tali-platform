@@ -97,7 +97,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
               </span>
               <button
                 type="button"
-                className="rq-r-link"
+                className="taali-text-btn rq-r-link"
                 onClick={(e) => { e.stopPropagation(); onNavigate?.('job-pipeline', { roleId: r.role_id }); }}
               >
                 Open →
@@ -125,7 +125,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
       </div>
       <button
         type="button"
-        className="home-section-toggle"
+        className="home-section-toggle taali-btn taali-btn-secondary taali-btn-xs"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >

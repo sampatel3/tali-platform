@@ -14,7 +14,7 @@ import { ArrowDown, ArrowUp, Plus, Save, Sparkles, Trash2, X } from 'lucide-reac
 
 import { useToast } from '../../context/ToastContext';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Button, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { requisitionApi } from '../requisitions/api';
 import '../requisitions/requisitions.css';
 import './requisition-template.css';
@@ -512,9 +512,14 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
               />
             ))}
 
-            <button type="button" className="rqt-add-section" onClick={addSection}>
+            <Button
+              variant="secondary"
+              fullWidth
+              className="rqt-add-section"
+              onClick={addSection}
+            >
               <Plus size={16} /> Add section
-            </button>
+            </Button>
 
             <div className="rqt-footer">
               <button type="button" className="rq-publish-btn" onClick={save} disabled={saving}>

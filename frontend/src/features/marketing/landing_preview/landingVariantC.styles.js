@@ -141,26 +141,53 @@ export const VARIANT_C_CSS = `
 .lvc.is-on .lvc-cta-row, .lvc.is-reduced .lvc-cta-row { opacity: 1; transform: none; }
 
 .lvc-btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 48px; padding: 0 24px; border-radius: 999px;
-  font-size: 14px; font-weight: 600; cursor: pointer;
-  border: 1px solid transparent;
-  transition: transform 0.2s ease, box-shadow 0.3s ease, background 0.3s ease;
+  --lvc-btn-bg: var(--lvc-bg-2);
+  --lvc-btn-color: var(--lvc-ink-2);
+  --lvc-btn-border: var(--lvc-line);
+  --lvc-btn-shadow: 0 0 transparent;
+  --lvc-btn-hover-bg: var(--lvc-purple-soft);
+  --lvc-btn-hover-color: var(--lvc-purple-2);
+  --lvc-btn-hover-border: rgba(196,165,253,0.6);
+
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; min-height: 40px; padding: 0 20px; border-radius: 10px;
+  font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1; cursor: pointer;
+  color: var(--lvc-btn-color); background: var(--lvc-btn-bg);
+  border: 1px solid var(--lvc-btn-border); box-shadow: var(--lvc-btn-shadow);
+  white-space: nowrap;
+  transition: transform 0.1s ease, box-shadow 0.16s ease, background 0.16s ease, border-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
 }
-.lvc-btn:active { transform: translateY(1px) scale(0.98); }
+.lvc-btn:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--lvc-btn-hover-color);
+  background: var(--lvc-btn-hover-bg);
+  border-color: var(--lvc-btn-hover-border);
+}
+.lvc-btn:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(94,58,168,0.24), var(--lvc-btn-shadow);
+}
+.lvc-btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lvc-btn:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
 .lvc-btn--primary {
-  color: #fff;
-  background: linear-gradient(135deg, var(--lvc-purple), var(--lvc-purple-2));
-  box-shadow: 0 12px 30px -12px rgba(94,58,168,0.55),
-              inset 0 1px 0 rgba(255,255,255,0.2);
+  --lvc-btn-bg: var(--lvc-purple);
+  --lvc-btn-color: var(--lvc-bg-2);
+  --lvc-btn-border: var(--lvc-purple);
+  --lvc-btn-shadow: 0 1px 2px rgba(94,58,168,0.22);
+  --lvc-btn-hover-bg: var(--lvc-purple-2);
+  --lvc-btn-hover-color: var(--lvc-bg-2);
+  --lvc-btn-hover-border: var(--lvc-purple-2);
 }
-.lvc-btn--primary:hover { box-shadow: 0 16px 40px -12px rgba(94,58,168,0.7); }
 .lvc-btn--ghost {
-  color: var(--lvc-purple);
-  background: var(--lvc-bg-2);
-  border-color: var(--lvc-line);
+  --lvc-btn-bg: var(--lvc-bg-2);
+  --lvc-btn-color: var(--lvc-ink-2);
+  --lvc-btn-border: var(--lvc-line);
 }
-.lvc-btn--ghost:hover { background: var(--lvc-purple-soft); border-color: rgba(196,165,253,0.6); }
+.lvc-btn--sm { height: 32px; min-height: 32px; padding: 0 14px; font-size: 13px; }
+.lvc-btn--lg { height: 48px; min-height: 48px; padding: 0 24px; }
 
 /* ── DOT LATTICE (hero motif) ────────────────────────────────────────────
    ~120 small dots in a loose grid. OFF: static grey, low opacity. On flip a

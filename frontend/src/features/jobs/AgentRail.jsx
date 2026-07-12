@@ -130,7 +130,7 @@ export const AgentRail = ({ roleId, onOpenSettings, onOpenFeed, onPending, fallb
       <section className="mc-rail-budget">
         <div className="mc-rail-budget-head">
           <span className="mc-kicker is-mute">Monthly budget</span>
-          <button type="button" className="mc-rail-budget-edit" onClick={onOpenSettings}>
+          <button type="button" className="taali-text-btn mc-rail-budget-edit" onClick={onOpenSettings}>
             Edit
           </button>
         </div>

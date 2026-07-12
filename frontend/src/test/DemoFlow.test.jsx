@@ -77,7 +77,7 @@ describe('Demo flow redesign', () => {
     assessments.requestDemo.mockResolvedValue({ data: { success: true, candidate_id: 321 } });
   });
 
-  it('wires the variant G landing CTAs to the same marketing targets as before', async () => {
+  it('wires the landing CTAs to the same marketing targets as before', async () => {
     const onNavigate = vi.fn();
     renderLanding(onNavigate);
 
@@ -99,34 +99,47 @@ describe('Demo flow redesign', () => {
     expect(onNavigate).toHaveBeenCalledWith('demo-lead');
   });
 
-  it('renders variant G as the production landing (hero, funnel, 5 Ds, control) with no preview chip', async () => {
+  it('renders the landing (hero + agent scene, variant G funnel + 5-Ds, closing CTA) with no preview chip', async () => {
     const { container } = renderLanding();
 
-    // Scoped variant G shell mounts; the internal preview switcher chip does not
-    // (that lives only on /landing-preview).
-    expect(container.querySelector('.lvg')).toBeTruthy();
+    // The production landing, NOT variant G's scoped `.lvg` shell. The only
+    // scoped subtrees are `.lvg-scene` (the grafted hero AgentScene) and the
+    // `.mc-vg` funnel + 5-Ds bands grafted from variant G.
+    expect(container.querySelector('.lvg')).toBeNull();
+    expect(container.querySelector('.lvg-scene')).toBeTruthy();
+    expect(container.querySelectorAll('.mc-vg').length).toBe(2);
+    // The internal preview switcher chip lives only on /landing-preview.
     expect(screen.queryByRole('group', { name: /Landing preview variant/i })).toBeNull();
 
-    // Hero eyebrow + H1 (grad-text split) + CTAs.
+    // Grafted hero copy: eyebrow + refined H1 (purple split) + the two CTAs.
     expect(screen.getByText(/AGENT-NATIVE HIRING/i)).toBeInTheDocument();
     expect(screen.getByText(/The hiring agent that screens, assesses, and/i)).toBeInTheDocument();
     expect(screen.getByText(/decides — with you\./i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /See it live/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
 
-    // The five funnel steps and the 5 Ds scorecard.
+    // Variant G's 5-step funnel replaces the old 3-step + decision-feed band.
+    expect(screen.getByText(/your whole funnel\./i)).toBeInTheDocument();
     ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
       expect(screen.getByText(step)).toBeInTheDocument();
     });
+    // No leftover decision-feed / 3-step copy.
+    expect(screen.queryByText(/HOW THE AGENT WORKS/i)).toBeNull();
+    expect(screen.queryByText(/Triage — autonomously/i)).toBeNull();
+
+    // The single assessment section — variant G's 5-Ds scorecard (Delegation /
+    // Description / Discernment / Diligence / Deliverable), one section only.
+    expect(screen.getByText(/actually work with AI\./i)).toBeInTheDocument();
     ['Delegation', 'Description', 'Discernment', 'Diligence', 'Deliverable'].forEach((d) => {
       expect(screen.getByText(d)).toBeInTheDocument();
     });
+    // The IDE walkthrough band is gone.
+    expect(screen.queryByText(/Candidates work here\./i)).toBeNull();
 
-    // Control section + the closing CTA band (which now lives inside Control).
-    expect(screen.getByText(/The agent advises\./i)).toBeInTheDocument();
+    // The closing CTA is intact.
     expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeInTheDocument();
 
-    // Decision-lane candidate threads the design (also proves the shared data).
+    // Maya Chen threads the design — the hero decision lane and the 5-Ds card.
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
   });
 
@@ -146,14 +159,20 @@ describe('Demo flow redesign', () => {
     });
   });
 
-  it('uses shared nav buttons on the demo page to jump back to landing sections', async () => {
-    const onNavigate = vi.fn();
-    renderDemo(onNavigate);
+  it('trims the shared marketing nav to Developers / Sign in / Book a demo', async () => {
+    renderDemo();
 
-    fireEvent.click(screen.getByRole('button', { name: 'How it works' }));
+    // The only marketing-nav destinations now are Developers, Sign in, and
+    // Book a demo — the old "How it works" section jump is gone.
+    expect(screen.queryByRole('button', { name: 'How it works' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'How it works' })).toBeNull();
 
-    expect(onNavigate).toHaveBeenCalledWith('landing');
-    expect(sessionStorage.getItem('taali.pendingMarketingSection')).toBe('how-it-works');
+    const developers = screen.getAllByRole('link', { name: /^Developers$/i });
+    expect(developers.length).toBeGreaterThan(0);
+    developers.forEach((link) => expect(link).toHaveAttribute('href', '/developers'));
+
+    expect(screen.getAllByRole('link', { name: /Sign in/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: /Book a demo/i }).length).toBeGreaterThan(0);
   });
 
   it('gates the walkthrough on /demo until details are submitted', async () => {

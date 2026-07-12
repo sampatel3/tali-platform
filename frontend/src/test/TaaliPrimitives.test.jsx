@@ -4,6 +4,99 @@ import { describe, expect, it } from 'vitest';
 
 import { Button, Dialog, Sheet } from '../shared/ui/TaaliPrimitives';
 
+describe('Button', () => {
+  it.each([
+    'primary',
+    'secondary',
+    'ghost',
+    'soft',
+    'danger',
+    'agent',
+    'inverse',
+  ])('applies the %s variant class', (variant) => {
+    render(<Button variant={variant}>{variant}</Button>);
+
+    expect(screen.getByRole('button', { name: variant })).toHaveClass(`taali-btn-${variant}`);
+  });
+
+  it.each(['xs', 'sm', 'md', 'lg'])('applies the %s size class', (size) => {
+    render(<Button size={size}>{size}</Button>);
+
+    expect(screen.getByRole('button', { name: size })).toHaveClass(`taali-btn-${size}`);
+  });
+
+  it('uses safe defaults for unknown variants and sizes', () => {
+    render(<Button variant="unknown" size="unknown">Fallback</Button>);
+
+    expect(screen.getByRole('button', { name: 'Fallback' })).toHaveClass(
+      'taali-btn-secondary',
+      'taali-btn-md'
+    );
+  });
+
+  it('defaults native buttons to type button and preserves an explicit type', () => {
+    const { rerender } = render(<Button>Safe submit</Button>);
+
+    expect(screen.getByRole('button', { name: 'Safe submit' })).toHaveAttribute('type', 'button');
+
+    rerender(<Button type="submit">Safe submit</Button>);
+    expect(screen.getByRole('button', { name: 'Safe submit' })).toHaveAttribute('type', 'submit');
+  });
+
+  it('preserves polymorphic rendering without adding a default button type', () => {
+    render(<Button as="a" href="/candidates">Candidates</Button>);
+
+    const link = screen.getByRole('link', { name: 'Candidates' });
+    expect(link).toHaveAttribute('href', '/candidates');
+    expect(link).not.toHaveAttribute('type');
+    expect(link).toHaveClass('taali-btn', 'taali-btn-secondary', 'taali-btn-md');
+  });
+
+  it('prevents disabled polymorphic links from activating', () => {
+    render(<Button as="a" href="/candidates" disabled>Disabled link</Button>);
+
+    const link = screen.getByRole('link', { name: 'Disabled link' });
+    expect(link).toHaveAttribute('aria-disabled', 'true');
+    expect(link).toHaveAttribute('tabindex', '-1');
+    expect(link).not.toHaveAttribute('disabled');
+  });
+
+  it('renders an accessible disabled loading state', () => {
+    render(<Button loading loadingLabel="Saving changes">Save</Button>);
+
+    const button = screen.getByRole('button', { name: 'Saving changes' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(button).not.toHaveTextContent('Save');
+    expect(button.querySelector('.taali-btn-spinner')).toHaveClass('animate-spin');
+    expect(button.querySelector('.taali-btn-spinner')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('keeps the original label while loading when no loading label is supplied', () => {
+    render(<Button loading>Refresh</Button>);
+
+    expect(screen.getByRole('button', { name: 'Refresh' })).toHaveTextContent('Refresh');
+  });
+
+  it('supports icon-only buttons and keeps caller classes last', () => {
+    render(
+      <Button iconOnly aria-label="Close" className="h-12 custom-button-layout">
+        <span aria-hidden="true">×</span>
+      </Button>
+    );
+
+    const button = screen.getByRole('button', { name: 'Close' });
+    expect(button).toHaveClass('taali-btn-icon-only', 'h-12', 'custom-button-layout');
+    expect(button.className.endsWith('h-12 custom-button-layout')).toBe(true);
+  });
+
+  it('supports full-width layout without creating another visual variant', () => {
+    render(<Button fullWidth>Continue</Button>);
+
+    expect(screen.getByRole('button', { name: 'Continue' })).toHaveClass('taali-btn-full');
+  });
+});
+
 function TwoSheetHarness() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);

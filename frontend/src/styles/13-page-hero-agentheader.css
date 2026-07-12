@@ -318,24 +318,6 @@
 .ab-budget-bar { height: 4px; border-radius: 2px; overflow: hidden; }
 .ab-budget-bar i { display: block; height: 100%; border-radius: 2px; }
 .ab-actions, .ab-activate { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.ab-btn {
-  height: 32px;
-  border-radius: 8px;
-  padding: 0 12px;
-  font-size: 12.5px;
-  font-weight: 600;
-  font-family: inherit;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  transition: background .12s ease, border-color .12s ease, transform .12s ease, filter .12s ease;
-}
-.ab-btn.ic { width: 32px; padding: 0; }
-.ab-btn:disabled { opacity: .55; cursor: default; }
 /* Simulated press — the landing scroll-trigger "presses" Turn-on before flipping. */
 .ab-btn.is-pressing { transform: scale(0.94); filter: brightness(0.9); }
 .ab-capbox {
@@ -371,10 +353,6 @@
 .abar-on .ab-budget-amt { color: #fff; }
 .abar-on .ab-budget-bar { background: rgba(255, 255, 255, .2); }
 .abar-on .ab-budget-bar i { background: var(--purple-lav); }
-.abar-on .ab-btn { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .22); color: #fff; }
-.abar-on .ab-btn:hover { background: rgba(255, 255, 255, .2); }
-.abar-on .ab-btn.primary { background: #fff; color: var(--purple-2); border-color: transparent; }
-
 /* PAUSED — amber (fill on .abar::after) */
 .abar-paused {
   border-color: color-mix(in oklab, var(--amber) 40%, var(--line));
@@ -388,17 +366,11 @@
    amount off the strip's baseline, above PAUSED / the pending pill / the tick.
    Drop it so the amount sits centred in line with the rest of the text. */
 .abar-paused .ab-budget-bar { display: none; }
-.abar-paused .ab-btn.primary { background: var(--purple); color: #fff; }
-.abar-paused .ab-btn.ic { background: var(--bg-2); border-color: color-mix(in oklab, var(--amber) 40%, var(--line)); color: var(--amber-ink); }
-
 /* OFF — quiet light (the .abar base IS the off look); just the inner bits. */
 .abar-off .ab-spark { background: var(--bg-3); border: 1px solid var(--line); color: var(--mute); }
 .abar-off .ab-label { color: var(--ink-soft); }
 .abar-off .ab-tick { color: var(--mute); }
 .abar-off .ab-capbox { background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
-.abar-off .ab-btn.primary { background: var(--purple); color: #fff; }
-.abar-off .ab-btn.primary:hover { background: color-mix(in oklab, var(--purple) 88%, white); }
-
 /* BLOCK — the agent strip reused full-width as a section header (e.g. the
    "Agent assessed" band over the candidate report's scored dimensions). Same
    ON treatment, just unclamped + carrying a trailing score instead of buttons. */

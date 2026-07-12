@@ -149,7 +149,7 @@ const LiveToastsSection = ({ showToast }) => (
           key={ex.label}
           type="button"
           onClick={() => showToast(ex.message, ex.type)}
-          className="rounded-md border border-[var(--taali-border)] bg-white px-3 py-2 text-sm text-[var(--ink)] hover:border-[var(--purple)] hover:text-[var(--purple)] transition-colors"
+          className="taali-btn taali-btn-secondary taali-btn-sm"
         >
           Fire: {ex.label}
         </button>
@@ -210,7 +210,7 @@ const CurrentToastSample = ({ type, message }) => {
       <p className="break-words">{message}</p>
       <button
         type="button"
-        className="mt-2 text-xs font-medium underline focus:outline-none"
+        className="taali-text-btn mt-2"
       >
         Dismiss
       </button>
@@ -236,8 +236,7 @@ const ProposedToastSample = ({ message, bg, border, text }) => (
     </p>
     <button
       type="button"
-      className="mt-2 text-xs font-medium underline focus:outline-none"
-      style={{ color: text }}
+      className="taali-text-btn mt-2"
     >
       Dismiss
     </button>
@@ -351,7 +350,7 @@ const StaticJobRow = ({ title, detail, pct, status, onCancel, onDismiss }) => {
           {!isTerminal && (
             <button
               type="button"
-              className="bg-jobs-cancel"
+              className="taali-btn taali-btn-secondary taali-btn-xs bg-jobs-cancel"
               onClick={onCancel}
               disabled={isCancelling}
             >
@@ -359,7 +358,12 @@ const StaticJobRow = ({ title, detail, pct, status, onCancel, onDismiss }) => {
             </button>
           )}
           {isTerminal && (
-            <button type="button" className="bg-jobs-dismiss-row" onClick={onDismiss}>
+            <button
+              type="button"
+              className="taali-icon-btn taali-icon-btn-ghost taali-icon-btn-sm bg-jobs-dismiss-row"
+              aria-label="Dismiss background job"
+              onClick={onDismiss}
+            >
               <X size={14} />
             </button>
           )}

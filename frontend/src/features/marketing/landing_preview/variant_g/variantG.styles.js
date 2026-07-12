@@ -96,7 +96,7 @@ export const VARIANT_G_CSS = `
 .lvg *, .lvg *::before, .lvg *::after { box-sizing: border-box; }
 .lvg a { color: var(--purple); text-decoration: none; }
 .lvg a:hover { color: var(--purple-deep); }
-.lvg button { font: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
+.lvg button { font: inherit; }
 .lvg img { max-width: 100%; display: block; }
 
 .lvg .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 var(--pad); }
@@ -141,22 +141,73 @@ export const VARIANT_G_CSS = `
 
 /* ── buttons ── */
 .lvg .btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 12px 20px; border-radius: 10px;
-  font-size: var(--l-body); font-weight: 500; letter-spacing: -.01em;
-  transition: transform .1s ease, background .16s ease, border-color .16s, color .16s, box-shadow .16s;
+  --lvg-btn-bg: var(--surface);
+  --lvg-btn-color: var(--ink-2);
+  --lvg-btn-border: var(--line);
+  --lvg-btn-shadow: 0 0 0 transparent;
+  --lvg-btn-hover-bg: var(--purple-soft);
+  --lvg-btn-hover-color: var(--purple-deep);
+  --lvg-btn-hover-border: color-mix(in oklab, var(--purple) 34%, var(--line));
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 20px;
+  border: 1px solid var(--lvg-btn-border) !important;
+  border-radius: 10px;
+  background: var(--lvg-btn-bg) !important;
+  color: var(--lvg-btn-color) !important;
+  box-shadow: var(--lvg-btn-shadow) !important;
+  font-size: var(--l-body);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -.01em;
+  text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
+  transition: transform .1s ease, background .16s ease, border-color .16s, color .16s, box-shadow .16s, opacity .16s;
 }
-.lvg .btn:active { transform: translateY(1px); }
-.lvg .btn-primary { background: var(--purple); color: #fff; box-shadow: 0 1px 0 rgba(255,255,255,.15) inset, var(--sh-sm); }
-.lvg .btn-primary:hover { background: var(--purple-deep); color: #fff; }
+.lvg .btn:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--lvg-btn-hover-bg) !important;
+  color: var(--lvg-btn-hover-color) !important;
+  border-color: var(--lvg-btn-hover-border) !important;
+}
+.lvg .btn:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 28%, transparent), var(--lvg-btn-shadow) !important;
+}
+.lvg .btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lvg .btn:is(:disabled, [aria-disabled="true"]) {
+  opacity: .48;
+  cursor: not-allowed;
+  transform: none;
+}
+.lvg .btn-primary,
+.lvg .cta-band.dark .btn:not(.btn-outline) {
+  --lvg-btn-bg: var(--purple);
+  --lvg-btn-color: var(--cloud);
+  --lvg-btn-border: var(--purple);
+  --lvg-btn-shadow: var(--sh-sm);
+  --lvg-btn-hover-bg: var(--purple-deep);
+  --lvg-btn-hover-color: var(--cloud);
+  --lvg-btn-hover-border: var(--purple-deep);
+}
 .lvg .btn-primary .arw { transition: transform .18s; }
-.lvg .btn-primary:hover .arw { transform: translateX(3px); }
-.lvg .btn-outline { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
-.lvg .btn-outline:hover { border-color: var(--purple); color: var(--purple); }
-.lvg .btn-ghost { color: var(--ink-2); padding-left: 6px; padding-right: 6px; }
-.lvg .btn-ghost:hover { color: var(--purple); }
-.lvg .btn-lg { padding: 15px 26px; font-size: var(--l-body); }
+.lvg .btn-primary:hover:not(:disabled) .arw { transform: translateX(3px); }
+.lvg .btn-outline { --lvg-btn-bg: var(--surface); --lvg-btn-color: var(--ink-2); --lvg-btn-border: var(--line); }
+.lvg .btn-ghost { --lvg-btn-bg: transparent; --lvg-btn-color: var(--ink-2); --lvg-btn-border: transparent; }
+.lvg .cta-band.dark .btn-outline {
+  --lvg-btn-bg: transparent;
+  --lvg-btn-color: var(--cloud);
+  --lvg-btn-border: color-mix(in oklab, var(--cloud) 28%, transparent);
+  --lvg-btn-hover-bg: color-mix(in oklab, var(--cloud) 12%, transparent);
+  --lvg-btn-hover-color: var(--cloud);
+  --lvg-btn-hover-border: color-mix(in oklab, var(--cloud) 44%, transparent);
+}
+.lvg .btn-lg { height: 48px; min-height: 48px; padding: 0 24px; font-size: var(--l-body); }
 
 /* ── nav ── */
 .lvg .nav {

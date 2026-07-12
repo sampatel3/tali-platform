@@ -118,7 +118,7 @@ export default function SubmittalPackDialog({
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>Close</Button>
           {!created ? (
-            <Button type="button" variant="purple" onClick={handleCreate} disabled={!canCreate}>
+            <Button type="button" variant="primary" onClick={handleCreate} disabled={!canCreate}>
               {creating ? 'Creating…' : `Create link (${applications.length})`}
             </Button>
           ) : null}

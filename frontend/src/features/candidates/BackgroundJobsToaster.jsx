@@ -277,7 +277,7 @@ function JobRow({ entry, onCancel, onDismiss }) {
           {!isTerminal && onCancel && (
             <button
               type="button"
-              className="bg-jobs-cancel"
+              className="taali-btn taali-btn-secondary taali-btn-xs bg-jobs-cancel"
               onClick={onCancel}
               disabled={isCancelling}
               aria-label={`Cancel ${title}`}
@@ -288,7 +288,7 @@ function JobRow({ entry, onCancel, onDismiss }) {
           {isTerminal && (
             <button
               type="button"
-              className="bg-jobs-dismiss-row"
+              className="taali-icon-btn taali-icon-btn-ghost taali-icon-btn-sm bg-jobs-dismiss-row"
               onClick={onDismiss}
               aria-label="Dismiss"
             >

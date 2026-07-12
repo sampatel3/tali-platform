@@ -113,36 +113,78 @@ const BUTTON_VARIANT_CLASS = {
   primary: 'taali-btn-primary',
   secondary: 'taali-btn-secondary',
   ghost: 'taali-btn-ghost',
+  soft: 'taali-btn-soft',
   danger: 'taali-btn-danger',
+  agent: 'taali-btn-agent',
+  inverse: 'taali-btn-inverse',
 };
 
 const BUTTON_SIZE_CLASS = {
-  xs: 'px-3 py-1.5 text-xs',
-  sm: 'px-4 py-2 text-sm',
-  md: 'px-5 py-2.5 text-sm',
-  lg: 'px-6 py-3 text-base',
+  xs: 'taali-btn-xs',
+  sm: 'taali-btn-sm',
+  md: 'taali-btn-md',
+  lg: 'taali-btn-lg',
 };
 
-export const Button = ({
+export const Button = React.forwardRef(function Button({
   className = '',
   variant = 'secondary',
   size = 'md',
   as: As = 'button',
+  loading = false,
+  loadingLabel,
+  iconOnly = false,
+  fullWidth = false,
+  disabled,
+  type,
   children,
   ...props
-}) => (
-  <As
-    className={cx(
-      'taali-btn inline-flex items-center justify-center gap-1.5',
-      BUTTON_VARIANT_CLASS[variant] || BUTTON_VARIANT_CLASS.secondary,
-      BUTTON_SIZE_CLASS[size] || BUTTON_SIZE_CLASS.md,
-      className
-    )}
-    {...props}
-  >
-    {children}
-  </As>
-);
+}, ref) {
+  const componentProps = { ...props };
+  const isNativeButton = As === 'button' || As?.rendersNativeButton === true;
+  const isDisabled = Boolean(disabled || loading);
+
+  if (isNativeButton) {
+    componentProps.type = type ?? 'button';
+  } else if (type !== undefined) {
+    componentProps.type = type;
+  }
+
+  if (isNativeButton && (disabled !== undefined || loading)) {
+    componentProps.disabled = isDisabled;
+  } else if (!isNativeButton && isDisabled) {
+    componentProps['aria-disabled'] = true;
+    componentProps.tabIndex = -1;
+    componentProps.onClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+  }
+
+  if (loading) {
+    componentProps['aria-busy'] = true;
+  }
+
+  return (
+    <As
+      {...componentProps}
+      ref={ref}
+      className={cx(
+        'taali-btn inline-flex items-center justify-center gap-1.5',
+        BUTTON_VARIANT_CLASS[variant] || BUTTON_VARIANT_CLASS.secondary,
+        BUTTON_SIZE_CLASS[size] || BUTTON_SIZE_CLASS.md,
+        iconOnly ? 'taali-btn-icon-only' : '',
+        fullWidth ? 'taali-btn-full' : '',
+        className
+      )}
+    >
+      {loading ? (
+        <Loader2 className="taali-btn-spinner animate-spin" aria-hidden="true" />
+      ) : null}
+      {loading ? loadingLabel ?? children : children}
+    </As>
+  );
+});
 
 export const Input = ({ className = '', ...props }) => (
   <input className={cx('taali-input', className)} {...props} />
@@ -419,7 +461,7 @@ export const MultiSelect = ({
               <div className="taali-multiselect-actions">
                 <button
                   type="button"
-                  className="taali-multiselect-action"
+                  className="taali-text-btn taali-multiselect-action"
                   onClick={() => {
                     if (allEnabledSelected) {
                       applyValues([]);

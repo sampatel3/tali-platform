@@ -50,21 +50,49 @@ export const VARIANT_E_CSS = `
 
 /* ── Buttons ─────────────────────────────────────────────────────────── */
 .lve-btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 46px; padding: 0 22px; border-radius: 999px;
-  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
-  border: 1px solid transparent; white-space: nowrap;
-  transition: transform 0.18s ease, box-shadow 0.3s ease, background 0.25s ease, border-color 0.25s ease;
+  --lve-btn-bg: var(--lve-bg-2);
+  --lve-btn-color: var(--lve-ink-2);
+  --lve-btn-border: var(--lve-line);
+  --lve-btn-shadow: 0 0 transparent;
+  --lve-btn-hover-bg: var(--lve-purple-soft);
+  --lve-btn-hover-color: var(--lve-purple-2);
+  --lve-btn-hover-border: rgba(196,165,253,0.6);
+
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; min-height: 40px; padding: 0 20px; border-radius: 10px;
+  font: inherit; font-size: 14px; font-weight: 600; line-height: 1; cursor: pointer;
+  color: var(--lve-btn-color); background: var(--lve-btn-bg);
+  border: 1px solid var(--lve-btn-border); box-shadow: var(--lve-btn-shadow);
+  white-space: nowrap;
+  transition: transform 0.1s ease, box-shadow 0.16s ease, background 0.16s ease, border-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
 }
-.lve-btn:active { transform: translateY(1px) scale(0.98); }
+.lve-btn:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--lve-btn-hover-color);
+  background: var(--lve-btn-hover-bg);
+  border-color: var(--lve-btn-hover-border);
+}
+.lve-btn:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(94,58,168,0.24), var(--lve-btn-shadow);
+}
+.lve-btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lve-btn:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
 .lve-btn--primary {
-  color: #fff; background: linear-gradient(135deg, var(--lve-purple), var(--lve-purple-2));
-  box-shadow: 0 12px 30px -12px rgba(94,58,168,0.55), inset 0 1px 0 rgba(255,255,255,0.2);
+  --lve-btn-bg: var(--lve-purple);
+  --lve-btn-color: var(--lve-bg-2);
+  --lve-btn-border: var(--lve-purple);
+  --lve-btn-shadow: 0 1px 2px rgba(94,58,168,0.22);
+  --lve-btn-hover-bg: var(--lve-purple-2);
+  --lve-btn-hover-color: var(--lve-bg-2);
+  --lve-btn-hover-border: var(--lve-purple-2);
 }
-.lve-btn--primary:hover { box-shadow: 0 16px 40px -12px rgba(94,58,168,0.7); }
-.lve-btn--ghost { color: var(--lve-purple); background: var(--lve-bg-2); border-color: var(--lve-line); }
-.lve-btn--ghost:hover { background: var(--lve-purple-soft); border-color: rgba(196,165,253,0.6); }
-.lve-btn--sm { height: 40px; padding: 0 18px; font-size: 13px; }
+.lve-btn--ghost { --lve-btn-bg: var(--lve-bg-2); --lve-btn-color: var(--lve-ink-2); --lve-btn-border: var(--lve-line); }
+.lve-btn--sm { height: 32px; min-height: 32px; padding: 0 14px; font-size: 13px; }
+.lve-btn--lg { height: 48px; min-height: 48px; padding: 0 24px; }
 
 /* ── NAV ─────────────────────────────────────────────────────────────── */
 .lve-nav {
@@ -112,10 +140,16 @@ export const VARIANT_E_CSS = `
 .lve-nav-link:hover { background: var(--lve-purple-soft); color: var(--lve-purple); }
 .lve-nav-right { display: none; align-items: center; gap: 12px; }
 .lve-nav-login {
-  background: none; border: 0; cursor: pointer; font: inherit; font-size: 14px; font-weight: 500;
-  color: var(--lve-ink-2); padding: 8px 6px; transition: color 0.2s ease;
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 32px; min-height: 32px; padding: 0 14px; border-radius: 10px;
+  background: transparent; border: 1px solid transparent; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; line-height: 1; color: var(--lve-ink-2);
+  transition: transform 0.1s ease, background 0.16s ease, color 0.16s ease, opacity 0.16s ease;
 }
-.lve-nav-login:hover { color: var(--lve-purple); }
+.lve-nav-login:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--lve-purple-2); background: var(--lve-purple-soft); }
+.lve-nav-login:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(94,58,168,0.24); }
+.lve-nav-login:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lve-nav-login:is(:disabled, [aria-disabled="true"]) { opacity: 0.48; cursor: not-allowed; transform: none; }
 .lve-nav-burger {
   display: inline-flex; align-items: center; justify-content: center;
   width: 42px; height: 42px; border-radius: 10px; cursor: pointer;
@@ -143,7 +177,7 @@ export const VARIANT_E_CSS = `
   background: none; cursor: pointer; font: inherit; font-size: 18px; font-weight: 500; color: var(--lve-ink);
 }
 .lve-drawer-cta { margin-top: 24px; display: flex; flex-direction: column; gap: 12px; }
-.lve-drawer-cta .lve-btn { width: 100%; justify-content: center; height: 50px; }
+.lve-drawer-cta .lve-btn { width: 100%; justify-content: center; height: 48px; min-height: 48px; }
 
 @media (min-width: 900px) {
   .lve-nav-links, .lve-nav-right { display: flex; }
@@ -252,11 +286,15 @@ export const VARIANT_E_CSS = `
 
 .lve-hs-replay {
   align-self: flex-end; display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--lve-line);
-  background: var(--lve-bg-2); color: var(--lve-mute); font: inherit; font-size: 11.5px; font-weight: 500;
-  cursor: pointer; transition: color 0.2s ease, border-color 0.2s ease;
+  height: 32px; min-height: 32px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--lve-line);
+  background: var(--lve-bg-2); color: var(--lve-ink-2); font: inherit; font-size: 12px; font-weight: 600;
+  line-height: 1; cursor: pointer;
+  transition: transform 0.1s ease, background 0.16s ease, color 0.16s ease, border-color 0.16s ease, opacity 0.16s ease;
 }
-.lve-hs-replay:hover { color: var(--lve-purple); border-color: rgba(196,165,253,0.6); }
+.lve-hs-replay:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--lve-purple-2); background: var(--lve-purple-soft); border-color: rgba(196,165,253,0.6); }
+.lve-hs-replay:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(94,58,168,0.24); }
+.lve-hs-replay:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lve-hs-replay:is(:disabled, [aria-disabled="true"]) { opacity: 0.48; cursor: not-allowed; transform: none; }
 
 /* ── 2 · THE PROBLEM ─────────────────────────────────────────────────── */
 .lve-problem { padding: clamp(52px, 7vh, 92px) 0; }

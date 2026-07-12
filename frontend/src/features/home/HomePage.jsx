@@ -386,6 +386,35 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     } catch { /* silent */ }
   }, [loadDecisions, loadRoles]);
 
+  // Org-wide soft pause / resume from the header's Agent strip. Home = "All
+  // roles", so this pauses (or resumes) EVERY agent-enabled role at once via
+  // the existing /agent/pause-all + /agent/resume-all endpoints — the same
+  // mechanism the Jobs header uses. Pause keeps each role's pending review
+  // items (it doesn't disable the agent); resume clears the pause for roles
+  // back under their monthly cap. A ref guard blocks double-fire; on success we
+  // re-poll org-status so the strip flips Pause⇄Resume immediately.
+  const orgAgentBusyRef = useRef(false);
+  const runOrgAgentBulk = useCallback(async (action) => {
+    if (orgAgentBusyRef.current) return;
+    orgAgentBusyRef.current = true;
+    try {
+      await action();
+      await reloadAll();
+    } catch {
+      showToast?.('Could not update the agents — try again.', 'error');
+    } finally {
+      orgAgentBusyRef.current = false;
+    }
+  }, [reloadAll, showToast]);
+  const handlePauseAllAgents = useCallback(
+    () => runOrgAgentBulk(() => agentApi.pauseAll()),
+    [runOrgAgentBulk],
+  );
+  const handleResumeAllAgents = useCallback(
+    () => runOrgAgentBulk(() => agentApi.resumeAll()),
+    [runOrgAgentBulk],
+  );
+
   // Poll the active-agents list for the left rail + notification badges.
   // Self-contained: a missing/erroring endpoint degrades to the plain home
   // (no rail/dock), so this can't break the central page.
@@ -570,6 +599,57 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     );
   }, [rolesBreakdown]);
 
+  // Org-level agent status for the header strip (Home = "All roles"). Built from
+  // the same /agent/org-status payload the KPIs read: active_role_count = roles
+  // running (enabled, not paused), paused_role_count = roles paused. The strip
+  // shows Pause when any are running, Resume when any are paused, and both in a
+  // mixed org — driving the org-wide pause-all / resume-all handlers above.
+  const agentRunningCount = Number(kpis.active_role_count || 0);
+  const agentPausedCount = Number(kpis.paused_role_count || 0);
+  const headerAgent = useMemo(() => {
+    const running = agentRunningCount;
+    const paused = agentPausedCount;
+    const enabled = running + paused;
+    const lastAt = kpis.last_decision_at ? new Date(kpis.last_decision_at).getTime() : null;
+    const ago = Number.isFinite(lastAt)
+      ? (() => {
+          const diff = Math.max(0, Date.now() - lastAt);
+          if (diff < 60_000) return 'just now';
+          if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+          if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+          return `${Math.round(diff / 86_400_000)}d ago`;
+        })()
+      : null;
+    let tick;
+    if (running > 0) {
+      tick = ago
+        ? `Monitoring ${enabled} role${enabled === 1 ? '' : 's'} · last decision ${ago}`
+        : `Monitoring ${enabled} role${enabled === 1 ? '' : 's'}`;
+    } else if (paused > 0) {
+      tick = 'Paused by you';
+    } else {
+      tick = null;
+    }
+    return {
+      on: running > 0,
+      // Auto-paused visual only when EVERY enabled agent is paused.
+      paused: running === 0 && paused > 0,
+      pending: pendingDecisions,
+      spentCents: Number(kpis.org_budget_spent_cents || 0),
+      budgetCents: Number(kpis.org_budget_cap_cents || 0),
+      tick,
+      inFlight: false,
+      pausedReason: running === 0 && paused > 0 ? 'Paused by you' : null,
+    };
+  }, [
+    agentRunningCount,
+    agentPausedCount,
+    pendingDecisions,
+    kpis.org_budget_spent_cents,
+    kpis.org_budget_cap_cents,
+    kpis.last_decision_at,
+  ]);
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
@@ -580,12 +660,21 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           whole width, above the agent rail + chat dock). */}
       <AgentHeader
         className="reveal"
-        // No breadcrumb strip on Home: a lone "Home" crumb below the nav just
-        // repeats the active "Home" nav tab, and the /home-preview target
-        // header omits it. Detail pages keep their (multi-level) trails.
+        // Home carries the same breadcrumb strip as every other page (Jobs,
+        // detail pages) so the header band occupies the SAME vertical space and
+        // the two line up. The lone "Home" crumb is non-clickable text.
+        breadcrumbs={[{ label: 'Home' }]}
         kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
         subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
+        // All-roles agent strip: Home = every role, so Pause pauses ALL agents
+        // (and Resume resumes them) via /agent/pause-all + /agent/resume-all.
+        agent={headerAgent}
+        onPauseAgent={handlePauseAllAgents}
+        onResumeAgent={handleResumeAllAgents}
+        pauseAllCount={agentRunningCount}
+        resumeAllCount={agentPausedCount}
+        offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
       {/* The shell renders immediately (not gated on the async agents fetch),
           so the page lays out once — no flash of the pre-rail layout. */}

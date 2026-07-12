@@ -1,0 +1,116 @@
+/* heroAgentScene.css — the styles for the hero's agent-ON <AgentScene>, lifted
+   from landing_preview/variant_g/variantG.styles.js and re-scoped under
+   `.lvg-scene` so the SAME animated scene (job flips OFF→ON, candidates flow
+   into the decision lane, verdicts stamp) can be grafted onto the real `/`
+   landing without dragging the rest of variant G's scoped design system in.
+
+   Only the scene's own rules are here (the job card + ON pill, the funnel-stat
+   row, the decision lane, the dark agent-ON stage, and the OFF→ON reveal
+   gates). Everything consumes the shared taali brand tokens (--purple,
+   --surface, --line, the app --fs-* product type scale, the --grad-agent-on
+   vocabulary) so it tracks the palette + dark mode exactly like the app. The
+   continuous agent state is owned by the shared Motion.dev AgentLoop. */
+
+.lvg-scene {
+  /* aliases the scene rules below reference, mapped onto the shared tokens */
+  --purple-deep: var(--purple-2);
+  --lavender: var(--purple-lav);
+  --agent-on: var(--grad-agent-on);
+  --agent-on-flow: var(--grad-agent-on-animated);
+  --mono: var(--font-mono);
+  --r: 14px;
+  --r-lg: 18px;
+  --sh-md: 0 2px 4px rgba(21, 18, 26, 0.04), 0 12px 28px -10px rgba(21, 18, 26, 0.12);
+  --sh-lg: 0 4px 8px rgba(21, 18, 26, 0.04), 0 30px 60px -22px rgba(74, 45, 128, 0.22);
+  --sh-glow: 0 20px 60px -18px rgba(94, 58, 168, 0.45);
+  --l-eyebrow: 12px;
+}
+.lvg-scene, .lvg-scene *, .lvg-scene *::before, .lvg-scene *::after { box-sizing: border-box; }
+
+/* agent-ON pill */
+.lvg-scene .agent-pill {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  padding: 5px 10px 5px 8px; border-radius: 999px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+  color: #efe7ff; font-weight: 500;
+  background: var(--agent-on-flow); background-size: 200% 100%;
+  box-shadow: var(--sh-glow);
+}
+.lvg-scene .agent-pill .led {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #c4a5fd; box-shadow: 0 0 0 3px rgba(196, 165, 253, .28);
+}
+.lvg-scene .agent-pill.off {
+  background: var(--bg); color: var(--mute);
+  border: 1px solid var(--line); box-shadow: none;
+}
+.lvg-scene .agent-pill.off .led { background: var(--mute); box-shadow: none; }
+
+/* job / role card */
+.lvg-scene .job-card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); padding: 13px; box-shadow: var(--sh-md);
+  transition: box-shadow .5s, border-color .5s;
+}
+.lvg-scene .job-card.is-on { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); box-shadow: var(--sh-lg); }
+.lvg-scene .job-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.lvg-scene .job-title { font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.02em; }
+.lvg-scene .job-meta { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 4px; letter-spacing: .02em; }
+
+/* funnel stat row */
+.lvg-scene .funnel-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.lvg-scene .fstat { background: var(--surface); padding: 8px 6px; }
+.lvg-scene .fstat .k { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .03em; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
+.lvg-scene .fstat .v { font-size: var(--fs-h2); font-weight: 600; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.lvg-scene .fstat.hot .v { color: var(--purple); }
+
+/* decision lane */
+.lvg-scene .lane { margin-top: 12px; }
+.lvg-scene .lane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.lvg-scene .lane-title { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+.lvg-scene .lane-await { font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; color: var(--purple); }
+.lvg-scene .cand-row {
+  display: grid; grid-template-columns: 30px 1fr auto auto; gap: 10px; align-items: center;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--surface); margin-top: 6px;
+}
+.lvg-scene .cand-row > div { min-width: 0; }
+.lvg-scene .cand-name, .lvg-scene .cand-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lvg-scene .avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; font-size: var(--fs-body); font-weight: 600;
+  background: var(--purple-soft); color: var(--purple-deep);
+}
+.lvg-scene .cand-name { font-size: var(--fs-body-lg); font-weight: 550; letter-spacing: -.01em; }
+.lvg-scene .cand-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 1px; }
+.lvg-scene .score-chip {
+  font-family: var(--mono); font-size: var(--fs-eyebrow); font-weight: 500;
+  padding: 4px 9px; border-radius: 8px; background: var(--purple-soft); color: var(--purple-deep);
+  font-variant-numeric: tabular-nums;
+}
+.lvg-scene .score-chip.low { background: var(--bg); color: var(--mute); }
+.lvg-scene .verdict {
+  font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase;
+  padding: 5px 11px; border-radius: 999px; font-weight: 500;
+}
+.lvg-scene .verdict.advance { background: var(--purple); color: #fff; }
+.lvg-scene .verdict.assess { background: var(--purple-soft); color: var(--purple-deep); }
+.lvg-scene .verdict.reject { background: var(--bg); color: var(--mute); border: 1px solid var(--line); }
+
+/* the scene on a dark agent-ON gradient stage that glows against the light page */
+.lvg-scene .stage { position: relative; max-width: 360px; width: 100%; margin: 0 auto; border-radius: var(--r-lg); padding: 13px; background: var(--agent-on-flow); background-size: 200% 200%; box-shadow: 0 30px 70px -28px rgba(74, 45, 128, .55); }
+.lvg-scene .stage::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14); pointer-events: none; }
+.lvg-scene .stage .stage-cap { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
+.lvg-scene .stage .stage-cap .t { font-family: var(--mono); font-size: var(--l-eyebrow); letter-spacing: .14em; text-transform: uppercase; color: rgba(255, 255, 255, .7); white-space: nowrap; }
+
+/* OFF is quiet/desaturated, ON lights up */
+.lvg-scene .job-card .funnel-stats,
+.lvg-scene .job-card .lane { transition: filter .6s ease, opacity .6s ease; }
+.lvg-scene .job-card:not(.is-on) .funnel-stats,
+.lvg-scene .job-card:not(.is-on) .lane { filter: grayscale(.55) saturate(.6); opacity: .72; }
+.lvg-scene .job-card:not(.is-on) .fstat.hot .v { color: var(--ink); }
+
+/* while ARMED (JS mounted + motion allowed) hide rows/verdicts so the timeline
+   reveals them cleanly; with NO data-armed they render in the settled state */
+.lvg-scene .stage[data-armed] .cand-row { opacity: 0; }
+.lvg-scene .stage[data-armed] .cand-row .verdict { opacity: 0; }

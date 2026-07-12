@@ -1,0 +1,863 @@
+/* ============================================================
+   Canonical action-button system
+
+   One visual grammar for actions across product, marketing, public,
+   assessment, and agent surfaces. Selection controls (tabs, segmented
+   controls, filter chips, switches, and clickable rows) intentionally keep
+   their own selected-state grammar; they still inherit the global focus and
+   disabled guardrails below.
+   ============================================================ */
+
+:root {
+  --taali-button-radius: var(--taali-radius-control);
+  --taali-button-height-xs: 28px;
+  --taali-button-height-sm: 32px;
+  --taali-button-height-md: 40px;
+  --taali-button-height-lg: 48px;
+  --taali-button-pad-xs: 0.625rem;
+  --taali-button-pad-sm: 0.875rem;
+  --taali-button-pad-md: 1.125rem;
+  --taali-button-pad-lg: 1.375rem;
+  --taali-button-gap: 0.5rem;
+  --taali-button-ring: var(--purple);
+  --taali-button-primary-bg: var(--purple);
+  --taali-button-primary-hover-bg: var(--purple-2);
+  --taali-button-primary-fg: var(--cloud);
+  --taali-button-accent-fg: var(--purple-2);
+  --taali-button-accent-hover-fg: var(--purple);
+  --taali-button-soft-bg: var(--purple-soft);
+  --taali-button-soft-hover-bg: color-mix(in oklab, var(--purple) 15%, var(--bg-2));
+  --taali-button-danger-soft-fg: var(--red-deep);
+  --taali-button-danger-soft-hover-fg: color-mix(in oklab, var(--red-deep) 84%, black);
+  --taali-button-primary-shadow: 0 1px 2px color-mix(in oklab, var(--purple) 22%, transparent);
+  --taali-button-agent-shadow: 0 6px 18px color-mix(in oklab, var(--purple) 28%, transparent);
+}
+
+/* Dark-mode accents are intentionally lighter for quiet controls, while the
+   filled primary uses the deeper brand stop so small labels remain AA. */
+html[data-theme="dark"][data-brand="taali"] {
+  --taali-button-primary-bg: var(--purple-2);
+  --taali-button-primary-hover-bg: color-mix(in oklab, var(--purple-2) 84%, black);
+  --taali-button-primary-fg: var(--cloud);
+  --taali-button-accent-fg: var(--purple-lav);
+  --taali-button-accent-hover-fg: var(--cloud);
+  --taali-button-soft-bg: var(--purple-soft);
+  --taali-button-soft-hover-bg: color-mix(in oklab, var(--purple-soft) 82%, var(--purple));
+  --taali-button-danger-soft-fg: #f27d7d;
+  --taali-button-danger-soft-hover-fg: #ff9b9b;
+}
+
+/* A visible keyboard focus is non-negotiable, including on selection
+   controls that are deliberately outside the action-button system. */
+:root button:focus-visible,
+:root a[role="button"]:focus-visible,
+:root [role="button"][tabindex]:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* Canonical base + compatibility aliases. Keeping the aliases here lets the
+   platform migrate safely without allowing old feature CSS to keep producing
+   different geometry, focus, hover, or disabled states. */
+:root :is(
+  .taali-btn,
+  .btn,
+  .mc-auth-cta,
+  .mc-demo-lead-cta,
+  .tasks-bespoke-cta-btn,
+  .ac-mobile-cta,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn,
+  .rq-rec-btn,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-link,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn,
+  .cp-btn-ghost,
+  .cp-btn-primary,
+  .cp-btn-danger,
+  .cp-send-btn,
+  .tk-send-btn,
+  .tk-stop-btn,
+  .rq-new-btn,
+  .rq-publish-btn,
+  .rq-btn-sm,
+  .rq-draft-btn,
+  .rq-attach-btn,
+  .rq-dept-newbtn,
+  .src-btn,
+  .mc-show-btn,
+  .ce-btn,
+  .bg-jobs-panel-btn,
+  :where(.dossier-rail) .dr-btn,
+  :where(.dossier-rail) .dr-rec-btn,
+  .pjp-apply-btn,
+  .ci-submit-btn,
+  .ci-btn-sm,
+  .ci-attach-btn,
+  .cl-new-btn,
+  .ev-rescore-btn,
+  .ab-btn,
+  .mc-agent-btn
+) {
+  --button-height: var(--taali-button-height-md);
+  --button-pad-x: var(--taali-button-pad-md);
+  --button-font-size: var(--fs-body-lg);
+  --button-bg: var(--bg-2);
+  --button-color: var(--ink-2);
+  --button-border: var(--line);
+  --button-shadow: 0 0 0 transparent;
+  --button-hover-bg: var(--taali-button-soft-bg);
+  --button-hover-color: var(--taali-button-accent-fg);
+  --button-hover-border: color-mix(in oklab, var(--purple) 34%, var(--line));
+  --button-hover-shadow: 0 0 0 transparent;
+  --button-focus-ring: var(--taali-button-ring);
+
+  appearance: none;
+  height: var(--button-height);
+  min-height: var(--button-height);
+  padding: 0 var(--button-pad-x);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--taali-button-gap);
+  border: 1px solid var(--button-border);
+  border-radius: var(--taali-button-radius);
+  background: var(--button-bg);
+  color: var(--button-color);
+  box-shadow: var(--button-shadow);
+  font-family: var(--font-sans);
+  font-size: var(--button-font-size);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.005em;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease,
+    opacity 140ms ease,
+    transform 80ms ease;
+}
+
+:root :is(
+  .taali-btn,
+  .btn,
+  .mc-auth-cta,
+  .mc-demo-lead-cta,
+  .tasks-bespoke-cta-btn,
+  .ac-mobile-cta,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn,
+  .rq-rec-btn,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-link,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn,
+  .cp-btn-ghost,
+  .cp-btn-primary,
+  .cp-btn-danger,
+  .cp-send-btn,
+  .tk-send-btn,
+  .tk-stop-btn,
+  .rq-new-btn,
+  .rq-publish-btn,
+  .rq-btn-sm,
+  .rq-draft-btn,
+  .rq-attach-btn,
+  .rq-dept-newbtn,
+  .src-btn,
+  .mc-show-btn,
+  .ce-btn,
+  .bg-jobs-panel-btn,
+  :where(.dossier-rail) .dr-btn,
+  :where(.dossier-rail) .dr-rec-btn,
+  .pjp-apply-btn,
+  .ci-submit-btn,
+  .ci-btn-sm,
+  .ci-attach-btn,
+  .cl-new-btn,
+  .ev-rescore-btn,
+  .ab-btn,
+  .mc-agent-btn
+):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--button-hover-bg);
+  color: var(--button-hover-color);
+  border-color: var(--button-hover-border);
+  box-shadow: var(--button-hover-shadow);
+}
+
+:root :is(
+  .taali-btn,
+  .btn,
+  .mc-auth-cta,
+  .mc-demo-lead-cta,
+  .tasks-bespoke-cta-btn,
+  .ac-mobile-cta,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn,
+  .rq-rec-btn,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-link,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn,
+  .cp-btn-ghost,
+  .cp-btn-primary,
+  .cp-btn-danger,
+  .cp-send-btn,
+  .tk-send-btn,
+  .tk-stop-btn,
+  .rq-new-btn,
+  .rq-publish-btn,
+  .rq-btn-sm,
+  .rq-draft-btn,
+  .rq-attach-btn,
+  .rq-dept-newbtn,
+  .src-btn,
+  .mc-show-btn,
+  .ce-btn,
+  .bg-jobs-panel-btn,
+  :where(.dossier-rail) .dr-btn,
+  :where(.dossier-rail) .dr-rec-btn,
+  .pjp-apply-btn,
+  .ci-submit-btn,
+  .ci-btn-sm,
+  .ci-attach-btn,
+  .cl-new-btn,
+  .ev-rescore-btn,
+  .ab-btn,
+  .mc-agent-btn
+):focus-visible {
+  outline: 2px solid var(--button-focus-ring);
+  outline-offset: 2px;
+  box-shadow: var(--button-shadow);
+}
+
+:root :is(
+  .taali-btn,
+  .btn,
+  .mc-auth-cta,
+  .mc-demo-lead-cta,
+  .tasks-bespoke-cta-btn,
+  .ac-mobile-cta,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn,
+  .rq-rec-btn,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-link,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn,
+  .cp-btn-ghost,
+  .cp-btn-primary,
+  .cp-btn-danger,
+  .cp-send-btn,
+  .tk-send-btn,
+  .tk-stop-btn,
+  .rq-new-btn,
+  .rq-publish-btn,
+  .rq-btn-sm,
+  .rq-draft-btn,
+  .rq-attach-btn,
+  .rq-dept-newbtn,
+  .src-btn,
+  .mc-show-btn,
+  .ce-btn,
+  .bg-jobs-panel-btn,
+  :where(.dossier-rail) .dr-btn,
+  :where(.dossier-rail) .dr-rec-btn,
+  .pjp-apply-btn,
+  .ci-submit-btn,
+  .ci-btn-sm,
+  .ci-attach-btn,
+  .cl-new-btn,
+  .ev-rescore-btn,
+  .ab-btn,
+  .mc-agent-btn
+):active:not(:disabled):not([aria-disabled="true"]) {
+  transform: translateY(1px);
+}
+
+:root :is(
+  .taali-btn,
+  .btn,
+  .mc-auth-cta,
+  .mc-demo-lead-cta,
+  .tasks-bespoke-cta-btn,
+  .ac-mobile-cta,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn,
+  .rq-rec-btn,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-link,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn,
+  .cp-btn-ghost,
+  .cp-btn-primary,
+  .cp-btn-danger,
+  .cp-send-btn,
+  .tk-send-btn,
+  .tk-stop-btn,
+  .rq-new-btn,
+  .rq-publish-btn,
+  .rq-btn-sm,
+  .rq-draft-btn,
+  .rq-attach-btn,
+  .rq-dept-newbtn,
+  .src-btn,
+  .mc-show-btn,
+  .ce-btn,
+  .bg-jobs-panel-btn,
+  :where(.dossier-rail) .dr-btn,
+  :where(.dossier-rail) .dr-rec-btn,
+  .pjp-apply-btn,
+  .ci-submit-btn,
+  .ci-btn-sm,
+  .ci-attach-btn,
+  .cl-new-btn,
+  .ev-rescore-btn,
+  .ab-btn,
+  .mc-agent-btn
+):is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.48;
+  filter: none;
+  transform: none;
+  cursor: not-allowed;
+}
+
+/* Size scale: four heights, shared typography, predictable icon slots. */
+:root :is(.taali-btn-xs, .btn-xs, .ce-btn, .bg-jobs-panel-btn) {
+  --button-height: var(--taali-button-height-xs);
+  --button-pad-x: var(--taali-button-pad-xs);
+  --button-font-size: var(--fs-caption);
+}
+
+:root :is(
+  .taali-btn-sm,
+  .btn-sm,
+  .btn.sm,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-link,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn,
+  .cp-btn-ghost,
+  .cp-btn-primary,
+  .cp-btn-danger,
+  .cp-send-btn,
+  .tk-send-btn,
+  .tk-stop-btn,
+  .rq-btn-sm,
+  .src-btn,
+  .ci-btn-sm,
+  .ci-attach-btn,
+  .ev-rescore-btn,
+  .ab-btn,
+  .mc-agent-btn,
+  :where(.dossier-rail) .dr-btn
+) {
+  --button-height: var(--taali-button-height-sm);
+  --button-pad-x: var(--taali-button-pad-sm);
+  --button-font-size: var(--fs-body);
+}
+
+:root :is(.taali-btn-md) {
+  --button-height: var(--taali-button-height-md);
+  --button-pad-x: var(--taali-button-pad-md);
+  --button-font-size: var(--fs-body-lg);
+}
+
+:root :is(
+  .taali-btn-lg,
+  .btn-lg,
+  .ac-mobile-cta,
+  .mc-demo-lead-cta,
+  .mc-show-btn.tall,
+  :where(.dossier-rail) .dr-rec-btn,
+  .pjp-apply-btn
+) {
+  --button-height: var(--taali-button-height-lg);
+  --button-pad-x: var(--taali-button-pad-lg);
+  --button-font-size: var(--fs-subtitle);
+}
+
+:root :is(
+  .taali-btn,
+  .btn,
+  .mc-auth-cta,
+  .mc-demo-lead-cta,
+  .tasks-bespoke-cta-btn,
+  .ac-mobile-cta,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn,
+  .rq-rec-btn,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-link,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn,
+  .cp-btn-ghost,
+  .cp-btn-primary,
+  .cp-btn-danger,
+  .cp-send-btn,
+  .tk-send-btn,
+  .tk-stop-btn,
+  .rq-new-btn,
+  .rq-publish-btn,
+  .rq-btn-sm,
+  .rq-draft-btn,
+  .rq-attach-btn,
+  .rq-dept-newbtn,
+  .src-btn,
+  .mc-show-btn,
+  .ce-btn,
+  .bg-jobs-panel-btn,
+  :where(.dossier-rail) .dr-btn,
+  :where(.dossier-rail) .dr-rec-btn,
+  .pjp-apply-btn,
+  .ci-submit-btn,
+  .ci-btn-sm,
+  .ci-attach-btn,
+  .cl-new-btn,
+  .ev-rescore-btn,
+  .ab-btn,
+  .mc-agent-btn
+) > svg {
+  width: 1.0625rem;
+  height: 1.0625rem;
+  flex: none;
+}
+
+/* Semantic variants. Each changes colour intent only; geometry and states stay
+   identical. */
+:root :is(
+  .taali-btn-primary,
+  .btn-primary,
+  .btn-purple,
+  .mc-auth-cta:not(.mc-auth-cta-outline),
+  .mc-demo-lead-cta,
+  .ac-mobile-cta,
+  .rq-btn.rq-teach,
+  .ac-btn-primary,
+  .cp-btn-primary,
+  .cp-send-btn,
+  .tk-send-btn,
+  .rq-new-btn,
+  .rq-publish-btn,
+  .rq-btn-sm.is-primary,
+  .src-btn:not(.src-btn-ghost),
+  .mc-show-btn.primary,
+  .pjp-apply-btn,
+  .ci-submit-btn,
+  .ci-btn-sm.is-primary,
+  .cl-new-btn,
+  .ev-rescore-btn
+) {
+  --button-bg: var(--taali-button-primary-bg);
+  --button-color: var(--taali-button-primary-fg);
+  --button-border: var(--taali-button-primary-bg);
+  --button-shadow: var(--taali-button-primary-shadow);
+  --button-hover-bg: var(--taali-button-primary-hover-bg);
+  --button-hover-color: var(--taali-button-primary-fg);
+  --button-hover-border: var(--taali-button-primary-hover-bg);
+  --button-hover-shadow: var(--taali-button-primary-shadow);
+}
+
+:root :is(
+  .taali-btn-secondary,
+  .btn-outline,
+  .mc-auth-cta-outline,
+  .tasks-bespoke-cta-btn,
+  .hmp-badge-btn,
+  .tcard-cta,
+  .rq-btn.rq-override,
+  .agent-needs-input-option,
+  .agent-needs-input-dismiss,
+  .agent-needs-input-reject,
+  .agent-needs-input-reject-cancel,
+  .ac-btn-ghost,
+  .tk-stop-btn,
+  .rq-btn-sm.is-ghost,
+  .src-btn-ghost,
+  .mc-show-btn:not(.primary),
+  .ce-btn:not(.ce-btn--ghost),
+  .bg-jobs-panel-btn,
+  :where(.dossier-rail) .dr-btn,
+  .ci-attach-btn
+) {
+  --button-bg: var(--bg-2);
+  --button-color: var(--ink-2);
+  --button-border: var(--line);
+  --button-shadow: 0 0 0 transparent;
+  --button-hover-bg: var(--taali-button-soft-bg);
+  --button-hover-color: var(--taali-button-accent-fg);
+  --button-hover-border: color-mix(in oklab, var(--purple) 34%, var(--line));
+  --button-hover-shadow: 0 0 0 transparent;
+}
+
+:root :is(
+  .taali-btn-ghost,
+  .btn-ghost,
+  .rq-btn.ghost,
+  .rq-btn.rq-defer,
+  .agent-needs-input-link,
+  .cp-btn-ghost,
+  .ce-btn--ghost,
+  .rq-draft-btn,
+  .rq-attach-btn,
+  .rq-dept-newbtn
+) {
+  --button-bg: transparent;
+  --button-color: var(--ink-2);
+  --button-border: transparent;
+  --button-shadow: 0 0 0 transparent;
+  --button-hover-bg: var(--taali-button-soft-bg);
+  --button-hover-color: var(--taali-button-accent-fg);
+  --button-hover-border: transparent;
+  --button-hover-shadow: 0 0 0 transparent;
+}
+
+:root :is(.taali-btn-soft, .ac-btn-soft, .rq-btn-sm.rq-share-btn) {
+  --button-bg: var(--taali-button-soft-bg);
+  --button-color: var(--taali-button-accent-fg);
+  --button-border: color-mix(in oklab, var(--purple) 16%, var(--line));
+  --button-shadow: 0 0 0 transparent;
+  --button-hover-bg: var(--taali-button-soft-hover-bg);
+  --button-hover-color: var(--taali-button-accent-hover-fg);
+  --button-hover-border: color-mix(in oklab, var(--purple) 32%, var(--line));
+  --button-hover-shadow: 0 0 0 transparent;
+}
+
+:root :is(
+  .taali-btn-danger,
+  .btn.danger,
+  .cp-btn-danger,
+  .agent-needs-input-reject.confirm
+) {
+  --button-bg: var(--red-deep);
+  --button-color: var(--cloud);
+  --button-border: var(--red-deep);
+  --button-shadow: 0 1px 2px color-mix(in oklab, var(--red-deep) 20%, transparent);
+  --button-hover-bg: color-mix(in oklab, var(--red-deep) 86%, black);
+  --button-hover-color: var(--cloud);
+  --button-hover-border: color-mix(in oklab, var(--red-deep) 86%, black);
+  --button-hover-shadow: 0 1px 2px color-mix(in oklab, var(--red-deep) 24%, transparent);
+}
+
+:root :is(
+  .taali-btn-agent,
+  .rq-btn.rq-approve,
+  .rq-rec-btn,
+  :where(.dossier-rail) .dr-rec-btn
+) {
+  --button-bg: var(--grad-agent-on);
+  --button-color: var(--cloud);
+  --button-border: color-mix(in oklab, var(--purple-lav) 35%, transparent);
+  --button-shadow: var(--taali-button-agent-shadow);
+  --button-hover-bg: var(--grad-agent-on);
+  --button-hover-color: var(--cloud);
+  --button-hover-border: color-mix(in oklab, var(--purple-lav) 55%, transparent);
+  --button-hover-shadow: 0 8px 22px color-mix(in oklab, var(--purple) 36%, transparent);
+  --button-focus-ring: var(--cloud);
+  background-size: auto;
+  animation: none;
+}
+
+/* Agent buttons keep the shared geometry/state system above, while Motion.dev
+   owns the continuous background-position loop. */
+:root :is(
+  .taali-btn-agent,
+  .taali-btn-primary,
+  .rq-btn.rq-approve,
+  .rq-rec-btn,
+  .btn-purple,
+  :where(.dossier-rail) .dr-rec-btn
+)[data-motion-loop="flow"] {
+  --button-bg: var(--grad-agent-on-animated);
+  --button-hover-bg: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
+}
+
+:root :is(.taali-btn-inverse, .mc-agent-btn, .abar-on .ab-btn) {
+  --button-bg: color-mix(in oklab, var(--cloud) 14%, transparent);
+  --button-color: var(--cloud);
+  --button-border: color-mix(in oklab, var(--cloud) 24%, transparent);
+  --button-shadow: 0 0 0 transparent;
+  --button-hover-bg: color-mix(in oklab, var(--cloud) 22%, transparent);
+  --button-hover-color: var(--cloud);
+  --button-hover-border: color-mix(in oklab, var(--cloud) 38%, transparent);
+  --button-hover-shadow: 0 0 0 transparent;
+  --button-focus-ring: var(--cloud);
+}
+
+:root .abar-on .ab-btn.primary {
+  --button-bg: var(--cloud);
+  --button-color: var(--purple-2);
+  --button-border: var(--cloud);
+  --button-hover-bg: color-mix(in oklab, var(--cloud) 90%, var(--purple-soft));
+  --button-hover-color: var(--purple-2);
+  --button-hover-border: var(--cloud);
+}
+
+:root .abar-paused .ab-btn.primary,
+:root .abar-off .ab-btn.primary {
+  --button-bg: var(--taali-button-primary-bg);
+  --button-color: var(--taali-button-primary-fg);
+  --button-border: var(--taali-button-primary-bg);
+  --button-hover-bg: var(--taali-button-primary-hover-bg);
+  --button-hover-color: var(--taali-button-primary-fg);
+  --button-hover-border: var(--taali-button-primary-hover-bg);
+}
+
+/* Loading and icon-only form factors. */
+.taali-btn-spinner {
+  width: 1.0625rem;
+  height: 1.0625rem;
+  flex: none;
+}
+
+:root :is(.taali-btn-icon-only, .ab-btn.ic) {
+  width: var(--button-height);
+  min-width: var(--button-height);
+  padding-inline: 0;
+}
+
+:root .taali-btn-full {
+  width: 100%;
+}
+
+/* Visibility remains a layout concern. This compatibility action only exists
+   below the breakpoint where the desktop agent rail is removed. */
+:root .ac-mobile-cta {
+  display: none;
+}
+
+/* A dense Kanban action cluster historically hard-coded 24px pills with a
+   higher-specificity descendant selector. Keep its compact intent, but make
+   the controls real xs actions like every other card toolbar. */
+:root .kanban-card .cc-agent-actions .btn {
+  height: var(--button-height);
+  min-height: var(--button-height);
+  padding: 0 var(--button-pad-x);
+  border-radius: var(--taali-button-radius);
+  font-size: var(--button-font-size);
+  font-weight: 600;
+}
+
+@media (max-width: 1180px) {
+  :root .ac-mobile-cta {
+    display: inline-flex;
+  }
+}
+
+:root :is(
+  .taali-icon-btn,
+  .icon-btn,
+  .mc-icon-btn,
+  .rq-tinybtn,
+  .rqt-icon-btn,
+  .rq-dept-iconbtn,
+  .bg-jobs-panel-icon-btn,
+  .ac-dock-collapse
+) {
+  --icon-button-size: var(--taali-button-height-md);
+  width: var(--icon-button-size);
+  min-width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  min-height: var(--icon-button-size);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--taali-button-radius);
+  background: var(--bg-2);
+  color: var(--ink-2);
+  box-shadow: none;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease, transform 80ms ease;
+}
+
+:root :is(.taali-icon-btn-sm, .rq-tinybtn, .rqt-icon-btn, .bg-jobs-panel-icon-btn, .ac-dock-collapse) {
+  --icon-button-size: var(--taali-button-height-xs);
+}
+
+:root .taali-icon-btn-lg {
+  --icon-button-size: var(--taali-button-height-lg);
+}
+
+:root .taali-icon-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+:root :is(
+  .taali-icon-btn,
+  .icon-btn,
+  .mc-icon-btn,
+  .rq-tinybtn,
+  .rqt-icon-btn,
+  .rq-dept-iconbtn,
+  .bg-jobs-panel-icon-btn,
+  .ac-dock-collapse
+):hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: color-mix(in oklab, var(--purple) 34%, var(--line));
+  background: var(--taali-button-soft-bg);
+  color: var(--taali-button-accent-fg);
+}
+
+:root :is(
+  .taali-icon-btn,
+  .icon-btn,
+  .mc-icon-btn,
+  .rq-tinybtn,
+  .rqt-icon-btn,
+  .rq-dept-iconbtn,
+  .bg-jobs-panel-icon-btn,
+  .ac-dock-collapse
+):focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+:root :is(
+  .taali-icon-btn,
+  .icon-btn,
+  .mc-icon-btn,
+  .rq-tinybtn,
+  .rqt-icon-btn,
+  .rq-dept-iconbtn,
+  .bg-jobs-panel-icon-btn,
+  .ac-dock-collapse
+):active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+:root :is(
+  .taali-icon-btn,
+  .icon-btn,
+  .mc-icon-btn,
+  .rq-tinybtn,
+  .rqt-icon-btn,
+  .rq-dept-iconbtn,
+  .bg-jobs-panel-icon-btn,
+  .ac-dock-collapse
+):disabled {
+  opacity: 0.48;
+  transform: none;
+}
+
+:root :is(.taali-icon-btn-danger, .rqt-icon-btn.is-danger) {
+  border-color: var(--taali-danger-border);
+  background: var(--taali-danger-soft);
+  color: var(--taali-button-danger-soft-fg);
+}
+
+:root :is(.taali-icon-btn-danger, .rqt-icon-btn.is-danger):hover:not(:disabled) {
+  border-color: var(--taali-button-danger-soft-fg);
+  background: color-mix(in oklab, var(--taali-danger) 16%, var(--bg-2));
+  color: var(--taali-button-danger-soft-fg);
+}
+
+/* Text actions are the only intentionally chrome-less action form. */
+:root :is(
+  .taali-text-btn,
+  .settings-link-button,
+  .src-link,
+  .rq-feed-toggle,
+  .mc-flags-toggle,
+  .pjp-link-btn
+) {
+  min-height: var(--taali-button-height-xs);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--taali-button-accent-fg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1.25;
+  text-decoration: none;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+:root :is(
+  .taali-text-btn,
+  .settings-link-button,
+  .src-link,
+  .rq-feed-toggle,
+  .mc-flags-toggle,
+  .pjp-link-btn
+):hover:not(:disabled) {
+  color: var(--taali-button-accent-hover-fg);
+  text-decoration: underline;
+}
+
+:root .taali-text-btn-danger {
+  color: var(--taali-button-danger-soft-fg);
+}
+
+:root .taali-text-btn-danger:hover:not(:disabled) {
+  color: var(--taali-button-danger-soft-hover-fg);
+}
+
+:root :is(
+  .taali-text-btn,
+  .settings-link-button,
+  .src-link,
+  .rq-feed-toggle,
+  .mc-flags-toggle,
+  .pjp-link-btn
+):is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.48;
+  color: var(--mute);
+  text-decoration: none;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root :is(button, a[role="button"], [role="button"][tabindex]) {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

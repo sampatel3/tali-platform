@@ -137,12 +137,12 @@ export const DemoLeadPage = ({ onNavigate }) => {
       <main className="mc-demo-lead-form-pane">
         <div className="mc-demo-lead-topnav">
           <span>HAVE AN ACCOUNT?</span>
-          <button type="button" onClick={() => onNavigate?.('login')}>Sign in →</button>
+          <button type="button" className="taali-text-btn" onClick={() => onNavigate?.('login')}>Sign in →</button>
         </div>
 
         <div className="mc-demo-lead-form-wrap">
           <span className="mc-demo-lead-tag">
-            <span className="mc-demo-lead-tag-dot" aria-hidden="true" />
+            <AgentLoop kind="pulse" className="mc-demo-lead-tag-dot" aria-hidden="true" />
             INTERACTIVE WALKTHROUGH · NO CALL
           </span>
 

@@ -97,19 +97,17 @@ export const TypeBadge = ({ type, size = 'md' }) => {
   );
 };
 
-// Compact verdict pill for the pending-queue rows (home-preview `.vpill`): an
-// icon + a short action word, toned purple for positive actions (Send /
-// Advance), grey for terminal (Reject / Pre-screen), amber for an escalation
-// the agent couldn't resolve. Distinct from the mono TypeBadge — the queue list
-// reads as "what the agent wants to do", at a glance.
+// Compact recommendation pill for the pending-queue rows (home-preview
+// `.vpill`). These are non-interactive status labels, so their wording states
+// the recommendation instead of looking like terse action buttons.
 const VERDICT = {
-  send_assessment: { label: 'Send', Icon: Send, tone: 'act' },
-  resend_assessment_invite: { label: 'Resend', Icon: Send, tone: 'act' },
-  advance_to_interview: { label: 'Advance', Icon: ArrowUpRight, tone: 'act' },
-  advance: { label: 'Advance', Icon: ArrowUpRight, tone: 'act' },
-  reject: { label: 'Reject', Icon: X, tone: 'rej' },
-  skip_assessment_reject: { label: 'Pre-screen', Icon: FilterX, tone: 'rej' },
-  escalate_low_confidence: { label: 'Escalate', Icon: CircleHelp, tone: 'q' },
+  send_assessment: { label: 'Assessment recommended', Icon: Send, tone: 'act' },
+  resend_assessment_invite: { label: 'Resend recommended', Icon: Send, tone: 'act' },
+  advance_to_interview: { label: 'Advance recommended', Icon: ArrowUpRight, tone: 'act' },
+  advance: { label: 'Advance recommended', Icon: ArrowUpRight, tone: 'act' },
+  reject: { label: 'Reject recommended', Icon: X, tone: 'rej' },
+  skip_assessment_reject: { label: 'Pre-screen reject', Icon: FilterX, tone: 'rej' },
+  escalate_low_confidence: { label: 'Review needed', Icon: CircleHelp, tone: 'q' },
 };
 
 export const VerdictPill = ({ type }) => {

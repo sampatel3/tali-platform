@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
 import { motionSafeScrollBehavior } from '../../shared/motion';
+import { Button } from '../../shared/ui/TaaliPrimitives';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
@@ -171,9 +172,9 @@ const Thread = ({ messages, isStreaming, error, onRetry }) => {
           <div className="cp-error-title">{fr.title}</div>
           <div className="cp-error-detail">{fr.detail}</div>
           {onRetry ? (
-            <button type="button" className="cp-error-retry" onClick={onRetry}>
+            <Button size="xs" variant="secondary" className="cp-error-retry" onClick={onRetry}>
               Try again
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}

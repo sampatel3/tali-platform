@@ -71,6 +71,9 @@ const ToastShowcasePage = lazy(() =>
 const MotionShowcasePage = lazy(() =>
   import('./features/dev/MotionShowcasePage').then((m) => ({ default: m.MotionShowcasePage }))
 );
+const ButtonShowcasePage = lazy(() =>
+  import('./features/dev/ButtonShowcasePage').then((m) => ({ default: m.ButtonShowcasePage }))
+);
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
 const DemoExperiencePage = lazy(() =>
@@ -1111,6 +1114,17 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <TokenGate>
               <MotionShowcasePage />
+            </TokenGate>
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/dev/buttons"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <TokenGate>
+              <ButtonShowcasePage />
             </TokenGate>
           </Suspense>
         )}

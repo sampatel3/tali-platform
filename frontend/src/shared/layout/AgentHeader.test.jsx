@@ -23,6 +23,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(container.querySelector('.ab-pulse')).toHaveAttribute('data-motion-loop', 'ring');
     const btn = screen.getByRole('button', { name: /^pause$/i });
     expect(btn).not.toBeDisabled();
+    expect(btn).toHaveClass('taali-btn', 'taali-btn-inverse', 'taali-btn-sm');
     fireEvent.click(btn);
     expect(onPause).toHaveBeenCalledTimes(1);
   });
@@ -48,6 +49,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(container.querySelector('.abar-flow-layer')).toHaveAttribute('data-motion-state', 'rest');
 
     const btn = screen.getByRole('button', { name: /^resume$/i });
+    expect(btn).toHaveClass('taali-btn', 'taali-btn-primary', 'taali-btn-sm');
     fireEvent.click(btn);
     expect(onResume).toHaveBeenCalledTimes(1);
   });
@@ -64,6 +66,21 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByText(/monthly budget reached/i)).toBeInTheDocument();
   });
 
+  it('uses the canonical primary small action when the agent is off', () => {
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={{ ...runningAgent, on: false, paused: false }}
+        onActivateAgent={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /turn on/i })).toHaveClass(
+      'taali-btn-primary',
+      'taali-btn-sm',
+    );
+  });
+
   it('renders a Turn off control only when onTurnOffAgent is wired, and fires it', () => {
     const onTurnOff = vi.fn();
     const { rerender } = render(
@@ -76,6 +93,11 @@ describe('AgentHeader — Pause/Resume panel', () => {
       <AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={() => {}} onTurnOffAgent={onTurnOff} />,
     );
     fireEvent.click(screen.getByRole('button', { name: /turn off agent/i }));
+    expect(screen.getByRole('button', { name: /turn off agent/i })).toHaveClass(
+      'taali-btn-inverse',
+      'taali-btn-sm',
+      'taali-btn-icon-only',
+    );
     expect(onTurnOff).toHaveBeenCalledTimes(1);
   });
 

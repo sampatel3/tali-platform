@@ -148,6 +148,41 @@ describe('AgentSidebar', () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
+  it('announces role scope and multi-select state as pressed choices', () => {
+    const { rerender } = render(
+      <AgentSidebar
+        agents={AGENTS}
+        activeRoleId={1}
+        onSelect={vi.fn()}
+        bulkMode={false}
+        bulkSelected={new Set()}
+        onToggleBulkMode={vi.fn()}
+        onToggleSelected={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /All roles/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /Data Eng/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /GenAI Engineer/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /Select/i })).toHaveAttribute('aria-pressed', 'false');
+
+    rerender(
+      <AgentSidebar
+        agents={AGENTS}
+        activeRoleId={1}
+        onSelect={vi.fn()}
+        bulkMode
+        bulkSelected={new Set([2])}
+        onToggleBulkMode={vi.fn()}
+        onToggleSelected={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Cancel/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /Data Eng/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /GenAI Engineer/i })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('orders running agents above paused ones in the on/paused section', () => {
     // Backend hands them back interleaved (here: pending-count desc). Running
     // agents must float to the top; within running and within paused the

@@ -91,7 +91,7 @@ export function NLSearchBar({
         {nlQuery ? (
           <button
             type="button"
-            className="nl-search__clear"
+            className="taali-icon-btn taali-icon-btn-ghost taali-icon-btn-sm nl-search__clear"
             onClick={() => {
               setDraft('');
               onClear();

@@ -261,7 +261,7 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload, embedded = fal
         </div>
         <button
           type="button"
-          className="home-section-toggle"
+          className="home-section-toggle taali-btn taali-btn-secondary taali-btn-xs"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >

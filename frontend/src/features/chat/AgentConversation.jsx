@@ -311,7 +311,7 @@ const AgentConversation = ({
           <div className="cp-thread">
             <div className="cp-refresh-row">
               Couldn’t load the conversation.
-              <button type="button" className="cp-refresh-retry" onClick={() => load()}>
+              <button type="button" className="taali-text-btn cp-refresh-retry" onClick={() => load()}>
                 Try again
               </button>
             </div>

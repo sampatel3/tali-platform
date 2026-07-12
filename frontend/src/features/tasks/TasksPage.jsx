@@ -213,7 +213,7 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
               No tasks match your filters.{' '}
               <button
                 type="button"
-                className="underline"
+                className="taali-text-btn"
                 onClick={() => {
                   setQuery('');
                   setRoleFilter('all');

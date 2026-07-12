@@ -3,10 +3,8 @@
 // it can be reused beyond the /home review queue (e.g. the candidate report)
 // with a different parent wiring its own handlers.
 //
-// Route-agnostic: the one imperative navigation (open job pipeline) goes
-// through the ``onNavigate`` prop the parent supplies. The candidate-report
-// links are plain new-tab <a href> (presentation, identical for any parent),
-// so they stay self-contained here.
+// Route-agnostic: deep links use real anchors so they preserve browser link
+// behaviour (open in a new tab, copy link, etc.) on every surface.
 //
 // Styles are the existing rq-* classes from home.css — imported here so any
 // surface rendering this card gets them without remembering to import the CSS
@@ -26,8 +24,10 @@ import {
 } from 'lucide-react';
 
 import { pathForPage } from '../../app/routing';
-import { AgentLoop } from '../motion';
+import { AgentFlowButton } from '../motion';
+import { PageLink } from '../ui/PageLink';
 import { ScoreRing } from '../ui/ScoreRing';
+import { Button } from '../ui/TaaliPrimitives';
 import {
   Avatar,
   ConfBar,
@@ -57,7 +57,7 @@ const fmtAppliedDate = (v) => {
 // slab would be) and hides the decision-only parts (reasoning, evidence, trace,
 // action bar) — keeping the identical header, deep-links, integrity flags and
 // requirement bars. One card, two surfaces, guaranteed in lockstep.
-export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, onReEvaluate, busy, middleSlot = null, hideDecisionParts = false, statusPill = null }) => {
+export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onReEvaluate, busy, middleSlot = null, hideDecisionParts = false, statusPill = null }) => {
   if (!decision) {
     return (
       <section className="rq-hybrid-detail">
@@ -145,25 +145,29 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         ) : null)}
       </div>
 
-      {/* Deep-links on their own row — standard outline buttons (preview). */}
+      {/* Deep-links on their own row — secondary actions rendered as links. */}
       <div className="rq-detail-links" style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14 }}>
-        <a
-          className="btn btn-outline btn-sm"
+        <Button
+          as="a"
+          variant="secondary"
+          size="sm"
           href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
           target="_blank"
           rel="noopener noreferrer"
           style={{ flex: 1, justifyContent: 'center' }}
         >
           <FileText size={14} aria-hidden="true" /> Candidate report
-        </a>
-        <button
-          type="button"
-          className="btn btn-outline btn-sm"
-          onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
+        </Button>
+        <Button
+          as={PageLink}
+          variant="secondary"
+          size="sm"
+          page="job-pipeline"
+          options={{ roleId: decision.role_id }}
           style={{ flex: 1, justifyContent: 'center' }}
         >
           <Eye size={14} aria-hidden="true" /> Job pipeline
-        </button>
+        </Button>
       </div>
 
       {/* Re-score in flight: one unmissable banner at the top; everything
@@ -198,10 +202,10 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           first, then reasoning + flags, with the secondary actions at the bottom. */}
       {isPending && !middleSlot ? (
         <div className="rq-rec">
-          <AgentLoop
-            as="button"
-            kind="flow"
-            type="button"
+          <Button
+            as={AgentFlowButton}
+            variant="agent"
+            size="md"
             className="rq-rec-btn"
             onClick={() => onApprove(decision)}
             disabled={frozen}
@@ -209,7 +213,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           >
             <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
             {spec.primaryLabel}
-          </AgentLoop>
+          </Button>
           <div className="rq-rec-kl">
             <Sparkles size={12} aria-hidden="true" /> Agent recommends
             {decision.confidence != null ? ` · Confidence ${Math.round(decision.confidence * 100)}%` : ''}
@@ -312,46 +316,46 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      {/* Secondary actions at the very BOTTOM (preview order), standard .btn
-          family. The recommended action lives in the slab near the top. */}
+      {/* Secondary actions at the very BOTTOM (preview order). The recommended
+          action lives in the slab near the top. */}
       {hideDecisionParts ? null : isPending ? (
         <div className="rq-action-bar">
           <div className="rq-action-l">
             {isStale && onReEvaluate ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => onReEvaluate(decision)}
                 disabled={frozen}
               >
                 <RefreshCw size={14} strokeWidth={2.4} aria-hidden="true" />
                 Re-evaluate
-              </button>
+              </Button>
             ) : null}
             {(spec.alternatives || []).map((alt) => {
               const AltIcon = alt.icon || X;
               return (
-                <button
+                <Button
                   key={alt.action}
-                  type="button"
-                  className="btn btn-outline btn-sm"
+                  variant="secondary"
+                  size="sm"
                   onClick={() => onAlternative(decision, alt)}
                   disabled={frozen}
                   title={alt.body}
                 >
                   <AltIcon size={14} strokeWidth={2} aria-hidden="true" />
                   {alt.label}
-                </button>
+                </Button>
               );
             })}
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => onTeach(decision)} disabled={frozen}>
+            <Button variant="secondary" size="sm" onClick={() => onTeach(decision)} disabled={frozen}>
               <Brain size={14} strokeWidth={2} aria-hidden="true" />
               Send back &amp; teach
-            </button>
+            </Button>
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSnooze(decision)} disabled={frozen}>
+          <Button variant="ghost" size="sm" onClick={() => onSnooze(decision)} disabled={frozen}>
             Snooze 1h
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="home-empty" style={{ marginTop: 12 }}>

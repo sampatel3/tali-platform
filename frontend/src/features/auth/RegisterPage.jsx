@@ -146,8 +146,8 @@ export const RegisterPage = ({ onNavigate }) => {
           Already with us?{' '}
           <button
             type="button"
+            className="taali-text-btn"
             onClick={() => onNavigate('login')}
-            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
           >
             Sign in
           </button>

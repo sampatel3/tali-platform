@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../shared/api/prospectsClient', () => ({
@@ -12,8 +12,6 @@ vi.mock('../../shared/api/prospectsClient', () => ({
   },
 }));
 
-// The "Find candidates" tab lists roles and reuses SourceCandidatesPanel,
-// which pulls roles + a toast helper. Mock both so the tab can render.
 vi.mock('../../shared/api', () => ({
   roles: {
     list: vi.fn(),
@@ -22,8 +20,19 @@ vi.mock('../../shared/api', () => ({
   },
 }));
 
+const showToast = vi.fn();
 vi.mock('../../context/ToastContext', () => ({
-  useToast: () => ({ showToast: vi.fn() }),
+  useToast: () => ({ showToast }),
+}));
+
+vi.mock('./CampaignsPanel', () => ({
+  default: ({ initialCampaignId, onCampaignChange }) => (
+    <div>
+      <span>Campaigns panel {initialCampaignId || 'list'}</span>
+      <button type="button" onClick={() => onCampaignChange(42)}>Open campaign 42</button>
+      <button type="button" onClick={() => onCampaignChange(null)}>Back to campaigns</button>
+    </div>
+  ),
 }));
 
 import { prospects as prospectsApi } from '../../shared/api/prospectsClient';
@@ -35,7 +44,11 @@ const ROWS = [
     id: 1,
     full_name: 'Alice One',
     email: 'alice@example.com',
+    phone: '+971 50 123 4567',
     position: 'Engineer',
+    location: 'Dubai',
+    linkedin_url: 'https://linkedin.com/in/alice',
+    notes: 'Platform engineer with Spark experience.',
     source_name: 'csv:leads.csv',
     source_strategy: 'sourced',
     status: 'new',
@@ -55,46 +68,35 @@ const ROWS = [
   },
 ];
 
+const openProspects = async () => {
+  fireEvent.click(screen.getByRole('tab', { name: /prospects/i }));
+  return screen.findByText('Alice One');
+};
+
 describe('SourcingPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    prospectsApi.list.mockResolvedValue({ data: { prospects: ROWS, total: 2 } });
+    window.history.replaceState({}, '', '/sourcing');
+    prospectsApi.list.mockResolvedValue({
+      data: { prospects: ROWS, total: 2, limit: 25, offset: 0 },
+    });
+    prospectsApi.create.mockResolvedValue({ data: { id: 3 } });
+    prospectsApi.update.mockResolvedValue({ data: {} });
+    prospectsApi.archive.mockResolvedValue({ data: {} });
     rolesApi.list.mockResolvedValue({ data: [{ id: 7, name: 'Senior Data Engineer' }] });
   });
 
-  it('shows a plain-English explainer of what Sourcing is for', async () => {
+  it('starts with the role-first workflow and a concise page header', async () => {
     render(<SourcingPage />);
-    await screen.findByText('Alice One');
-    expect(screen.getByText(/candidates you go out and find/i)).toBeInTheDocument();
+
+    expect(screen.getByRole('heading', { name: /build a better shortlist/i })).toBeInTheDocument();
+    expect(screen.getByText(/find people against a live role/i)).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /find candidates/i })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByLabelText('Pick a role')).toBeInTheDocument();
+    expect(prospectsApi.list).not.toHaveBeenCalled();
   });
 
-  it('orients the user with an empty state that links to Find candidates', async () => {
-    prospectsApi.list.mockResolvedValue({ data: { prospects: [], total: 0 } });
-    render(<SourcingPage />);
-    await waitFor(() => expect(prospectsApi.list).toHaveBeenCalled());
-    expect(await screen.findByText(/No prospects yet\./i)).toBeInTheDocument();
-    // The empty state offers a button that jumps to the Find candidates tab.
-    fireEvent.click(screen.getByRole('button', { name: /find candidates/i }));
-    expect(await screen.findByText(/ready-to-paste search strings/i)).toBeInTheDocument();
-  });
-
-  it('lists roles on the Find candidates tab and mounts the search-string panel', async () => {
-    render(<SourcingPage />);
-    await screen.findByText('Alice One');
-
-    fireEvent.click(screen.getByRole('tab', { name: /find candidates/i }));
-    await waitFor(() => expect(rolesApi.list).toHaveBeenCalled());
-
-    const picker = await screen.findByLabelText('Pick a role');
-    fireEvent.change(picker, { target: { value: '7' } });
-
-    // The reused SourceCandidatesPanel renders its search-string generator.
-    expect(
-      await screen.findByRole('button', { name: /generate search strings/i }),
-    ).toBeInTheDocument();
-  });
-
-  it('keeps closed and filled roles out of the Find candidates picker', async () => {
+  it('filters terminal roles and mounts the shared sourcing panel', async () => {
     rolesApi.list.mockResolvedValue({
       data: [
         { id: 7, name: 'Senior Data Engineer', job_status: 'open' },
@@ -104,44 +106,117 @@ describe('SourcingPage', () => {
       ],
     });
     render(<SourcingPage />);
-    await screen.findByText('Alice One');
 
-    fireEvent.click(screen.getByRole('tab', { name: /find candidates/i }));
     const picker = await screen.findByLabelText('Pick a role');
+    expect(within(picker).getByRole('option', { name: 'Senior Data Engineer' })).toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: 'Filled Role' })).not.toBeInTheDocument();
+    expect(within(picker).queryByRole('option', { name: 'Cancelled Role' })).not.toBeInTheDocument();
 
-    expect(within(picker).getByRole('option', { name: /Senior Data Engineer/ })).toBeInTheDocument();
-    expect(within(picker).queryByRole('option', { name: /Filled Role/ })).not.toBeInTheDocument();
-    expect(within(picker).queryByRole('option', { name: /Cancelled Role/ })).not.toBeInTheDocument();
-    expect(within(picker).queryByRole('option', { name: /Archived Workable Role/ })).not.toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: '7' } });
+    expect(await screen.findByRole('button', { name: /generate search strings/i })).toBeInTheDocument();
   });
 
-  it('renders prospect rows with a suppressed badge', async () => {
+  it('carries a pasted profile into the prospect form and saves it', async () => {
     render(<SourcingPage />);
-    await waitFor(() => expect(prospectsApi.list).toHaveBeenCalled());
-    expect(await screen.findByText('Alice One')).toBeInTheDocument();
-    expect(screen.getByText('Bob Two')).toBeInTheDocument();
-    // Suppressed badge shows the reason for the suppressed row.
-    expect(screen.getByText('unsubscribed')).toBeInTheDocument();
-  });
+    const picker = await screen.findByLabelText('Pick a role');
+    fireEvent.change(picker, { target: { value: '7' } });
 
-  it('submits the add-prospect form', async () => {
-    prospectsApi.create.mockResolvedValue({ data: { id: 3 } });
-    render(<SourcingPage />);
-    await screen.findByText('Alice One');
+    fireEvent.change(await screen.findByLabelText('Candidate profile or CV text'), {
+      target: { value: 'Spark platform engineer with five years in Dubai.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /continue to save prospect/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /add prospect/i }));
+    expect(screen.getByRole('tab', { name: /prospects/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Notes or profile context')).toHaveValue(
+      'Spark platform engineer with five years in Dubai.',
+    );
     fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Carol Three' } });
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'carol@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: /save prospect/i }));
 
-    await waitFor(() =>
-      expect(prospectsApi.create).toHaveBeenCalledWith(
-        expect.objectContaining({ full_name: 'Carol Three', email: 'carol@example.com' }),
-      ),
-    );
+    await waitFor(() => expect(prospectsApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        full_name: 'Carol Three',
+        email: 'carol@example.com',
+        notes: 'Spark platform engineer with five years in Dubai.',
+        source_name: 'sourcing-assist:role-7',
+      }),
+    ));
+    expect(showToast).toHaveBeenCalledWith('Prospect saved to your shortlist.', 'success');
   });
 
-  it('renders the import result summary including invalid rows', async () => {
+  it('loads active prospects with server pagination and humanizes provenance', async () => {
+    render(<SourcingPage />);
+    await openProspects();
+
+    expect(prospectsApi.list).toHaveBeenCalledWith({ limit: 25, offset: 0, status: 'active' });
+    expect(screen.getByText('CSV · leads.csv')).toBeInTheDocument();
+    expect(screen.getByText('Added manually')).toBeInTheDocument();
+    expect(screen.getByText('unsubscribed')).toBeInTheDocument();
+  });
+
+  it('edits all prospect details and status', async () => {
+    render(<SourcingPage />);
+    await openProspects();
+
+    const aliceRow = screen.getByRole('row', { name: /Alice One/i });
+    fireEvent.click(within(aliceRow).getByRole('button', { name: 'Edit' }));
+    const editForm = screen.getByRole('form', { name: 'Edit prospect' });
+    expect(within(editForm).getByLabelText('Phone')).toHaveValue('+971 50 123 4567');
+    fireEvent.change(within(editForm).getByLabelText('Position'), { target: { value: 'Staff Engineer' } });
+    fireEvent.change(within(editForm).getByLabelText('Prospect status'), { target: { value: 'interested' } });
+    fireEvent.click(within(editForm).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(prospectsApi.update).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ position: 'Staff Engineer', status: 'interested' }),
+    ));
+  });
+
+  it('archives and restores prospects with visible feedback', async () => {
+    render(<SourcingPage />);
+    await openProspects();
+
+    const aliceRow = screen.getByRole('row', { name: /Alice One/i });
+    fireEvent.click(within(aliceRow).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(prospectsApi.archive).toHaveBeenCalledWith(1));
+    expect(showToast).toHaveBeenCalledWith('Prospect archived.', 'success');
+
+    prospectsApi.list.mockResolvedValueOnce({
+      data: { prospects: [{ ...ROWS[0], status: 'archived' }], total: 1 },
+    });
+    fireEvent.change(screen.getByLabelText('Status filter'), { target: { value: 'archived' } });
+    const restore = await screen.findByRole('button', { name: 'Restore' });
+    fireEvent.click(restore);
+    await waitFor(() => expect(prospectsApi.update).toHaveBeenCalledWith(1, { status: 'new' }));
+  });
+
+  it('requests the next page instead of silently stopping at 25', async () => {
+    prospectsApi.list.mockResolvedValue({
+      data: { prospects: ROWS, total: 60, limit: 25, offset: 0 },
+    });
+    render(<SourcingPage />);
+    await openProspects();
+
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    await waitFor(() => expect(prospectsApi.list).toHaveBeenLastCalledWith({
+      limit: 25,
+      offset: 25,
+      status: 'active',
+    }));
+    expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+  });
+
+  it('renders a useful empty shortlist state', async () => {
+    prospectsApi.list.mockResolvedValue({ data: { prospects: [], total: 0 } });
+    render(<SourcingPage />);
+    fireEvent.click(screen.getByRole('tab', { name: /prospects/i }));
+
+    expect(await screen.findByText('Your shortlist is empty')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /find candidates/i })).toBeInTheDocument();
+  });
+
+  it('imports CSV rows and reports invalid rows', async () => {
     prospectsApi.importCsv.mockResolvedValue({
       data: {
         created: 3,
@@ -152,15 +227,29 @@ describe('SourcingPage', () => {
       },
     });
     render(<SourcingPage />);
-    await screen.findByText('Alice One');
+    await openProspects();
 
     const file = new File(['full_name,email\nX,x@y.com\n'], 'leads.csv', { type: 'text/csv' });
-    const input = screen.getByTestId('csv-input');
-    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.change(screen.getByTestId('csv-input'), { target: { files: [file] } });
 
     await waitFor(() => expect(prospectsApi.importCsv).toHaveBeenCalledWith(file));
     const summary = await screen.findByTestId('import-summary');
     expect(summary).toHaveTextContent('Imported 3');
     expect(summary).toHaveTextContent('Row 4: missing or invalid email');
+  });
+
+  it('keeps tabs and campaign detail in the URL', async () => {
+    render(<SourcingPage />);
+    const findTab = screen.getByRole('tab', { name: /find candidates/i });
+    fireEvent.keyDown(findTab, { key: 'ArrowRight' });
+    expect(screen.getByRole('tab', { name: /prospects/i })).toHaveAttribute('aria-selected', 'true');
+    expect(window.location.search).toContain('tab=prospects');
+    await screen.findByText('Alice One');
+
+    fireEvent.click(screen.getByRole('tab', { name: /campaigns/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open campaign 42/i }));
+    expect(window.location.search).toContain('campaign=42');
+    fireEvent.click(screen.getByRole('button', { name: /back to campaigns/i }));
+    expect(window.location.search).not.toContain('campaign=');
   });
 });

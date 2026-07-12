@@ -147,8 +147,7 @@ function ToastContainer({ toasts, onDismiss }) {
               <button
                 type="button"
                 onClick={() => onDismiss(t.id)}
-                className="mt-2 text-xs font-medium underline focus:outline-none focus:ring-2 focus:ring-offset-1"
-                style={{ color: tokens.accent }}
+                className="taali-text-btn mt-2"
               >
                 Dismiss
               </button>

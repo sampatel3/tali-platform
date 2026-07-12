@@ -160,7 +160,10 @@
 
 .fb-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  /* One column per PIPELINE_FUNNEL_STAGES entry (Applied · Scored · Invited ·
+     Advanced · Rejected). `completed` is no longer a top-level tile, so this is
+     5 — a 6th column left an empty cell (dead space) after Rejected. */
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
 }
 

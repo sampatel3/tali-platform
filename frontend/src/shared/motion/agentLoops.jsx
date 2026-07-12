@@ -155,3 +155,4 @@ export const AgentLoop = forwardRef(function AgentLoop({
 export const AgentFlowButton = forwardRef(function AgentFlowButton(props, ref) {
   return <AgentLoop ref={ref} as="button" kind="flow" {...props} />;
 });
+AgentFlowButton.rendersNativeButton = true;

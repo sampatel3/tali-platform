@@ -36,11 +36,6 @@
   background: var(--purple);
 }
 
-.taali-btn-primary[data-motion-loop="flow"] {
-  background: var(--grad-agent-on-animated);
-  background-size: 300% 300%;
-}
-
 @media (prefers-reduced-motion: reduce) {
   :root {
     --motion-duration-instant: 1ms;

@@ -8,7 +8,6 @@ import {
   setDarkModePreference,
   subscribeThemePreference,
 } from '../../lib/themePreference';
-import { navigateToMarketingSection } from '../../lib/marketingScroll';
 import { MotionDisclosure } from '../motion';
 import { TaaliTile } from '../ui/Branding';
 import { PageLink } from '../ui/PageLink';
@@ -23,10 +22,6 @@ const APP_TABS = [
   { id: 'tasks', label: 'Tasks' },
   { id: 'reporting', label: 'Reporting' },
   { id: 'settings', label: 'Settings' },
-];
-
-const MARKETING_TABS = [
-  { id: 'how-it-works', label: 'How it works' },
 ];
 
 const initialsFor = (...values) => {
@@ -212,16 +207,9 @@ export const MarketingNav = ({ onNavigate }) => {
       <div className="app-nav-inner">
         <TaaliLogo page="landing" onClick={closeMenu} />
         <div className="row !hidden md:!flex" style={{ gap: 22 }}>
-          {MARKETING_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => navigateToMarketingSection(tab.id, onNavigate)}
-            >
-              {tab.label}
-            </button>
-          ))}
+          <PageLink page="developers" className="btn btn-ghost btn-sm" onClick={closeMenu}>
+            Developers
+          </PageLink>
         </div>
         <div className="row" style={{ gap: 10 }}>
           <PageLink page="login" className="btn btn-ghost btn-sm !hidden sm:!inline-flex">
@@ -249,33 +237,27 @@ export const MarketingNav = ({ onNavigate }) => {
       <MotionDisclosure
         open={mobileMenuOpen}
         id="marketing-mobile-menu"
-        className="border-t border-[var(--line)] bg-[var(--bg)] px-5 pb-5 pt-3 md:!hidden"
+        className="md:!hidden border-t border-[var(--line)] bg-[var(--bg)] px-5 pb-5 pt-3"
       >
-            <div className="flex flex-col">
-              {MARKETING_TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
-                  onClick={() => {
-                    closeMenu();
-                    navigateToMarketingSection(tab.id, onNavigate);
-                  }}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
-              <PageLink
-                page="login"
-                className="btn btn-outline btn-sm flex-1 justify-center"
-                onClick={closeMenu}
-              >
-                Sign in
-              </PageLink>
-              <ThemeToggleButton />
-            </div>
+        <div className="flex flex-col">
+          <PageLink
+            page="developers"
+            className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
+            onClick={closeMenu}
+          >
+            Developers
+          </PageLink>
+        </div>
+        <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
+          <PageLink
+            page="login"
+            className="btn btn-outline btn-sm flex-1 justify-center"
+            onClick={closeMenu}
+          >
+            Sign in
+          </PageLink>
+          <ThemeToggleButton />
+        </div>
       </MotionDisclosure>
     </div>
   );

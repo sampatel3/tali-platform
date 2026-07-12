@@ -1,12 +1,14 @@
 import React, { useCallback, useState } from 'react';
-import { ChevronDown, Copy, Loader2 } from 'lucide-react';
+import { ChevronDown, Copy, Loader2, UserPlus } from 'lucide-react';
 
 import { roles as rolesApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 
-// "Source candidates" panel on the role detail page. Everything here produces
-// copy-paste artefacts for the recruiter to run by hand on LinkedIn / Google —
-// there is NO LinkedIn API, scraping, or automation.
+// "Source candidates" panel on the role detail page. Search and outreach
+// artefacts are run by the recruiter on LinkedIn / Google — there is NO
+// LinkedIn API, scraping, or automated sending. The Sourcing page can pass an
+// optional `onPrepareProspect` handoff so pasted profile context is carried into
+// the prospect form instead of being thrown away.
 //
 // Two tools:
 //  - Generate search strings: deterministic Google X-ray + LinkedIn boolean,
@@ -100,7 +102,7 @@ function OutreachResult({ draft }) {
   );
 }
 
-export function SourceCandidatesPanel({ roleId, defaultOpen = false }) {
+export function SourceCandidatesPanel({ roleId, defaultOpen = false, onPrepareProspect = null }) {
   const { showToast } = useToast();
   const [open, setOpen] = useState(defaultOpen);
 
@@ -186,7 +188,11 @@ export function SourceCandidatesPanel({ roleId, defaultOpen = false }) {
             <div className="src-tool-head">
               <span className="src-tool-title">Draft outreach</span>
             </div>
+            <label className="src-field-label" htmlFor={`src-profile-${roleId}`}>
+              Candidate profile or CV text
+            </label>
             <textarea
+              id={`src-profile-${roleId}`}
               className="taali-input src-profile"
               rows={5}
               maxLength={8000}
@@ -220,6 +226,27 @@ export function SourceCandidatesPanel({ roleId, defaultOpen = false }) {
               </button>
             </div>
             <OutreachResult draft={draft} />
+            {onPrepareProspect ? (
+              <div className="src-save-prospect">
+                <div>
+                  <strong>Keep this person in your shortlist</strong>
+                  <span>The pasted profile will carry into their prospect notes and future campaign draft.</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  disabled={!profileText.trim()}
+                  onClick={() => onPrepareProspect({
+                    profileText: profileText.trim(),
+                    draft,
+                    roleId,
+                  })}
+                >
+                  <UserPlus size={13} aria-hidden="true" />
+                  Continue to save prospect
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

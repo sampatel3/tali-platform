@@ -280,8 +280,8 @@ describe('LandingPreviewPage', () => {
     expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeTruthy();
     expect(screen.getAllByText('Delegation').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Live component/i).length).toBeGreaterThan(0);
-    // Real decision-outcome atoms (VerdictPill "Advance") appear in the scenes.
-    expect(screen.getAllByText('Advance').length).toBeGreaterThan(0);
+    // Real decision-outcome atoms use status wording, not a command label.
+    expect(screen.getAllByText('Advance recommended').length).toBeGreaterThan(0);
   });
 
   it('renders variant E with final scene states (never armed) under reduced-motion', () => {
@@ -415,11 +415,15 @@ describe('LandingPreviewPage', () => {
     const { container } = renderAt('?v=g');
     // The landing now uses the site's shared MarketingNav (rendered OUTSIDE the
     // scoped `.lvg` root) rather than a bespoke variant nav — so the chrome
-    // matches /blog, /demo and the app. Its section tabs are present.
+    // matches /blog, /demo and the app.
     expect(container.querySelector('.app-nav')).toBeTruthy();
     expect(container.querySelector('.lvg .nav-links')).toBeNull();
-    expect(screen.getByRole('button', { name: /How it works/i })).toBeTruthy();
-    // The nav is trimmed to only "How it works" — Product/Developers/Blog removed.
+    // The nav is trimmed to Developers / Sign in / Book a demo — the old
+    // "How it works" section tab (and Product/Blog) are gone from the nav.
+    const developers = screen.getAllByRole('link', { name: /^Developers$/i });
+    expect(developers.length).toBeGreaterThan(0);
+    developers.forEach((link) => expect(link).toHaveAttribute('href', '/developers'));
+    expect(screen.queryByRole('button', { name: /How it works/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Product$/i })).toBeNull();
     // The section anchors still resolve to the site's canonical marketing anchors,
     // now carried by variant G's first two body sections; the closing section +
