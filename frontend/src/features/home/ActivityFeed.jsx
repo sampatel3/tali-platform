@@ -87,7 +87,7 @@ export const ActivityFeed = ({
                       : row.status === 'pending'
                         ? <span className="rq-stream-pendpill">NEEDS YOU</span>
                         : <span className="rq-stream-teachpill">+ FEEDBACK</span>}
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body)', color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-caption)', color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                       D-{row.id} · {formatRelativeAge(row.created_at)} ago
                     </span>
                   </div>
