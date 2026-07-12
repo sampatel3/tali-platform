@@ -41,7 +41,7 @@
    cascade). Disabled under reduced motion so rows render in their final state. */
 @media (prefers-reduced-motion: no-preference) {
   .hmp-feed .rq-stream-list > li {
-    animation: hmpRowIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: hmpRowIn var(--motion-duration-reveal) var(--motion-ease-enter) both;
   }
 }
 @keyframes hmpRowIn {

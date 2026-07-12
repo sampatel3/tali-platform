@@ -12,6 +12,10 @@
   transform-origin: top left;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .wt-tip .dot { animation: none; }
+}
+
 /* Standing report has a narrower native layout, so a smaller scale-up is
    enough — keeps text readable without forcing extra whitespace. */
 .wt-frame[data-pane="profile"] .wt-stage iframe {
@@ -1829,11 +1833,6 @@ button.eng-badge-button:focus-visible {
 .dossier-rail .is-rescoring > *:not([role="status"]) {
   opacity: 0.55;
 }
-@keyframes drFlow {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
 .dossier-rail .dr-rec-kl {
   display: flex;
   align-items: center;
@@ -1860,7 +1859,6 @@ button.eng-badge-button:focus-visible {
   gap: 8px;
   background: var(--grad-agent-on-animated);
   background-size: 300% 300%;
-  animation: drFlow 7s ease-in-out infinite;
   color: #fff;
   border: 0;
   border-radius: 12px;
@@ -2535,7 +2533,7 @@ button.eng-badge-button:focus-visible {
 @media (prefers-reduced-motion: no-preference) {
   /* DecisionRail slides in from the left as the dossier mounts. */
   .dossier-rail.dr-reveal {
-    animation: drSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: drSlideIn var(--motion-duration-reveal) var(--motion-ease-enter) both;
   }
   @keyframes drSlideIn {
     from { opacity: 0; transform: translateX(-16px); }
@@ -2549,8 +2547,8 @@ button.eng-badge-button:focus-visible {
      report's --stacked variant so no other bar is affected. */
   .mc-overview-dimensions--stacked .mc-overview-dim-bar > i {
     transform-origin: left center;
-    animation: barGrow 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
-    animation-delay: calc(var(--i, 0) * 0.06s + 0.12s);
+    animation: barGrow var(--motion-duration-data) var(--motion-ease-enter) both;
+    animation-delay: calc(var(--i, 0) * var(--motion-stagger-default) + var(--motion-duration-fast));
   }
   @keyframes barGrow {
     from { transform: scaleX(0); }

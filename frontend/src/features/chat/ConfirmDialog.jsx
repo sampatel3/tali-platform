@@ -1,12 +1,14 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
+
+import { Dialog } from '../../shared/ui/TaaliPrimitives';
 
 // Lightweight modal-confirm. Replaces ``window.confirm`` so the dialog
 // matches the app's design tokens (no Chrome-style native chrome) and
 // can be dismissed with Esc / click-outside.
 //
-// Usage: render ``<ConfirmDialog>`` only when ``open === true`` and pass
-// the action label so the primary button reads "Delete" / "Discard"
-// rather than a generic "OK".
+// Keep the component mounted and drive `open` so the shared Dialog can finish
+// its exit. Pass the action label so the primary reads Delete/Discard rather
+// than a generic OK.
 const ConfirmDialog = ({
   open,
   title,
@@ -20,56 +22,14 @@ const ConfirmDialog = ({
   const confirmRef = useRef(null);
   const cancelRef = useRef(null);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        onCancel?.();
-        return;
-      }
-      // Trap Tab between the two buttons so focus can't wander out of the
-      // modal onto the page behind it. We deliberately do NOT bind Enter to
-      // confirm — plain Enter already activates whichever button has focus,
-      // so binding it here would confirm even when Cancel is focused.
-      if (e.key === 'Tab') {
-        const first = cancelRef.current;
-        const last = confirmRef.current;
-        if (!first || !last) return;
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    // Autofocus the destructive primary so plain Enter triggers it without a
-    // detour through the cancel button.
-    confirmRef.current?.focus();
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
-
-  if (!open) return null;
-
   return (
-    <div
-      className="cp-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="cp-modal-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel?.();
-      }}
-    >
-      <div className="cp-modal">
-        {title ? (
-          <div id="cp-modal-title" className="cp-modal-title">
-            {title}
-          </div>
-        ) : null}
-        {detail ? <div className="cp-modal-detail">{detail}</div> : null}
+    <Dialog
+      open={open}
+      onClose={onCancel}
+      title={title || 'Confirm'}
+      initialFocusRef={confirmRef}
+      panelClassName="max-w-[26.25rem]"
+      footer={(
         <div className="cp-modal-actions">
           <button ref={cancelRef} type="button" className="cp-btn-ghost" onClick={onCancel}>
             {cancelLabel}
@@ -83,8 +43,10 @@ const ConfirmDialog = ({
             {confirmLabel}
           </button>
         </div>
-      </div>
-    </div>
+      )}
+    >
+      {detail ? <div className="cp-modal-detail">{detail}</div> : null}
+    </Dialog>
   );
 };
 

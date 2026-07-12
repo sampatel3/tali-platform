@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 
 import { assessments as assessmentsApi } from '../../shared/api';
+import { motionSafeScrollBehavior } from '../../shared/motion';
 import { CandidateMiniNav, MarketingNav } from '../../shared/layout/TaaliLayout';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import { PRODUCT_WALKTHROUGH_TASK } from './productWalkthroughModels';
@@ -34,7 +35,7 @@ const missingRequiredFields = (form) => (
 const scrollToWalkthrough = () => {
   if (typeof document === 'undefined') return;
   window.setTimeout(() => {
-    document.getElementById('demo-walkthrough')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('demo-walkthrough')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   }, 60);
 };
 

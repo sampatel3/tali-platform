@@ -2,10 +2,8 @@
 // pixel-accurately. Ported from the handoff's taali-brand.css (design system) +
 // vivid.html (page-specific styles), with EVERY selector scoped under the `.lvf`
 // root so nothing leaks into the app and the look holds regardless of the app's
-// active brand/theme. The handoff `:root` tokens live on `.lvf`; keyframes are
-// renamed (`lvfAgentFlow`, `lvfStamp`) to avoid global collision; the gradient
-// SHIMMER animations are gated behind `prefers-reduced-motion: no-preference`
-// (the gradients themselves always paint — only the motion is gated).
+// active brand/theme. The handoff `:root` tokens live on `.lvf`; authored
+// sequences stay scoped and the agent loops come from the shared Motion system.
 //
 // Injected via a <style> tag inside the `.lvf` root so the whole variant
 // lazy-loads as one chunk with its component. LIGHT theme, purple family only —
@@ -144,8 +142,6 @@ export const VARIANT_F_CSS = `
 /* ============================================================
    AGENT-ON SIGNATURE (the job card + ON pill)
    ============================================================ */
-@keyframes lvfAgentFlow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
-
 .lvf .agent-pill {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 5px 11px 5px 9px; border-radius: 999px;
@@ -324,7 +320,7 @@ export const VARIANT_F_CSS = `
 .lvf .heroC { padding: 66px 0 100px; position: relative; overflow: hidden; }
 .lvf .heroC-hero { text-align: center; display: flex; flex-direction: column; align-items: center; }
 .lvf .heroC .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: #fff; border: 1px solid var(--line); box-shadow: var(--sh-sm); margin-bottom: 24px; }
-.lvf .heroC .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
+.lvf .heroC .eyebrow-flow-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
 .lvf .heroC h1 { font-size: clamp(44px, 5.2vw, 74px); letter-spacing: -.045em; line-height: .98; max-width: 15ch; }
 .lvf .heroC .lede { margin: 26px auto 0; max-width: 560px; font-size: 19px; }
 .lvf .heroC-actions { display: flex; gap: 14px; align-items: center; justify-content: center; margin-top: 34px; flex-wrap: wrap; }
@@ -389,15 +385,4 @@ export const VARIANT_F_CSS = `
 .lvf .stage[data-armed] .cand-row { opacity: 0; }
 .lvf .stage[data-armed] .cand-row .verdict { opacity: 0; }
 
-/* ============================================================
-   MOTION — gradient shimmer, gated behind no-preference. The gradients above
-   always paint; only the position animation is gated so reduced-motion users
-   get a static (but full-colour) scene.
-   ============================================================ */
-@media (prefers-reduced-motion: no-preference) {
-  .lvf .agent-pill { animation: lvfAgentFlow 6s linear infinite; }
-  .lvf .heroC .eyebrow::before { animation: lvfAgentFlow 6s linear infinite; }
-  .lvf .dd-fill { animation: lvfAgentFlow 6s linear infinite; }
-  .lvf .stage { animation: lvfAgentFlow 14s linear infinite; }
-}
 `;

@@ -11,10 +11,10 @@
 // bars fill from 0 and its rows stagger in on mount (scoped CSS keyframes so the
 // real AssessmentScorecard is untouched), and the evidence report reveals on
 // scroll. Everything respects prefers-reduced-motion via
-// <MotionConfig reducedMotion="user"> + the reduced flag.
+// the shared MotionSystemProvider + the reduced flag.
 
 import React, { useMemo } from 'react';
-import { LazyMotion, domMax, MotionConfig } from 'motion/react';
+import { MotionSystemProvider, Reveal, useReducedMotionSync } from '../../shared/motion';
 
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { useToast } from '../../context/ToastContext';
@@ -28,10 +28,7 @@ import {
   AI_SHOWCASE_COMPLETED_ASSESSMENT,
 } from '../demo/productWalkthroughModels';
 import {
-  Reveal,
-  ScrollReveal,
   PreviewSwitcher,
-  useReducedMotionSync,
 } from '../../shared/motion/previewMotion';
 import './ReportMotionPreview.css';
 
@@ -70,8 +67,7 @@ export const ReportMotionPreview = () => {
   const toast = (msg) => showToast(msg, 'info');
 
   return (
-    <LazyMotion features={domMax} strict>
-      <MotionConfig reducedMotion="user">
+    <MotionSystemProvider>
         <div data-brand="taali" className="rmp-root">
           <BreadcrumbsRow items={[
             { label: 'Jobs' },
@@ -115,7 +111,7 @@ export const ReportMotionPreview = () => {
 
                 {/* (2) The evidence report — the REAL CandidateReportView on the
                     real view-model. Reveals on scroll. */}
-                <ScrollReveal reduced={reduced} className="rmp-report">
+                <Reveal reduced={reduced} className="rmp-report" y={24}>
                   <CandidateReportView
                     model={reportModel}
                     variant="page"
@@ -123,15 +119,14 @@ export const ReportMotionPreview = () => {
                     showIntegritySection
                     showEvidenceSections
                   />
-                </ScrollReveal>
+                </Reveal>
               </main>
             </div>
           </div>
 
           <PreviewSwitcher current="report" badge="PREVIEW · Report on Motion" />
         </div>
-      </MotionConfig>
-    </LazyMotion>
+    </MotionSystemProvider>
   );
 };
 

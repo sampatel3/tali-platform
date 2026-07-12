@@ -64,7 +64,9 @@
   color: var(--mute);
   padding: 8px 12px;
   cursor: pointer;
-  transition: 0.12s;
+  transition:
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    background var(--motion-duration-fast) var(--motion-ease-standard);
 }
 .an-window button + button { border-left: 1px solid var(--line-2); }
 .an-window button:hover { color: var(--ink-2); }
@@ -100,9 +102,7 @@
 .an-pcell .v small { font-size: var(--fs-body); color: var(--mute); font-weight: 400; }
 .an-pcell .s { font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; }
 
-/* ── tab panels ─────────────────────────────────────────────────────────── */
-.an-tabpanel { animation: an-fade 0.18s ease; }
-@keyframes an-fade { from { opacity: 0; } to { opacity: 1; } }
+/* Tab-panel presence is owned by the shared Motion system. */
 
 .an-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
@@ -139,7 +139,7 @@
   .an-chart-svg .an-chart-line {
     stroke-dasharray: 1400;
     stroke-dashoffset: 1400;
-    animation: anChartDraw 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: anChartDraw var(--motion-duration-data) var(--motion-ease-enter) forwards;
   }
 }
 @keyframes anChartDraw {
@@ -346,7 +346,7 @@
 .an-acard .an-name { font-weight: 600; font-size: var(--fs-body-lg); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .an-apill { font-size: var(--fs-eyebrow); font-weight: 600; border-radius: 99px; padding: 2px 9px; flex: none; }
-.an-apill.on { background: var(--purple-soft); color: var(--purple-2); }
+.an-apill.on { background: var(--grad-agent-on-animated); background-size: 300% 300%; color: #fff; }
 .an-apill.off { background: var(--amber-soft); color: var(--amber-ink); }
 
 .an-actbadge {
@@ -366,9 +366,7 @@
   height: 5px;
   border-radius: 50%;
   background: #fff;
-  animation: an-pulse 1.6s infinite;
 }
-@keyframes an-pulse { 0%, 100% { opacity: 0.55; transform: scale(1); } 50% { opacity: 1; transform: scale(1.2); } }
 
 .an-abar {
   height: 5px;

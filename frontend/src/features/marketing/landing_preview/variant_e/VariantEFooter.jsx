@@ -2,6 +2,7 @@ import React from 'react';
 
 import { TaaliLogo } from '../../../../shared/layout/TaaliLayout';
 import { scrollToMarketingSection } from '../../../../lib/marketingScroll';
+import { motionSafeScrollBehavior } from '../../../../shared/motion';
 
 // ---------------------------------------------------------------------------
 // Closing CTA + production dark footer. Copied from the production landing
@@ -123,7 +124,7 @@ export const ProductionFooter = ({ onNavigate }) => (
                     }
                     if (item.section) {
                       const el = document.getElementById(item.section);
-                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      if (el) el.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
                       else scrollToMarketingSection(item.section);
                       return;
                     }

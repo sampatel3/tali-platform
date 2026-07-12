@@ -1,5 +1,6 @@
 import React from 'react';
 import { MessageSquare, Pause, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { AgentLoop } from '../../shared/motion';
 
 const groupByRecency = (rows) => {
   const groups = { today: [], yesterday: [], week: [], older: [] };
@@ -179,11 +180,17 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
         title={a.role_name}
       >
         <span className="cp-agent-top">
-          <span className={`cp-agent-stat cp-agent-stat-${status}`} aria-hidden="true">
-            {status === 'on' ? <Sparkles size={13} strokeWidth={2} />
-              : status === 'paused' ? <Pause size={11} strokeWidth={2} fill="currentColor" />
-              : <span className="cp-agent-dot" />}
-          </span>
+          {status === 'on' ? (
+            <AgentLoop kind="flow" className="cp-agent-stat cp-agent-stat-on" aria-hidden="true">
+              <Sparkles size={13} strokeWidth={2} />
+            </AgentLoop>
+          ) : (
+            <span className={`cp-agent-stat cp-agent-stat-${status}`} aria-hidden="true">
+              {status === 'paused'
+                ? <Pause size={11} strokeWidth={2} fill="currentColor" />
+                : <span className="cp-agent-dot" />}
+            </span>
+          )}
           <span className="cp-agent-role">{a.role_name}</span>
         </span>
         <span className="cp-agent-sub">

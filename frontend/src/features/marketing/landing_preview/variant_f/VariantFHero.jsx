@@ -1,5 +1,6 @@
 import React from 'react';
 
+import { AgentLoop } from '../../../../shared/motion';
 import { AgentScene } from './AgentScene';
 
 // HERO — centered, type-led. Eyebrow pill (animated gradient dot), H1 with the
@@ -15,7 +16,7 @@ export const VariantFHero = ({ onNavigate }) => {
       <div className="heroC-orb a" aria-hidden="true" />
       <div className="heroC-orb b" aria-hidden="true" />
       <div className="wrap heroC-hero">
-        <span className="eyebrow">AGENT-NATIVE HIRING</span>
+        <span className="eyebrow"><AgentLoop kind="flow" className="eyebrow-flow-dot" />AGENT-NATIVE HIRING</span>
         <h1 className="display">
           The hiring agent that screens, assesses, and{' '}
           <span className="grad-text">decides — with you.</span>

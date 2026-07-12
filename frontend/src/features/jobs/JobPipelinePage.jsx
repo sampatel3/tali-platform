@@ -26,6 +26,7 @@ import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import SubmittalPackDialog from './SubmittalPackDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
+import { AgentLoop, motionSafeScrollBehavior } from '../../shared/motion';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
 // role detail layout — top AgentBar replaces it. Component file stays
 // in the tree until any other surface that may import it is also
@@ -1118,7 +1119,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   };
 
   const handleOpenRoleSettings = () => {
-    document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   };
 
   const viewCandidateReport = useCallback((application) => {
@@ -1232,7 +1233,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setActiveView('role-fit');
     const tabsEl = document.querySelector('.sub-tabs-sticky');
     if (tabsEl && typeof tabsEl.scrollIntoView === 'function') {
-      tabsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      tabsEl.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
     }
   };
 
@@ -1505,13 +1506,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                 <Sparkles size={11} strokeWidth={2} />
                               </div>
                               <div className="cc-agent-body">
-                                <div className="cc-agent-action">{formatDecisionLabel(pendingDecision.recommendation)}</div>
+                                <AgentLoop kind="flow" className="cc-agent-action agent-flow-text">
+                                  {formatDecisionLabel(pendingDecision.recommendation)}
+                                </AgentLoop>
                                 <div className="cc-agent-why">
                                   {pendingDecision.reasoning
                                     || resolvePipelineCardFooterStatus(application, pendingDecision)}
                                 </div>
                                 <div className="cc-agent-actions">
-                                  <button
+                                  <AgentLoop
+                                    as="button"
+                                    kind="flow"
                                     type="button"
                                     className="btn btn-purple btn-xs"
                                     onClick={(event) => {
@@ -1522,7 +1527,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                     disabled={decisionResolving}
                                   >
                                     {decisionResolving ? '…' : 'Approve'}
-                                  </button>
+                                  </AgentLoop>
                                   <button
                                     type="button"
                                     className="btn btn-outline btn-xs"
@@ -1585,7 +1590,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             savingRoleConfig={savingRoleConfig}
             usageBreakdown={usageBreakdown}
             onSave={handleSaveRoleConfig}
-            onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' })}
             onSaveBudget={async (dollars) => {
               if (!Number.isFinite(numericRoleId)) return;
               const cents = Math.max(0, Math.round(Number(dollars) * 100));
@@ -1988,8 +1993,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td>
                                 {agentLabel ? (
                                   <span className="ai-action">
-                                    <Sparkles size={11} strokeWidth={2} />
-                                    {agentLabel}
+                                    <AgentLoop kind="pulse"><Sparkles size={11} strokeWidth={2} /></AgentLoop>
+                                    <AgentLoop kind="flow" className="ai-action-label">{agentLabel}</AgentLoop>
                                   </span>
                                 ) : (
                                   <span className="ctable-em">—</span>

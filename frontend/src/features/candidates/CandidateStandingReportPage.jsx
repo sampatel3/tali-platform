@@ -4,7 +4,7 @@ import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAle
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
-import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
+import { AgentLoop, MotionNumber } from '../../shared/motion';
 import '../../shared/motion/reveal.css';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -202,28 +202,17 @@ export const IntegrityChip = ({ verdict, trustBand, warnings, corroborations, un
   );
 };
 
-// One 5-Ds axis score, counted up from 0 on enter via the shared production
-// useCountUp ticker. Extracted so the hook is called once per axis (hooks can't
-// live inside the map callback). Reduced-motion (or no signal) → the final
-// integer with no tween.
-export const DimScore = ({ score, hasSignal, reduced }) => {
-  const value = useCountUp(hasSignal ? Math.round(score) : 0, {
-    reduced,
-    format: (n) => Math.round(n),
-  });
-  return (
-    <span className="mc-overview-dim-score">
-      {hasSignal ? value : '—'}
-      {hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
-    </span>
-  );
-};
+// One 5-Ds axis score. Changes interpolate from the previously rendered score;
+// reduced motion settles immediately and missing signals stay non-numeric.
+export const DimScore = ({ score, hasSignal }) => (
+  <span className="mc-overview-dim-score">
+    {hasSignal ? <MotionNumber value={Math.round(score)} /> : '—'}
+    {hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
+  </span>
+);
 
 export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
-  // Synchronous reduced-motion read, shared by the 5-Ds score tickers below so
-  // reduced-motion users land on the final integers with no count-up.
-  const reducedMotion = useReducedMotionSync();
   // ``shareToken`` is set when the SPA is mounted via the public
   // ``/share/:shareToken`` route. ``applicationId`` is set on the
   // recruiter-side ``/c/:applicationId`` and ``/candidates/:applicationId``
@@ -1416,7 +1405,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                           <div className="mc-overview-dim-bar" aria-hidden="true">
                             <i className={isLow ? 'low' : ''} style={{ width: `${pct}%` }} />
                           </div>
-                          <DimScore score={axis.score} hasSignal={axis.hasSignal} reduced={reducedMotion} />
+                          <DimScore score={axis.score} hasSignal={axis.hasSignal} />
                         </div>
                       );
                     })}
@@ -1510,7 +1499,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             return (
               <div className="assessment-head" data-internal-only>
                 {gradedDimensions.length > 0 ? (
-                  <div className="abar abar-on abar-block">
+                  <AgentLoop as="div" kind="glow" className="abar abar-on abar-block">
+                    <AgentLoop kind="flow" className="abar-flow-layer" />
                     <span className="ab-spark"><Sparkles size={15} strokeWidth={2} /></span>
                     <span className="ab-label">Agent assessed</span>
                     <span className="ab-tick">
@@ -1521,7 +1511,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <span className="ab-assess">
                       <b>{score != null ? Math.round(score) : '—'}</b><span>/100</span>
                     </span>
-                  </div>
+                  </AgentLoop>
                 ) : null}
                 {assessmentId ? (
                   <div className="assessment-actions" ref={assessmentActionsRef}>

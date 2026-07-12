@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Briefcase, CheckSquare, MessageSquare, Search, User } from 'lucide-react';
 
 import { roles as rolesApi, tasks as tasksApi } from '../api';
+import { AnimatePresence, m, popoverVariants } from '../motion';
 
 const MAX_PER_GROUP = 5;
 const SERVER_SEARCH_LIMIT = 20;
@@ -265,8 +266,17 @@ export const GlobalSearch = ({ onNavigate }) => {
         <kbd>⌘K</kbd>
       </form>
 
+      <AnimatePresence initial={false}>
       {open ? (
-        <div className="mc-nav-search-popover" role="listbox">
+        <m.div
+          key="global-search-popover"
+          className="mc-nav-search-popover"
+          role="listbox"
+          variants={popoverVariants}
+          initial="hidden"
+          animate="visible"
+          exit="exit"
+        >
           {isLoading && totalMatches === 0 ? (
             <div className="mc-nav-search-empty">Searching…</div>
           ) : error ? (
@@ -318,8 +328,9 @@ export const GlobalSearch = ({ onNavigate }) => {
             </span>
             <span className="arrow" aria-hidden="true">→</span>
           </button>
-        </div>
+        </m.div>
       ) : null}
+      </AnimatePresence>
     </div>
   );
 };

@@ -1,7 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { stagger, useAnimate } from 'motion/react';
-
-import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { AgentLoop, MOTION_EASE, stagger, useAnimate, useReducedMotionSync } from '../../../../shared/motion';
 import { CANDIDATES, FUNNEL_STATS, verdictLabel } from './variantG.data';
 
 // ---------------------------------------------------------------------------
@@ -85,9 +83,9 @@ export const AgentScene = () => {
       try {
         await animate([
           // Beat 2 — candidate rows flow into the decision lane.
-          ['.cand-row', { opacity: [0, 1], y: [10, 0] }, { duration: 0.5, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT }), ease: [0.2, 0.7, 0.2, 1] }],
+          ['.cand-row', { opacity: [0, 1], y: [10, 0] }, { duration: 0.5, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT }), ease: MOTION_EASE.emphasized }],
           // Beat 3 — each verdict pill stamps in, .18s after its row lands.
-          ['.cand-row .verdict', { opacity: [0, 1], scale: [0.7, 1.06, 1] }, { duration: 0.42, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT + STAMP_OFFSET }), ease: [0.2, 1.3, 0.4, 1] }],
+          ['.cand-row .verdict', { opacity: [0, 1], scale: [0.7, 1.06, 1] }, { duration: 0.42, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT + STAMP_OFFSET }), ease: MOTION_EASE.confirm }],
         ]);
         if (!cancelled) completedRef.current = true; // settled — hold it
       } catch {
@@ -102,7 +100,14 @@ export const AgentScene = () => {
   }, [triggered, reduced, animate]);
 
   return (
-    <div className="stage" ref={scope} {...(reduced ? {} : { 'data-armed': 'true' })}>
+    <AgentLoop
+      as="div"
+      kind="flow"
+      active={on}
+      className="stage"
+      ref={scope}
+      {...(reduced ? {} : { 'data-armed': 'true' })}
+    >
       <div className="stage-cap">
         <span className="t">Agent · live</span>
       </div>
@@ -114,7 +119,9 @@ export const AgentScene = () => {
             <div className="job-meta">#312 · ENGINEERING · REMOTE · 312 APPLIED</div>
           </div>
           {on ? (
-            <span className="agent-pill"><span className="led" />AGENT ON</span>
+            <AgentLoop kind="flow" className="agent-pill">
+              <AgentLoop kind="pulse" className="led" />AGENT ON
+            </AgentLoop>
           ) : (
             <span className="agent-pill off"><span className="led" />AGENT OFF</span>
           )}
@@ -147,7 +154,7 @@ export const AgentScene = () => {
           ))}
         </div>
       </div>
-    </div>
+    </AgentLoop>
   );
 };
 

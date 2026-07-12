@@ -166,13 +166,9 @@ export const VARIANT_C_CSS = `
    ~120 small dots in a loose grid. OFF: static grey, low opacity. On flip a
    radial pulse ripples from the toggle (bottom-centre): each dot's colour +
    scale transition is delayed by its distance to the origin (computed per dot
-   at render), so the wave visibly propagates. After it settles the whole field
-   drifts slowly via one keyframe on the container. CSS transitions only. */
+   at render), so the wave visibly propagates, then holds as a calm field. */
 .lvc-lattice {
   position: absolute; inset: 0; z-index: 1; pointer-events: none;
-  animation: lvcLatticeDrift 44s ease-in-out infinite;
-  animation-play-state: var(--lvc-motion);
-  will-change: transform;
 }
 .lvc-dot {
   position: absolute; border-radius: 50%;
@@ -193,11 +189,6 @@ export const VARIANT_C_CSS = `
   45%  { transform: translate(-50%, -50%) scale(1.9); }
   100% { transform: translate(-50%, -50%) scale(1); }
 }
-@keyframes lvcLatticeDrift {
-  0%,100% { transform: translate3d(0, 0, 0); }
-  50%     { transform: translate3d(0, -10px, 0); }
-}
-
 /* The switch — grey when OFF, purple saturates in when ON */
 .lvc-switch-wrap {
   position: relative; z-index: 4;
@@ -226,8 +217,6 @@ export const VARIANT_C_CSS = `
   box-shadow: inset 0 2px 6px rgba(74,45,128,0.3),
               0 0 26px rgba(124,77,255,0.35),
               0 0 0 1px rgba(196,165,253,0.4);
-  animation: lvcSwitchFlow 6s ease-in-out infinite;
-  animation-play-state: var(--lvc-motion);
 }
 .lvc-switch-glow {
   position: absolute; inset: -18px; border-radius: 999px;
@@ -254,8 +243,6 @@ export const VARIANT_C_CSS = `
 }
 .lvc-switch.is-on .lvc-switch-ring {
   border-color: rgba(124,77,255,0.8);
-  animation: lvcRing 1.8s ease-out infinite;
-  animation-play-state: var(--lvc-motion);
 }
 .lvc-switch-caption {
   font-family: 'Geist Mono', ui-monospace, monospace;
@@ -264,9 +251,6 @@ export const VARIANT_C_CSS = `
 }
 .lvc-switch-caption b { color: var(--lvc-purple); font-weight: 600; }
 .lvc:not(.is-on) .lvc-switch-caption b { color: var(--lvc-mute); }
-
-@keyframes lvcSwitchFlow { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
-@keyframes lvcRing { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.4); opacity: 0; } }
 
 /* Reveal primitive (scroll-triggered). Deltas kept subtle (translate/opacity
    only) so nothing is lost if the reveal never fires — content stays legible. */
@@ -343,23 +327,8 @@ export const VARIANT_C_CSS = `
   position: absolute; left: 4%; right: 4%; top: 50%; height: 2px;
   transform: translateY(-50%);
   background: linear-gradient(90deg,
-    rgba(196,165,253,0.15), rgba(94,58,168,0.35), rgba(196,165,253,0.15));
-}
-.lvc-ribbon-flow { position: absolute; left: 4%; right: 4%; top: 50%; height: 0; }
-.lvc-ribbon-dot {
-  position: absolute; top: 50%; left: 0;
-  width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%;
-  background: var(--lvc-purple);
-  box-shadow: 0 0 10px rgba(124,77,255,0.7);
-  opacity: calc(0.15 + 0.85 * var(--lvc-glow));
-  animation: lvcRibbonFlow 6.6s linear infinite;
-  animation-play-state: var(--lvc-motion);
-}
-@keyframes lvcRibbonFlow {
-  0%   { left: 0%;   opacity: 0; }
-  8%   { opacity: 1; }
-  92%  { opacity: 1; }
-  100% { left: 100%; opacity: 0; }
+    rgba(196,165,253,0.15), rgba(94,58,168,0.65), rgba(196,165,253,0.15));
+  background-size: 300% 100%;
 }
 .lvc-ribbon-nodes {
   position: absolute; left: 4%; right: 4%; top: 50%;
@@ -377,13 +346,6 @@ export const VARIANT_C_CSS = `
   background: var(--lvc-purple);
   box-shadow: 0 0 0 4px rgba(124,77,255,calc(0.12 * var(--lvc-glow))),
               0 0 14px rgba(124,77,255,calc(0.7 * var(--lvc-glow)));
-  animation: lvcNodePulse 3s ease-in-out infinite;
-  animation-delay: calc(var(--n) * 0.4s);
-  animation-play-state: var(--lvc-motion);
-}
-@keyframes lvcNodePulse {
-  0%,100% { transform: scale(1); opacity: 0.85; }
-  50%     { transform: scale(1.25); opacity: 1; }
 }
 
 /* Stage cards — light cards, thin borders, purple node numbers */

@@ -10,10 +10,10 @@
 // Motion: the pulse KPIs tick up, the tab underline slides between tabs
 // (layout), the funnel + override bars grow on enter (scoped CSS), and the
 // decisions-per-day line + area draw in (pathLength / fade). Reduced motion →
-// final state via <MotionConfig reducedMotion="user"> + the reduced flag.
+// final state via the shared MotionSystemProvider + the reduced flag.
 
 import React, { useState } from 'react';
-import { LazyMotion, domMax, MotionConfig, m } from 'motion/react';
+import { MotionSystemProvider, Reveal, m, useReducedMotionSync } from '../../shared/motion';
 import { Bot, Brain, FlaskConical, History, TrendingUp } from 'lucide-react';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
@@ -21,9 +21,7 @@ import { OutcomesTab } from './OutcomesTab';
 import {
   EASE_OUT,
   NumberTicker,
-  Reveal,
   PreviewSwitcher,
-  useReducedMotionSync,
 } from '../../shared/motion/previewMotion';
 import './AnalyticsMotionPreview.css';
 
@@ -167,8 +165,7 @@ export const AnalyticsMotionPreview = () => {
   const budgetPct = spend.budget_cents > 0 ? Math.round((spend.spent_cents / spend.budget_cents) * 100) : null;
 
   return (
-    <LazyMotion features={domMax} strict>
-      <MotionConfig reducedMotion="user">
+    <MotionSystemProvider>
         <div data-brand="taali" className="amp-root">
           <Reveal reduced={reduced}>
             <AgentHeader
@@ -256,8 +253,7 @@ export const AnalyticsMotionPreview = () => {
 
           <PreviewSwitcher current="analytics" badge="PREVIEW · Analytics on Motion" />
         </div>
-      </MotionConfig>
-    </LazyMotion>
+    </MotionSystemProvider>
   );
 };
 

@@ -1,10 +1,8 @@
 // Scoped CSS for LandingVariantG — F's "Vivid Purple" visual system with G's
 // tight, one-screen-per-section layout. Same tokens, agent-ON stage, orb glows
 // and gradient shimmer as F; every selector is scoped under the `.lvg` root so
-// nothing leaks into the app. Keyframes are renamed (`lvgAgentFlow`) to avoid
-// global collision; the gradient SHIMMER animations are gated behind
-// `prefers-reduced-motion: no-preference` (the gradients themselves always paint
-// — only the motion is gated).
+// nothing leaks into the app. Authored sequences stay scoped and the agent
+// loops come from the shared Motion system.
 //
 // TYPE — the landing is MARKETING, not the app. It runs on its OWN bespoke,
 // bigger `--l-*` px scale (defined in the `.lvg` block below), NOT the app
@@ -195,8 +193,6 @@ export const VARIANT_G_CSS = `
 /* ============================================================
    AGENT-ON SIGNATURE (the job card + ON pill)
    ============================================================ */
-@keyframes lvgAgentFlow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
-
 .lvg .agent-pill {
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   padding: 5px 10px 5px 8px; border-radius: 999px;
@@ -387,7 +383,7 @@ export const VARIANT_G_CSS = `
 .lvg .heroC-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: center; }
 .lvg .heroC-copy { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
 .lvg .heroC .eyebrow { margin-bottom: 26px; }
-.lvg .heroC .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
+.lvg .heroC .eyebrow-flow-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
 .lvg .heroC h1 { font-size: var(--l-hero); letter-spacing: -.045em; line-height: 1.08; max-width: 15ch; }
 .lvg .heroC .lede { margin: 26px 0 0; max-width: 500px; font-size: var(--l-lead); line-height: 1.65; }
 .lvg .heroC-actions { display: flex; gap: 14px; align-items: center; justify-content: flex-start; margin-top: 48px; flex-wrap: wrap; }
@@ -454,15 +450,4 @@ export const VARIANT_G_CSS = `
 .lvg .stage[data-armed] .cand-row { opacity: 0; }
 .lvg .stage[data-armed] .cand-row .verdict { opacity: 0; }
 
-/* ============================================================
-   MOTION — gradient shimmer, gated behind no-preference. The gradients above
-   always paint; only the position animation is gated so reduced-motion users
-   get a static (but full-colour) scene.
-   ============================================================ */
-@media (prefers-reduced-motion: no-preference) {
-  .lvg .agent-pill { animation: lvgAgentFlow 6s linear infinite; }
-  .lvg .heroC .eyebrow::before { animation: lvgAgentFlow 6s linear infinite; }
-  .lvg .dd-fill { animation: lvgAgentFlow 6s linear infinite; }
-  .lvg .stage { animation: lvgAgentFlow 14s linear infinite; }
-}
 `;

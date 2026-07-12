@@ -1,12 +1,12 @@
 import React from 'react';
 
-import { Reveal } from '../../../../shared/motion/previewMotion';
+import { AgentLoop, Reveal } from '../../../../shared/motion';
 import { CANDIDATES, FUNNEL, DDS, CONTROL, PROOF, COMPOSITE } from './variantF.data';
 
 // The scrolling body sections, in narrative order: Problem → Agentic hiring
 // (funnel + folded-in "You decide" control block) → AI-native assessments (5-Ds
 // scorecard + folded-in proof stats) → Close CTA. Section entrances reuse the
-// shared one-shot CSS <Reveal> (can't get stuck under LazyMotion). Copy is
+// shared once-in-view <Reveal>. Copy is
 // verbatim from the handoff.
 
 const TICK = (
@@ -144,7 +144,7 @@ export const FluencySection = ({ reduced }) => (
                 <div className="dd-name">{d.name}</div>
                 <div className="dd-def">{d.def}</div>
               </div>
-              <div className="dd-track"><div className="dd-fill" style={{ width: `${d.val}%` }} /></div>
+              <div className="dd-track"><AgentLoop kind="flow" className="dd-fill" style={{ width: `${d.val}%` }} /></div>
               <div className="dd-val">{d.val}</div>
             </div>
           ))}

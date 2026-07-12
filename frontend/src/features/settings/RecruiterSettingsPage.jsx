@@ -11,6 +11,7 @@ import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
 import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { motionSafeScrollBehavior } from '../../shared/motion';
 import {
   Button,
   Panel,
@@ -819,7 +820,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     if (!target) return;
     const timer = window.setTimeout(() => {
       if (typeof target.scrollIntoView === 'function') {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        target.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
       }
     }, 0);
     return () => window.clearTimeout(timer);
@@ -1339,7 +1340,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     // section renders), so scroll-into-view is irrelevant. Scroll the
     // window back to the top so users start at the top of the card.
     if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: motionSafeScrollBehavior('smooth') });
     }
   };
 

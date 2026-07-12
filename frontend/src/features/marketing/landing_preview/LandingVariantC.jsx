@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { TaaliLogo } from '../../../shared/layout/TaaliLayout';
 import { scrollToMarketingSection } from '../../../lib/marketingScroll';
+import { AgentLoop, prefersReducedMotion } from '../../../shared/motion';
 import { VARIANT_C_CSS } from './landingVariantC.styles';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +17,7 @@ import { VARIANT_C_CSS } from './landingVariantC.styles';
 // single `filter` (grayscale) + custom-property transition on `.lvc`, driven by
 // one `data-on` attribute — every child animation keys off it.
 //
-// Constraints honoured: no new deps (CSS keyframes/transitions only — no
+// Constraints honoured: no new deps (shared Motion + CSS transitions — no
 // <canvas>, no rAF), lazy-loaded route, prefers-reduced-motion renders straight
 // to ON with static composition, robust at 80% zoom / 1024–1600 widths,
 // purple-family accents, fixture data only. Nothing depends on
@@ -24,17 +25,12 @@ import { VARIANT_C_CSS } from './landingVariantC.styles';
 // even if they never fire.
 // ---------------------------------------------------------------------------
 
-const prefersReducedMotion = () =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
 // ── Dot lattice (hero background) ──────────────────────────────────────────
 // A loose grid of ~120 small dots. OFF: static, grey, low opacity. On flip a
 // radial pulse ripples outward from the toggle (bottom-centre): each dot's
 // colour/scale transition is delayed by its distance to the toggle, so the
-// ripple visibly propagates. After it settles the lattice drifts very slowly as
-// a single collective keyframe on the container. Positions and per-dot delays
+// ripple visibly propagates. After it settles the lattice holds as a calm
+// background. Positions and per-dot delays
 // are computed once at render (deterministic seed) — no rAF, CSS only.
 const LATTICE_COLS = 14;
 const LATTICE_ROWS = 9; // 14 × 9 = 126 dots ≈ "~120"
@@ -105,12 +101,12 @@ const AgentSwitch = ({ on, pressing, onToggle }) => (
       className={`lvc-switch${on ? ' is-on' : ''}${pressing ? ' is-pressing' : ''}`}
       onClick={onToggle}
     >
-      <span className="lvc-switch-track" aria-hidden="true">
+      <AgentLoop kind="flow" active={on} className="lvc-switch-track" aria-hidden="true">
         <span className="lvc-switch-glow" />
         <span className="lvc-switch-knob">
-          <span className="lvc-switch-ring" />
+          <AgentLoop kind="ring" active={on} className="lvc-switch-ring" />
         </span>
-      </span>
+      </AgentLoop>
     </button>
     <span className="lvc-switch-caption" aria-hidden="true">
       agent: <b>{on ? 'on' : 'off'}</b>
@@ -214,20 +210,13 @@ const ProblemSection = ({ reveal }) => (
 // dots flowing along it via keyframes. It animates unconditionally when ON;
 // off-screen pausing is a nice-to-have driven by animation-play-state only.
 const RIBBON_NODES = ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'];
-const RIBBON_DOTS = Array.from({ length: 6 }, (_, i) => ({ id: i, delay: i * 1.1 }));
-
 const PipelineRibbon = () => (
   <div className="lvc-ribbon" aria-hidden="true">
-    <div className="lvc-ribbon-rail" />
-    <div className="lvc-ribbon-flow">
-      {RIBBON_DOTS.map((d) => (
-        <span key={d.id} className="lvc-ribbon-dot" style={{ animationDelay: `${-d.delay}s` }} />
-      ))}
-    </div>
+    <AgentLoop kind="flow" className="lvc-ribbon-rail" />
     <div className="lvc-ribbon-nodes">
       {RIBBON_NODES.map((n, i) => (
         <span key={n} className="lvc-ribbon-node" style={{ '--n': i }}>
-          <span className="lvc-ribbon-node-core" />
+          <AgentLoop kind="pulse" delay={i * 0.4} className="lvc-ribbon-node-core" />
         </span>
       ))}
     </div>

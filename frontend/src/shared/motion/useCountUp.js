@@ -1,6 +1,6 @@
-// useCountUp — the PRODUCTION number ticker (the preview kit's NumberTicker
-// stays preview-only). A tiny easeOutCubic requestAnimationFrame loop with zero
-// dependencies: no `motion/react`, no bundle cost.
+// Legacy compatibility hook. Production surfaces now use MotionNumber so
+// values interpolate from their previous state and share the system tokens.
+// Keep this export temporarily for downstream imports; do not add new callers.
 //
 // CRITICAL difference from previewMotion.jsx's NumberTicker: this re-runs the
 // tween whenever `to` changes, not only on mount. Real pages feed these values
@@ -10,30 +10,10 @@
 
 import { useEffect, useState } from 'react';
 
-// Synchronous prefers-reduced-motion read, ported verbatim from the preview
-// kit. Motion's own useReducedMotion resolves in a layout effect (null on first
-// paint), too late — it flashes 0 before settling. Reading matchMedia
-// synchronously in the initial state seeds the deterministic final value.
-export const useReducedMotionSync = () => {
-  const query = '(prefers-reduced-motion: reduce)';
-  const read = () =>
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(query).matches
-      : false;
-  const [reduced, setReduced] = useState(read);
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const mq = window.matchMedia(query);
-    const onChange = () => setReduced(mq.matches);
-    if (mq.addEventListener) mq.addEventListener('change', onChange);
-    else if (mq.addListener) mq.addListener(onChange);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener('change', onChange);
-      else if (mq.removeListener) mq.removeListener(onChange);
-    };
-  }, []);
-  return reduced;
-};
+import { MOTION_DURATION } from './tokens';
+import { useReducedMotionSync } from './useReducedMotionSync';
+
+export { useReducedMotionSync };
 
 /**
  * Count up to `to`, re-running each time `to` changes. Returns the formatted
@@ -48,7 +28,7 @@ export const useReducedMotionSync = () => {
  *   "$1.9k", "1,204".
  * @returns {string|number} the formatted current value.
  */
-export const useCountUp = (to, { reduced = false, duration = 1100, format = (n) => Math.round(n).toLocaleString() } = {}) => {
+export const useCountUp = (to, { reduced = false, duration = MOTION_DURATION.data * 1000, format = (n) => Math.round(n).toLocaleString() } = {}) => {
   const [display, setDisplay] = useState(reduced ? to : 0);
   useEffect(() => {
     if (reduced) {

@@ -1296,3 +1296,7 @@ a.rq-btn-sm { text-decoration: none; }
   border-color: var(--purple);
 }
 .rq-quick-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rq-skel-line { animation: none; }
+}

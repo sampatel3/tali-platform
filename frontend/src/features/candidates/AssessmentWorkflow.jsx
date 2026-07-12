@@ -1,4 +1,5 @@
 import React from 'react';
+import { AgentLoop } from '../../shared/motion';
 
 // The five-step assessment lifecycle, in order. The stepper and the funnel
 // strip both read from this so they stay in lockstep.
@@ -86,7 +87,7 @@ export function AssessmentWorkflowStepper({ status, tracking, labeled = false })
     <div className={`aw${labeled ? ' aw--card' : ''}`} title={wf.title}>
       {labeled ? (
         <div className={`aw-state aw-state--${wf.tone}`}>
-          {wf.live ? <span className="aw-live-dot" aria-hidden="true" /> : null}
+          {wf.live ? <AgentLoop kind="pulse" className="aw-live-dot" /> : null}
           {wf.label}
         </div>
       ) : null}
@@ -112,7 +113,7 @@ export function AssessmentWorkflowStepper({ status, tracking, labeled = false })
       </div>
       {labeled ? null : (
         <div className={`aw-state aw-state--${wf.tone}`}>
-          {wf.live ? <span className="aw-live-dot" aria-hidden="true" /> : null}
+          {wf.live ? <AgentLoop kind="pulse" className="aw-live-dot" /> : null}
           {wf.label}
         </div>
       )}

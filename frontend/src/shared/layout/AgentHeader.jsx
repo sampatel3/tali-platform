@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Pause, Play, Power, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 
 import { useAgentStatus } from './AgentBar';
+import { AgentLoop } from '../motion';
 import { BreadcrumbsRow } from '../ui/Breadcrumbs';
 
 // AgentHeader — the single compact LIGHT header at the top of every recruiter
@@ -164,12 +165,13 @@ const AgentStrip = ({
 
   return (
     // ONE persistent box (no key/remount) — the abar-{status} class morphs it
-    // in place: the dark-purple / amber fills crossfade via .abar::before /
-    // ::after, and the border / text / glow tween (see 13-page-hero CSS).
-    <div className={`abar abar-${status}`}>
+    // in place: the dark-purple Motion layer / amber ::after fill crossfade,
+    // and the border / text / glow tween (see 13-page-hero CSS).
+    <AgentLoop as="div" kind="glow" active={status === 'on'} className={`abar abar-${status}`}>
+      <AgentLoop kind="flow" active={status === 'on'} className="abar-flow-layer" />
       <span className="ab-spark">
         <Sparkles size={15} strokeWidth={2} />
-        {inFlight && on && !paused ? <span className="ab-pulse" aria-hidden="true" /> : null}
+        {inFlight && on && !paused ? <AgentLoop kind="ring" className="ab-pulse" /> : null}
       </span>
       <span className="ab-label">{label}</span>
       {pending > 0 ? (
@@ -253,7 +255,7 @@ const AgentStrip = ({
           ) : null}
         </span>
       )}
-    </div>
+    </AgentLoop>
   );
 };
 

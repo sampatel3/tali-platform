@@ -1,3 +1,5 @@
+import { motionSafeScrollBehavior } from '../shared/motion';
+
 const PENDING_MARKETING_SECTION_KEY = 'taali.pendingMarketingSection';
 const MARKETING_HEADER_OFFSET = 112;
 
@@ -31,11 +33,13 @@ export const scrollToMarketingSection = (sectionId, { behavior = 'smooth' } = {}
   const target = document.getElementById(sectionId);
   if (!target) return false;
 
+  const resolvedBehavior = motionSafeScrollBehavior(behavior);
+
   const top = Math.max(
     0,
     window.scrollY + target.getBoundingClientRect().top - MARKETING_HEADER_OFFSET
   );
-  window.scrollTo({ top, behavior });
+  window.scrollTo({ top, behavior: resolvedBehavior });
 
   if (window.location.pathname === '/') {
     window.history.replaceState(null, '', `/#${sectionId}`);

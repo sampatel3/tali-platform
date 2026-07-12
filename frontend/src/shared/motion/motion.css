@@ -1,0 +1,60 @@
+:root {
+  --motion-duration-instant: 80ms;
+  --motion-duration-fast: 140ms;
+  --motion-duration-base: 200ms;
+  --motion-duration-spatial: 280ms;
+  --motion-duration-reveal: 480ms;
+  --motion-duration-data: 750ms;
+  --motion-agent-pulse: 1.6s;
+  --motion-agent-ring: 1.6s;
+  --motion-agent-glow: 3.6s;
+  --motion-agent-flow: 7s;
+  --motion-agent-ambient: 18s;
+  --motion-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-ease-loop: cubic-bezier(0.45, 0, 0.55, 1);
+  --motion-distance-micro: 2px;
+  --motion-distance-small: 4px;
+  --motion-distance-medium: 12px;
+  --motion-distance-large: 24px;
+  --motion-stagger-dense: 35ms;
+  --motion-stagger-default: 60ms;
+}
+
+.motion-disclosure {
+  overflow: hidden;
+}
+
+.motion-tab-indicator {
+  position: absolute;
+  right: 0;
+  bottom: -2px;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--purple);
+}
+
+.taali-btn-primary[data-motion-loop="flow"] {
+  background: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-instant: 1ms;
+    --motion-duration-fast: 1ms;
+    --motion-duration-base: 1ms;
+    --motion-duration-spatial: 1ms;
+    --motion-duration-reveal: 1ms;
+    --motion-duration-data: 1ms;
+    --motion-agent-pulse: 1ms;
+    --motion-agent-ring: 1ms;
+    --motion-agent-glow: 1ms;
+    --motion-agent-flow: 1ms;
+    --motion-agent-ambient: 1ms;
+    --motion-stagger-dense: 0ms;
+    --motion-stagger-default: 0ms;
+  }
+}

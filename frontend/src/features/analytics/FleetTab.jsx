@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
+import { AgentLoop } from '../../shared/motion';
 import {
   safeNum,
   fmtUsd,
@@ -70,10 +71,14 @@ const AgentCard = ({ a }) => {
     <div className={`an-acard ${a.running ? 'run' : 'paused'}`}>
       <div className="at">
         <span className="an-name" title={a.name}>{a.name}</span>
-        <span className={`an-apill ${a.running ? 'on' : 'off'}`}>{a.running ? 'ON' : 'PAUSED'}</span>
+        {a.running ? (
+          <AgentLoop kind="flow" className="an-apill on">ON</AgentLoop>
+        ) : (
+          <span className="an-apill off">PAUSED</span>
+        )}
       </div>
       <span className={`an-actbadge ${actCls}`}>
-        {actCls === 'work' ? <span className="pd" aria-hidden="true" /> : null}
+        {actCls === 'work' ? <AgentLoop kind="pulse" className="pd" /> : null}
         {badgeText}
       </span>
       <div className="an-abar"><i className={barHi ? 'hi' : ''} style={{ width: `${p}%` }} /></div>

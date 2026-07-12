@@ -1,7 +1,14 @@
 import React, { useEffect, useRef } from 'react';
-import { stagger, useAnimate, useInView } from 'motion/react';
-
-import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import {
+  MOTION_DURATION,
+  MOTION_EASE,
+  MOTION_STAGGER,
+  animate as animateValue,
+  stagger,
+  useAnimate,
+  useInView,
+  useReducedMotionSync,
+} from '../../../../shared/motion';
 import { AgentDecisionCard } from '../../../../shared/decisions/AgentDecisionCard';
 import { AssessmentScorecard } from '../../../candidates/AssessmentScorecard';
 
@@ -109,9 +116,9 @@ export const ArtifactFrame = ({ browserPath, children, className = '' }) => (
 // Animate the real 5-Ds scorecard's reveal. On enter (once) the five D rows
 // stagger in (fade + rise), each score bar fills 0 → value, and the score
 // number ticks up. The AssessmentScorecard itself is untouched; we drive its
-// DOM via a scoped Motion timeline + a light rAF number tween, and arm the
+// DOM via scoped Motion timelines, and arm the
 // hidden initial state through the `data-lve-sc` CSS contract.
-const EASE = [0.16, 1, 0.3, 1];
+const EASE = MOTION_EASE.enter;
 
 export const ScorecardArtifact = () => {
   const [scope, animate] = useAnimate();
@@ -131,26 +138,24 @@ export const ScorecardArtifact = () => {
     if (!inView || playedRef.current) return undefined;
     playedRef.current = true;
 
-    animate('.sc5-row', { opacity: [0, 1], y: [14, 0] }, { duration: 0.5, delay: stagger(0.09), ease: EASE });
-    animate('.sc5-bar > i', { scaleX: [0, 1] }, { duration: 0.7, delay: stagger(0.09), ease: EASE });
+    animate('.sc5-row', { opacity: [0, 1], y: [14, 0] }, { duration: MOTION_DURATION.reveal, delay: stagger(MOTION_STAGGER.default), ease: EASE });
+    animate('.sc5-bar > i', { scaleX: [0, 1] }, { duration: MOTION_DURATION.data, delay: stagger(MOTION_STAGGER.default), ease: EASE });
 
-    const rafs = [];
+    const controls = [];
     root.querySelectorAll('.sc5-score').forEach((el, i) => {
       const node = el.firstChild;
       if (!node) return;
       const target = parseInt(node.textContent, 10);
       if (!Number.isFinite(target)) return;
-      const start = performance.now() + i * 90;
-      const dur = 900;
-      const step = (now) => {
-        const t = Math.max(0, Math.min(1, (now - start) / dur));
-        const eased = 1 - Math.pow(1 - t, 3);
-        node.textContent = String(Math.round(target * eased));
-        if (t < 1) rafs.push(requestAnimationFrame(step));
-      };
-      rafs.push(requestAnimationFrame(step));
+      node.textContent = '0';
+      controls.push(animateValue(0, target, {
+        duration: MOTION_DURATION.data,
+        delay: i * MOTION_STAGGER.default,
+        ease: EASE,
+        onUpdate: (value) => { node.textContent = String(Math.round(value)); },
+      }));
     });
-    return () => rafs.forEach((r) => cancelAnimationFrame(r));
+    return () => controls.forEach((control) => control.stop());
   }, [inView, reduced, animate, scope]);
 
   return (

@@ -1,6 +1,6 @@
 import React from 'react';
 
-import { Reveal } from '../../../../shared/motion/previewMotion';
+import { AgentLoop, Reveal } from '../../../../shared/motion';
 import { CANDIDATES, FUNNEL, DDS, CONTROL, COMPOSITE } from './variantG.data';
 
 // The body sections — each its OWN one-screen destination for a nav item, in
@@ -11,7 +11,7 @@ import { CANDIDATES, FUNNEL, DDS, CONTROL, COMPOSITE } from './variantG.data';
 // cross-page deep links resolve straight to them. Every
 // section is `.section-vp` (min-height min(100svh,900px), content
 // vertically centred) so clicking its nav item shows the whole section without
-// further scrolling. Entrances reuse the shared one-shot CSS <Reveal>. Copy is
+// further scrolling. Entrances reuse the shared once-in-view <Reveal>. Copy is
 // verbatim from F, ledes trimmed for density.
 
 const TICK = (
@@ -100,7 +100,7 @@ export const FluencySection = ({ reduced }) => (
               <div className="dd-name">{d.name}</div>
               <div className="dd-def">{d.def}</div>
             </div>
-            <div className="dd-track"><div className="dd-fill" style={{ width: `${d.val}%` }} /></div>
+            <div className="dd-track"><AgentLoop kind="flow" className="dd-fill" style={{ width: `${d.val}%` }} /></div>
             <div className="dd-val">{d.val}</div>
           </div>
         ))}

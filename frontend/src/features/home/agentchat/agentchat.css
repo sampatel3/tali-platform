@@ -87,7 +87,7 @@
    off = grey dot. Amber here is icon-only on an amber-soft chip — never mixed
    into the ink. */
 .ac-stat { width: 24px; height: 24px; border-radius: 8px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
-.ac-stat-on { background: var(--grad-agent-on); color: #fff; box-shadow: 0 0 0 3px var(--purple-soft); }
+.ac-stat-on { background: var(--grad-agent-on-animated); background-size: 300% 300%; color: #fff; box-shadow: 0 0 0 3px var(--purple-soft); }
 .ac-stat-paused { background: var(--amber-soft); color: var(--amber); }
 .ac-stat-off { background: var(--bg-3); color: var(--mute); }
 .ac-stat-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -213,8 +213,7 @@
 .ac-card-head { display: flex; align-items: center; gap: 7px; font-size: 0.71875rem; font-weight: 600; color: var(--ink); }
 .ac-card-head svg { color: var(--purple); flex-shrink: 0; }
 .ac-card-live { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: 0.65625rem; color: var(--purple-2); }
-.ac-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--purple); animation: ac-pulse 1.4s ease-in-out infinite; }
-@keyframes ac-pulse { 0%,100% { opacity: 0.35; transform: scale(0.85);} 50% { opacity: 1; transform: scale(1.1);} }
+.ac-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--purple); }
 .ac-card-constraint { background: var(--purple-tint); border-color: var(--purple-soft); }
 .ac-rescreen-estimate { font-size: 0.71875rem; color: var(--ink-2); background: var(--bg-3); border: 1px dashed var(--line-2); border-radius: 8px; padding: 6px 9px; line-height: 1.4; }
 .ac-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }

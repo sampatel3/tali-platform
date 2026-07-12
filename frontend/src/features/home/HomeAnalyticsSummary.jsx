@@ -8,25 +8,20 @@ import React from 'react';
 import { LineChart, ArrowUpRight } from 'lucide-react';
 
 import { formatCount, formatMoneyUsd } from '../../shared/metrics';
-import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
+import { MotionNumber } from '../../shared/motion';
 
 const pct = (v) => `${Math.round(Number(v) || 0)}%`;
 
-// One pulse cell's value. Each cell owns a useCountUp so the number tweens up
-// once its live value settles after first paint (the values arrive from the
-// org-status poll). Reduced-motion users get the final value with no tween.
-const PulseValue = ({ to, format, reduced, unit }) => {
-  const shown = useCountUp(Number(to) || 0, { reduced, format });
-  return (
-    <div className="home-pulse-v">
-      {shown}
-      {unit ? <span className="home-pulse-unit"> {unit}</span> : null}
-    </div>
-  );
-};
+// Values interpolate from their previous settled state when the lightweight
+// org-status poll updates. Reduced motion renders the next value immediately.
+const PulseValue = ({ to, format, unit }) => (
+  <div className="home-pulse-v">
+    <MotionNumber value={Number(to) || 0} format={format} />
+    {unit ? <span className="home-pulse-unit"> {unit}</span> : null}
+  </div>
+);
 
 export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }) => {
-  const reduced = useReducedMotionSync();
   const cells = [
     { k: 'Decisions today', to: kpis.today || 0, format: formatCount },
     { k: 'Auto-advanced', to: kpis.auto_applied_today || 0, format: formatCount },
@@ -53,7 +48,7 @@ export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }
         {cells.map((c) => (
           <div className="home-pulse-stat" key={c.k}>
             <div className="home-pulse-k">{c.k}</div>
-            <PulseValue to={c.to} format={c.format} reduced={reduced} unit={c.unit} />
+            <PulseValue to={c.to} format={c.format} unit={c.unit} />
           </div>
         ))}
       </div>

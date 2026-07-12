@@ -17,7 +17,10 @@ const runningAgent = {
 describe('AgentHeader — Pause/Resume panel', () => {
   it('renders the Pause button and fires onPauseAgent when running', () => {
     const onPause = vi.fn();
-    render(<AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={onPause} />);
+    const { container } = render(<AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={onPause} />);
+    expect(container.querySelector('.abar')).toHaveAttribute('data-motion-loop', 'glow');
+    expect(container.querySelector('.abar-flow-layer')).toHaveAttribute('data-motion-loop', 'flow');
+    expect(container.querySelector('.ab-pulse')).toHaveAttribute('data-motion-loop', 'ring');
     const btn = screen.getByRole('button', { name: /^pause$/i });
     expect(btn).not.toBeDisabled();
     fireEvent.click(btn);
@@ -31,7 +34,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
   it('shows Paused (not Auto-paused) and the Resume button after a manual pause', () => {
     const onResume = vi.fn();
-    render(
+    const { container } = render(
       <AgentHeader
         title="Jobs"
         agent={{ ...runningAgent, on: false, paused: true, pausedReason: 'paused by recruiter' }}
@@ -41,6 +44,8 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByText('Paused')).toBeInTheDocument();
     expect(screen.queryByText('Auto-paused')).not.toBeInTheDocument();
     expect(screen.getByText(/paused by you/i)).toBeInTheDocument();
+    expect(container.querySelector('.abar')).toHaveAttribute('data-motion-state', 'rest');
+    expect(container.querySelector('.abar-flow-layer')).toHaveAttribute('data-motion-state', 'rest');
 
     const btn = screen.getByRole('button', { name: /^resume$/i });
     fireEvent.click(btn);

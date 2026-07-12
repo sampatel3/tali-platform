@@ -2,6 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 
 import { Button } from '../../shared/ui/TaaliPrimitives';
+import {
+  MotionDisclosure,
+  MotionTab,
+  MotionTabs,
+  PresenceSwap,
+  motionSafeScrollBehavior,
+} from '../../shared/motion';
 import { CandidateAuditTimeline } from './CandidateAuditTimeline';
 import { AssessmentInviteChip } from './CandidateStatusChips';
 import { ScoreProvenance } from './ScoreProvenance';
@@ -188,7 +195,10 @@ export function CandidateTriageDrawer({
   useEffect(() => {
     if (!applicationId || !containerRef.current) return;
     if (typeof containerRef.current.scrollIntoView !== 'function') return;
-    containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    containerRef.current.scrollIntoView({
+      behavior: motionSafeScrollBehavior('smooth'),
+      block: 'nearest',
+    });
   }, [applicationId]);
 
   if (!application) return null;
@@ -265,13 +275,15 @@ export function CandidateTriageDrawer({
         <button
           type="button"
           className="ctc-toggle-link"
+          aria-expanded={showDetails}
+          aria-controls="candidate-triage-details"
           onClick={() => setShowDetails((prev) => !prev)}
         >
           {showDetails ? 'Hide details' : 'Show details'}
         </button>
       </div>
 
-      {showDetails ? (
+      <MotionDisclosure open={showDetails} id="candidate-triage-details">
         <div className="ctc-details">
           <div className="ctc-scores">
             <span>Pre-screen <strong>{formatScore(resolvePreScreenScore(application))}</strong></span>
@@ -297,7 +309,7 @@ export function CandidateTriageDrawer({
             </div>
           ) : null}
         </div>
-      ) : null}
+      </MotionDisclosure>
 
       {!canAct ? (
         <div className="ctc-closed-banner">
@@ -319,29 +331,40 @@ export function CandidateTriageDrawer({
         </div>
       ) : null}
 
-      <div className="ctc-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'move'}
+      <MotionTabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="ctc-tabs"
+        aria-label="Candidate actions"
+      >
+        <MotionTab
+          value="move"
+          id="candidate-action-tab-move"
+          aria-controls="candidate-action-panel-move"
           className={activeTab === 'move' ? 'on' : ''}
-          onClick={() => setActiveTab('move')}
+          indicatorClassName="ctc-tab-motion-indicator"
         >
-          Move forward
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'send'}
+          <span>Move forward</span>
+        </MotionTab>
+        <MotionTab
+          value="send"
+          id="candidate-action-tab-send"
+          aria-controls="candidate-action-panel-send"
           className={activeTab === 'send' ? 'on' : ''}
-          onClick={() => setActiveTab('send')}
+          indicatorClassName="ctc-tab-motion-indicator"
         >
-          Send assessment
-        </button>
-      </div>
+          <span>Send assessment</span>
+        </MotionTab>
+      </MotionTabs>
 
+      <PresenceSwap presenceKey={activeTab}>
       {activeTab === 'send' ? (
-        <div className="ctc-tab-pane" role="tabpanel">
+        <div
+          id="candidate-action-panel-send"
+          className="ctc-tab-pane"
+          role="tabpanel"
+          aria-labelledby="candidate-action-tab-send"
+        >
           {application?.score_summary?.invite_tracking?.invite_sent_at ? (
             <div className="ctc-invite-track">
               <div className="ctc-invite-track-head">
@@ -448,7 +471,12 @@ export function CandidateTriageDrawer({
           </div>
         </div>
       ) : (
-        <div className="ctc-tab-pane" role="tabpanel">
+        <div
+          id="candidate-action-panel-move"
+          className="ctc-tab-pane"
+          role="tabpanel"
+          aria-labelledby="candidate-action-tab-move"
+        >
           <div className="ctc-cards">
             {showMoveToWorkable ? (
               loadingWorkableStages ? (
@@ -522,6 +550,7 @@ export function CandidateTriageDrawer({
           </div>
         </div>
       )}
+      </PresenceSwap>
 
       <div className="ctc-foot">
         <span>{loadingActivity ? 'Loading activity…' : (activityLabel || sourceLabel)}</span>

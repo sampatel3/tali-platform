@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Pause, Play, Sparkles } from 'lucide-react';
 
 import { agent as agentApi } from '../api';
+import { AgentLoop } from '../motion';
 
 const POLL_INTERVAL_MS = 30_000;
 const AMBER_THRESHOLD_PCT = 80;
@@ -215,7 +216,10 @@ export const AgentBar = ({
   const budgetLabel = formatDollars(budgetCents);
 
   return (
-    <div
+    <AgentLoop
+      as="div"
+      kind="ambient"
+      active={!paused}
       className={`mc-agent-bar ${amber ? 'is-amber' : ''}`.trim()}
       role="status"
       aria-live="polite"
@@ -224,7 +228,7 @@ export const AgentBar = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 320px', minWidth: 0 }}>
           <div className="mc-agent-glyph">
             <Sparkles size={18} strokeWidth={2} style={{ color: '#fff' }} />
-            {inFlight ? <span className="mc-pulse-ring" aria-hidden="true" /> : null}
+            {inFlight ? <AgentLoop kind="ring" className="mc-pulse-ring" /> : null}
           </div>
           <div style={{ minWidth: 0 }}>
             <div className="mc-agent-title">
@@ -258,7 +262,7 @@ export const AgentBar = ({
           </button>
         </div>
       </div>
-    </div>
+    </AgentLoop>
   );
 };
 

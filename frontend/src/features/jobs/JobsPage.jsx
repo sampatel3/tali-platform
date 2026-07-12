@@ -42,27 +42,33 @@ import {
   JOBS_SHOWCASE,
   JOBS_SHOWCASE_ORG,
 } from '../demo/productWalkthroughModels';
-import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
+import {
+  AnimatePresence,
+  AgentLoop,
+  LayoutGroup,
+  MOTION_DURATION,
+  MOTION_STAGGER,
+  MotionNumber,
+  fadeVariants,
+  m,
+  motionSafeScrollBehavior,
+  motionTransition,
+  reducedFadeVariants,
+  useReducedMotionSync,
+} from '../../shared/motion';
 import '../../shared/motion/reveal.css';
 
 // Canonical funnel for the role-card stat row — shared with the home
 // "Pipeline" strip and the job-detail funnel via src/shared/metrics.
 const STAGES = PIPELINE_FUNNEL_STAGES;
 
-// One per-stage count on a role card. A tiny component so the count-up hook
-// runs per cell (hooks can't live inside the STAGES.map body). Reduced motion —
-// or a zero count — renders the final value immediately with no tween.
-const StageCount = ({ value, reduced }) => (
-  useCountUp(value, {
-    reduced: reduced || value === 0,
-    duration: 900,
-    format: (n) => formatCount(n),
-  })
-);
+// Role-card counts interpolate only when a previous value changes. First paint
+// and reduced motion are already settled, avoiding repeated zero-to-value runs.
+const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
 
 // Card stagger is capped so a long role list can't push the last card's delay
 // out to several seconds (0.06s × index).
-const STAGGER_CAP = 12;
+const STAGGER_CAP = MOTION_STAGGER.maxItems;
 
 // Progressive load: paint this many roles first (the active / starred /
 // recently-synced head of the list, per the backend's sort), then fetch the
@@ -575,8 +581,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       setGridStaggerDone(true);
       return undefined;
     }
-    // Cover the last (capped) card's delay + the 0.48s reveal duration.
-    const windowMs = Math.min(STAGGER_CAP, filtered.length) * 60 + 480 + 120;
+    // Cover the last (capped) card's delay + the reveal duration. These values
+    // share the same vocabulary as Motion-driven list changes below.
+    const windowMs = (
+      Math.min(STAGGER_CAP, filtered.length) * MOTION_STAGGER.default * 1000
+      + MOTION_DURATION.reveal * 1000
+      + 120
+    );
     const id = window.setTimeout(() => setGridStaggerDone(true), windowMs);
     return () => window.clearTimeout(id);
   }, [loading, error, filtered.length, reduced]);
@@ -714,7 +725,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             <button
               type="button"
               className="btn btn-outline"
-              onClick={() => document.getElementById('jobs-source-filters')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+              onClick={() => document.getElementById('jobs-source-filters')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'center' })}
             >
               <Filter size={13} />
               Filter
@@ -932,185 +943,201 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             )}
           />
         ) : (
-          <div className={`jobs-grid${gridStaggerDone ? '' : ' reveal-stagger'}`}>
-            {filtered.map((role, roleIndex) => {
-              const stageCounts = role?.stage_counts || {};
-              const workableRole = String(role?.source || '').toLowerCase() === 'workable';
-              const roleLive = isRoleLive(role);
-              const roleDimmed = isRoleDimmed(role);
-              const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
-              const roleBadgeLabel = getRoleBadgeLabel(role);
-              const agentEnabled = Boolean(role?.agentic_mode_enabled);
-              // Soft pause keeps agentic_mode_enabled=true but stamps
-              // agent_paused_at, so an enabled-but-paused role must read
-              // "AGENT PAUSED", not "AGENT ON".
-              const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
-              // Live agent status from the /roles/{id}/agent/status fan-out.
-              // When loaded, the indicator shows the canvas-spec
-              // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
-              const agentLive = agentSpendByRole?.[role.id] || null;
-              const agentBudget = Number(
-                agentLive?.monthly_budget_cents
-                ?? role?.monthly_usd_budget_cents
-                ?? 0,
-              ) / 100;
-              const agentSpent = agentLive
-                ? Number(agentLive.monthly_spent_cents || 0) / 100
-                : null;
-              const pendingCount = Number(agentLive?.pending_decisions || 0);
-              const roleLoc = String(role?.location || role?.workable_location || '').trim();
-              const roleDept = String(role?.department || role?.workable_department || '').trim();
-              return (
-                <div
-                  key={role.id}
-                  className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''} ${roleDimmed ? 'not-live' : ''}`}
-                  onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      onNavigate('job-pipeline', { roleId: role.id });
-                    }
-                  }}
-                  style={{ cursor: 'pointer', '--i': Math.min(roleIndex, STAGGER_CAP) }}
-                >
-                  {/* Card header — canvas jobs-list role-card:
-                      ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
-                      dept · loc · updated ago */}
-                  <div className="job-head">
-                    {roleLive ? (
-                      <span
-                        className="job-star is-locked"
-                        aria-label="Live role · always in continuous sync"
-                        title="Live role · always in continuous sync (auto-starred)"
-                        style={{
-                          padding: 2,
-                          marginTop: 2,
-                          flexShrink: 0,
-                          color: 'var(--purple)',
-                          cursor: 'default',
-                          display: 'inline-flex',
-                        }}
-                      >
-                        <Star size={16} strokeWidth={1.5} fill="currentColor" />
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="job-star"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void handleToggleStar(role);
-                        }}
-                        aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
-                        aria-pressed={Boolean(role.starred_for_auto_sync)}
-                        title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          padding: 2,
-                          marginTop: 2,
-                          cursor: 'pointer',
-                          flexShrink: 0,
-                          color: role.starred_for_auto_sync ? 'var(--purple)' : 'var(--ink-soft)',
-                        }}
-                      >
-                        <Star
-                          size={16}
-                          strokeWidth={1.5}
-                          fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
-                        />
-                      </button>
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-                        <h3 className="role-name">{role.name}</h3>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)' }}>#{role.id}</span>
-                        {workableRole ? (
-                          <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[0.59375rem]" />
-                        ) : (
-                          <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 'var(--fs-caption)' }}>
-                            {roleBadgeLabel}
-                          </span>
-                        )}
-                        {role?.job_status && JOB_STATUS_META[role.job_status] ? (
-                          <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
-                            {JOB_STATUS_META[role.job_status].label}
-                          </span>
-                        ) : null}
-                        {role?.client_name ? (
-                          <span className="job-client-chip" title={`Client · ${role.client_name}`}>
-                            <Building2 size={10} strokeWidth={2} /> {role.client_name}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="role-meta">
-                        {[
-                          roleDept || null,
-                          roleLoc || null,
-                          lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-                        ].filter(Boolean).join(' · ') || 'No details yet'}
-                      </div>
-                    </div>
-                    {agentPaused ? (
-                      <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
-                        <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                        PAUSED
-                      </span>
-                    ) : agentEnabled ? (
-                      <span
-                        className="job-agent-pill is-on"
-                        title="Agent on for this role"
-                      >
-                        <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
-                        {agentSpent != null && agentBudget > 0
-                          ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
-                          : agentBudget > 0
-                            ? `ON · cap $${Math.round(agentBudget)}`
-                            : 'ON'}
-                      </span>
-                    ) : (
-                      <span className="job-agent-pill is-off" title="Agent off">OFF</span>
-                    )}
-                  </div>
-
-                  <div className="job-stats">
-                    {STAGES.map((stage) => {
-                      const value = stage.key === 'invited'
-                        ? invitedStageValue(stageCounts)
-                        : Number(stageCounts?.[stage.key] || 0);
-                      const tone = funnelStageTone(stage.key, value);
-                      return (
-                        <div key={stage.key} className={`js-cell${tone === 'term' ? ' is-term' : ''}`}>
-                          <div className="k">{stage.label}</div>
-                          <div
-                            className="v"
-                            style={tone === 'term' ? { color: 'var(--mute)' } : undefined}
+          <LayoutGroup id="jobs-role-grid">
+            <div
+              className={`jobs-grid${gridStaggerDone ? '' : ' reveal-stagger'}`}
+              style={{ position: 'relative' }}
+            >
+              <AnimatePresence initial={false} mode={reduced ? 'sync' : 'popLayout'}>
+                {filtered.map((role, roleIndex) => {
+                  const stageCounts = role?.stage_counts || {};
+                  const workableRole = String(role?.source || '').toLowerCase() === 'workable';
+                  const roleLive = isRoleLive(role);
+                  const roleDimmed = isRoleDimmed(role);
+                  const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
+                  const roleBadgeLabel = getRoleBadgeLabel(role);
+                  const agentEnabled = Boolean(role?.agentic_mode_enabled);
+                  // Soft pause keeps agentic_mode_enabled=true but stamps
+                  // agent_paused_at, so an enabled-but-paused role must read
+                  // "AGENT PAUSED", not "AGENT ON".
+                  const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
+                  // Live agent status from the /roles/{id}/agent/status fan-out.
+                  // When loaded, the indicator shows the canvas-spec
+                  // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
+                  const agentLive = agentSpendByRole?.[role.id] || null;
+                  const agentBudget = Number(
+                    agentLive?.monthly_budget_cents
+                    ?? role?.monthly_usd_budget_cents
+                    ?? 0,
+                  ) / 100;
+                  const agentSpent = agentLive
+                    ? Number(agentLive.monthly_spent_cents || 0) / 100
+                    : null;
+                  const pendingCount = Number(agentLive?.pending_decisions || 0);
+                  const roleLoc = String(role?.location || role?.workable_location || '').trim();
+                  const roleDept = String(role?.department || role?.workable_department || '').trim();
+                  return (
+                    <m.div
+                      key={role.id}
+                      layout={reduced ? false : 'position'}
+                      variants={reduced ? reducedFadeVariants : fadeVariants}
+                      initial="hidden"
+                      animate="visible"
+                      exit="exit"
+                      transition={{
+                        layout: reduced ? motionTransition.instant : motionTransition.layout,
+                      }}
+                      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''} ${roleDimmed ? 'not-live' : ''}`}
+                      onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          onNavigate('job-pipeline', { roleId: role.id });
+                        }
+                      }}
+                      style={{ cursor: 'pointer', '--i': Math.min(roleIndex, STAGGER_CAP) }}
+                    >
+                      {/* Card header — canvas jobs-list role-card:
+                          ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
+                          dept · loc · updated ago */}
+                      <div className="job-head">
+                        {roleLive ? (
+                          <span
+                            className="job-star is-locked"
+                            aria-label="Live role · always in continuous sync"
+                            title="Live role · always in continuous sync (auto-starred)"
+                            style={{
+                              padding: 2,
+                              marginTop: 2,
+                              flexShrink: 0,
+                              color: 'var(--purple)',
+                              cursor: 'default',
+                              display: 'inline-flex',
+                            }}
                           >
-                            <StageCount value={value} reduced={reduced} />
+                            <Star size={16} strokeWidth={1.5} fill="currentColor" />
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="job-star"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleToggleStar(role);
+                            }}
+                            aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
+                            aria-pressed={Boolean(role.starred_for_auto_sync)}
+                            title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              padding: 2,
+                              marginTop: 2,
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                              color: role.starred_for_auto_sync ? 'var(--purple)' : 'var(--ink-soft)',
+                            }}
+                          >
+                            <Star
+                              size={16}
+                              strokeWidth={1.5}
+                              fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
+                            />
+                          </button>
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+                            <h3 className="role-name">{role.name}</h3>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)' }}>#{role.id}</span>
+                            {workableRole ? (
+                              <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[0.59375rem]" />
+                            ) : (
+                              <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 'var(--fs-caption)' }}>
+                                {roleBadgeLabel}
+                              </span>
+                            )}
+                            {role?.job_status && JOB_STATUS_META[role.job_status] ? (
+                              <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
+                                {JOB_STATUS_META[role.job_status].label}
+                              </span>
+                            ) : null}
+                            {role?.client_name ? (
+                              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
+                                <Building2 size={10} strokeWidth={2} /> {role.client_name}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="role-meta">
+                            {[
+                              roleDept || null,
+                              roleLoc || null,
+                              lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
+                            ].filter(Boolean).join(' · ') || 'No details yet'}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                        {agentPaused ? (
+                          <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
+                            <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+                            PAUSED
+                          </span>
+                        ) : agentEnabled ? (
+                          <AgentLoop
+                            kind="flow"
+                            className="job-agent-pill is-on"
+                            title="Agent on for this role"
+                          >
+                            <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
+                            {agentSpent != null && agentBudget > 0
+                              ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
+                              : agentBudget > 0
+                                ? `ON · cap $${Math.round(agentBudget)}`
+                                : 'ON'}
+                          </AgentLoop>
+                        ) : (
+                          <span className="job-agent-pill is-off" title="Agent off">OFF</span>
+                        )}
+                      </div>
 
-                  <div className="job-foot">
-                    {pendingCount > 0 ? (
-                      <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
-                    ) : agentPaused ? (
-                      <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
-                    ) : !agentEnabled ? (
-                      <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
-                    ) : (
-                      <span />
-                    )}
-                    <span className="job-foot-open">Open pipeline →</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                      <div className="job-stats">
+                        {STAGES.map((stage) => {
+                          const value = stage.key === 'invited'
+                            ? invitedStageValue(stageCounts)
+                            : Number(stageCounts?.[stage.key] || 0);
+                          const tone = funnelStageTone(stage.key, value);
+                          return (
+                            <div key={stage.key} className={`js-cell${tone === 'term' ? ' is-term' : ''}`}>
+                              <div className="k">{stage.label}</div>
+                              <div
+                                className="v"
+                                style={tone === 'term' ? { color: 'var(--mute)' } : undefined}
+                              >
+                                <StageCount value={value} reduced={reduced} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="job-foot">
+                        {pendingCount > 0 ? (
+                          <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
+                        ) : agentPaused ? (
+                          <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
+                        ) : !agentEnabled ? (
+                          <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
+                        ) : (
+                          <span />
+                        )}
+                        <span className="job-foot-open">Open pipeline →</span>
+                      </div>
+                    </m.div>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
+          </LayoutGroup>
         )}
 
         {!loading && filtered.length > 0 ? (

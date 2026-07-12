@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
+import { motionSafeScrollBehavior } from '../../shared/motion';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
@@ -150,7 +151,7 @@ const Thread = ({ messages, isStreaming, error, onRetry }) => {
   }, []);
   useEffect(() => {
     if (pinnedRef.current) {
-      endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      endRef.current?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'end' });
     }
   }, [messages, isStreaming]);
 

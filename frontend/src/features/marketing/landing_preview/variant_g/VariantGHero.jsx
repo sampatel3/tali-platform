@@ -1,5 +1,6 @@
 import React from 'react';
 
+import { AgentLoop } from '../../../../shared/motion';
 import { AgentScene } from './AgentScene';
 
 // HERO — two columns on desktop so the headline block and the live agent stage
@@ -18,7 +19,7 @@ export const VariantGHero = ({ onNavigate }) => {
       <div className="heroC-orb b" aria-hidden="true" />
       <div className="wrap heroC-grid">
         <div className="heroC-copy">
-          <span className="eyebrow">AGENT-NATIVE HIRING</span>
+          <span className="eyebrow"><AgentLoop kind="flow" className="eyebrow-flow-dot" />AGENT-NATIVE HIRING</span>
           <h1 className="display">
             The hiring agent that screens, assesses, and{' '}
             <span className="grad-text">decides — with you.</span>

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
 
-// The pulse values tween up with useCountUp once their live value settles. This
+// The pulse values use the shared MotionNumber once their live value settles. This
 // pins the two things the motion pass added: the entrance-reveal class on the
 // section, and the reduced-motion contract — a reduced-motion viewer must see
 // the FINAL numbers immediately (no 0-flash, nothing left animating/hidden).

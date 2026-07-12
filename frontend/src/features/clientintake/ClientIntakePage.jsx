@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, FileText, Paperclip, Send, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
+import { motionSafeScrollBehavior } from '../../shared/motion';
 import { publicIntakeApi } from '../requisitions/api';
 import './clientintake.css';
 
@@ -264,7 +265,7 @@ export function ClientIntakePage() {
 
   // Keep the thread pinned to the latest turn.
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    threadEndRef.current?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'end' });
   }, [messages, turnInFlight]);
 
   const clearAttachments = useCallback(() => {

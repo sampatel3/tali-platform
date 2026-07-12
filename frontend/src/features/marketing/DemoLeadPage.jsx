@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
+import { AgentLoop } from '../../shared/motion';
 
 // Recruiter-readable agent feed shown on the dark editorial pane. Same
 // vocabulary the real Hub decision feed uses (advance / reject / taught)
@@ -16,7 +17,7 @@ const AGENT_FEED_ROWS = [
 const AgentLiveFeed = () => (
   <div className="mc-demo-feed">
     <div className="mc-demo-feed-head">
-      <span className="mc-demo-feed-dot" aria-hidden="true" />
+      <AgentLoop kind="pulse" className="mc-demo-feed-dot" />
       <span className="mc-demo-feed-label">TAALI · DECISION FEED · SR. BACKEND</span>
       <span className="mc-demo-feed-now">LIVE</span>
     </div>
@@ -42,7 +43,7 @@ const AgentLiveFeed = () => (
       </div>
     ))}
     <div className="mc-demo-feed-cursor" aria-hidden="true">
-      <span />
+      <AgentLoop kind="pulse" />
     </div>
   </div>
 );

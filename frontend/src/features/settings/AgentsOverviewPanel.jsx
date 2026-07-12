@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 
 import { agent as agentApi } from '../../shared/api';
+import { AgentLoop } from '../../shared/motion';
 
 // Polls: the panel summary is cheap (counts + sums) so 5s matches the
 // Background jobs table cadence; the activity feed is heavier so it lags.
@@ -135,10 +136,17 @@ function AgentCard({ a }) {
     <div className={`agz-agent ${a.running ? 'run' : 'paused'}`}>
       <div className="agz-agent-top">
         <span className="agz-agent-name" title={a.name}>{a.name}</span>
-        <span className={`agz-pill ${a.running ? 'on' : 'off'}`}>{a.running ? 'ON' : 'PAUSED'}</span>
+        {a.running ? (
+          <AgentLoop kind="flow" className="agz-pill on">ON</AgentLoop>
+        ) : (
+          <span className="agz-pill off">PAUSED</span>
+        )}
       </div>
       <div className={`agz-now agz-${actCls}`}>
-        <span className="agz-actbadge">{act.label}</span>
+        <span className="agz-actbadge">
+          {actCls === 'work' ? <AgentLoop kind="pulse" className="agz-pd" /> : null}
+          {act.label}
+        </span>
         <span className="agz-acttxt" title={idleText}>{idleText}</span>
       </div>
       <div className="agz-bar"><i className={`tone-${barTone}`} style={{ width: `${pct}%` }} /></div>

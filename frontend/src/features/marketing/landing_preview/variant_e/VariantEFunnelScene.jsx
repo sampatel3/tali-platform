@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Check, FileSearch, Inbox, Sparkles } from 'lucide-react';
-import { useInView } from 'motion/react';
-
-import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { useInView, useReducedMotionSync } from '../../../../shared/motion';
 import { Avatar, ScoreChip, VerdictPill, initialsFrom } from '../../../home/atoms';
 
 // ---------------------------------------------------------------------------

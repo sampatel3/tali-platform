@@ -1,4 +1,10 @@
 import React, { createContext, useCallback, useContext, useState } from 'react';
+import {
+  AnimatePresence,
+  m,
+  motionTransition,
+  toastVariants,
+} from '../shared/motion';
 
 const ToastContext = createContext(null);
 
@@ -104,45 +110,52 @@ const VARIANT_TOKENS = {
 };
 
 function ToastContainer({ toasts, onDismiss }) {
-  if (!toasts.length) return null;
   return (
     <div
       className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 max-w-[min(400px,90vw)]"
       role="region"
       aria-label="Notifications"
     >
-      {toasts.map((t) => {
-        const tokens = VARIANT_TOKENS[t.type] || VARIANT_TOKENS.info;
-        return (
-          <div
-            key={t.id}
-            className="rounded-lg border px-4 py-3 shadow-sm text-sm"
-            style={{
-              background: tokens.bg,
-              borderColor: tokens.border,
-              color: 'var(--ink)',
-            }}
-            role={t.type === 'error' ? 'alert' : 'status'}
-          >
-            <p className="break-words">
-              <span
-                aria-hidden="true"
-                className="inline-block h-2 w-2 rounded-full mr-2 align-middle"
-                style={{ background: tokens.accent }}
-              />
-              {t.message}
-            </p>
-            <button
-              type="button"
-              onClick={() => onDismiss(t.id)}
-              className="mt-2 text-xs font-medium underline focus:outline-none focus:ring-2 focus:ring-offset-1"
-              style={{ color: tokens.accent }}
+      <AnimatePresence initial={false} mode="popLayout">
+        {toasts.map((t) => {
+          const tokens = VARIANT_TOKENS[t.type] || VARIANT_TOKENS.info;
+          return (
+            <m.div
+              key={t.id}
+              layout="position"
+              variants={toastVariants}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              transition={{ layout: motionTransition.layout }}
+              className="rounded-lg border px-4 py-3 shadow-sm text-sm"
+              style={{
+                background: tokens.bg,
+                borderColor: tokens.border,
+                color: 'var(--ink)',
+              }}
+              role={t.type === 'error' ? 'alert' : 'status'}
             >
-              Dismiss
-            </button>
-          </div>
-        );
-      })}
+              <p className="break-words">
+                <span
+                  aria-hidden="true"
+                  className="inline-block h-2 w-2 rounded-full mr-2 align-middle"
+                  style={{ background: tokens.accent }}
+                />
+                {t.message}
+              </p>
+              <button
+                type="button"
+                onClick={() => onDismiss(t.id)}
+                className="mt-2 text-xs font-medium underline focus:outline-none focus:ring-2 focus:ring-offset-1"
+                style={{ color: tokens.accent }}
+              >
+                Dismiss
+              </button>
+            </m.div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }

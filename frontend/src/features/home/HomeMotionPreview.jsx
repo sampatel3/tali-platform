@@ -12,12 +12,20 @@
 // up as the queue populates row-by-row (staggered), and the KPI numbers count
 // up. Approving the top decision animates it out and promotes the next pending
 // row into the detail slot (AnimatePresence). Everything respects
-// prefers-reduced-motion via <MotionConfig reducedMotion="user">.
+// prefers-reduced-motion via the shared MotionSystemProvider.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  LazyMotion, domMax, MotionConfig, AnimatePresence, m, stagger,
-} from 'motion/react';
+  AnimatePresence,
+  MOTION_DURATION,
+  MOTION_STAGGER,
+  MotionNumber,
+  MotionSystemProvider,
+  m,
+  motionTransition,
+  stagger,
+  useReducedMotionSync,
+} from '../../shared/motion';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { KpiTile } from '../../shared/ui/KpiStrip';
@@ -37,68 +45,29 @@ import './home.css';
 import './agentchat/agentchat.css';
 import './HomeMotionPreview.css';
 
-const EASE_OUT = [0.16, 1, 0.3, 1];
-
-// Synchronous prefers-reduced-motion read (matches the codebase's landing
-// variants). Motion's own useReducedMotion resolves in a layout effect (null on
-// first paint), too late to seed deterministic initial state for the tickers.
-const useReducedMotionSync = () => {
-  const query = '(prefers-reduced-motion: reduce)';
-  const read = () =>
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(query).matches
-      : false;
-  const [reduced, setReduced] = useState(read);
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const mq = window.matchMedia(query);
-    const onChange = () => setReduced(mq.matches);
-    if (mq.addEventListener) mq.addEventListener('change', onChange);
-    else if (mq.addListener) mq.addListener(onChange);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener('change', onChange);
-      else if (mq.removeListener) mq.removeListener(onChange);
-    };
-  }, []);
-  return reduced;
-};
-
 // A number that counts up to `to` once on mount, then holds. Reduced motion →
 // renders the final value immediately with no tween. Used for the KPI/pulse
 // tiles so the platform numbers animate in the way they would in-app.
-const NumberTicker = ({ to, prefix = '', suffix = '', reduced }) => {
-  const [display, setDisplay] = useState(reduced ? to : 0);
-  useEffect(() => {
-    if (reduced) {
-      setDisplay(to);
-      return undefined;
-    }
-    let raf = 0;
-    const start = performance.now();
-    const dur = 1100;
-    const step = (now) => {
-      const t = Math.min(1, (now - start) / dur);
-      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
-      setDisplay(to * eased);
-      if (t < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [to, reduced]);
-  return <>{prefix}{Math.round(display)}{suffix}</>;
-};
+const NumberTicker = ({ to, prefix = '', suffix = '', reduced }) => (
+  <MotionNumber
+    value={to}
+    initialValue={0}
+    reduced={reduced}
+    format={(value) => `${prefix}${Math.round(value)}${suffix}`}
+  />
+);
 
 // One-shot fade+rise reveal for the app sections. Uses initial→animate (NOT
 // whileInView) because the Hub body scrolls inside its own column — whileInView
 // would leave below-the-fold sections stuck hidden until scrolled. Under
-// MotionConfig reducedMotion="user" the transform is dropped to the final state.
-const Reveal = ({ children, className, style, delay = 0, y = 16 }) => (
+// MotionSystemProvider policy drops the transform to its final state.
+const Reveal = ({ children, className, style, delay = 0, y = 16, reduced = false }) => (
   <m.div
     className={className}
     style={style}
-    initial={{ opacity: 0, y }}
+    initial={reduced ? false : { opacity: 0, y }}
     animate={{ opacity: 1, y: 0 }}
-    transition={{ duration: 0.5, ease: EASE_OUT, delay }}
+    transition={reduced ? motionTransition.instant : { ...motionTransition.reveal, delay }}
   >
     {children}
   </m.div>
@@ -221,8 +190,7 @@ export const HomeMotionPreview = () => {
   });
 
   return (
-    <LazyMotion features={domMax} strict>
-      <MotionConfig reducedMotion="user">
+    <MotionSystemProvider>
         <div className="home-app hmp-root" data-brand="taali" style={{ height: '100vh' }}>
           {/* Floating "this is a mockup" badge + demo controls. */}
           <div className="hmp-badge" role="note">
@@ -253,7 +221,7 @@ export const HomeMotionPreview = () => {
                 ) : null}
               </AnimatePresence>
             ) : null}
-            <Reveal>
+            <Reveal reduced={reduced}>
               <AgentHeader
                 kicker="HUB · 103 AWAITING YOU · 4 ACTIVE ROLES"
                 title="Good morning"
@@ -276,9 +244,9 @@ export const HomeMotionPreview = () => {
                 <m.div
                   className="kpi-strip hmp-kpi-strip"
                   style={{ '--kpi-cols': 4 }}
-                  initial="hidden"
+                  initial={reduced ? false : 'hidden'}
                   animate="show"
-                  variants={{ hidden: {}, show: { transition: { delayChildren: stagger(0.07, { startDelay: 0.1 }) } } }}
+                  variants={{ hidden: {}, show: { transition: { delayChildren: stagger(MOTION_STAGGER.default, { startDelay: 0.1 }) } } }}
                 >
                   {kpiTiles.map((tile) => (
                     <m.div
@@ -286,7 +254,7 @@ export const HomeMotionPreview = () => {
                       className="hmp-kpi-cell"
                       variants={{
                         hidden: { opacity: 0, y: 14, scale: 0.99 },
-                        show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.45, ease: EASE_OUT } },
+                        show: { opacity: 1, y: 0, scale: 1, transition: motionTransition.reveal },
                       }}
                     >
                       <KpiTile {...tile} />
@@ -294,7 +262,7 @@ export const HomeMotionPreview = () => {
                   ))}
                 </m.div>
 
-                <Reveal delay={0.08}>
+                <Reveal delay={MOTION_DURATION.instant} reduced={reduced}>
                   <FunnelBoard
                     variant="flat"
                     scopeLabel="all roles"
@@ -307,7 +275,7 @@ export const HomeMotionPreview = () => {
                   {/* Decision feed. Rows are appended one at a time on flip; a
                       scoped CSS keyframe (.hmp-feed .rq-stream-item) fades each
                       one in as it mounts, so the queue visibly populates. */}
-                  <Reveal delay={0.12} className="hmp-feed">
+                  <Reveal delay={MOTION_DURATION.fast} className="hmp-feed" reduced={reduced}>
                     {rows.length === 0 ? (
                       <div className="hmp-feed-empty">
                         <strong>Agent is off.</strong>
@@ -333,7 +301,7 @@ export const HomeMotionPreview = () => {
                           initial={{ opacity: 0, y: 14 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -14 }}
-                          transition={{ duration: 0.32, ease: EASE_OUT }}
+                          transition={motionTransition.spatial}
                         >
                           <DecisionDetail
                             decision={selected}
@@ -353,7 +321,7 @@ export const HomeMotionPreview = () => {
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                           exit={{ opacity: 0 }}
-                          transition={{ duration: 0.3 }}
+                          transition={motionTransition.base}
                         >
                           {on
                             ? 'Queue clear — every decision reviewed. Nice.'
@@ -369,8 +337,7 @@ export const HomeMotionPreview = () => {
             <ShowcaseDock onAct={(msg) => showToast(msg, 'info')} />
           </div>
         </div>
-      </MotionConfig>
-    </LazyMotion>
+    </MotionSystemProvider>
   );
 };
 

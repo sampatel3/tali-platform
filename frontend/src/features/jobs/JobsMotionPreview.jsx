@@ -8,14 +8,14 @@
 // WorkableTag, SyncPulse, WorkableLogo). Motion only adds motion: the cards
 // reveal in a stagger, each agent-status chip animates in, the per-role stage
 // counts tick up, and cards lift on hover. Everything respects
-// prefers-reduced-motion via <MotionConfig reducedMotion="user">.
+// prefers-reduced-motion via the shared MotionSystemProvider.
 //
 // The inline card is reproduced (not imported) because JobsPage renders it
 // inline (~L894–1066) with no standalone card component, and we must not touch
 // the production page.
 
 import React, { useMemo, useState } from 'react';
-import { LazyMotion, domMax, MotionConfig, m } from 'motion/react';
+import { AgentLoop, MotionSystemProvider, Reveal, m, useReducedMotionSync } from '../../shared/motion';
 import { Building2, Filter, Inbox, Pause, Sparkles, Star, Zap } from 'lucide-react';
 
 import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount } from '../../shared/metrics';
@@ -25,11 +25,9 @@ import { JOBS_SHOWCASE, JOBS_SHOWCASE_ORG } from '../demo/productWalkthroughMode
 import {
   EASE_OUT,
   NumberTicker,
-  Reveal,
   PreviewSwitcher,
   staggerContainer,
   staggerItem,
-  useReducedMotionSync,
 } from '../../shared/motion/previewMotion';
 import './JobsMotionPreview.css';
 
@@ -172,12 +170,12 @@ const RoleCard = ({ role, agentLive, reduced }) => {
               PAUSED
             </span>
           ) : agentEnabled ? (
-            <span className="job-agent-pill is-on" title="Agent on for this role">
+            <AgentLoop kind="flow" className="job-agent-pill is-on" title="Agent on for this role">
               <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
               {agentSpent != null && agentBudget > 0
                 ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
                 : agentBudget > 0 ? `ON · cap $${Math.round(agentBudget)}` : 'ON'}
-            </span>
+            </AgentLoop>
           ) : (
             <span className="job-agent-pill is-off" title="Agent off">OFF</span>
           )}
@@ -249,8 +247,7 @@ export const JobsMotionPreview = () => {
   };
 
   return (
-    <LazyMotion features={domMax} strict>
-      <MotionConfig reducedMotion="user">
+    <MotionSystemProvider>
         <div data-brand="taali" className="jmp-root">
           <Reveal>
             <AgentHeader
@@ -333,8 +330,7 @@ export const JobsMotionPreview = () => {
 
           <PreviewSwitcher current="jobs" badge="PREVIEW · Jobs on Motion" />
         </div>
-      </MotionConfig>
-    </LazyMotion>
+    </MotionSystemProvider>
   );
 };
 

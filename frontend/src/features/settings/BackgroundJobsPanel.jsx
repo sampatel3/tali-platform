@@ -4,6 +4,7 @@ import { Loader2, X } from 'lucide-react';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { roles as rolesApi } from '../../shared/api';
 import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitives';
+import { AgentLoop } from '../../shared/motion';
 
 const HISTORY_POLL_MS = 5000;
 // Hide terminal-state history rows older than this so the panel stays focused
@@ -94,7 +95,11 @@ const StatusDot = ({ status }) => {
   const tone = STATUS_TONE[s] || 'noop';
   return (
     <span className="bg-jobs-panel-status">
-      <span className={`bg-jobs-panel-dot tone-${tone}`} aria-hidden="true" />
+      <AgentLoop
+        kind="pulse"
+        active={tone === 'running'}
+        className={`bg-jobs-panel-dot tone-${tone}`}
+      />
       <span className="bg-jobs-panel-status-label">{statusLabel(s)}</span>
     </span>
   );

@@ -11,6 +11,7 @@
 // so the correct static state renders at p=0 and p=1 even if a listener never
 // fires.
 import { useEffect, useRef, useState } from 'react';
+import { useReducedMotionSync } from '../../../../shared/motion';
 
 export const clamp = (v, lo = 0, hi = 1) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -39,11 +40,6 @@ export const beatVis = (p, n, count = 5) => {
   return clamp(Math.min(fadeIn, fadeOut));
 };
 
-const prefersReducedMotion = () =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
 // Static mode = reduced-motion OR a viewport too short to sticky-scrub reliably.
 // Below this height the pinned math gets cramped (captions collide with the
 // rail), so we fall back to the stacked static composition. This is the guard
@@ -51,27 +47,20 @@ const prefersReducedMotion = () =>
 const MIN_SCRUB_HEIGHT = 560;
 
 export const useStaticMode = () => {
-  const [staticMode, setStaticMode] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    return prefersReducedMotion() || window.innerHeight < MIN_SCRUB_HEIGHT;
-  });
+  const reduced = useReducedMotionSync();
+  const [shortViewport, setShortViewport] = useState(() => (
+    typeof window === 'undefined' || window.innerHeight < MIN_SCRUB_HEIGHT
+  ));
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    const evaluate = () =>
-      setStaticMode(prefersReducedMotion() || window.innerHeight < MIN_SCRUB_HEIGHT);
+    const evaluate = () => setShortViewport(window.innerHeight < MIN_SCRUB_HEIGHT);
     evaluate();
     window.addEventListener('resize', evaluate, { passive: true });
-    let mq;
-    if (typeof window.matchMedia === 'function') {
-      mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-      if (mq.addEventListener) mq.addEventListener('change', evaluate);
-    }
     return () => {
       window.removeEventListener('resize', evaluate);
-      if (mq && mq.removeEventListener) mq.removeEventListener('change', evaluate);
     };
   }, []);
-  return staticMode;
+  return reduced || shortViewport;
 };
 
 // Drives `onFrame(p)` on every rAF-throttled scroll/resize while `enabled`.

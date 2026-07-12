@@ -87,8 +87,11 @@ describe('AgentDecisionCard reject consequence copy', () => {
     expect(
       screen.getByText(/Disqualifies them in Workable\./i),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /reject/i }))
+    const recommendation = screen.getByRole('button', { name: /reject/i });
+    expect(recommendation)
       .toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));
+    expect(recommendation).toHaveAttribute('data-motion-loop', 'flow');
+    expect(recommendation).toHaveAttribute('data-motion-state', 'running');
   });
 
   it('does not show the consequence on a non-reject card', () => {

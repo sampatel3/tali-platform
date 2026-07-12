@@ -298,18 +298,6 @@
   border-left: 3px solid var(--purple);
   padding: 22px 28px 24px 25px;
   margin-top: 16px;
-  animation: candidate-triage-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-
-@keyframes candidate-triage-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .candidate-triage-grid {

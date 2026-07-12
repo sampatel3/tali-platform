@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { BRAND } from '../../config/brand';
 import { assessments } from '../../shared/api';
+import { motionSafeScrollBehavior } from '../../shared/motion';
 import { AssessmentContextWindow } from './AssessmentContextWindow';
 import { AssessmentRuntimeAlerts } from './AssessmentRuntimeAlerts';
 import { AssessmentStatusScreen } from './AssessmentStatusScreen';
@@ -525,7 +526,7 @@ export default function AssessmentPage({
   }, [executing]);
 
   const handleOpenGuide = useCallback(() => {
-    contextWindowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    contextWindowRef.current?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   }, []);
 
   // First-minutes engagement beacons — fire-and-forget, deduped locally and

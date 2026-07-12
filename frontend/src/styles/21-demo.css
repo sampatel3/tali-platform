@@ -1833,7 +1833,6 @@
   height: 7px;
   border-radius: 50%;
   background: #7dd0a8;
-  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .mc-demo-feed-label {
@@ -1868,7 +1867,6 @@
   height: 11px;
   background: var(--purple-lav);
   vertical-align: -1px;
-  animation: pulse 1s ease-in-out infinite;
 }
 
 /* Right pane (gate / form) */
@@ -2112,4 +2110,11 @@
 .mc-demo-lead-trust strong {
   color: var(--ink);
   font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-show-marquee-icon-dot,
+  .mc-show-frame-tip .dot,
+  .mc-show-ide-typing span,
+  .mc-demo-lead-tag-dot { animation: none; }
 }

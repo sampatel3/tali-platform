@@ -10,6 +10,7 @@
    consumes it; Taali's hiring-specific tokens live in 01-base.css.
    ============================================================ */
 @import "./styles/00-tokens.css";
+@import "./shared/motion/motion.css";
 @import "./styles/01-base.css";
 @import "./styles/02-shell-nav.css";
 @import "./styles/03-settings-agent.css";

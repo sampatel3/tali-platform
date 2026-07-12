@@ -13,6 +13,7 @@ import { useToast } from '../../context/ToastContext';
 import { ChatComposer, ChatEmptyState, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from '../home/agentchat/cards.jsx';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
+import { AgentLoop } from '../../shared/motion';
 
 const ON_SUGGESTIONS = [
   'Who in the pool is based in MENA?',
@@ -373,7 +374,7 @@ const AgentConversation = ({
             )}
             {rescreenPending && !sending && !agentWorking && (
               <div className="ac-rescreen-live">
-                <span className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+                <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
               </div>
             )}
           </div>

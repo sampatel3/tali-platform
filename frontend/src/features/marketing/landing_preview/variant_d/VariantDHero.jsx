@@ -1,4 +1,5 @@
 import React from 'react';
+import { AgentLoop } from '../../../../shared/motion';
 
 // ── The agent switch — grey OFF → purple ON, same vocabulary as variant C. ──
 const AgentSwitch = ({ on, pressing, onToggle }) => (
@@ -11,12 +12,12 @@ const AgentSwitch = ({ on, pressing, onToggle }) => (
       className={`lvd-switch${on ? ' is-on' : ''}${pressing ? ' is-pressing' : ''}`}
       onClick={onToggle}
     >
-      <span className="lvd-switch-track" aria-hidden="true">
+      <AgentLoop kind="flow" active={on} className="lvd-switch-track" aria-hidden="true">
         <span className="lvd-switch-glow" />
         <span className="lvd-switch-knob">
-          <span className="lvd-switch-ring" />
+          <AgentLoop kind="ring" active={on} className="lvd-switch-ring" />
         </span>
-      </span>
+      </AgentLoop>
     </button>
     <span className="lvd-switch-caption" aria-hidden="true">
       agent: <b>{on ? 'on' : 'off'}</b>

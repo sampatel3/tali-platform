@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { motionSafeScrollBehavior } from '../../../../shared/motion';
 
 // ---------------------------------------------------------------------------
 // Sticky marketing nav for variant E. Transparent at the top; on scroll it
@@ -28,7 +29,7 @@ const Brand = ({ onNavigate }) => (
 const scrollToId = (id) => {
   if (typeof document === 'undefined') return;
   const el = document.getElementById(id);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (el) el.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
 };
 
 export const VariantENav = ({ onNavigate }) => {

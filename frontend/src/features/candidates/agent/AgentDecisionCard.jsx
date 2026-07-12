@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ArrowRight, Check, ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react';
 
 import { Button, Card } from '../../../shared/ui/TaaliPrimitives';
+import { AgentFlowButton } from '../../../shared/motion';
 
 const DECISION_LABEL = {
   advance_to_interview: 'Advance to technical interview',
@@ -161,6 +162,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
         <div className="flex shrink-0 flex-col items-end gap-2">
           <div className="flex gap-2">
             <Button
+              as={AgentFlowButton}
               variant="primary"
               size="xs"
               onClick={onApprove}

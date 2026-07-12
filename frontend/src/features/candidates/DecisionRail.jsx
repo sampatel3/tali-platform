@@ -19,6 +19,7 @@ import React from 'react';
 import { Brain, Check, Clock, Flag, RefreshCw, Sparkles, X } from 'lucide-react';
 
 import { ScoreRing } from '../../shared/ui/ScoreRing';
+import { AgentLoop } from '../../shared/motion';
 import { ScoreProvenance } from './ScoreProvenance';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
@@ -188,7 +189,9 @@ export const DecisionRail = ({
             </div>
           ) : null}
           <div className="dr-rec">
-            <button
+            <AgentLoop
+              as="button"
+              kind="flow"
               type="button"
               className="dr-rec-btn"
               onClick={() => onApprove?.(decision)}
@@ -196,7 +199,7 @@ export const DecisionRail = ({
               title={primaryButtonTitle}
             >
               <PrimaryIcon size={16} strokeWidth={2.2} aria-hidden="true" /> {spec.primaryLabel}
-            </button>
+            </AgentLoop>
             {isRejectDecision ? (
               <div className="dr-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
             ) : null}

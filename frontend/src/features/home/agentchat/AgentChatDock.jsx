@@ -11,6 +11,7 @@ import { useToast } from '../../../context/ToastContext';
 import { ChatComposer, ChatEmptyState, ChatMarkdown, ChatMessage, ThinkingDots } from '../../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from './cards.jsx';
 import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
+import { AgentLoop } from '../../../shared/motion';
 
 // Role-scoped empty-state prompts. Off roles get an activation suggestion that
 // drives the agent's set_agent_state tool, so you can light one up from Home.
@@ -379,12 +380,12 @@ export function AgentChatDock({
         )}
         {stalled && !sending && (
           <div className="ac-rescreen-live">
-            <span className="ac-pulse" /> This is taking longer than expected — still running. You can send another message, or check back shortly.
+            <AgentLoop kind="pulse" className="ac-pulse" /> This is taking longer than expected — still running. You can send another message, or check back shortly.
           </div>
         )}
         {rescreenPending && !sending && (
           <div className="ac-rescreen-live">
-            <span className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+            <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
           </div>
         )}
       </div>

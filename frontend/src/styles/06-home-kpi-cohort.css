@@ -592,14 +592,25 @@
    Override = purple-lavender outline (in-scheme counter-action). This is the
    ONE agent-positive vocabulary reused on the header, chat rail, and cards. */
 .kanban-card .cc-agent-actions .btn-purple {
-  background: var(--grad-agent-on);
+  background: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
   border: 1px solid rgba(196, 165, 253, 0.5);
   color: #f1ecfb;
   box-shadow: 0 1px 10px rgba(94, 58, 168, 0.28);
 }
 
+.agent-flow-text {
+  background: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent !important;
+}
+
 .kanban-card .cc-agent-actions .btn-purple:hover {
-  background: linear-gradient(180deg, #43227e, #2a1454);
+  background: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
+  filter: brightness(1.14);
 }
 
 .kanban-card .cc-agent-actions .btn-outline {

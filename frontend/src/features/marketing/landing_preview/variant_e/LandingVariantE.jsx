@@ -1,7 +1,5 @@
 import React, { useEffect } from 'react';
-import { LazyMotion, domMax, MotionConfig } from 'motion/react';
-
-import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { MotionSystemProvider, useReducedMotionSync } from '../../../../shared/motion';
 import { VARIANT_E_CSS } from './variantE.styles';
 import { VariantENav } from './VariantENav';
 import { ClosingCta, ProductionFooter } from './VariantEFooter';
@@ -29,9 +27,9 @@ import {
 //   5. CONTROL   — the agent advises, you decide (a real decision glimpse).
 //   6. PROOF     — a tight stats row, the closing CTA, and the production footer.
 //
-// Motion (motion.dev): section entrances use the shared, one-shot CSS <Reveal>
-// (can't get stuck); the hero + funnel SCENES use useAnimate/useInView autoplay
-// timelines. <MotionConfig reducedMotion="user"> + a synchronous reduced-motion
+// Motion (motion.dev): section entrances use the shared once-in-view <Reveal>;
+// the hero + funnel SCENES use useAnimate/useInView autoplay timelines. The
+// shared provider + a synchronous reduced-motion
 // read make every scene render its final composed state under reduced motion.
 // Lenis smooth-scroll is scoped to this variant and skipped under reduced motion.
 // ---------------------------------------------------------------------------
@@ -67,8 +65,7 @@ export const LandingVariantE = ({ onNavigate }) => {
   }, [reduced]);
 
   return (
-    <LazyMotion features={domMax} strict>
-      <MotionConfig reducedMotion="user">
+    <MotionSystemProvider>
         <div className="lve" data-brand="taali">
           <style>{VARIANT_E_CSS}</style>
 
@@ -85,8 +82,7 @@ export const LandingVariantE = ({ onNavigate }) => {
             <ProductionFooter onNavigate={onNavigate} />
           </div>
         </div>
-      </MotionConfig>
-    </LazyMotion>
+    </MotionSystemProvider>
   );
 };
 

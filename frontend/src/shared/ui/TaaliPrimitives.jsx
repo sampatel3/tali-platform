@@ -9,6 +9,13 @@ import React, {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Loader2, X } from 'lucide-react';
+import {
+  AnimatePresence,
+  backdropVariants,
+  createSheetVariants,
+  dialogVariants,
+  m,
+} from '../motion';
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -772,6 +779,7 @@ export const Sheet = ({
 }) => {
   const panelRef = useRef(null);
   const previousFocusRef = useRef(null);
+  const panelVariants = useMemo(() => createSheetVariants(side), [side]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -820,63 +828,74 @@ export const Sheet = ({
     };
   }, [onClose, open]);
 
-  if (!open) return null;
-
   return (
-    <div
-      className={cx('fixed inset-0 z-50 bg-[rgba(12,18,32,0.38)] backdrop-blur-sm', overlayClassName)}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        className={cx(
-          'absolute inset-x-0 bottom-0 flex max-h-[92vh] flex-col overflow-hidden border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none motion-safe:animate-[taali-sheet-in_180ms_ease-out] md:inset-y-3 md:h-[calc(100%-1.5rem)] md:max-h-none md:w-[42.5rem] md:rounded-[var(--taali-radius-panel)]',
-          side === 'left'
-            ? 'md:left-3 md:right-auto'
-            : 'md:right-3 md:left-auto',
-          panelClassName
-        )}
-      >
-        <div className={cx('border-b border-[var(--taali-border-soft)] bg-[color:var(--taali-surface)] px-5 py-4 backdrop-blur-sm', headerClassName)}>
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              {headerContent || (
-                <>
-                  <h2 className="taali-display text-xl font-semibold tracking-tight">{title}</h2>
-                  {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
-                </>
-              )}
-            </div>
-            <Button
-              type="button"
-              onClick={onClose}
-              variant="ghost"
-              size="sm"
-              aria-label="Close"
-              className="!px-2 !py-2"
-            >
-              <X size={14} />
-            </Button>
-          </div>
-        </div>
-        <div
-          className={cx('min-h-0 flex-1 overflow-y-auto px-5 py-5', bodyClassName)}
+    <AnimatePresence>
+      {open ? (
+        <m.div
+          key="sheet-overlay"
+          variants={backdropVariants}
+          initial="hidden"
+          animate="visible"
+          exit="exit"
+          className={cx('fixed inset-0 z-50 bg-[rgba(12,18,32,0.38)] backdrop-blur-sm', overlayClassName)}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) onClose();
+          }}
         >
-          {children}
-        </div>
-        {footer ? (
-          <div className={cx('border-t border-[var(--taali-border-soft)] bg-[color:var(--taali-surface)] px-5 py-4 backdrop-blur-sm', footerClassName)}>
-            {footer}
-          </div>
-        ) : null}
-      </div>
-    </div>
+          <m.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            tabIndex={-1}
+            variants={panelVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className={cx(
+              'absolute inset-x-0 bottom-0 flex max-h-[92vh] flex-col overflow-hidden border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none md:inset-y-3 md:h-[calc(100%-1.5rem)] md:max-h-none md:w-[42.5rem] md:rounded-[var(--taali-radius-panel)]',
+              side === 'left'
+                ? 'md:left-3 md:right-auto'
+                : 'md:right-3 md:left-auto',
+              panelClassName
+            )}
+          >
+            <div className={cx('border-b border-[var(--taali-border-soft)] bg-[color:var(--taali-surface)] px-5 py-4 backdrop-blur-sm', headerClassName)}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  {headerContent || (
+                    <>
+                      <h2 className="taali-display text-xl font-semibold tracking-tight">{title}</h2>
+                      {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
+                    </>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  onClick={onClose}
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Close"
+                  className="!px-2 !py-2"
+                >
+                  <X size={14} />
+                </Button>
+              </div>
+            </div>
+            <div
+              className={cx('min-h-0 flex-1 overflow-y-auto px-5 py-5', bodyClassName)}
+            >
+              {children}
+            </div>
+            {footer ? (
+              <div className={cx('border-t border-[var(--taali-border-soft)] bg-[color:var(--taali-surface)] px-5 py-4 backdrop-blur-sm', footerClassName)}>
+                {footer}
+              </div>
+            ) : null}
+          </m.div>
+        </m.div>
+      ) : null}
+    </AnimatePresence>
   );
 };
 
@@ -892,6 +911,7 @@ export const Dialog = ({
   footerClassName = '',
   panelClassName = '',
   overlayClassName = '',
+  initialFocusRef = null,
 }) => {
   const panelRef = useRef(null);
   const previousFocusRef = useRef(null);
@@ -903,7 +923,9 @@ export const Dialog = ({
     lockBodyScrollForSheet();
 
     const focusables = panelRef.current?.querySelectorAll(FOCUSABLE_SELECTOR);
-    if (focusables && focusables.length > 0) {
+    if (initialFocusRef?.current && typeof initialFocusRef.current.focus === 'function') {
+      initialFocusRef.current.focus();
+    } else if (focusables && focusables.length > 0) {
       focusables[0].focus();
     } else {
       panelRef.current?.focus();
@@ -941,57 +963,68 @@ export const Dialog = ({
         previousFocusRef.current.focus();
       }
     };
-  }, [onClose, open]);
-
-  if (!open) return null;
+  }, [initialFocusRef, onClose, open]);
 
   return (
-    <div
-      className={cx('fixed inset-0 z-[60] bg-[rgba(12,18,32,0.42)] px-4 py-6 backdrop-blur-sm', overlayClassName)}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div className="flex min-h-full items-center justify-center">
-        <div
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={title}
-          tabIndex={-1}
-          className={cx(
-            'flex w-full max-w-[34rem] flex-col overflow-hidden rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none motion-safe:animate-[taali-dialog-in_180ms_ease-out]',
-            panelClassName
-          )}
+    <AnimatePresence>
+      {open ? (
+        <m.div
+          key="dialog-overlay"
+          variants={backdropVariants}
+          initial="hidden"
+          animate="visible"
+          exit="exit"
+          className={cx('fixed inset-0 z-[60] bg-[rgba(12,18,32,0.42)] px-4 py-6 backdrop-blur-sm', overlayClassName)}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) onClose();
+          }}
         >
-          <div className={cx('border-b border-[var(--taali-border-soft)] px-5 py-4', headerClassName)}>
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <h2 className="taali-display text-xl font-semibold tracking-tight">{title}</h2>
-                {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
+          <div className="flex min-h-full items-center justify-center">
+            <m.div
+              ref={panelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label={title}
+              tabIndex={-1}
+              variants={dialogVariants}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              className={cx(
+                'flex w-full max-w-[34rem] flex-col overflow-hidden rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none',
+                panelClassName
+              )}
+            >
+              <div className={cx('border-b border-[var(--taali-border-soft)] px-5 py-4', headerClassName)}>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h2 className="taali-display text-xl font-semibold tracking-tight">{title}</h2>
+                    {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={onClose}
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Close"
+                    className="!px-2 !py-2"
+                  >
+                    <X size={14} />
+                  </Button>
+                </div>
               </div>
-              <Button
-                type="button"
-                onClick={onClose}
-                variant="ghost"
-                size="sm"
-                aria-label="Close"
-                className="!px-2 !py-2"
-              >
-                <X size={14} />
-              </Button>
-            </div>
+              <div className={cx('px-5 py-5', bodyClassName)}>
+                {children}
+              </div>
+              {footer ? (
+                <div className={cx('border-t border-[var(--taali-border-soft)] px-5 py-4', footerClassName)}>
+                  {footer}
+                </div>
+              ) : null}
+            </m.div>
           </div>
-          <div className={cx('px-5 py-5', bodyClassName)}>
-            {children}
-          </div>
-          {footer ? (
-            <div className={cx('border-t border-[var(--taali-border-soft)] px-5 py-4', footerClassName)}>
-              {footer}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
+        </m.div>
+      ) : null}
+    </AnimatePresence>
   );
 };

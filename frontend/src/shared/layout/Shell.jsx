@@ -24,6 +24,14 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 import { isPreviewNavSurface } from '../../lib/previewNav';
+import {
+  AnimatePresence,
+  AgentLoop,
+  backdropVariants,
+  createSheetVariants,
+  m,
+  popoverVariants,
+} from '../motion';
 import { TaaliTile } from '../ui/Branding';
 import { PageLink } from '../ui/PageLink';
 import { useAgentStatusOrg } from './AgentBar';
@@ -177,7 +185,15 @@ const AvatarMenu = ({ user, orgName, onClose, onLogout }) => {
   const orgLabel = formatHeaderOrgLabel(orgName, 'No company');
 
   return (
-    <div ref={ref} className="mc-avatar-menu" role="menu">
+    <m.div
+      ref={ref}
+      className="mc-avatar-menu"
+      role="menu"
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+      variants={popoverVariants}
+    >
       <div className="mc-avatar-menu-header">
         <div className="name" title={displayName}>{displayName}</div>
         <div className="org" title={orgName}>{orgLabel}</div>
@@ -187,7 +203,7 @@ const AvatarMenu = ({ user, orgName, onClose, onLogout }) => {
         <LogOut size={15} strokeWidth={1.7} />
         Sign out
       </button>
-    </div>
+    </m.div>
   );
 };
 
@@ -221,12 +237,24 @@ const MobileNavDrawer = ({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
   const orgLabel = formatHeaderOrgLabel(orgName, 'No company');
   return (
-    <div className="mc-drawer-root" role="dialog" aria-modal="true" aria-label="Menu">
-      <div className="mc-drawer-backdrop" onClick={onClose} />
-      <div className="mc-drawer-panel" ref={panelRef} tabIndex={-1}>
+    <m.div
+      className="mc-drawer-root"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Menu"
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+    >
+      <m.div className="mc-drawer-backdrop" onClick={onClose} variants={backdropVariants} />
+      <m.div
+        className="mc-drawer-panel"
+        ref={panelRef}
+        tabIndex={-1}
+        variants={createSheetVariants('right')}
+      >
         <div className="mc-drawer-head">
           <div className="mc-drawer-id">
             <span className="mc-drawer-avatar" aria-hidden="true">{initials}</span>
@@ -269,8 +297,8 @@ const MobileNavDrawer = ({
             Sign out
           </button>
         </div>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
   );
 };
 
@@ -380,7 +408,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
             title="Agent mode is ON · click to manage on Jobs"
             aria-label="Agent mode is on"
           >
-            <span className="dot" aria-hidden="true" />
+            <AgentLoop kind="pulse" className="dot" />
             Agent running
           </PageLink>
         ) : null}
@@ -397,14 +425,17 @@ export const Shell = ({ currentPage, onNavigate }) => {
             {initials}
             <ChevronDown size={11} strokeWidth={1.8} style={{ marginLeft: 2 }} />
           </button>
-          {menuOpen ? (
-            <AvatarMenu
-              user={user}
-              orgName={orgName}
-              onClose={() => setMenuOpen(false)}
-              onLogout={handleLogout}
-            />
-          ) : null}
+          <AnimatePresence initial={false}>
+            {menuOpen ? (
+              <AvatarMenu
+                key="account-menu"
+                user={user}
+                orgName={orgName}
+                onClose={() => setMenuOpen(false)}
+                onLogout={handleLogout}
+              />
+            ) : null}
+          </AnimatePresence>
         </div>
         <button
           type="button"
@@ -417,17 +448,22 @@ export const Shell = ({ currentPage, onNavigate }) => {
         </button>
       </div>
     </header>
-    <MobileNavDrawer
-      open={drawerOpen}
-      onClose={() => setDrawerOpen(false)}
-      initials={initials}
-      displayName={displayName}
-      orgName={orgName}
-      resolvedPage={resolvedPage}
-      homePending={homePending}
-      onLogout={handleLogout}
-      onNavigate={onNavigate}
-    />
+    <AnimatePresence initial={false}>
+      {drawerOpen ? (
+        <MobileNavDrawer
+          key="mobile-navigation"
+          open
+          onClose={() => setDrawerOpen(false)}
+          initials={initials}
+          displayName={displayName}
+          orgName={orgName}
+          resolvedPage={resolvedPage}
+          homePending={homePending}
+          onLogout={handleLogout}
+          onNavigate={onNavigate}
+        />
+      ) : null}
+    </AnimatePresence>
     </>
   );
 };

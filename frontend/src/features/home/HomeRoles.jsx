@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
 import { formatUsd, humanizePausedReason } from './atoms';
+import { AgentLoop } from '../../shared/motion';
 
 export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
   const [open, setOpen] = useState(false);
@@ -65,7 +66,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
                   </span>
                 ) : null}
                 {r.paused ? null : r.agentic_mode_enabled ? (
-                  <span className="rq-r-flag on">AGENT ON</span>
+                  <AgentLoop kind="flow" className="rq-r-flag on">AGENT ON</AgentLoop>
                 ) : (
                   <span className="rq-r-flag mute">AGENT OFF</span>
                 )}

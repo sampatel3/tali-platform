@@ -28,6 +28,7 @@ vi.mock('../../shared/api', () => ({
 }));
 
 import * as apiClient from '../../shared/api';
+import { MotionSystemProvider } from '../../shared/motion';
 import { JobsPage } from './JobsPage';
 
 // matchMedia is absent in jsdom; stub it so useReducedMotionSync can read a
@@ -296,5 +297,40 @@ describe('JobsPage entrance motion', () => {
     fireEvent.click(screen.getByRole('button', { name: /With open candidates/i }));
     await screen.findByText('Backend Engineer');
     expect(document.querySelector('.jobs-grid')).not.toHaveClass('reveal-stagger');
+  });
+
+  it('keeps filtered cards present for their exit and preserves the surviving card', async () => {
+    setReducedMotion(false);
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        baseRoles[0],
+        {
+          ...baseRoles[0],
+          id: 102,
+          name: 'Dormant Role',
+          active_candidates_count: 0,
+        },
+      ],
+    });
+    render(
+      <MotionSystemProvider>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </MotionSystemProvider>,
+    );
+
+    await screen.findByText('Dormant Role');
+    const grid = document.querySelector('.jobs-grid');
+    const survivingCard = screen.getByText('Backend Engineer').closest('.job-card');
+    await waitFor(() => expect(grid).not.toHaveClass('reveal-stagger'), { timeout: 2000 });
+
+    fireEvent.click(screen.getByRole('button', { name: /With open candidates/i }));
+
+    // AnimatePresence retains the removed role just long enough to complete the
+    // shared exit, while the keyed survivor remains the same layout node.
+    expect(screen.getByText('Dormant Role')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Dormant Role')).not.toBeInTheDocument());
+    expect(screen.getByText('Backend Engineer').closest('.job-card')).toBe(survivingCard);
+    expect(document.querySelector('.jobs-grid')).toBe(grid);
+    expect(grid).not.toHaveClass('reveal-stagger');
   });
 });

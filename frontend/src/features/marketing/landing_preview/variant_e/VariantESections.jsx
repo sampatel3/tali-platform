@@ -1,6 +1,7 @@
 import React from 'react';
 
-import { Reveal, NumberTicker, useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { Reveal, useReducedMotionSync } from '../../../../shared/motion';
+import { NumberTicker } from '../../../../shared/motion/previewMotion';
 import { HeroScene } from './VariantEHeroScene';
 import { FunnelScene } from './VariantEFunnelScene';
 import { ScorecardArtifact, ControlDecisionArtifact } from './VariantERealMocks';
@@ -10,7 +11,7 @@ import { ScorecardArtifact, ControlDecisionArtifact } from './VariantERealMocks'
 // turn a job on, the agent works your whole funnel — and it's the only one that
 // measures how people actually work with AI. Every section-header triad (mono
 // eyebrow → short verb-led H2 → one-line sub) enters via the shared, one-shot
-// CSS <Reveal> (can't get stuck the way a Motion whileInView wrapper can). The
+// once-only shared <Reveal>. The
 // two autoplay SCENES — the hero job-on loop and the funnel advance — own their
 // own useAnimate/useInView timelines in their component files.
 // ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ import { ScrollToTop } from './shared/ui/ScrollToTop';
 import { RouteMeta } from './shared/seo/RouteMeta';
 import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
 import { useKeyboardShortcut } from './shared/hooks/useKeyboardShortcut';
+import { MotionSystemProvider } from './shared/motion';
 
 import {
   ForgotPasswordPage,
@@ -66,6 +67,9 @@ const BackgroundJobsToaster = lazy(() =>
 );
 const ToastShowcasePage = lazy(() =>
   import('./features/dev/ToastShowcasePage').then((m) => ({ default: m.ToastShowcasePage }))
+);
+const MotionShowcasePage = lazy(() =>
+  import('./features/dev/MotionShowcasePage').then((m) => ({ default: m.MotionShowcasePage }))
 );
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
@@ -1101,6 +1105,17 @@ function AppContent() {
         )}
       />
 
+      <Route
+        path="/dev/motion"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <TokenGate>
+              <MotionShowcasePage />
+            </TokenGate>
+          </Suspense>
+        )}
+      />
+
       <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />
 
       {/* Public, no-auth careers-style job posting. The shareable link a
@@ -1168,19 +1183,21 @@ function AppContent() {
 
 function App() {
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <ToastProvider>
-        <JobStatusProvider>
-          <ErrorBoundary>
-            <AppContent />
-          </ErrorBoundary>
-          {/* Global job panel — outside routes so it survives navigation */}
-          <Suspense fallback={null}>
-            <BackgroundJobsToaster />
-          </Suspense>
-        </JobStatusProvider>
-      </ToastProvider>
-    </BrowserRouter>
+    <MotionSystemProvider>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <ToastProvider>
+          <JobStatusProvider>
+            <ErrorBoundary>
+              <AppContent />
+            </ErrorBoundary>
+            {/* Global job panel — outside routes so it survives navigation */}
+            <Suspense fallback={null}>
+              <BackgroundJobsToaster />
+            </Suspense>
+          </JobStatusProvider>
+        </ToastProvider>
+      </BrowserRouter>
+    </MotionSystemProvider>
   );
 }
 

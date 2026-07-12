@@ -40,7 +40,6 @@
     0 12px 28px -14px color-mix(in srgb, var(--purple) 70%, transparent),
     0 4px 10px -4px color-mix(in srgb, var(--purple) 40%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.10);
-  animation: mc-aurora 18s ease-in-out infinite;
 }
 
 .mc-agent-bar.is-amber {
@@ -67,17 +66,6 @@
   z-index: -1;
 }
 
-@keyframes mc-aurora {
-  0% { background-position: 0% 50%, 100% 50%, 50% 0%; }
-  50% { background-position: 100% 50%, 0% 50%, 50% 100%; }
-  100% { background-position: 0% 50%, 100% 50%, 50% 0%; }
-}
-
-@keyframes mc-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
 .mc-agent-row {
   display: flex;
   flex-wrap: wrap;
@@ -102,13 +90,7 @@
   inset: -3px;
   border-radius: 13px;
   border: 2px solid rgba(255, 255, 255, 0.55);
-  animation: mc-pulse-ring 1.6s ease-out infinite;
   pointer-events: none;
-}
-
-@keyframes mc-pulse-ring {
-  0% { transform: scale(1); opacity: 0.7; }
-  100% { transform: scale(1.25); opacity: 0; }
 }
 
 .mc-agent-title {

@@ -39,6 +39,7 @@ import { RecentDecisions } from './RecentDecisions';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
+import { PresenceSwap } from '../../shared/motion';
 
 
 // The backend returns 409 with a structured detail ({code, message, ...}) when
@@ -1154,11 +1155,13 @@ export const HomeNow = ({
               roleNameById={roleNameById}
             />
             <div className="rq-hybrid-right">
-              <InvitedDetail
-                candidate={selectedInvited}
-                roleNameById={roleNameById}
-                onNavigate={onNavigate}
-              />
+              <PresenceSwap presenceKey={selectedInvited?.id || 'invited-empty'}>
+                <InvitedDetail
+                  candidate={selectedInvited}
+                  roleNameById={roleNameById}
+                  onNavigate={onNavigate}
+                />
+              </PresenceSwap>
             </div>
           </div>
         )
@@ -1174,16 +1177,18 @@ export const HomeNow = ({
               staleOnly={staleOnly}
             />
             <div className="rq-hybrid-right">
-              <AgentDecisionCard
-                decision={selected}
-                busy={busyId === selected?.id}
-                onApprove={handleApprove}
-                onAlternative={handleAlternative}
-                onReEvaluate={handleReEvaluate}
-                onSnooze={handleSnooze}
-                onTeach={(d) => setTeachFor(d)}
-                onNavigate={onNavigate}
-              />
+              <PresenceSwap presenceKey={selected?.id || 'decision-empty'}>
+                <AgentDecisionCard
+                  decision={selected}
+                  busy={busyId === selected?.id}
+                  onApprove={handleApprove}
+                  onAlternative={handleAlternative}
+                  onReEvaluate={handleReEvaluate}
+                  onSnooze={handleSnooze}
+                  onTeach={(d) => setTeachFor(d)}
+                  onNavigate={onNavigate}
+                />
+              </PresenceSwap>
             </div>
           </div>
 

@@ -1,7 +1,5 @@
 import React, { useCallback } from 'react';
-import { LazyMotion, domMax, MotionConfig } from 'motion/react';
-
-import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { MotionSystemProvider, useReducedMotionSync } from '../../../../shared/motion';
 import { MarketingNav } from '../../../../shared/layout/TaaliLayout';
 import { VARIANT_G_CSS } from './variantG.styles';
 import { VariantGHero } from './VariantGHero';
@@ -27,7 +25,7 @@ import { FunnelSection, FluencySection, ControlSection } from './VariantGSection
 //
 // The vivid purple design itself — two-column hero, the OFF→ON AgentScene, the
 // funnel / 5-Ds / control sections — is unchanged. Motion model is unchanged:
-// LazyMotion + MotionConfig reducedMotion + the CSS one-shot <Reveal> entrances
+// MotionSystemProvider + true once-in-view <Reveal> entrances
 // and the AgentScene useAnimate timeline.
 // ---------------------------------------------------------------------------
 
@@ -44,8 +42,7 @@ export const LandingVariantG = ({ onNavigate }) => {
   }, [reduced]);
 
   return (
-    <LazyMotion features={domMax} strict>
-      <MotionConfig reducedMotion="user">
+    <MotionSystemProvider>
         <MarketingNav onNavigate={onNavigate} />
         <div className="lvg">
           <style>{VARIANT_G_CSS}</style>
@@ -56,8 +53,7 @@ export const LandingVariantG = ({ onNavigate }) => {
           <ControlSection reduced={reduced} onNavigate={onNavigate} />
           <VariantGFooter onSection={scrollToSection} />
         </div>
-      </MotionConfig>
-    </LazyMotion>
+    </MotionSystemProvider>
   );
 };
 

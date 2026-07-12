@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Sparkles, Star } from 'lucide-react';
-import { stagger, useAnimate, useInView } from 'motion/react';
-
-import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { AgentLoop, stagger, useAnimate, useInView, useReducedMotionSync } from '../../../../shared/motion';
 import { Avatar, ScoreChip, VerdictPill, initialsFrom } from '../../../home/atoms';
 
 // ---------------------------------------------------------------------------
@@ -122,10 +120,10 @@ export const HeroScene = () => {
           {/* OFF → ON pill crossfade, using the real .job-agent-pill vocabulary. */}
           <span className="lve-hs-pillbox">
             <span className="job-agent-pill is-off lve-hs-pill-off" style={{ opacity: on ? 0 : 1 }}>OFF</span>
-            <span className="job-agent-pill is-on lve-hs-pill-on" title="Agent on for this role">
+            <AgentLoop kind="flow" active={on} className="job-agent-pill is-on lve-hs-pill-on" title="Agent on for this role">
               <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
               AGENT ON
-            </span>
+            </AgentLoop>
           </span>
         </div>
 

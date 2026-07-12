@@ -108,6 +108,12 @@ const RAW_UTILITY_PATTERN = /\b(?:bg|text|border)-(?:white|black|gray(?:-\d{2,3}
 const THEME_TOGGLE_PATTERN = /\b(?:Switch to light theme|Switch to dark theme|Light UI|Dark UI)\b/g;
 const GRADIENT_BG_VAR_PATTERN = /\bbg-\[var\(--[^)\]]*gradient[^)\]]*\)\]/g;
 const SQUARE_TABLE_PATTERN = /\b(?:rounded-none|rounded-sm)\b/g;
+const DIRECT_MOTION_IMPORT_PATTERN = /from\s+['"]motion\/react['"]/g;
+const LEGACY_COUNTUP_IMPORT_PATTERN = /from\s+['"][^'"]*shared\/motion\/useCountUp['"]/g;
+// These names belonged to the retired CSS implementation of live-agent
+// motion. Reintroducing one would bypass AgentLoop's tokens, in-view pause,
+// and explicit reduced-motion rest state.
+const RETIRED_AGENT_KEYFRAME_PATTERN = /@keyframes\s+(?:abar(?:Pulse|Flow|Ring)|agentChipPulse|mc-(?:aurora|pulse-ring|blink)|rqRecFlow|drFlow|aw-pulse|bgJobsPulse|agzSoft|an-pulse|ac-pulse|tk-dot|lv[fg]AgentFlow|lvc(?:SwitchFlow|Ring|RibbonFlow|NodePulse)|lvd(?:SwitchFlow|Ring))\b/gi;
 const CSS_VAR_USAGE_PATTERN = /var\(\s*(--[\w-]+)\s*(?:,[^)]+)?\)/g;
 const CSS_VAR_DEFINITION_PATTERN = /(--[\w-]+)\s*:/g;
 
@@ -151,6 +157,20 @@ async function main() {
     const content = await readFile(join(ROOT, relPath), 'utf-8');
 
     let match;
+    const directMotionPattern = new RegExp(DIRECT_MOTION_IMPORT_PATTERN.source, DIRECT_MOTION_IMPORT_PATTERN.flags);
+    while ((match = directMotionPattern.exec(content)) !== null) {
+      if (relPath.startsWith('src/shared/motion/')) continue;
+      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — import Motion through src/shared/motion`);
+    }
+    const legacyCountUpPattern = new RegExp(LEGACY_COUNTUP_IMPORT_PATTERN.source, LEGACY_COUNTUP_IMPORT_PATTERN.flags);
+    while ((match = legacyCountUpPattern.exec(content)) !== null) {
+      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — use MotionNumber from src/shared/motion`);
+    }
+    const retiredAgentKeyframePattern = new RegExp(RETIRED_AGENT_KEYFRAME_PATTERN.source, RETIRED_AGENT_KEYFRAME_PATTERN.flags);
+    while ((match = retiredAgentKeyframePattern.exec(content)) !== null) {
+      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — live agent loops must use AgentLoop from src/shared/motion`);
+    }
+
     const cssVarPattern = new RegExp(CSS_VAR_USAGE_PATTERN.source, CSS_VAR_USAGE_PATTERN.flags);
     while ((match = cssVarPattern.exec(content)) !== null) {
       const variableName = match[1];

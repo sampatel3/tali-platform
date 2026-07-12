@@ -31,6 +31,7 @@ const PORTAL_CSS = `
 }
 .devx, .devx * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body { background: #0a0a11; }
 .devx ::selection { background: rgba(167,139,250,0.30); color: #fff; }
 .devx-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: color-mix(in srgb, var(--x-bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--x-line); }

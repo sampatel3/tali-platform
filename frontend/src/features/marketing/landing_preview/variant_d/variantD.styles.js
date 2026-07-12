@@ -147,9 +147,7 @@ export const VARIANT_D_CSS = `
   background: linear-gradient(120deg, var(--lvd-purple-2), var(--lvd-lav), var(--lvd-purple), var(--lvd-purple-2));
   background-size: 300% 300%; border-color: rgba(196,165,253,0.7);
   box-shadow: inset 0 2px 6px rgba(74,45,128,0.3), 0 0 26px rgba(124,77,255,0.35), 0 0 0 1px rgba(196,165,253,0.4);
-  animation: lvdSwitchFlow 6s ease-in-out infinite;
 }
-.lvd.is-static .lvd-switch.is-on .lvd-switch-track { animation: none; }
 .lvd-switch-glow {
   position: absolute; inset: -18px; border-radius: 999px;
   background: radial-gradient(closest-side, rgba(124,77,255,0.35), transparent 75%);
@@ -169,8 +167,7 @@ export const VARIANT_D_CSS = `
 }
 .lvd-switch.is-pressing .lvd-switch-knob { width: 60px; }
 .lvd-switch-ring { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(139,133,149,0.4); }
-.lvd-switch.is-on .lvd-switch-ring { border-color: rgba(124,77,255,0.8); animation: lvdRing 1.8s ease-out infinite; }
-.lvd.is-static .lvd-switch.is-on .lvd-switch-ring { animation: none; }
+.lvd-switch.is-on .lvd-switch-ring { border-color: rgba(124,77,255,0.8); }
 .lvd-switch-caption {
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px;
   letter-spacing: 0.14em; text-transform: uppercase; color: var(--lvd-mute); transition: color 0.5s ease;
@@ -194,8 +191,6 @@ export const VARIANT_D_CSS = `
 .lvd-scrollcue-chev { width: 18px; height: 18px; animation: lvdBob 1.8s ease-in-out infinite; }
 .lvd.is-static .lvd-scrollcue-chev { animation: none; }
 @keyframes lvdBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
-@keyframes lvdSwitchFlow { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
-@keyframes lvdRing { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.4); opacity: 0; } }
 
 /* ── PINNED SCENE ─────────────────────────────────────────────────────── */
 .lvd-scene-wrap { position: relative; height: 500vh; }

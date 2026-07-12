@@ -309,7 +309,7 @@ export const VARIANT_E_CSS = `
 .lve-fn[data-armed] .lve-fn-step { opacity: 0; }
 .lve-fn[data-armed] .lve-fn-rail-fill { transform: scaleX(0); }
 .lve-fn.is-playing .lve-fn-step {
-  animation: lveFnStepIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: lveFnStepIn var(--motion-duration-reveal) var(--motion-ease-enter) both;
 }
 .lve-fn.is-playing .lve-fn-step:nth-child(1) { animation-delay: 0.05s; }
 .lve-fn.is-playing .lve-fn-step:nth-child(2) { animation-delay: 0.24s; }
@@ -317,7 +317,7 @@ export const VARIANT_E_CSS = `
 .lve-fn.is-playing .lve-fn-step:nth-child(4) { animation-delay: 0.62s; }
 .lve-fn.is-playing .lve-fn-step:nth-child(5) { animation-delay: 0.81s; }
 .lve-fn.is-playing .lve-fn-rail-fill {
-  animation: lveFnRail 1.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: lveFnRail 1.5s var(--motion-ease-enter) both;
 }
 @keyframes lveFnStepIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes lveFnRail { from { transform: scaleX(0); } to { transform: scaleX(1); } }

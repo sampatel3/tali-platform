@@ -1,7 +1,5 @@
 import React, { useEffect } from 'react';
-import { LazyMotion, domMax, MotionConfig } from 'motion/react';
-
-import { useReducedMotionSync } from '../../../../shared/motion/previewMotion';
+import { MotionSystemProvider, useReducedMotionSync } from '../../../../shared/motion';
 import { VARIANT_F_CSS } from './variantF.styles';
 import { VariantFNav } from './VariantFNav';
 import { VariantFHero } from './VariantFHero';
@@ -20,9 +18,9 @@ import { ProblemSection, FunnelSection, FluencySection, CloseSection } from './V
 //
 // Motion model — the hero AgentScene runs a Motion `useAnimate` autoplay-once
 // timeline (OFF → ON → rows land → verdicts stamp) with a Replay affordance;
-// section entrances reuse the shared one-shot CSS <Reveal> (can't get stuck
-// under LazyMotion); the gradient shimmer is pure CSS gated behind
-// prefers-reduced-motion. <MotionConfig reducedMotion="user"> + a synchronous
+// section entrances reuse the shared once-in-view <Reveal>; the gradient
+// shimmer is pure CSS gated behind prefers-reduced-motion. The shared provider
+// + a synchronous
 // reduced-motion read make every scene render its settled final state under
 // reduced motion. Lenis smooth-scroll is scoped to this variant and skipped
 // under reduced motion.
@@ -59,8 +57,7 @@ export const LandingVariantF = ({ onNavigate }) => {
   }, [reduced]);
 
   return (
-    <LazyMotion features={domMax} strict>
-      <MotionConfig reducedMotion="user">
+    <MotionSystemProvider>
         <div className="lvf">
           <style>{VARIANT_F_CSS}</style>
 
@@ -72,8 +69,7 @@ export const LandingVariantF = ({ onNavigate }) => {
           <CloseSection reduced={reduced} onNavigate={onNavigate} />
           <VariantFFooter />
         </div>
-      </MotionConfig>
-    </LazyMotion>
+    </MotionSystemProvider>
   );
 };
 

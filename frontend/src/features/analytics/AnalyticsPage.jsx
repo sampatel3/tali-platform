@@ -26,7 +26,12 @@ import {
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
-import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
+import {
+  MotionNumber,
+  MotionTab,
+  MotionTabs,
+  PresenceSwap,
+} from '../../shared/motion';
 import '../../shared/motion/reveal.css';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Select, PageLoader } from '../../shared/ui/TaaliPrimitives';
@@ -197,19 +202,17 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   const budgetCents = safeNum(spend.budget_cents);
   const budgetPctValue = budgetCents > 0 ? Math.round((spentCents / budgetCents) * 100) : null;
 
-  // ── Pulse-band number tickers. useCountUp re-runs when `to` changes, so each
-  //    cell counts 0 → real once the summary fetch settles; reduced motion
-  //    lands on the final formatted value immediately. Formats mirror the
-  //    static render exactly (locale-grouped int, "N%", fmtUsd). ──────────────
-  const reduced = useReducedMotionSync();
+  // ── Pulse-band number interpolation. MotionNumber moves from the previous
+  //    settled value to the next one, so polling/scope changes never replay a
+  //    theatrical zero-to-value count. Reduced motion lands immediately. ────
   const asInt = (n) => Math.round(n).toLocaleString();
   const asPct = (n) => `${Math.round(n)}%`;
-  const decisionsTick = useCountUp(decisions, { reduced, format: asInt });
-  const autoAdvancedTick = useCountUp(autoAdvanced, { reduced, format: asInt });
-  const advanceHireTick = useCountUp(advanceHirePct ?? 0, { reduced, format: asPct });
-  const overrideRateTick = useCountUp(overrideRate, { reduced, format: asPct });
-  const teachRateTick = useCountUp(teachRate, { reduced, format: asPct });
-  const spendTick = useCountUp(spentCents, { reduced, format: fmtUsd });
+  const decisionsTick = <MotionNumber value={decisions} format={asInt} />;
+  const autoAdvancedTick = <MotionNumber value={autoAdvanced} format={asInt} />;
+  const advanceHireTick = <MotionNumber value={advanceHirePct ?? 0} format={asPct} />;
+  const overrideRateTick = <MotionNumber value={overrideRate} format={asPct} />;
+  const teachRateTick = <MotionNumber value={teachRate} format={asPct} />;
+  const spendTick = <MotionNumber value={spentCents} format={fmtUsd} />;
 
   // Per-day decision volume for the chart card = sum of every decision type in
   // each day's bucket (real /analytics/activity-timeseries data).
@@ -348,26 +351,33 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         </div>
 
         {/* Underline tabs — shared .vtabs/.vtab vocabulary. */}
-        <div className="vtabs" role="tablist">
+        <MotionTabs value={tab} onValueChange={setTab} className="vtabs" aria-label="Analytics views">
           {TABS.map((t) => {
             const { Icon } = t;
             return (
-              <button
+              <MotionTab
                 key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.key}
+                value={t.key}
+                id={`analytics-tab-${t.key}`}
+                aria-controls={`analytics-panel-${t.key}`}
                 className={`vtab${tab === t.key ? ' on' : ''}`}
-                onClick={() => setTab(t.key)}
+                indicatorClassName="vtab-motion-indicator"
               >
                 <Icon size={16} aria-hidden="true" />
                 {t.label}
-              </button>
+              </MotionTab>
             );
           })}
-        </div>
+        </MotionTabs>
 
-        {tab === 'outcomes' ? (
+        <PresenceSwap
+            presenceKey={tab}
+            id={`analytics-panel-${tab}`}
+            className="an-tabpanel"
+            role="tabpanel"
+            aria-labelledby={`analytics-tab-${tab}`}
+          >
+          {tab === 'outcomes' ? (
           loading && !summary
             ? (
               <div className="an-empty" aria-label="Loading outcomes">
@@ -402,6 +412,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         ) : (
           <DecisionLogTab roleId={roleId} />
         )}
+        </PresenceSwap>
       </div>
     </div>
   );

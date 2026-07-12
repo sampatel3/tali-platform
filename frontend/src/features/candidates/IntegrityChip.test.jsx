@@ -76,7 +76,7 @@ describe('DimScore (5-Ds score ticker)', () => {
   it('reduced-motion → renders the final rounded score immediately, no tween', () => {
     const { container } = render(<DimScore score={82.4} hasSignal reduced />);
     const el = container.querySelector('.mc-overview-dim-score');
-    // useCountUp seeds `to` when reduced, so the settled integer + suffix show
+    // MotionNumber settles immediately when reduced, so the integer + suffix show
     // at once — no lingering 0 from a mount-only tween.
     expect(el.textContent).toBe('82/100');
   });

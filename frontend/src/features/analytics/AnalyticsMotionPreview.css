@@ -39,7 +39,7 @@
   /* Funnel conversion bars grow from the left as the tab enters. */
   .amp-outcomes .an-conv .cfill {
     transform-origin: left center;
-    animation: ampGrowX 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: ampGrowX var(--motion-duration-data) var(--motion-ease-enter) both;
   }
   .amp-outcomes .an-conv .an-convrow:nth-child(1) .cfill { animation-delay: 0.20s; }
   .amp-outcomes .an-conv .an-convrow:nth-child(2) .cfill { animation-delay: 0.28s; }
@@ -51,7 +51,7 @@
   /* Override-rate-over-time bars rise from the baseline. */
   .amp-outcomes .an-bars .bk {
     transform-origin: bottom center;
-    animation: ampGrowY 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: ampGrowY var(--motion-duration-data) var(--motion-ease-enter) both;
   }
   .amp-outcomes .an-bars .an-bar:nth-child(1) .bk { animation-delay: 0.24s; }
   .amp-outcomes .an-bars .an-bar:nth-child(2) .bk { animation-delay: 0.32s; }

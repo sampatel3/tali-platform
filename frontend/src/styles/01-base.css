@@ -162,6 +162,10 @@ html[data-theme="dark"] {
     scroll-behavior: smooth;
   }
 
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+
   body {
     margin: 0;
     background: var(--bg);
@@ -219,4 +223,3 @@ html[data-theme="dark"] {
     font-weight: inherit;
   }
 }
-

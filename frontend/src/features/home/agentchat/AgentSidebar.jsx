@@ -8,6 +8,7 @@
 import { Check, CheckSquare, Layers, MessageSquare, Pause, Sparkles } from 'lucide-react';
 
 import { humanizePausedReason } from '../atoms';
+import { AgentLoop } from '../../../shared/motion';
 
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
@@ -82,11 +83,17 @@ export function AgentSidebar({
               {selected ? <Check size={11} strokeWidth={3} /> : null}
             </span>
           )}
-          <span className={`ac-stat ac-stat-${rowStatus}`} aria-hidden="true">
-            {rowStatus === 'on' ? <Sparkles size={13} strokeWidth={2} />
-              : rowStatus === 'paused' ? <Pause size={11} strokeWidth={2} fill="currentColor" />
-              : <span className="ac-stat-dot" />}
-          </span>
+          {rowStatus === 'on' ? (
+            <AgentLoop kind="flow" className="ac-stat ac-stat-on" aria-hidden="true">
+              <Sparkles size={13} strokeWidth={2} />
+            </AgentLoop>
+          ) : (
+            <span className={`ac-stat ac-stat-${rowStatus}`} aria-hidden="true">
+              {rowStatus === 'paused'
+                ? <Pause size={11} strokeWidth={2} fill="currentColor" />
+                : <span className="ac-stat-dot" />}
+            </span>
+          )}
           <span className="ac-agent-role">{a.role_name}</span>
         </span>
         {/* Everything below the top row is indented to align past the glyph

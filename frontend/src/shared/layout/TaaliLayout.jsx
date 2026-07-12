@@ -9,6 +9,7 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 import { navigateToMarketingSection } from '../../lib/marketingScroll';
+import { MotionDisclosure } from '../motion';
 import { TaaliTile } from '../ui/Branding';
 import { PageLink } from '../ui/PageLink';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
@@ -245,38 +246,37 @@ export const MarketingNav = ({ onNavigate }) => {
         </div>
       </div>
 
-      {mobileMenuOpen ? (
-        <div
-          id="marketing-mobile-menu"
-          className="md:!hidden border-t border-[var(--line)] bg-[var(--bg)] px-5 pb-5 pt-3"
-        >
-          <div className="flex flex-col">
-            {MARKETING_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
-                onClick={() => {
-                  closeMenu();
-                  navigateToMarketingSection(tab.id, onNavigate);
-                }}
+      <MotionDisclosure
+        open={mobileMenuOpen}
+        id="marketing-mobile-menu"
+        className="border-t border-[var(--line)] bg-[var(--bg)] px-5 pb-5 pt-3 md:!hidden"
+      >
+            <div className="flex flex-col">
+              {MARKETING_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
+                  onClick={() => {
+                    closeMenu();
+                    navigateToMarketingSection(tab.id, onNavigate);
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
+              <PageLink
+                page="login"
+                className="btn btn-outline btn-sm flex-1 justify-center"
+                onClick={closeMenu}
               >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
-            <PageLink
-              page="login"
-              className="btn btn-outline btn-sm flex-1 justify-center"
-              onClick={closeMenu}
-            >
-              Sign in
-            </PageLink>
-            <ThemeToggleButton />
-          </div>
-        </div>
-      ) : null}
+                Sign in
+              </PageLink>
+              <ThemeToggleButton />
+            </div>
+      </MotionDisclosure>
     </div>
   );
 };

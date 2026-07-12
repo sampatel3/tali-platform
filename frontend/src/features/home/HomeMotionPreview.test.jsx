@@ -51,7 +51,7 @@ describe('HomeMotionPreview (/home-preview)', () => {
 
     // Strip flips to ON and the first pending decision streams into the feed.
     await waitFor(() => expect(screen.getByText('Agent on')).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText('Maya Chen')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Maya Chen').length).toBeGreaterThan(0));
   });
 
   it('renders the final state under prefers-reduced-motion', async () => {
@@ -66,6 +66,6 @@ describe('HomeMotionPreview (/home-preview)', () => {
     // Activation drops straight to the fully populated queue.
     fireEvent.click(screen.getByRole('button', { name: /turn on/i }));
     await waitFor(() => expect(screen.getByText('Agent on')).toBeInTheDocument());
-    expect(screen.getByText('Maya Chen')).toBeInTheDocument();
+    expect(screen.getAllByText('Maya Chen').length).toBeGreaterThan(0);
   });
 });

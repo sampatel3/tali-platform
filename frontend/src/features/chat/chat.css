@@ -286,7 +286,7 @@
   align-items: center;
   justify-content: center;
 }
-.cp-agent-stat-on { background: var(--grad-agent-on); color: #fff; box-shadow: 0 0 0 3px var(--c-purple-soft); }
+.cp-agent-stat-on { background: var(--grad-agent-on-animated); background-size: 300% 300%; color: #fff; box-shadow: 0 0 0 3px var(--c-purple-soft); }
 .cp-agent-stat-paused { background: var(--amber-soft, #fbf0dd); color: var(--c-amber); }
 .cp-agent-stat-off { background: var(--c-bg-3); color: var(--c-mute); }
 .cp-agent-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -524,7 +524,9 @@
 }
 .cp-head-pill.cp-head-pill-on {
   border-color: color-mix(in oklab, var(--c-purple) 40%, var(--c-line));
-  color: var(--c-purple-2);
+  color: #fff;
+  background: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
 }
 
 /* ============ scroll + thread ============ */
@@ -538,6 +540,9 @@
   background: var(--c-bg-2);
   scroll-behavior: smooth;
   min-height: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cp-scroll { scroll-behavior: auto; }
 }
 .cp-thread {
   max-width: 760px;
@@ -1050,34 +1055,6 @@
 
 /* ============ confirm modal ============ */
 
-.cp-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  background: color-mix(in oklab, var(--c-ink) 35%, transparent);
-  backdrop-filter: blur(2px);
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  animation: cp-fade-in .12s ease-out;
-}
-.cp-modal {
-  width: min(420px, 100%);
-  background: var(--c-bg-2);
-  border: 1px solid var(--c-line);
-  border-radius: 16px;
-  padding: 22px 24px 18px;
-  box-shadow: 0 2px 0 rgba(29, 23, 48, .04), 0 30px 60px -20px rgba(29, 23, 48, .22);
-  animation: cp-pop-in .14s cubic-bezier(.2, .8, .2, 1);
-}
-.cp-modal-title {
-  font-family: var(--font-display, var(--font-sans, "Geist", "Inter", system-ui, sans-serif));
-  font-weight: 600;
-  font-size: 1rem;
-  letter-spacing: -.01em;
-  color: var(--c-ink);
-  margin-bottom: 6px;
-}
 .cp-modal-detail {
   font-size: 0.84375rem;
   line-height: 1.5;
@@ -1122,15 +1099,6 @@
 .cp-btn-danger:hover {
   background: color-mix(in oklab, var(--c-red) 90%, black);
 }
-@keyframes cp-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-@keyframes cp-pop-in {
-  from { opacity: 0; transform: translateY(4px) scale(.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
 /* ============ scrollbars ============ */
 /* Quiet thin scrollbars on the rail + thread, matching the Home dock
    (`.ac-stream` / `.ac-agent-list`). */

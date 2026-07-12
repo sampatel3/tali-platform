@@ -18,13 +18,13 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .reveal {
-    animation: revealUp var(--reveal-dur, 0.48s) cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: revealUp var(--reveal-dur, var(--motion-duration-reveal)) var(--motion-ease-enter) both;
     animation-delay: var(--reveal-delay, 0s);
   }
 
   .reveal-stagger > * {
-    animation: revealUp var(--reveal-dur, 0.48s) cubic-bezier(0.16, 1, 0.3, 1) both;
-    animation-delay: calc(var(--i, 0) * var(--reveal-step, 0.06s));
+    animation: revealUp var(--reveal-dur, var(--motion-duration-reveal)) var(--motion-ease-enter) both;
+    animation-delay: calc(var(--i, 0) * var(--reveal-step, var(--motion-stagger-default)));
   }
 
   @keyframes revealUp {

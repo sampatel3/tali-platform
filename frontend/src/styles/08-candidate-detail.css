@@ -198,6 +198,7 @@
   padding: 3px;
 }
 .ctc-tabs button {
+  position: relative;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -206,12 +207,23 @@
   font-size: var(--fs-caption);
   font-weight: 500;
   padding: 6px 14px;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.ctc-tabs button > span:not(.ctc-tab-motion-indicator) {
+  position: relative;
+  z-index: 1;
 }
 .ctc-tabs button:hover:not(.on) { color: var(--ink); }
 .ctc-tabs button.on {
-  background: var(--purple);
   color: #fff;
+}
+.ctc-tab-motion-indicator {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--purple);
 }
 
 .ctc-tab-pane {
@@ -2042,4 +2054,8 @@ body.interview-view .page {
   display: block;
   border: 0;
   background: var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse { animation: none; }
 }

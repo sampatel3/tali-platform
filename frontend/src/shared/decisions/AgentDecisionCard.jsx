@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 
 import { pathForPage } from '../../app/routing';
+import { AgentLoop } from '../motion';
 import { ScoreRing } from '../ui/ScoreRing';
 import {
   Avatar,
@@ -197,7 +198,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           first, then reasoning + flags, with the secondary actions at the bottom. */}
       {isPending && !middleSlot ? (
         <div className="rq-rec">
-          <button
+          <AgentLoop
+            as="button"
+            kind="flow"
             type="button"
             className="rq-rec-btn"
             onClick={() => onApprove(decision)}
@@ -206,7 +209,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           >
             <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
             {spec.primaryLabel}
-          </button>
+          </AgentLoop>
           <div className="rq-rec-kl">
             <Sparkles size={12} aria-hidden="true" /> Agent recommends
             {decision.confidence != null ? ` · Confidence ${Math.round(decision.confidence * 100)}%` : ''}

@@ -827,6 +827,13 @@
   color: var(--purple-2, var(--purple));
   white-space: nowrap;
 }
+.ai-action-label {
+  background: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
 
 .ctable-empty {
   padding: 28px 18px;
@@ -1170,4 +1177,3 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
-

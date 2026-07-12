@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { Check, CircleHelp, FileText, SlidersHorizontal, X } from 'lucide-react';
+import { AgentLoop } from '../../../shared/motion';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
 
@@ -21,7 +22,7 @@ export function ImpactCard({ card, onApply, busy }) {
           <span>Constraint {card.action}</span>
           {card.rescreening_count > 0 && (
             <span className="ac-card-live">
-              <span className="ac-pulse" /> re-screening {card.rescreening_count}
+              <AgentLoop kind="pulse" className="ac-pulse" /> re-screening {card.rescreening_count}
             </span>
           )}
         </div>

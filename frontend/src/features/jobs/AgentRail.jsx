@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
+import { AgentLoop } from '../../shared/motion';
 
 const fmtUsd = (cents) => {
   if (cents == null) return '$0';
@@ -94,7 +95,7 @@ export const AgentRail = ({ roleId, onOpenSettings, onOpenFeed, onPending, fallb
     <aside className={`mc-rail tone-${tone}`} aria-label="Agent status">
       <header className="mc-rail-head">
         <div className="mc-rail-orb">
-          <span className="mc-rail-orb-pulse" aria-hidden="true" />
+          <AgentLoop kind="ring" className="mc-rail-orb-pulse" />
           <Bot size={16} strokeWidth={2} style={{ color: '#fff' }} />
         </div>
         <div>
@@ -107,7 +108,7 @@ export const AgentRail = ({ roleId, onOpenSettings, onOpenFeed, onPending, fallb
       </header>
 
       <div className="mc-rail-tick">
-        <span className="mc-rail-tick-pulse" aria-hidden="true" />
+        <AgentLoop kind="pulse" className="mc-rail-tick-pulse" />
         {lastActivity}
       </div>
 

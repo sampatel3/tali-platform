@@ -367,6 +367,8 @@ describe('LandingPreviewPage', () => {
     expect(screen.queryByRole('button', { name: /Replay/i })).toBeNull();
     // The agent-ON pill renders (not the OFF variant).
     expect(container.querySelector('.lvf .agent-pill:not(.off)')).toBeTruthy();
+    expect(container.querySelector('.lvf .agent-pill:not(.off)')).toHaveAttribute('data-motion-loop', 'flow');
+    expect(container.querySelector('.lvf .agent-pill:not(.off)')).toHaveAttribute('data-motion-state', 'rest');
     // Key copy still present without any animation.
     expect(screen.getByText(/decides — with you\./i)).toBeTruthy();
   });
@@ -440,5 +442,7 @@ describe('LandingPreviewPage', () => {
     expect(container.querySelector('.lvg .stage[data-armed]')).toBeNull();
     expect(screen.queryByRole('button', { name: /Replay/i })).toBeNull();
     expect(container.querySelector('.lvg .agent-pill:not(.off)')).toBeTruthy();
+    expect(container.querySelector('.lvg .agent-pill:not(.off)')).toHaveAttribute('data-motion-loop', 'flow');
+    expect(container.querySelector('.lvg .agent-pill:not(.off)')).toHaveAttribute('data-motion-state', 'rest');
   });
 });

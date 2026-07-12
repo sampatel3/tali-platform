@@ -758,11 +758,6 @@
   text-align: center;
   margin: 0 0 14px;
 }
-@keyframes rqRecFlow {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
 .rq-rec-kl {
   display: flex;
   align-items: center;
@@ -797,7 +792,6 @@
   gap: 8px;
   background: var(--grad-agent-on-animated);
   background-size: 300% 300%;
-  animation: rqRecFlow 7s ease-in-out infinite;
   color: #fff;
   border: 0;
   border-radius: 11px;
@@ -1261,8 +1255,9 @@
 }
 
 .rq-r-flag.on {
-  background: color-mix(in oklab, var(--purple) 14%, transparent);
-  color: var(--purple);
+  background: var(--grad-agent-on-animated);
+  background-size: 300% 300%;
+  color: #fff;
 }
 
 .rq-r-pending em {

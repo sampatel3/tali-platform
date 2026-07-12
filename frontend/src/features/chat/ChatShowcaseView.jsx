@@ -14,6 +14,7 @@ import ToolCallCard from './ToolCallCard';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
 import Sidebar from './Sidebar';
 import { ChatMarkdown, ChatMessage } from '../../shared/chat';
+import { AgentLoop } from '../../shared/motion';
 import { NeedsInputCard } from '../home/agentchat/cards.jsx';
 
 // ChatShowcaseView — the step-05 "locked preview" embedded by DemoShowcasePage.
@@ -600,10 +601,10 @@ const AgentCenter = () => (
         <span className="sub">Agent</span>
       </div>
       <div className="cp-head-grow" />
-      <span className="cp-head-pill cp-head-pill-on">
+      <AgentLoop kind="flow" className="cp-head-pill cp-head-pill-on">
         <span className="cp-pill-glyph"><Sparkles size={11} /></span>
         Agent on
-      </span>
+      </AgentLoop>
     </header>
     <div className="cp-scroll">
       <div className="cp-thread">
