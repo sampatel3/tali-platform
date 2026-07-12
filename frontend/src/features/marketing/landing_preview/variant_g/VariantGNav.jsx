@@ -51,8 +51,8 @@ export const VariantGNav = ({ onNavigate, onSection, active }) => {
           ))}
         </div>
         <div className="nav-right">
-          <button type="button" className="btn btn-ghost" onClick={go('/login')}>Log in</button>
-          <button type="button" className="btn btn-primary" onClick={go('/signup')}>
+          <button type="button" className="btn btn-ghost" onClick={go('login')}>Log in</button>
+          <button type="button" className="btn btn-primary" onClick={go('showcase')}>
             See it live <span className="arw">→</span>
           </button>
         </div>

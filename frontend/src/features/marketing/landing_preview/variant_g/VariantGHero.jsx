@@ -28,10 +28,10 @@ export const VariantGHero = ({ onNavigate }) => {
             end. You stay in control of every call that matters.
           </p>
           <div className="heroC-actions">
-            <button type="button" className="btn btn-primary btn-lg" onClick={go('/signup')}>
+            <button type="button" className="btn btn-primary btn-lg" onClick={go('showcase')}>
               See it live <span className="arw">→</span>
             </button>
-            <button type="button" className="btn btn-outline btn-lg" onClick={go('/demo')}>
+            <button type="button" className="btn btn-outline btn-lg" onClick={go('demo-lead')}>
               Book a demo
             </button>
           </div>

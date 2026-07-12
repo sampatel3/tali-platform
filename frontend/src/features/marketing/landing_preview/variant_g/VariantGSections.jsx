@@ -150,10 +150,10 @@ export const ControlSection = ({ reduced, onNavigate }) => {
             Ready to put the agent to work?
           </h2>
           <div className="cta-actions">
-            <button type="button" className="btn btn-lg" style={{ background: '#fff', color: '#241147' }} onClick={go('/signup')}>
+            <button type="button" className="btn btn-lg" style={{ background: '#fff', color: '#241147' }} onClick={go('showcase')}>
               See it live <span className="arw">→</span>
             </button>
-            <button type="button" className="btn btn-lg btn-outline" style={{ background: 'rgba(255,255,255,.08)', color: '#fff', borderColor: 'rgba(255,255,255,.28)' }} onClick={go('/demo')}>
+            <button type="button" className="btn btn-lg btn-outline" style={{ background: 'rgba(255,255,255,.08)', color: '#fff', borderColor: 'rgba(255,255,255,.28)' }} onClick={go('demo-lead')}>
               Book a demo
             </button>
           </div>

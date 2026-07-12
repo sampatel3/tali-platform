@@ -62,58 +62,71 @@ describe('Demo flow redesign', () => {
     sessionStorage.clear();
     window.scrollTo = vi.fn();
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    // The landing renders variant G (motion + prefers-reduced-motion reads),
+    // which needs matchMedia; jsdom doesn't implement it. Stub it as "no
+    // reduced-motion preference" so the scene renders its animated path.
+    window.matchMedia = vi.fn().mockImplementation((query) => ({
+      matches: false,
+      media: query,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
     assessments.requestDemo.mockResolvedValue({ data: { success: true, candidate_id: 321 } });
   });
 
-  it('routes marketing nav entry points across the landing page instead of to demo', async () => {
+  it('wires the variant G landing CTAs to the same marketing targets as before', async () => {
     const onNavigate = vi.fn();
     renderLanding(onNavigate);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Product' }));
+    // Nav "Log in" → the login page (matches the old landing's "Sign in").
+    fireEvent.click(screen.getByRole('button', { name: /^Log in$/i }));
+    expect(onNavigate).toHaveBeenCalledWith('login');
 
-    expect(onNavigate).not.toHaveBeenCalled();
-    expect(screen.getByRole('link', { name: 'Developers' })).toHaveAttribute('href', '/developers');
-    expect(screen.getByRole('link', { name: 'Blog' })).toHaveAttribute('href', '/blog');
+    // "See it live" (nav + hero + closing band) → the live product walkthrough
+    // (the old landing's "Try the live walkthrough" target).
+    fireEvent.click(screen.getAllByRole('button', { name: /See it live/i })[0]);
+    expect(onNavigate).toHaveBeenCalledWith('showcase');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Developers / API' }));
-    expect(onNavigate).toHaveBeenCalledWith('developers');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Blog' }));
-    expect(onNavigate).toHaveBeenCalledWith('blog');
+    // "Book a demo" (hero + closing band) → the demo-lead intake, unchanged.
+    fireEvent.click(screen.getAllByRole('button', { name: /^Book a demo$/i })[0]);
+    expect(onNavigate).toHaveBeenCalledWith('demo-lead');
   });
 
-  it('renders the restored candidate workspace and how-it-works sections on landing', async () => {
-    renderLanding();
+  it('renders variant G as the production landing (hero, funnel, 5 Ds, control) with no preview chip', async () => {
+    const { container } = renderLanding();
 
-    expect(screen.getByRole('heading', { name: /The recruiter's\s*agent\.\s*Built to hire engineers\s*who ship with AI/i })).toBeInTheDocument();
-    expect(screen.getByText(/AGENTIC-FIRST/i)).toBeInTheDocument();
+    // Scoped variant G shell mounts; the internal preview switcher chip does not
+    // (that lives only on /landing-preview).
+    expect(container.querySelector('.lvg')).toBeTruthy();
+    expect(screen.queryByRole('group', { name: /Landing preview variant/i })).toBeNull();
+
+    // Hero eyebrow + H1 (grad-text split) + CTAs.
+    expect(screen.getByText(/AGENT-NATIVE HIRING/i)).toBeInTheDocument();
+    expect(screen.getByText(/The hiring agent that screens, assesses, and/i)).toBeInTheDocument();
+    expect(screen.getByText(/decides — with you\./i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /See it live/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole('button', { name: /Try the live walkthrough/i }).length).toBeGreaterThan(0);
-    // Hero composition shows the unified agent strip (label "Agent off"
-    // initially). The auto-flip to ON is driven by an IntersectionObserver
-    // scrolling past #how-it-works — JSDom doesn't fire intersection entries,
-    // so the strip stays OFF in tests. Assert the OFF copy ("Set a monthly cap…").
-    expect(screen.getByText(/^Agent off$/i)).toBeInTheDocument();
-    expect(screen.getByText(/Set a monthly cap/i)).toBeInTheDocument();
+
+    // The five funnel steps and the 5 Ds scorecard.
+    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
+      expect(screen.getByText(step)).toBeInTheDocument();
+    });
+    ['Delegation', 'Description', 'Discernment', 'Diligence', 'Deliverable'].forEach((d) => {
+      expect(screen.getByText(d)).toBeInTheDocument();
+    });
+
+    // Control section + the closing CTA band (which now lives inside Control).
+    expect(screen.getByText(/The agent advises\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeInTheDocument();
+
+    // Decision-lane candidate threads the design (also proves the shared data).
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/CANDIDATES PROCESSED/i)).toBeInTheDocument();
-    // "What your candidate actually sees" section was removed in v4 (HANDOFF chat.md)
-    // — the showcase now embeds the real candidate workspace iframe instead.
-    expect(screen.getByRole('heading', { name: /An autonomous agent in your pipeline/i })).toBeInTheDocument();
-    expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
-    expect(screen.getByText(/We're the only platform that measures it\./i)).toBeInTheDocument();
-    // The right-column mock now renders the actual product STANDING REPORT
-    // (radar + dimension breakdown via shared/ui/RadarChart + scoring/scoringDimensions).
-    // "Standing report" also appears in the Decide step body, so getAllByText.
-    expect(screen.getAllByText(/STANDING REPORT/i).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'How it works' })).toBeInTheDocument();
   });
 
-  it('keeps the theme toggle button in both landing and demo navigation', async () => {
-    const { unmount } = renderLanding();
-    expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
-
-    unmount();
+  it('keeps the theme toggle button in demo navigation', async () => {
     renderDemo();
     expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
   });
