@@ -398,7 +398,7 @@ describe('LandingPreviewPage', () => {
       expect(screen.getByText(d)).toBeTruthy();
     });
     expect(screen.getByText(/The agent advises\./i)).toBeTruthy();
-    expect(screen.getByText(/webcams or lockdown browsers/i)).toBeTruthy();
+    // The closing CTA now lives inside the Control section (Proof was dropped).
     expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeTruthy();
     expect(screen.getByText(/hello@taali\.ai/i)).toBeTruthy();
     // Purple family only — the reject path never uses red vocabulary.
@@ -413,17 +413,19 @@ describe('LandingPreviewPage', () => {
     const { container } = renderAt('?v=g');
     // The core requirement: each center nav link points at a section that exists.
     const links = Array.from(container.querySelectorAll('.lvg .nav-links a'));
-    expect(links.length).toBe(4);
+    expect(links.length).toBe(3);
     const ids = links.map((a) => (a.getAttribute('href') || '').replace('#', ''));
-    expect(ids).toEqual(['g-funnel', 'g-fluency', 'g-control', 'g-proof']);
+    expect(ids).toEqual(['g-funnel', 'g-fluency', 'g-control']);
     ids.forEach((id) => {
       expect(container.querySelector(`#${id}`)).toBeTruthy();
     });
+    // The standalone Proof section is gone (its CTA now closes Control).
+    expect(container.querySelector('#g-proof')).toBeNull();
     // The brand + hero anchor to the top section.
     expect(container.querySelector('.lvg .brand[href="#g-top"]')).toBeTruthy();
     expect(container.querySelector('#g-top')).toBeTruthy();
     // Every mapped section is a one-screen `.section-vp` band.
-    ['g-funnel', 'g-fluency', 'g-control', 'g-proof'].forEach((id) => {
+    ['g-funnel', 'g-fluency', 'g-control'].forEach((id) => {
       expect(container.querySelector(`.section-vp#${id}`)).toBeTruthy();
     });
   });

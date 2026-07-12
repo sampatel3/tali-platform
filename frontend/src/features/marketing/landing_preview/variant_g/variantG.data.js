@@ -63,13 +63,6 @@ export const CONTROL = [
   'It advises; it never acts on protected characteristics.',
 ];
 
-export const PROOF = [
-  { num: 'Every task', lbl: 'battle-tested before use' },
-  { num: 'Every decision', lbl: 'carries its evidence' },
-  { num: 'Every session', lbl: 'captured turn by turn' },
-  { num: 'Zero', lbl: 'webcams or lockdown browsers' },
-];
-
 // Hero funnel-stat row (the OFF→ON job card). Last cell ("Advanced") goes hot
 // (purple value) when the agent is ON.
 export const FUNNEL_STATS = [

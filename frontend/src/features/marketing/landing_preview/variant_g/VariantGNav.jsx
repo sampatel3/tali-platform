@@ -11,7 +11,6 @@ export const NAV_LINKS = [
   { id: 'g-funnel', label: 'Agentic hiring' },
   { id: 'g-fluency', label: 'AI fluency' },
   { id: 'g-control', label: 'Control' },
-  { id: 'g-proof', label: 'Proof' },
 ];
 
 export const VariantGNav = ({ onNavigate, onSection, active }) => {

@@ -314,14 +314,8 @@ export const VARIANT_G_CSS = `
 .lvg .control-point p { margin: 0; font-size: 17px; line-height: 1.5; color: var(--ink); letter-spacing: -.01em; }
 
 /* ============================================================
-   PROOF + CTA + FOOTER
+   CTA + FOOTER
    ============================================================ */
-.lvg .proof-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 44px; }
-.lvg .proof-item { padding: 22px 0; border-top: 2px solid var(--ink); }
-.lvg .proof-num { font-size: 28px; font-weight: 600; letter-spacing: -.03em; color: var(--purple); }
-.lvg .proof-lbl { font-size: 14px; color: var(--ink-2); line-height: 1.45; margin-top: 8px; }
-@media (max-width: 800px) { .lvg .proof-grid { grid-template-columns: repeat(2, 1fr); } }
-
 .lvg .cta-band { border-radius: var(--r-xl); padding: 52px 48px; text-align: center; position: relative; overflow: hidden; }
 .lvg .cta-band.dark { background: var(--agent-on); color: #fff; }
 .lvg .cta-band.dark h2 { color: #fff; }
@@ -400,6 +394,10 @@ export const VARIANT_G_CSS = `
 .lvg .glow-card .dg-ev .lk { font-family: var(--mono); font-size: 10px; color: var(--lavender); letter-spacing: .06em; }
 .lvg .control-copy .display { font-size: clamp(28px,3vw,38px); margin: 16px 0 6px; }
 .lvg .control-points { margin-top: 20px; }
+/* the relocated closing CTA — Control's finale; tighter than a standalone band
+   so the whole section still lands in one viewport. */
+.lvg .cta-band.control-cta { margin-top: 40px; padding: 34px 44px; }
+.lvg .cta-band.control-cta .cta-actions { margin-top: 22px; }
 @media (max-width: 940px) {
   .lvg .controlC-grid { grid-template-columns: 1fr; }
   .lvg .glow-card { max-width: 460px; }
