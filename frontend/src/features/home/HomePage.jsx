@@ -8,6 +8,7 @@ import { useSearchParams } from 'react-router-dom';
 import { MessageSquare } from 'lucide-react';
 
 import { agent as agentApi, agentChat } from '../../shared/api';
+import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -51,6 +52,18 @@ const filtersToParams = (filters) => {
   }
   return params;
 };
+
+// Stale-while-revalidate cache keys (module-level, survive navigation). The
+// decisions key is scoped to the same role/type/status the loader fetches; ad-hoc
+// search queries (filters.q) aren't cached, so they return null.
+const decisionsCacheKey = (filters) => (filters.q ? null : `home:decisions:${JSON.stringify({
+  role: filters.role_id || null,
+  type: filters.type || null,
+  status: filters.status || 'pending',
+})}`);
+// "Needs re-eval" count is computed per role/type scope, so its cache key must
+// carry that scope or a scoped count would leak across filters.
+const staleCacheKey = (filters) => `home:stale:${filters.role_id || 'all'}:${filters.type || 'all'}`;
 
 const greetingForHour = (date) => {
   const h = date.getHours();
@@ -130,17 +143,24 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     }, { replace: true });
   }, [setSearchParams]);
 
-  const [orgStatus, setOrgStatus] = useState(null);
-  const [decisions, setDecisions] = useState([]);
-  const [pendingOrdered, setPendingOrdered] = useState([]);
+  // Seed org-wide numbers from the SWR cache so returning to /home (React Router
+  // re-mounts this page on every tab switch) paints the last-known values
+  // instantly instead of flashing 0/empty while the polls round-trip. The polls
+  // below refresh the cache; React setState no-ops when the value is unchanged,
+  // so the displayed number only moves on a real change.
+  const [orgStatus, setOrgStatus] = useState(() => readCache('home:org-status')?.data ?? null);
+  const [decisions, setDecisions] = useState(() => readCache(decisionsCacheKey(filters))?.data?.feed ?? []);
+  const [pendingOrdered, setPendingOrdered] = useState(() => readCache(decisionsCacheKey(filters))?.data?.pending ?? []);
   // True "Needs re-eval" total for the current scope, computed server-side over
   // the whole queue (the per-row is_stale on the list only covers the capped
   // page, so a deep backlog under-counts client-side). Refreshed on real loads,
   // not the silent poll.
-  const [staleCount, setStaleCount] = useState(0);
-  const [rolesBreakdown, setRolesBreakdown] = useState([]);
-  const [loadingDecisions, setLoadingDecisions] = useState(true);
-  const [loadingRoles, setLoadingRoles] = useState(true);
+  const [staleCount, setStaleCount] = useState(() => readCache(staleCacheKey(filters))?.data ?? 0);
+  const [rolesBreakdown, setRolesBreakdown] = useState(() => readCache('home:roles-breakdown')?.data ?? []);
+  // Skip the loading state when the cache already has data to paint, so the
+  // queue and funnel don't flash their spinners on a warm re-mount.
+  const [loadingDecisions, setLoadingDecisions] = useState(() => !readCache(decisionsCacheKey(filters)));
+  const [loadingRoles, setLoadingRoles] = useState(() => !readCache('home:roles-breakdown'));
 
   // Agent chat (Option C): active agents for the left rail + the dock's target
   // role. Progressive enhancement — if the /agent-chat endpoints aren't
@@ -161,11 +181,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // Once the recruiter has picked (or cleared) an agent in the rail, the 30s
   // poll stops auto-focusing the top agent — so a deselect sticks.
   const userTouchedSelectionRef = useRef(false);
-  // Stale-while-revalidate cache of the last rows seen per filter, so flipping
-  // between filters you've already opened paints instantly instead of blanking
-  // to a spinner while the (authenticated) refetch round-trips. Search queries
-  // aren't cached (ad-hoc, unbounded keys); the map is capped to recent views.
-  const decisionsCacheRef = useRef(new Map());
   // Reply notifications: remember each agent's unread count between polls so we
   // can toast when a NEW reply lands in a thread you're not currently viewing.
   // `null` until the first poll primes it (so pre-existing unread never toasts).
@@ -181,17 +196,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // the live list updates in place without a flash — the cards just reconcile
   // when fresh data lands.
   const loadDecisions = useCallback(async ({ silent = false } = {}) => {
-    const cacheKey = filters.q ? null : JSON.stringify({
-      role: filters.role_id || null,
-      type: filters.type || null,
-      status: filters.status || 'pending',
-    });
-    const cached = cacheKey ? decisionsCacheRef.current.get(cacheKey) : null;
+    const cacheKey = decisionsCacheKey(filters);
+    const cached = cacheKey ? readCache(cacheKey) : null;
     // Paint cached rows for this filter immediately (stale-while-revalidate);
     // only show the spinner when there's nothing cached to show yet.
-    if (!silent && cached) {
-      setPendingOrdered(cached.pending);
-      setDecisions(cached.feed);
+    if (!silent && cached?.data) {
+      setPendingOrdered(cached.data.pending);
+      setDecisions(cached.data.feed);
     }
     if (!silent && !cached) setLoadingDecisions(true);
     const ticket = ++reloadCounter.current;
@@ -236,12 +247,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       });
       setPendingOrdered(pending);
       setDecisions(feedRows);
-      if (cacheKey) {
-        const cache = decisionsCacheRef.current;
-        cache.set(cacheKey, { pending, feed: feedRows });
-        // Keep only the most recent handful of filter views in memory.
-        if (cache.size > 10) cache.delete(cache.keys().next().value);
-      }
+      if (cacheKey) writeCache(cacheKey, { pending, feed: feedRows });
     } catch (err) {
       // 401/403 here means the AuthContext is about to redirect to
       // /login — no need to flash a "Failed to load" toast in the
@@ -259,7 +265,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     setLoadingRoles(true);
     try {
       const res = await agentApi.rolesBreakdown();
-      setRolesBreakdown(Array.isArray(res?.data) ? res.data : []);
+      const next = Array.isArray(res?.data) ? res.data : [];
+      setRolesBreakdown(next);
+      writeCache('home:roles-breakdown', next);
     } catch {
       setRolesBreakdown([]);
     } finally {
@@ -280,8 +288,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           agentApi.rolesBreakdown(),
         ]);
         if (cancelled) return;
-        setOrgStatus(statusRes?.data || null);
-        setRolesBreakdown(Array.isArray(rolesRes?.data) ? rolesRes.data : []);
+        const nextStatus = statusRes?.data || null;
+        const nextRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
+        setOrgStatus(nextStatus);
+        setRolesBreakdown(nextRoles);
+        // Refresh the SWR cache so the next re-mount paints these instantly.
+        writeCache('home:org-status', nextStatus);
+        writeCache('home:roles-breakdown', nextRoles);
       } catch { /* silent */ } finally {
         // The dedicated loadRoles() useEffect was retired in favour of this
         // poll; clear loadingRoles here so the "By role" section doesn't
@@ -314,11 +327,19 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // scope changes.
   useEffect(() => {
     let cancelled = false;
+    // Repaint the last-known scoped count instantly on a warm re-mount, then
+    // revalidate below. Keyed by scope so a role/type count never leaks across
+    // filters.
+    const key = staleCacheKey(filters);
+    const seeded = readCache(key);
+    if (seeded?.data != null) setStaleCount(seeded.data);
     agentApi.needsReevalCount({
       role_id: filters.role_id || undefined,
       type: filters.type || undefined,
     }).then((res) => {
-      if (!cancelled) setStaleCount(Number(res?.data?.count) || 0);
+      const n = Number(res?.data?.count) || 0;
+      if (!cancelled) setStaleCount(n);
+      writeCache(key, n);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [filters.role_id, filters.type]);
