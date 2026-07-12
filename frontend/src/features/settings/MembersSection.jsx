@@ -227,7 +227,7 @@ const MembersSection = ({
                     <>
                       <button
                         type="button"
-                        className="settings-member-link settings-member-link-danger"
+                        className="taali-text-btn taali-text-btn-danger settings-member-link settings-member-link-danger"
                         onClick={() => handleRemoveMember(member, { wasInvited: invited })}
                         disabled={busy}
                       >
@@ -235,7 +235,7 @@ const MembersSection = ({
                       </button>
                       <button
                         type="button"
-                        className="settings-member-link"
+                        className="taali-text-btn settings-member-link"
                         onClick={() => setConfirmRemoveId(null)}
                         disabled={busy}
                       >
@@ -248,7 +248,7 @@ const MembersSection = ({
                         <>
                           <button
                             type="button"
-                            className="settings-member-link"
+                            className="taali-text-btn settings-member-link"
                             onClick={() => handleResendInvite(member)}
                             disabled={busy}
                           >
@@ -256,7 +256,7 @@ const MembersSection = ({
                           </button>
                           <button
                             type="button"
-                            className="settings-member-link"
+                            className="taali-text-btn settings-member-link"
                             onClick={() => handleCopyInviteLink(member)}
                             disabled={busy}
                           >
@@ -266,7 +266,7 @@ const MembersSection = ({
                       ) : (
                         <button
                           type="button"
-                          className="settings-member-link"
+                          className="taali-text-btn settings-member-link"
                           onClick={() => handleSetRole(member, memberRole === 'owner' ? 'member' : 'owner')}
                           disabled={busy}
                         >
@@ -275,7 +275,7 @@ const MembersSection = ({
                       )}
                       <button
                         type="button"
-                        className="settings-member-link settings-member-link-danger"
+                        className="taali-text-btn taali-text-btn-danger settings-member-link settings-member-link-danger"
                         onClick={() => setConfirmRemoveId(member.id)}
                         disabled={busy}
                       >

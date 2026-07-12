@@ -235,7 +235,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
           </button>
         ))}
       </span>
-      <button type="button" className="btn sm" onClick={handleExport} disabled={exporting}>
+      <button type="button" className="btn btn-sm" onClick={handleExport} disabled={exporting}>
         <Download size={14} aria-hidden="true" />
         {exporting ? 'Exporting…' : 'Export'}
       </button>
@@ -256,7 +256,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         {loadError ? (
           <div className="an-error" role="alert">
             <p>Couldn&apos;t load analytics. This is usually a temporary connection issue.</p>
-            <button type="button" className="btn sm" onClick={() => setReloadKey((k) => k + 1)}>
+            <button type="button" className="btn btn-sm" onClick={() => setReloadKey((k) => k + 1)}>
               Retry
             </button>
           </div>

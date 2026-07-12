@@ -69,7 +69,7 @@ export const BespokeTaskRequestPage = ({ onNavigate, NavComponent = null }) => {
         <div className="bespoke-task-page">
           <button
             type="button"
-            className="bespoke-back"
+            className="taali-text-btn bespoke-back"
             onClick={() => onNavigate?.('tasks')}
           >
             <ArrowLeft size={14} />

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape from 'cytoscape';
 import { X } from 'lucide-react';
 
+import { Button } from '../../shared/ui/TaaliPrimitives';
+
 /**
  * Force-directed graph view of NL-search results.
  *
@@ -311,9 +313,9 @@ function GraphSidePanel({ node, subgraph, onClose, onSelectCandidate }) {
       <header className="graph-side__head">
         <span className="graph-side__kind">{node.kind}</span>
         <h3 className="graph-side__name">{node.label || '—'}</h3>
-        <button type="button" onClick={onClose} aria-label="Close">
+        <Button variant="ghost" size="xs" iconOnly onClick={onClose} aria-label="Close">
           <X size={16} />
-        </button>
+        </Button>
       </header>
       <div className="graph-side__body">
         {node.kind === 'Person' && (
@@ -345,7 +347,7 @@ function GraphSidePanel({ node, subgraph, onClose, onSelectCandidate }) {
                   {onSelectCandidate ? (
                     <button
                       type="button"
-                      className="link"
+                      className="taali-text-btn link"
                       onClick={() => onSelectCandidate(c.id.replace(/^person:/, ''))}
                     >
                       {c.name || c.id}

@@ -41,7 +41,7 @@ export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }
         <span className="kicker">ANALYTICS · PLATFORM PULSE</span>
         <button
           type="button"
-          className="home-pulse-link"
+          className="taali-btn taali-btn-secondary taali-btn-xs home-pulse-link"
           onClick={() => onNavigate?.('analytics')}
         >
           <LineChart size={14} aria-hidden="true" /> Open full analytics

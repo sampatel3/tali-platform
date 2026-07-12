@@ -75,7 +75,7 @@ const EditorFallback = ({
           type="button"
           onClick={() => onSave?.(editorContent ?? assessmentStarterCode ?? '')}
           disabled={isTimerPaused || saving}
-          className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--mute)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
+          className="taali-btn taali-btn-secondary taali-btn-xs"
         >
           {saving ? 'Saving...' : 'Save'}
         </button>
@@ -83,7 +83,7 @@ const EditorFallback = ({
           type="button"
           onClick={() => onExecute?.(editorContent ?? assessmentStarterCode ?? '')}
           disabled={isTimerPaused}
-          className="inline-flex items-center gap-1.5 rounded-full bg-[var(--purple)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+          className="taali-btn taali-btn-primary taali-btn-xs"
         >
           Run
         </button>
@@ -96,7 +96,7 @@ const EditorFallback = ({
           <button
             type="button"
             onClick={onRetry}
-            className="rounded-full border border-[var(--taali-warning-border)] bg-[var(--bg-2)] px-2.5 py-1 text-[0.6875rem] font-medium text-[var(--taali-warning)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
+            className="taali-btn taali-btn-secondary taali-btn-xs"
           >
             Try again
           </button>
@@ -125,11 +125,7 @@ const DockToggleButton = ({ active = false, icon = null, onClick, children }) =>
   <button
     type="button"
     onClick={onClick}
-    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[0.75rem] font-medium transition-colors ${
-      active
-        ? 'border-[var(--purple)] bg-[var(--purple-soft)] text-[var(--purple)]'
-        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:border-[var(--ink)] hover:text-[var(--ink)]'
-    }`}
+    className={`taali-btn taali-btn-xs ${active ? 'taali-btn-soft' : 'taali-btn-secondary'}`}
   >
     {icon}
     {children}
@@ -148,7 +144,7 @@ const RuntimeOutputPanel = ({ output, executing, onClose }) => (
       <button
         type="button"
         onClick={onClose}
-        className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[0.6875rem] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)]"
+        className="taali-btn taali-btn-inverse taali-btn-xs"
       >
         Collapse
         <ChevronDown size={12} />
@@ -387,7 +383,7 @@ export const AssessmentWorkspace = ({
                       }
                       onCreateRepoFile?.();
                     }}
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--mute)] transition-colors hover:bg-[var(--bg-3)] hover:text-[var(--purple)]"
+                    className="taali-icon-btn taali-icon-btn-sm"
                     aria-label="New file"
                   >
                     <Plus size={14} />
@@ -395,7 +391,7 @@ export const AssessmentWorkspace = ({
                   <button
                     type="button"
                     onClick={() => onToggleRepoPanel?.()}
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--mute)] transition-colors hover:bg-[var(--bg-3)] hover:text-[var(--purple)]"
+                    className="taali-icon-btn taali-icon-btn-sm"
                     aria-label={repoPanelCollapsed ? 'Expand repository' : 'Collapse repository'}
                   >
                     {repoPanelCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
@@ -428,14 +424,14 @@ export const AssessmentWorkspace = ({
                         <button
                           type="button"
                           onClick={() => onCreateRepoFile?.(newRepoFilePath)}
-                          className="flex-1 rounded-full bg-[var(--purple)] px-3 py-2 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)]"
+                          className="taali-btn taali-btn-primary taali-btn-sm flex-1"
                         >
                           Create
                         </button>
                         <button
                           type="button"
                           onClick={onCancelRepoFileCreate}
-                          className="flex-1 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-2 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)]"
+                          className="taali-btn taali-btn-secondary taali-btn-sm flex-1"
                         >
                           Cancel
                         </button>
@@ -581,7 +577,7 @@ export const AssessmentWorkspace = ({
                   <button
                     type="button"
                     onClick={() => onSelectRepoFile?.(null)}
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--mute)] transition-colors hover:bg-[var(--bg-3)] hover:text-[var(--purple)]"
+                    className="taali-icon-btn taali-icon-btn-sm"
                     aria-label="Close editor"
                     title="Close editor"
                   >

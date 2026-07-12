@@ -169,7 +169,7 @@ export function DistributeRolePanel({ roleId, defaultOpen = false }) {
           {!loading && error ? (
             <div className="src-warn">
               Could not load distribution options.{' '}
-              <button type="button" className="src-retry-link" onClick={() => load()}>
+              <button type="button" className="taali-text-btn src-retry-link" onClick={() => load()}>
                 Retry
               </button>
             </div>

@@ -17,7 +17,7 @@ function TaaliDefaultFallback() {
         </p>
         <button
           type="button"
-          className="font-mono text-sm text-[var(--taali-purple)] underline underline-offset-2 hover:text-[var(--taali-purple-hover)]"
+          className="taali-text-btn"
           onClick={() => window.location.reload()}
         >
           Refresh page

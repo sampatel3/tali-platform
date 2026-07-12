@@ -1385,7 +1385,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               {(matchedRequirements.length + missingRequirements.length) > 0 ? (
                 <button
                   type="button"
-                  className="mc-overview-reqjump"
+                  className="taali-text-btn mc-overview-reqjump"
                   onClick={() => activateTab('requirements')}
                 >
                   See the full requirement breakdown · {matchedRequirements.length} of {matchedRequirements.length + missingRequirements.length} met →

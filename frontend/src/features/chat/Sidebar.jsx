@@ -1,6 +1,8 @@
 import React from 'react';
 import { MessageSquare, Pause, Plus, Sparkles, Trash2 } from 'lucide-react';
 
+import { Button } from '../../shared/ui/TaaliPrimitives';
+
 const groupByRecency = (rows) => {
   const groups = { today: [], yesterday: [], week: [], older: [] };
   if (!rows?.length) return groups;
@@ -92,7 +94,8 @@ const AskList = ({ conversations, activeId, onSelect, onNew, onDelete, listError
             <button
               type="button"
               title="Delete conversation"
-              className="cp-conv-del"
+              className="taali-icon-btn taali-icon-btn-danger taali-icon-btn-sm cp-conv-del"
+              aria-label="Delete conversation"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(r.id);
@@ -109,12 +112,12 @@ const AskList = ({ conversations, activeId, onSelect, onNew, onDelete, listError
   return (
     <>
       <div className="cp-side-head">
-        <button type="button" className="cp-new-chat" onClick={onNew}>
+        <Button variant="secondary" fullWidth className="cp-new-chat" onClick={onNew}>
           <span className="cp-plus">
             <Plus size={11} strokeWidth={3} />
           </span>
           New conversation
-        </button>
+        </Button>
       </div>
       <div className="cp-side-list">
         <Group label="Today" rows={groups.today} />

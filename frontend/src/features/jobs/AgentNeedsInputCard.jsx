@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowUpRight, CheckCircle2, MessageSquareWarning, UserX, X } from 'lucide-react';
 
 import api from '../../shared/api/httpClient';
+import { Button } from '../../shared/ui/TaaliPrimitives';
 
 const STATUS_OPEN = 'open';
 
@@ -283,9 +284,16 @@ function FreeTextAnswer({ busy, onSubmit, multiline = false, placeholder = 'Your
           disabled={busy}
         />
       )}
-      <button type="submit" disabled={busy || !text.trim()}>
+      <Button
+        type="submit"
+        variant="primary"
+        size="sm"
+        loading={busy}
+        loadingLabel="Sending..."
+        disabled={!text.trim()}
+      >
         Send
-      </button>
+      </Button>
     </form>
   );
 }

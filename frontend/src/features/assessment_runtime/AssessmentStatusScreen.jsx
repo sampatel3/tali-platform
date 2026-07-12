@@ -88,7 +88,7 @@ export const AssessmentStatusScreen = ({
         ) : (
           <button
             type="button"
-            className="mt-6 inline-flex items-center justify-center rounded-full bg-[var(--purple)] px-7 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--purple-hover,var(--purple))]"
+            className="taali-btn taali-btn-primary taali-btn-lg mt-6"
             onClick={handleClose}
           >
             Close window

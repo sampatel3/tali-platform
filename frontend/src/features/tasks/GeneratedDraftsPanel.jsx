@@ -54,7 +54,7 @@ export const GeneratedDraftsPanel = ({ onNavigate }) => {
         <button
           type="button"
           onClick={() => onNavigate?.('home')}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--purple)] px-3.5 py-2 text-[12px] font-semibold text-white transition-colors hover:bg-[var(--purple-2)]"
+          className="taali-btn taali-btn-primary taali-btn-xs shrink-0"
         >
           Review with the agent <ArrowRight size={13} />
         </button>
