@@ -2,10 +2,10 @@
   position: sticky;
   top: 0;
   z-index: 40;
-  /* Same treatment as the recruiter shell nav (.mc-nav): a subtle on-brand
-     lavender fill (shared --taali-nav-bg token, so marketing and app stay one
-     system) that is clearly NOT white and distinct from the page bg, plus a
-     hairline border-bottom so the header reads as its own clean bar. */
+  /* Same treatment as the recruiter shell nav (.mc-nav): an opaque white fill
+     (shared --taali-nav-bg token, so marketing and app stay one system),
+     delineated from the page bg by a hairline border-bottom so the header
+     reads as its own clean bar. */
   background: var(--taali-nav-bg);
   border-bottom: 1px solid var(--line);
   backdrop-filter: saturate(1.1) blur(10px);

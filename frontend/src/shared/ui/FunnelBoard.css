@@ -110,6 +110,15 @@
   text-transform: none;
 }
 
+/* Home Hub only: the per-stage decision chips ("348 send assessment",
+   "3 advance", "80 reject", "5 delivered"…) were too small to read at
+   --fs-eyebrow (8.4px). Bump to --fs-body (10.4px) on the Hub for legibility.
+   Scoped to .home-body so JobPipelinePage's flat funnel is unaffected. */
+.home-body .fb-stchips .fb-dchip,
+.home-body .fb-stchips .fb-dnone {
+  font-size: var(--fs-body);
+}
+
 /* Phone: let the flat strip scroll inside its own card like the full board. */
 @media (max-width: 720px) {
   .funnel-board.fb-flat {

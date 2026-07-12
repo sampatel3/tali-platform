@@ -96,6 +96,16 @@
   align-items: center;
 }
 
+/* Home Hub greeting band ("Good morning, …") sits directly on the page
+   background — no separate white block. Drop the white fill, the divider and
+   the left-accent bar so the greeting blends into --bg; text + layout unchanged.
+   Scoped to .home-app so every other recruiter page keeps its white header. */
+.home-app .agent-header {
+  background: transparent;
+  border-bottom: none;
+}
+.home-app .agent-header::before { display: none; }
+
 /* Thin purple left-accent — the brand cue on the light header. */
 .agent-header::before {
   content: "";
