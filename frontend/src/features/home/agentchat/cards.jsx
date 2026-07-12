@@ -110,7 +110,12 @@ export function ImpactCard({ card, onApply, busy }) {
         )}
         {!sim && target != null && onApply && (
           <div className="ac-impact-actions">
-            <button className="ac-impact-apply" disabled={busy} onClick={() => onApply(target)}>
+            <button
+              type="button"
+              className="taali-btn taali-btn-primary taali-btn-xs ac-impact-apply"
+              disabled={busy}
+              onClick={() => onApply(target)}
+            >
               Apply {target}
             </button>
           </div>

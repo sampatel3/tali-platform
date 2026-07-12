@@ -112,19 +112,49 @@ export const VARIANT_D_CSS = `
 .lvd.is-on .lvd-cta-row, .lvd.is-static .lvd-cta-row { opacity: 1; transform: none; }
 
 .lvd-btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 48px; padding: 0 24px; border-radius: 999px;
-  font-size: 14px; font-weight: 600; cursor: pointer; border: 1px solid transparent;
-  transition: transform 0.2s ease, box-shadow 0.3s ease, background 0.3s ease;
+  --lvd-btn-bg: var(--lvd-bg-2);
+  --lvd-btn-color: var(--lvd-ink-2);
+  --lvd-btn-border: var(--lvd-line);
+  --lvd-btn-shadow: 0 0 transparent;
+  --lvd-btn-hover-bg: var(--lvd-purple-soft);
+  --lvd-btn-hover-color: var(--lvd-purple-2);
+  --lvd-btn-hover-border: rgba(196,165,253,0.6);
+
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; min-height: 40px; padding: 0 20px; border-radius: 10px;
+  font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1; cursor: pointer;
+  color: var(--lvd-btn-color); background: var(--lvd-btn-bg);
+  border: 1px solid var(--lvd-btn-border); box-shadow: var(--lvd-btn-shadow);
+  white-space: nowrap;
+  transition: transform 0.1s ease, box-shadow 0.16s ease, background 0.16s ease, border-color 0.16s ease, color 0.16s ease, opacity 0.16s ease;
 }
-.lvd-btn:active { transform: translateY(1px) scale(0.98); }
+.lvd-btn:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--lvd-btn-hover-color);
+  background: var(--lvd-btn-hover-bg);
+  border-color: var(--lvd-btn-hover-border);
+}
+.lvd-btn:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(94,58,168,0.24), var(--lvd-btn-shadow);
+}
+.lvd-btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lvd-btn:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
 .lvd-btn--primary {
-  color: #fff; background: linear-gradient(135deg, var(--lvd-purple), var(--lvd-purple-2));
-  box-shadow: 0 12px 30px -12px rgba(94,58,168,0.55), inset 0 1px 0 rgba(255,255,255,0.2);
+  --lvd-btn-bg: var(--lvd-purple);
+  --lvd-btn-color: var(--lvd-bg-2);
+  --lvd-btn-border: var(--lvd-purple);
+  --lvd-btn-shadow: 0 1px 2px rgba(94,58,168,0.22);
+  --lvd-btn-hover-bg: var(--lvd-purple-2);
+  --lvd-btn-hover-color: var(--lvd-bg-2);
+  --lvd-btn-hover-border: var(--lvd-purple-2);
 }
-.lvd-btn--primary:hover { box-shadow: 0 16px 40px -12px rgba(94,58,168,0.7); }
-.lvd-btn--ghost { color: var(--lvd-purple); background: var(--lvd-bg-2); border-color: var(--lvd-line); }
-.lvd-btn--ghost:hover { background: var(--lvd-purple-soft); border-color: rgba(196,165,253,0.6); }
+.lvd-btn--ghost { --lvd-btn-bg: var(--lvd-bg-2); --lvd-btn-color: var(--lvd-ink-2); --lvd-btn-border: var(--lvd-line); }
+.lvd-btn--sm { height: 32px; min-height: 32px; padding: 0 14px; font-size: 13px; }
+.lvd-btn--lg { height: 48px; min-height: 48px; padding: 0 24px; }
 
 /* Switch — grey OFF, purple ON (same vocabulary as variant C). */
 .lvd-switch-wrap {

@@ -168,8 +168,8 @@ export const LoginPage = ({ onNavigate }) => {
           New here?{' '}
           <button
             type="button"
+            className="taali-text-btn"
             onClick={() => onNavigate('demo-lead')}
-            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
           >
             Book a demo
           </button>
@@ -232,8 +232,8 @@ export const LoginPage = ({ onNavigate }) => {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 18 }}>
           <button
             type="button"
+            className="taali-text-btn"
             onClick={() => onNavigate('forgot-password')}
-            style={{ background: 'none', border: 0, color: 'var(--purple)', fontSize: 12.5, fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
           >
             Forgot password?
           </button>
@@ -291,8 +291,8 @@ export const LoginPage = ({ onNavigate }) => {
         No account?{' '}
         <button
           type="button"
+          className="taali-text-btn"
           onClick={() => onNavigate('register')}
-          style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
         >
           Request access
         </button>

@@ -154,7 +154,7 @@ const CvMatchReview = ({
             })}
           </div>
 
-          <button type="button" className="rail-jump" onClick={onJumpToPrep}>
+          <button type="button" className="taali-text-btn rail-jump" onClick={onJumpToPrep}>
             View interview prep →
           </button>
         </div>

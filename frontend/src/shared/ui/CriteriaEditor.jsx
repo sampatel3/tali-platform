@@ -60,7 +60,7 @@ const Composer = ({ onAdd, disabled }) => {
       />
       <button
         type="button"
-        className="ce-composer-add"
+        className="taali-btn taali-btn-primary taali-btn-md ce-composer-add"
         onClick={submit}
         disabled={disabled || !text.trim()}
       >
@@ -212,7 +212,7 @@ const HiddenSection = ({ workspaceCriteria, suppressedIds, onRestore, busy }) =>
               <span className="ce-hidden-bucket">{c.bucket}</span>
               <button
                 type="button"
-                className="ce-hidden-restore"
+                className="taali-btn taali-btn-secondary taali-btn-xs ce-hidden-restore"
                 onClick={() => onRestore(c)}
                 disabled={busy}
               >

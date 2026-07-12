@@ -421,7 +421,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
                 Couldn’t load this conversation.
                 <button
                   type="button"
-                  className="cp-refresh-retry"
+                  className="taali-text-btn cp-refresh-retry"
                   onClick={() => setHydrateNonce((n) => n + 1)}
                 >
                   Try again

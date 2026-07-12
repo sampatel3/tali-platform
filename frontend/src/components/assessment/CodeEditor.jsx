@@ -67,7 +67,7 @@ export default function CodeEditor({
             type="button"
             onClick={handleSave}
             disabled={disabled || saving}
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--mute)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
+            className="taali-btn taali-btn-secondary taali-btn-xs"
           >
             <Save size={12} />
             {saving ? 'Saving...' : 'Save'}
@@ -77,7 +77,7 @@ export default function CodeEditor({
               type="button"
               onClick={onOpenTerminal}
               disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)] disabled:opacity-50"
+              className="taali-btn taali-btn-secondary taali-btn-xs"
             >
               <TerminalSquare size={12} />
               Run tests
@@ -87,7 +87,7 @@ export default function CodeEditor({
             type="button"
             onClick={handleRun}
             disabled={disabled}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--purple)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+            className="taali-btn taali-btn-primary taali-btn-xs"
           >
             <Play size={12} fill="currentColor" />
             Run

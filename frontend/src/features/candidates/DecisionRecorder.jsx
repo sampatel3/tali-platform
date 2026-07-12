@@ -231,7 +231,7 @@ export const DecisionRecorder = ({
         {history.length ? (
           <button
             type="button"
-            className="font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--taali-muted)] underline-offset-2 hover:underline"
+            className="taali-text-btn"
             onClick={() => setHistoryOpen((open) => !open)}
           >
             {historyOpen ? 'Hide history' : `History (${history.length})`}

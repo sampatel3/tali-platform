@@ -5,7 +5,7 @@ import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
 
 const HelpPillButton = ({ as: Component = 'button', children, className = '', ...props }) => (
   <Component
-    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[0.75rem] font-medium text-[var(--mute)] transition-colors hover:bg-[var(--purple-soft)] hover:text-[var(--purple)] ${className}`.trim()}
+    className={`taali-btn taali-btn-ghost taali-btn-xs ${className}`.trim()}
     {...props}
   >
     {children}
@@ -93,7 +93,7 @@ export const AssessmentTopBar = ({
           onClick={onSubmit}
           disabled={isTimerPaused || submitDisabled}
           title={submitDisabled ? 'Preview — submission is disabled in the demo' : undefined}
-          className="inline-flex items-center gap-2 rounded-full bg-[var(--ink)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="taali-btn taali-btn-primary taali-btn-sm"
         >
           Submit
           <ChevronRight size={14} />

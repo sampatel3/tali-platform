@@ -1,6 +1,8 @@
 import React from 'react';
 import { AlertTriangle } from 'lucide-react';
 
+import { Button } from '../../shared/ui/TaaliPrimitives';
+
 export const AssessmentRuntimeAlerts = ({
   showTabWarning,
   proctoringEnabled,
@@ -65,14 +67,15 @@ export const AssessmentRuntimeAlerts = ({
           Assessment paused.{pauseMessage ? ` ${pauseMessage}` : " Your timer is stopped — you won't lose time."}
         </div>
         {onRetryClaude && (
-          <button
-            type="button"
-            className="rounded-[var(--taali-radius-control)] border border-[var(--taali-danger)] px-3 py-1 font-mono text-xs font-bold text-[var(--taali-danger)] transition-colors hover:bg-[var(--taali-danger-soft)] disabled:opacity-60"
+          <Button
+            variant="secondary"
+            size="xs"
             onClick={onRetryClaude}
-            disabled={retryingClaude}
+            loading={retryingClaude}
+            loadingLabel="Retrying..."
           >
-            {retryingClaude ? 'Retrying...' : 'Retry Claude'}
-          </button>
+            Retry Claude
+          </Button>
         )}
       </div>
     )}

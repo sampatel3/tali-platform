@@ -1061,7 +1061,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   <span className="rq-error-text">{error}</span>
                   <button
                     type="button"
-                    className="rq-error-dismiss"
+                    className="taali-icon-btn taali-icon-btn-ghost taali-icon-btn-sm rq-error-dismiss"
                     aria-label="Dismiss message"
                     onClick={() => setError('')}
                   >

@@ -1038,14 +1038,14 @@ export default function AssessmentPage({
                   type="button"
                   onClick={() => handleSubmit(true)}
                   disabled={isTimerPaused || submitting}
-                  className="rounded-full bg-[var(--purple)] px-4 py-2 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+                  className="taali-btn taali-btn-primary taali-btn-sm"
                 >
                   {submitting ? 'Submitting...' : 'Retry submit'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setSubmitError(null)}
-                  className="rounded-full border border-[var(--taali-danger-border)] bg-[var(--bg-2)] px-4 py-2 text-[0.75rem] font-medium text-[var(--taali-danger)] transition-colors hover:border-[var(--taali-danger)]"
+                  className="taali-btn taali-btn-danger taali-btn-sm"
                 >
                   Dismiss
                 </button>
@@ -1074,7 +1074,7 @@ export default function AssessmentPage({
                 type="button"
                 onClick={() => handleSave(codeRef.current)}
                 disabled={isTimerPaused || savingRepoFile}
-                className="rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-2 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
+                className="taali-btn taali-btn-secondary taali-btn-sm"
               >
                 {savingRepoFile ? 'Saving...' : 'Save draft'}
               </button>
@@ -1082,7 +1082,7 @@ export default function AssessmentPage({
                 type="button"
                 onClick={() => handleSubmit(false)}
                 disabled={isTimerPaused || submitting}
-                className="rounded-full bg-[var(--purple)] px-4 py-2 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+                className="taali-btn taali-btn-primary taali-btn-sm"
               >
                 {submitting ? 'Submitting...' : 'Submit'}
               </button>
@@ -1134,14 +1134,14 @@ export default function AssessmentPage({
             <div className="mt-6 flex items-center justify-end gap-3">
               <button
                 type="button"
-                className="inline-flex items-center justify-center rounded-full border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-5 py-2.5 text-sm font-medium text-[var(--taali-runtime-text)] transition-colors hover:border-[var(--taali-purple)] hover:text-[var(--taali-purple)]"
+                className="taali-btn taali-btn-secondary taali-btn-md"
                 onClick={() => setSubmitConfirmOpen(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="inline-flex items-center justify-center rounded-full bg-[var(--taali-purple)] px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[var(--taali-purple-hover)]"
+                className="taali-btn taali-btn-primary taali-btn-md"
                 onClick={() => handleSubmit(true)}
               >
                 Submit

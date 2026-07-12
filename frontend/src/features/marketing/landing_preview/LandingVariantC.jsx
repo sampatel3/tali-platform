@@ -490,16 +490,14 @@ const ClosingCta = ({ onNavigate }) => (
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              className="inline-flex h-12 items-center gap-2 rounded-full px-7 text-[0.875rem] font-semibold text-white"
-              style={{ border: '1px solid rgba(255,255,255,0.55)', background: 'transparent' }}
+              className="taali-btn taali-btn-inverse taali-btn-lg"
               onClick={() => onNavigate('showcase')}
             >
               Open walkthrough →
             </button>
             <button
               type="button"
-              className="inline-flex h-12 items-center gap-2 rounded-full bg-white px-7 text-[0.875rem] font-semibold text-[var(--purple)]"
-              style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
+              className="taali-btn taali-btn-primary taali-btn-lg"
               onClick={() => onNavigate('demo-lead')}
             >
               Get in touch →

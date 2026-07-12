@@ -60,7 +60,7 @@ export const VARIANT_F_CSS = `
 .lvf *, .lvf *::before, .lvf *::after { box-sizing: border-box; }
 .lvf a { color: var(--purple); text-decoration: none; }
 .lvf a:hover { color: var(--purple-deep); }
-.lvf button { font: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
+.lvf button { font: inherit; }
 .lvf img { max-width: 100%; display: block; }
 
 .lvf .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 var(--pad); }
@@ -97,22 +97,74 @@ export const VARIANT_F_CSS = `
 
 /* ── buttons ── */
 .lvf .btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 12px 20px; border-radius: 10px;
-  font-size: 15px; font-weight: 500; letter-spacing: -.01em;
-  transition: transform .1s ease, background .16s ease, border-color .16s, color .16s, box-shadow .16s;
+  --lvf-btn-bg: var(--surface);
+  --lvf-btn-color: var(--ink-2);
+  --lvf-btn-border: var(--line);
+  --lvf-btn-shadow: 0 0 transparent;
+  --lvf-btn-hover-bg: var(--purple-soft);
+  --lvf-btn-hover-color: var(--purple-deep);
+  --lvf-btn-hover-border: color-mix(in oklab, var(--purple) 34%, var(--line));
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 20px;
+  border: 1px solid var(--lvf-btn-border) !important;
+  border-radius: 10px;
+  background: var(--lvf-btn-bg) !important;
+  color: var(--lvf-btn-color) !important;
+  box-shadow: var(--lvf-btn-shadow) !important;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -.01em;
+  text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
+  transition: transform .1s ease, background .16s ease, border-color .16s, color .16s, box-shadow .16s, opacity .16s;
 }
-.lvf .btn:active { transform: translateY(1px); }
-.lvf .btn-primary { background: var(--purple); color: #fff; box-shadow: 0 1px 0 rgba(255,255,255,.15) inset, var(--sh-sm); }
-.lvf .btn-primary:hover { background: var(--purple-deep); color: #fff; }
+.lvf .btn:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--lvf-btn-hover-bg) !important;
+  color: var(--lvf-btn-hover-color) !important;
+  border-color: var(--lvf-btn-hover-border) !important;
+}
+.lvf .btn:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(94,58,168,.24), var(--lvf-btn-shadow) !important;
+}
+.lvf .btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lvf .btn:is(:disabled, [aria-disabled="true"]) {
+  opacity: .48;
+  cursor: not-allowed;
+  transform: none;
+}
+.lvf .btn-primary,
+.lvf .cta-band.dark .btn:not(.btn-outline) {
+  --lvf-btn-bg: var(--purple);
+  --lvf-btn-color: var(--surface);
+  --lvf-btn-border: var(--purple);
+  --lvf-btn-shadow: var(--sh-sm);
+  --lvf-btn-hover-bg: var(--purple-deep);
+  --lvf-btn-hover-color: var(--surface);
+  --lvf-btn-hover-border: var(--purple-deep);
+}
 .lvf .btn-primary .arw { transition: transform .18s; }
-.lvf .btn-primary:hover .arw { transform: translateX(3px); }
-.lvf .btn-outline { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
-.lvf .btn-outline:hover { border-color: var(--purple); color: var(--purple); }
-.lvf .btn-ghost { color: var(--ink-2); padding-left: 6px; padding-right: 6px; }
-.lvf .btn-ghost:hover { color: var(--purple); }
-.lvf .btn-lg { padding: 15px 26px; font-size: 16px; }
+.lvf .btn-primary:hover:not(:disabled) .arw { transform: translateX(3px); }
+.lvf .btn-outline { --lvf-btn-bg: var(--surface); --lvf-btn-color: var(--ink-2); --lvf-btn-border: var(--line); }
+.lvf .btn-ghost { --lvf-btn-bg: transparent; --lvf-btn-color: var(--ink-2); --lvf-btn-border: transparent; }
+.lvf .cta-band.dark .btn-outline {
+  --lvf-btn-bg: transparent;
+  --lvf-btn-color: var(--surface);
+  --lvf-btn-border: rgba(255,255,255,.28);
+  --lvf-btn-hover-bg: rgba(255,255,255,.12);
+  --lvf-btn-hover-color: var(--surface);
+  --lvf-btn-hover-border: rgba(255,255,255,.44);
+}
+.lvf .btn-sm { height: 32px; min-height: 32px; padding: 0 14px; font-size: 13px; }
+.lvf .btn-lg { height: 48px; min-height: 48px; padding: 0 24px; font-size: 16px; }
 
 /* ── nav ── */
 .lvf .nav {
@@ -343,10 +395,15 @@ export const VARIANT_F_CSS = `
 .lvf .replay {
   display: inline-flex; align-items: center; gap: 7px;
   font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-  color: rgba(255,255,255,.8); padding: 6px 12px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: rgba(255,255,255,.1);
-  transition: color .16s, border-color .16s;
+  height: 32px; min-height: 32px; padding: 0 14px; border-radius: 10px;
+  color: rgba(255,255,255,.8); border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.1);
+  font-weight: 600; line-height: 1; cursor: pointer;
+  transition: transform .1s ease, color .16s, border-color .16s, background .16s, opacity .16s;
 }
-.lvf .replay:hover { color: #fff; border-color: #fff; }
+.lvf .replay:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--surface); border-color: rgba(255,255,255,.44); background: rgba(255,255,255,.16); }
+.lvf .replay:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(196,165,253,.42); }
+.lvf .replay:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.lvf .replay:is(:disabled, [aria-disabled="true"]) { opacity: .48; cursor: not-allowed; transform: none; }
 
 /* ── PROBLEM §2 ── */
 .lvf .problemC { text-align: center; padding: 120px 0; position: relative; }

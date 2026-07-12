@@ -347,7 +347,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                 </div>
                 <div className="mt-5 text-center text-[0.8125rem] text-[var(--mute)]">
                   Already know what you need?{' '}
-                  <button type="button" className="text-[var(--purple)]" onClick={() => onNavigate?.('login')}>
+                  <button type="button" className="taali-text-btn" onClick={() => onNavigate?.('login')}>
                     Sign in
                   </button>
                 </div>
@@ -425,7 +425,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
             })}
 
             <div className="wt-foot">
-              <button type="button" className="exit" onClick={() => setSubmittedLead(null)}>← Back to form</button>
+              <button type="button" className="taali-text-btn exit" onClick={() => setSubmittedLead(null)}>← Back to form</button>
               <div className="nav">
                 <button type="button" className="btn btn-outline btn-sm" onClick={() => onNavigate?.('landing')}>Read more about Taali</button>
                 <button type="button" className="btn btn-purple btn-sm" onClick={() => window.location.assign('mailto:hello@taali.ai?subject=Taali%20demo')}>Book a 20-min call</button>

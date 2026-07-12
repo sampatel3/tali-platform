@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { decisionPolicyApi } from './api';
 import { prettyKey } from '../analytics/analyticsFormat';
+import { Button } from '../../shared/ui/TaaliPrimitives';
 
 // Pending feedback_retune policies awaiting admin activation. Shows
 // the diff against the current active policy plus any per-shift
@@ -93,21 +94,23 @@ export default function PendingRetuneReview() {
             </tbody>
           </table>
           </div>
-          <footer className="dp-pending-actions">
-            <button
-              type="button"
+          <footer className="dp-pending-actions flex flex-wrap gap-2">
+            <Button
+              variant="primary"
+              size="sm"
               disabled={busy === p.policy_id}
               onClick={() => handleActivate(p.policy_id)}
             >
               Activate
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
               disabled={busy === p.policy_id}
               onClick={() => handleDiscard(p.policy_id)}
             >
               Discard
-            </button>
+            </Button>
           </footer>
         </article>
       ))}

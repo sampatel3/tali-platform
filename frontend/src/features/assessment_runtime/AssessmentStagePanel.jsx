@@ -29,12 +29,10 @@ export function AssessmentStagePanel({ twoStage }) {
               key={i}
               type="button"
               onClick={() => setActive(i)}
-              className="flex flex-1 items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition"
-              style={{
-                minWidth: 200,
-                borderColor: isActive ? 'var(--purple, #7c5cff)' : 'var(--taali-runtime-border, rgba(127,127,127,0.25))',
-                background: isActive ? 'color-mix(in srgb, var(--purple, #7c5cff) 12%, transparent)' : 'transparent',
-              }}
+              className={`taali-btn taali-btn-sm flex flex-1 items-center gap-2.5 justify-start text-left ${
+                isActive ? 'taali-btn-soft' : 'taali-btn-secondary'
+              }`}
+              style={{ minWidth: 200 }}
             >
               <span
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
@@ -64,8 +62,7 @@ export function AssessmentStagePanel({ twoStage }) {
         <button
           type="button"
           onClick={() => setActive(active + 1)}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[0.8125rem] font-semibold text-white"
-          style={{ background: 'var(--purple, #7c5cff)' }}
+          className="taali-btn taali-btn-primary taali-btn-sm mt-3"
         >
           Done — start {next.title} <span aria-hidden>→</span>
         </button>

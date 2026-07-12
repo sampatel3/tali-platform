@@ -228,7 +228,7 @@ export function CandidateTriageDrawer({
       {onClose ? (
         <button
           type="button"
-          className="ctc-close"
+          className="taali-icon-btn taali-icon-btn-ghost taali-icon-btn-sm ctc-close"
           onClick={onClose}
           aria-label="Close candidate drawer"
         >
@@ -264,7 +264,7 @@ export function CandidateTriageDrawer({
         </div>
         <button
           type="button"
-          className="ctc-toggle-link"
+          className="taali-text-btn ctc-toggle-link"
           onClick={() => setShowDetails((prev) => !prev)}
         >
           {showDetails ? 'Hide details' : 'Show details'}

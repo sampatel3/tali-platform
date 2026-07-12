@@ -447,7 +447,7 @@ const RoleAgentSettingsTab = ({
               <span>Monthly cap {fmtUsd(monthlyBudgetCents)}</span>
               <button
                 type="button"
-                className="mc-agent-settings-budget-edit-link"
+                className="taali-text-btn mc-agent-settings-budget-edit-link"
                 onClick={startBudgetEdit}
               >
                 <Edit3 size={11} />

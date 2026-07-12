@@ -1,6 +1,8 @@
 import React, { useEffect } from 'react';
 import { X } from 'lucide-react';
 
+import { Button } from './TaaliPrimitives';
+
 const SHORTCUTS = [
   { keys: ['⌘', 'K'], description: 'Open global search' },
   { keys: ['/'], description: 'Focus search bar' },
@@ -55,14 +57,15 @@ export const KeyboardShortcutsModal = ({ open, onClose }) => {
           <h2 id="kbd-shortcuts-title" style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
             Keyboard shortcuts
           </h2>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
+            iconOnly
             onClick={onClose}
             aria-label="Close"
-            style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--taali-muted, #888)', padding: 4 }}
           >
             <X size={16} />
-          </button>
+          </Button>
         </div>
         <dl style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           {SHORTCUTS.map((shortcut) => (

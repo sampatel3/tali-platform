@@ -96,7 +96,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
               </span>
               <button
                 type="button"
-                className="rq-r-link"
+                className="taali-text-btn rq-r-link"
                 onClick={(e) => { e.stopPropagation(); onNavigate?.('job-pipeline', { roleId: r.role_id }); }}
               >
                 Open →

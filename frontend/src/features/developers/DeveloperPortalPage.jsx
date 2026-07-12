@@ -38,8 +38,6 @@ body { background: #0a0a11; }
 .devx-bar-right { display: flex; align-items: center; gap: 16px; }
 .devx-bar-link { font-size: 14px; color: var(--x-mute); text-decoration: none; }
 .devx-bar-link:hover { color: var(--x-fg); }
-.devx-cta { padding: 8px 16px; border-radius: 10px; background: var(--x-purple-strong); color: #fff; text-decoration: none; font-weight: 600; font-size: 13px; }
-.devx-cta:hover { background: #8b5cf6; }
 .devx-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; max-width: 1080px; margin: 0 auto; padding: 28px 24px 120px; }
 .devx-nav { position: sticky; top: 78px; align-self: start; display: flex; flex-direction: column; gap: 1px; }
 .devx-nav a { padding: 6px 12px; border-radius: 8px; color: var(--x-mute); text-decoration: none; font-size: 14px; border-left: 2px solid transparent; transition: color .12s; }
@@ -57,8 +55,7 @@ body { background: #0a0a11; }
 .devx code { font-family: var(--font-mono, monospace); font-size: 13px; background: var(--x-purple-soft); color: var(--x-purple); padding: 1px 6px; border-radius: 6px; }
 .devx-codewrap { position: relative; margin: 12px 0; }
 .devx-pre { background: var(--x-surface); color: #e9e9f5; border: 1px solid var(--x-line); border-radius: 12px; padding: 16px; overflow-x: auto; font-family: var(--font-mono, monospace); font-size: 13px; line-height: 1.6; margin: 0; }
-.devx-copy { position: absolute; top: 10px; right: 10px; background: #2a2a3a; color: #fff; border: 1px solid var(--x-line); border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
-.devx-copy:hover { background: #38384e; }
+.devx-copy { position: absolute; top: 10px; right: 10px; }
 .devx-grp { margin-top: 20px; }
 .devx-grp-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; color: var(--x-fg); }
 .devx-ep { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 12px; padding: 12px 0; border-top: 1px solid var(--x-line); }
@@ -90,7 +87,7 @@ const CodeBlock = ({ children }) => {
   };
   return (
     <div className="devx-codewrap">
-      <button type="button" className="devx-copy" onClick={onCopy}>
+      <button type="button" className="taali-btn taali-btn-secondary taali-btn-xs devx-copy" onClick={onCopy}>
         {copied ? 'Copied' : 'Copy'}
       </button>
       <pre className="devx-pre">{children}</pre>
@@ -126,7 +123,7 @@ export const DeveloperPortalPage = () => {
         <a href="/" className="devx-brand">Taali</a>
         <div className="devx-bar-right">
           <a href="#endpoints" className="devx-bar-link">Endpoints</a>
-          <a href="/settings/developers" className="devx-cta">Sign in for API keys</a>
+          <a href="/settings/developers" className="taali-btn taali-btn-primary taali-btn-sm">Sign in for API keys</a>
         </div>
       </nav>
 
