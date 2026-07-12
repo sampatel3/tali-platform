@@ -13,8 +13,7 @@ import * as apiClient from '../../shared/api';
 import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
-import { Dialog, Button } from '../../shared/ui/TaaliPrimitives';
-import { SkeletonTable } from '../../shared/ui/Skeleton';
+import { Dialog, Button, PageLoader } from '../../shared/ui/TaaliPrimitives';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
@@ -1196,7 +1195,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       <div>
         {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
         <div className="page">
-          <SkeletonTable rows={8} />
+          <PageLoader />
         </div>
       </div>
     );

@@ -684,6 +684,21 @@ export const Spinner = ({ size = 24, className = '' }) => (
   <Loader2 size={size} className={cx('animate-spin text-[var(--taali-purple)]', className)} aria-hidden />
 );
 
+// PageLoader — the one shared cold-load state: a centred circular spinner.
+// Every page/section load in the app uses this so the loading experience
+// stays consistent. `minHeight` reserves vertical space so the spinner sits
+// mid-view and the swap-in to real content doesn't jump.
+export const PageLoader = ({ size = 28, minHeight = '17.5rem', label = 'Loading…', className = '' }) => (
+  <div
+    className={cx('flex items-center justify-center', className)}
+    style={{ minHeight }}
+    role="status"
+    aria-label={label}
+  >
+    <Spinner size={size} />
+  </div>
+);
+
 export const TabBar = ({ tabs, activeTab, onChange, className = '', density = 'default' }) => (
   <div
     role="tablist"
