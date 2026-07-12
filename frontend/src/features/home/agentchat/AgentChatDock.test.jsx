@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   answerNeedsInput: vi.fn().mockResolvedValue({ data: {} }),
   dismissNeedsInput: vi.fn().mockResolvedValue({ data: {} }),
+  applyPendingRejects: vi.fn(),
+  dismissPendingRejects: vi.fn(),
 }));
 vi.mock('../../../shared/api', () => ({
   agentChat: {
@@ -14,6 +16,8 @@ vi.mock('../../../shared/api', () => ({
     sendMessage: mocks.sendMessage,
     answerNeedsInput: mocks.answerNeedsInput,
     dismissNeedsInput: mocks.dismissNeedsInput,
+    applyPendingRejects: mocks.applyPendingRejects,
+    dismissPendingRejects: mocks.dismissPendingRejects,
     markRead: vi.fn().mockResolvedValue({ data: {} }),
     listConversations: vi.fn().mockResolvedValue({ data: { agents: [] } }),
   },
@@ -98,6 +102,59 @@ describe('AgentChatDock', () => {
     await waitFor(() =>
       expect(mocks.answerNeedsInput).toHaveBeenCalledWith(9, { value: 'marcus', label: 'Marcus' })
     );
+  });
+
+  it('pending-reject sweep card: Approve applies, resolved card shows outcome', async () => {
+    const sweepMsg = {
+      kind: 'message', id: 's1', author: 'agent',
+      text: 'Auto-reject is on — 7 rejects were already waiting. Apply to them too?',
+      created_at: '2026-06-03T09:03:00Z',
+      actions: [{ type: 'pending_reject_sweep', role_id: 1, pending_count: 7, status: 'offered' }],
+    };
+    mocks.getTimeline.mockResolvedValue({ data: { timeline: [sweepMsg] } });
+    mocks.applyPendingRejects.mockResolvedValue({
+      data: {
+        timeline: [
+          {
+            ...sweepMsg,
+            actions: [{ type: 'pending_reject_sweep', role_id: 1, pending_count: 7, status: 'applied', applied_count: 7 }],
+          },
+        ],
+      },
+    });
+    renderDock();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Reject 7 pending/ }));
+    await waitFor(() => expect(mocks.applyPendingRejects).toHaveBeenCalledWith(1));
+    // The refreshed timeline collapses the buttons to the outcome line.
+    expect(await screen.findByText(/Applied — 7 sent through the reject flow/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Reject 7 pending/ })).not.toBeInTheDocument();
+  });
+
+  it('pending-reject sweep card: Keep for review dismisses', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message', id: 's2', author: 'agent', text: 'Apply to pending too?',
+          created_at: '2026-06-03T09:04:00Z',
+          actions: [{ type: 'pending_reject_sweep', role_id: 1, pending_count: 3, status: 'offered' }],
+        }],
+      },
+    });
+    mocks.dismissPendingRejects.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message', id: 's2', author: 'agent', text: 'Apply to pending too?',
+          created_at: '2026-06-03T09:04:00Z',
+          actions: [{ type: 'pending_reject_sweep', role_id: 1, pending_count: 3, status: 'dismissed' }],
+        }],
+      },
+    });
+    renderDock();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Keep for review/ }));
+    await waitFor(() => expect(mocks.dismissPendingRejects).toHaveBeenCalledWith(1));
+    expect(await screen.findByText('Kept for manual review')).toBeInTheDocument();
   });
 
   it('bulk mode: composer fans out to onSendBulk, not the single-role send', async () => {

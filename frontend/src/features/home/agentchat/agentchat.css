@@ -243,6 +243,10 @@
 
 /* ---- Draft-task review card -------------------------------------------- */
 .ac-card-draft { background: var(--purple-tint); border-color: var(--purple-soft); }
+
+/* ---- Pending-reject sweep offer card ------------------------------------ */
+.ac-card-sweep { background: var(--purple-tint); border-color: var(--purple-soft); }
+.ac-card-sweep .ac-card-head svg { color: var(--purple); }
 .ac-draft { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 11px; }
 .ac-draft + .ac-draft { margin-top: 2px; }
 .ac-draft-title { font-size: 0.8125rem; font-weight: 600; color: var(--ink); line-height: 1.3; }

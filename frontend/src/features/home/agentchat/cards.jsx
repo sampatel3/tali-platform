@@ -5,7 +5,7 @@
 // intentionally NOT rendered here in Option C — those live in the main feed.
 
 import { useState } from 'react';
-import { Check, CircleHelp, FileText, SlidersHorizontal, X } from 'lucide-react';
+import { Check, CircleHelp, FileText, SlidersHorizontal, UserX, X } from 'lucide-react';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
 
@@ -287,6 +287,41 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// The pending_reject_sweep card — posted when auto-reject is turned on while
+// pre-screen reject cards are already pending in the Hub. The toggle is
+// forward-only; this is the recruiter's one-click opt-in to apply the new
+// policy to the existing queue. Resolved offers collapse to an outcome line.
+export function PendingRejectSweepCard({ card, onApply, onDismiss, busy }) {
+  if (!card) return null;
+  const n = card.pending_count || 0;
+  return (
+    <div className="ac-card ac-card-sweep">
+      <div className="ac-card-head">
+        <UserX size={14} />
+        <span>Auto-reject is on — {n} already pending</span>
+      </div>
+      {card.status === 'applied' ? (
+        <div className="ac-needs-answered">
+          <Check size={13} /> Applied — {card.applied_count ?? n} sent through the reject flow
+        </div>
+      ) : card.status === 'dismissed' ? (
+        <div className="ac-needs-answered" style={{ color: 'var(--ink-soft)' }}>
+          Kept for manual review
+        </div>
+      ) : (
+        <div className="ac-card-actions">
+          <button className="ac-btn ac-btn-primary" disabled={busy} onClick={() => onApply?.()}>
+            <Check size={13} /> Reject {n} pending
+          </button>
+          <button className="ac-btn ac-btn-ghost" disabled={busy} onClick={() => onDismiss?.()}>
+            Keep for review
+          </button>
+        </div>
+      )}
     </div>
   );
 }
