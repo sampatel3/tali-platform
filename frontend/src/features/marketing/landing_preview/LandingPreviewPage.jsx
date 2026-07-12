@@ -7,8 +7,9 @@ import { LandingVariantC } from './LandingVariantC';
 import { LandingVariantD } from './variant_d/LandingVariantD';
 import { LandingVariantE } from './variant_e/LandingVariantE';
 import { LandingVariantF } from './variant_f/LandingVariantF';
+import { LandingVariantG } from './variant_g/LandingVariantG';
 
-const DEFAULT_VARIANT = 'f';
+const DEFAULT_VARIANT = 'g';
 const VARIANTS = {
   a: { label: 'A · Value-abstract', Component: LandingVariantA },
   b: { label: 'B · One live artifact', Component: LandingVariantB },
@@ -16,6 +17,7 @@ const VARIANTS = {
   d: { label: 'D · Watch it work', Component: LandingVariantD },
   e: { label: 'E · Watch it work', Component: LandingVariantE },
   f: { label: 'F · Vivid', Component: LandingVariantF },
+  g: { label: 'G · Combined', Component: LandingVariantG },
 };
 
 // Small floating variant-switcher chip. Fixed bottom-centre, updates the ?v=

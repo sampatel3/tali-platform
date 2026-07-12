@@ -141,12 +141,12 @@ describe('LandingPreviewPage', () => {
     ).toBe('true');
   });
 
-  it('falls back to variant F (the default) for an unknown ?v value', () => {
+  it('falls back to variant G (the default) for an unknown ?v value', () => {
     const { container } = renderAt('?v=zzz');
-    // Variant F ("Vivid Purple") is now the default; its scoped `.lvf` shell mounts.
-    expect(container.querySelector('.lvf')).toBeTruthy();
+    // Variant G ("Combined") is now the default; its scoped `.lvg` shell mounts.
+    expect(container.querySelector('.lvg')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: /F · Vivid/i }).getAttribute('aria-pressed'),
+      screen.getByRole('button', { name: /G · Combined/i }).getAttribute('aria-pressed'),
     ).toBe('true');
   });
 
@@ -301,10 +301,10 @@ describe('LandingPreviewPage', () => {
     expect(container.querySelector('.lve-hs-replay')).toBeNull();
   });
 
-  // ── Variant F · "Vivid Purple" design handoff (the new default) ──────────
-  it('renders variant F as the default (?v empty) with its scoped shell, nav, hero scene and sections', () => {
-    const { container } = renderAt('');
-    // Scoped `.lvf` root + the F switcher chip is active by default.
+  // ── Variant F · "Vivid Purple" design handoff ───────────────────────────
+  it('renders variant F at ?v=f with its scoped shell, nav, hero scene and sections', () => {
+    const { container } = renderAt('?v=f');
+    // Scoped `.lvf` root + the F switcher chip is active at ?v=f.
     expect(container.querySelector('.lvf')).toBeTruthy();
     expect(
       screen.getByRole('button', { name: /F · Vivid/i }).getAttribute('aria-pressed'),
@@ -369,5 +369,71 @@ describe('LandingPreviewPage', () => {
     expect(container.querySelector('.lvf .agent-pill:not(.off)')).toBeTruthy();
     // Key copy still present without any animation.
     expect(screen.getByText(/decides — with you\./i)).toBeTruthy();
+  });
+
+  // ── Variant G · Combined — F's vivid look + E's tight section-per-viewport ─
+  it('renders variant G as the default (?v empty) with its scoped shell, two-column hero and sections', () => {
+    const { container } = renderAt('');
+    // Scoped `.lvg` root + the G switcher chip is active by default.
+    expect(container.querySelector('.lvg')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /G · Combined/i }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    // Two-column hero: the copy column + the agent stage column both mount, with
+    // the verbatim H1 + grad-text accent and both CTAs.
+    expect(container.querySelector('.lvg .heroC-grid .heroC-copy')).toBeTruthy();
+    expect(container.querySelector('.lvg .heroC-stage-col .stage .job-card')).toBeTruthy();
+    expect(screen.getByText(/The hiring agent that screens, assesses, and/i)).toBeTruthy();
+    expect(screen.getByText(/decides — with you\./i)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /See it live/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Book a demo/i }).length).toBeGreaterThan(0);
+    // Funnel — the five steps, said once.
+    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
+      expect(screen.getByText(step)).toBeTruthy();
+    });
+    expect(screen.getByText(/One agent,/i)).toBeTruthy();
+    // The 5 Ds scorecard, the control destination, proof + close, footer.
+    expect(screen.getByText(/Measure how people/i)).toBeTruthy();
+    ['Delegation', 'Description', 'Discernment', 'Diligence', 'Deliverable'].forEach((d) => {
+      expect(screen.getByText(d)).toBeTruthy();
+    });
+    expect(screen.getByText(/The agent advises\./i)).toBeTruthy();
+    expect(screen.getByText(/webcams or lockdown browsers/i)).toBeTruthy();
+    expect(screen.getByText(/Ready to put the agent to work\?/i)).toBeTruthy();
+    expect(screen.getByText(/hello@taali\.ai/i)).toBeTruthy();
+    // Purple family only — the reject path never uses red vocabulary.
+    expect(screen.getByText('Tariq Al-Ahmad')).toBeTruthy();
+    expect(screen.getByText('Reject')).toBeTruthy();
+    // Broadened copy: "works with AI", never "ship/build with AI".
+    expect(container.textContent).not.toMatch(/ship with AI/i);
+    expect(container.textContent).not.toMatch(/build with AI/i);
+  });
+
+  it('wires every variant-G nav anchor to a matching section (nav href targets resolve)', () => {
+    const { container } = renderAt('?v=g');
+    // The core requirement: each center nav link points at a section that exists.
+    const links = Array.from(container.querySelectorAll('.lvg .nav-links a'));
+    expect(links.length).toBe(4);
+    const ids = links.map((a) => (a.getAttribute('href') || '').replace('#', ''));
+    expect(ids).toEqual(['g-funnel', 'g-fluency', 'g-control', 'g-proof']);
+    ids.forEach((id) => {
+      expect(container.querySelector(`#${id}`)).toBeTruthy();
+    });
+    // The brand + hero anchor to the top section.
+    expect(container.querySelector('.lvg .brand[href="#g-top"]')).toBeTruthy();
+    expect(container.querySelector('#g-top')).toBeTruthy();
+    // Every mapped section is a one-screen `.section-vp` band.
+    ['g-funnel', 'g-fluency', 'g-control', 'g-proof'].forEach((id) => {
+      expect(container.querySelector(`.section-vp#${id}`)).toBeTruthy();
+    });
+  });
+
+  it('renders variant G in its settled ON state (never armed, no replay) under reduced-motion', () => {
+    stubMatchMedia(true);
+    const { container } = renderAt('?v=g');
+    expect(container.querySelector('.lvg .job-card.is-on')).toBeTruthy();
+    expect(container.querySelector('.lvg .stage[data-armed]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Replay/i })).toBeNull();
+    expect(container.querySelector('.lvg .agent-pill:not(.off)')).toBeTruthy();
   });
 });
