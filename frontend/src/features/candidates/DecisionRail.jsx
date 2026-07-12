@@ -113,7 +113,7 @@ export const DecisionRail = ({
   const metaItems = (Array.isArray(candidateMeta) ? candidateMeta : []).filter(Boolean);
 
   return (
-    <aside className="dossier-rail">
+    <aside className="dossier-rail dr-reveal">
       {candidateName ? (
         <div className="dr-id">
           <div className="dr-id-avatar" aria-hidden="true">{candidateInitials || 'C'}</div>

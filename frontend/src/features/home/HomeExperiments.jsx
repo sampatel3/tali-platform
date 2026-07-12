@@ -47,7 +47,7 @@ const SectionRow = ({ label }) => (
     <td
       colSpan={99}
       style={{
-        paddingTop: 14, paddingBottom: 4, fontSize: 11, letterSpacing: '0.06em',
+        paddingTop: 14, paddingBottom: 4, fontSize: 'var(--fs-body-lg)', letterSpacing: '0.06em',
         textTransform: 'uppercase', color: 'var(--purple)', fontWeight: 600,
       }}
     >
@@ -133,7 +133,7 @@ export const HomeExperiments = ({ roleId, dateFrom }) => {
       {anySmall ? (
         <div
           style={{
-            margin: '8px 0', padding: '8px 12px', borderRadius: 8, fontSize: 13,
+            margin: '8px 0', padding: '8px 12px', borderRadius: 8, fontSize: 'var(--fs-subtitle)',
             color: 'var(--ink)',
             background: 'color-mix(in oklab, var(--purple) 7%, var(--bg-2))',
             border: '1px solid color-mix(in oklab, var(--purple) 28%, var(--line))',
@@ -144,7 +144,7 @@ export const HomeExperiments = ({ roleId, dateFrom }) => {
       ) : null}
 
       {data?.cohort_drift ? (
-        <div style={{ margin: '4px 0 8px', fontSize: 12, color: 'var(--mute)' }}>
+        <div style={{ margin: '4px 0 8px', fontSize: 'var(--fs-subtitle)', color: 'var(--mute)' }}>
           ⚠ Arm assignment counts are materially unequal — interpret rates with care.
         </div>
       ) : null}
@@ -154,14 +154,14 @@ export const HomeExperiments = ({ roleId, dateFrom }) => {
       ) : arms.length === 0 ? (
         <div className="home-empty">No assignments recorded for this experiment yet.</div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-subtitle)' }}>
           <thead>
             <tr>
               <th style={{ textAlign: 'left', padding: '4px 8px' }} />
               {arms.map((a) => (
                 <th key={a.arm_id} style={{ textAlign: 'right', padding: '4px 12px' }}>
                   <div style={{ fontWeight: 600 }}>{a.arm_key}</div>
-                  <div style={{ fontSize: 11, color: 'var(--mute)', fontWeight: 400 }}>{a.task_name || `task ${a.task_id}`}</div>
+                  <div style={{ fontSize: 'var(--fs-body-lg)', color: 'var(--mute)', fontWeight: 400 }}>{a.task_name || `task ${a.task_id}`}</div>
                 </th>
               ))}
             </tr>

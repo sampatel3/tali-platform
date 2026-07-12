@@ -35,7 +35,7 @@
   background: transparent;
   color: var(--mute);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   padding: 7px 14px;
   border-radius: 999px;
@@ -63,7 +63,7 @@
 
 .mc-settings-group {
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--mute);
@@ -81,7 +81,7 @@
   background: transparent;
   color: var(--ink-2);
   font: inherit;
-  font-size: 0.84375rem;
+  font-size: var(--fs-body);
   cursor: pointer;
 }
 
@@ -109,14 +109,14 @@
 .mc-settings-section h2 {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 1.375rem;
+  font-size: var(--fs-h2);
   letter-spacing: -0.015em;
   color: var(--ink);
   margin: 0 0 6px;
 }
 
 .mc-settings-section .section-sub {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
   margin-bottom: 20px;
 }
@@ -200,11 +200,11 @@
   background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
 }
 .settings-credit-pack > span:first-child {
-  font-size: 0.9375rem;
+  font-size: var(--fs-subtitle);
   font-weight: 600;
 }
 .settings-credit-pack-meta {
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--purple-2);
   font-weight: 500;
 }
@@ -256,7 +256,7 @@
 .settings-panel h2 {
   margin-top: 18px;
   margin-bottom: 0;
-  font-size: 1.3125rem;          /* 21px — preview .smain h2 */
+  font-size: var(--fs-h2);       /* 21px — preview .smain h2 */
   letter-spacing: -0.01em;
   line-height: 1.2;
 }
@@ -266,7 +266,7 @@
 }
 .settings-panel .sub {
   margin: 4px 0 2px;
-  font-size: 0.84375rem;         /* 13.5px */
+  font-size: var(--fs-body);     /* 13.5px */
 }
 
 /* ── Form field labels: preview `.fld .k` is sentence-case 12px / 500,
@@ -274,7 +274,7 @@
    Inputs sit on the tinted `--bg` with a `--line-2` hairline. ── */
 .settings-panel .field > .k {
   font-family: var(--font-sans);
-  font-size: 0.75rem;            /* 12px */
+  font-size: var(--fs-caption);  /* 12px */
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
@@ -288,7 +288,7 @@
   background: var(--bg);
   border-color: var(--line-2);
   padding: 10px 13px;
-  font-size: 0.84375rem;         /* 13.5px */
+  font-size: var(--fs-body);     /* 13.5px */
 }
 .settings-panel .field textarea {
   line-height: 1.5;
@@ -300,11 +300,11 @@
   padding: 14px 16px;
 }
 .settings-toggle-card h4 {
-  font-size: 0.84375rem;         /* 13.5px */
+  font-size: var(--fs-body-lg);  /* 13.5px */
   font-weight: 500;
 }
 .settings-toggle-card p {
-  font-size: 0.75rem;            /* 12px */
+  font-size: var(--fs-caption);  /* 12px */
 }
 
 /* ── Toggle switch: preview `.sw` is 42×23 with a 19px knob. The shared
@@ -332,10 +332,10 @@
    14.5px / 600 with a 12.5px muted description. Align the de-carded
    `.settings-subcard-head` typography. ── */
 .settings-subcard-head h3 {
-  font-size: 0.90625rem;         /* 14.5px */
+  font-size: var(--fs-subtitle); /* 14.5px */
 }
 .settings-subcard-head p {
-  font-size: 0.78125rem;         /* 12.5px */
+  font-size: var(--fs-body);     /* 12.5px */
 }
 
 /* ── Workable status card: preview `.wkstatus` is a hairline card on
@@ -372,7 +372,7 @@
 }
 .members .mb .chip {
   font-family: var(--font-sans);
-  font-size: 0.6875rem;          /* 11px — preview .mchip */
+  font-size: var(--fs-eyebrow);  /* 11px — preview .mchip */
   font-weight: 500;
   letter-spacing: 0;
   padding: 3px 11px;
@@ -395,7 +395,7 @@
   border: 0;
   padding: 0;
   font: inherit;
-  font-size: 0.75rem;            /* 12px */
+  font-size: var(--fs-caption);  /* 12px */
   font-weight: 500;
   color: var(--purple);
   cursor: pointer;
@@ -419,14 +419,14 @@
    bonus in purple. Pass-1 already de-slabbed these; ensure the price
    line reads as the preview's `→ $N credit` purple meta. ── */
 .settings-credit-pack > span:first-child {
-  font-size: 1.125rem;           /* 18px — preview .pack .pamt */
+  font-size: var(--fs-h3);       /* 18px — preview .pack .pamt */
 }
 
 /* ── Stat cards: preview `.bcard .v` / `.wkstatus` numbers are 22px.
    Nudge the shared 24px summary value down inside settings. ── */
 .settings-panel .settings-billing-card .settings-summary-value,
 .settings-panel .settings-summary-card .settings-summary-value {
-  font-size: 1.375rem;           /* 22px — preview .bcard .v */
+  font-size: var(--fs-h2);       /* 22px — preview .bcard .v */
 }
 
 /* ── AI-agent budget/threshold row: preview keeps both under ONE flat
@@ -463,7 +463,7 @@
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
   padding: 8px 11px;
-  font-size: 0.84375rem;         /* 13.5px — matches .field input */
+  font-size: var(--fs-body);     /* 13.5px — matches .field input */
   font-family: var(--font-mono);
 }
 .bh-stage-row select {
@@ -474,7 +474,7 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   white-space: nowrap;
 }
@@ -499,7 +499,7 @@
   gap: 6px;
   padding: 3px 10px;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   font-weight: 600;
   border: 1px solid var(--line-2);
   color: var(--mute);
@@ -538,7 +538,7 @@
 }
 .settings-integration-card-heading h3 {
   margin: 0;
-  font-size: 1.0625rem;
+  font-size: var(--fs-h3);
   font-weight: 600;
   color: var(--ink);
 }
@@ -570,7 +570,7 @@
 }
 .settings-integration-card-heading .sub {
   margin: 3px 0 0;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--mute);
 }
 .settings-integration-card-head .settings-integration-chip {

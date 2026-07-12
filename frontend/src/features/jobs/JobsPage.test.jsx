@@ -30,6 +30,21 @@ vi.mock('../../shared/api', () => ({
 import * as apiClient from '../../shared/api';
 import { JobsPage } from './JobsPage';
 
+// matchMedia is absent in jsdom; stub it so useReducedMotionSync can read a
+// deterministic prefers-reduced-motion value per test.
+const setReducedMotion = (reduce) => {
+  window.matchMedia = vi.fn().mockImplementation((query) => ({
+    matches: query.includes('reduce') ? reduce : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+};
+
 const baseRoles = [
   {
     id: 101,
@@ -56,6 +71,10 @@ const baseOrg = {
 describe('JobsPage Workable sync states', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default to reduced motion so the per-stage count-up tickers render their
+    // final values synchronously (jsdom has no rAF-driven layout). Motion-
+    // specific tests below override this to exercise the entrance animations.
+    setReducedMotion(true);
     apiClient.roles.list.mockResolvedValue({ data: baseRoles });
     apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
@@ -218,5 +237,64 @@ describe('JobsPage Workable sync states', () => {
     await screen.findByText('Backend Engineer');
     expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, limit: 24 });
     expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true });
+  });
+});
+
+describe('JobsPage entrance motion', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setReducedMotion(true);
+    apiClient.roles.list.mockResolvedValue({ data: baseRoles });
+    apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
+    apiClient.tasks.list.mockResolvedValue({ data: [] });
+    apiClient.agent.status.mockResolvedValue({ data: {} });
+    apiClient.agent.rolesBreakdown.mockResolvedValue({ data: [] });
+    apiClient.agent.orgStatus.mockResolvedValue({
+      data: { org_budget_spent_cents: 4200, org_budget_cap_cents: 9000 },
+    });
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+  });
+
+  it('adds the reveal classes to the strip / KPI / filter rows and staggers the cards on first mount', async () => {
+    setReducedMotion(false);
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    await screen.findByText('Backend Engineer');
+    // Sequential entrance reveal above the grid.
+    expect(document.querySelector('.wk-strip')).toHaveClass('reveal');
+    expect(document.querySelector('.filter-row')).toHaveClass('reveal');
+    // KpiStrip wrapper + the two rows above are the three .reveal elements.
+    expect(document.querySelectorAll('.reveal').length).toBeGreaterThanOrEqual(3);
+    // Card grid staggers in once, and each card carries its capped index.
+    const grid = document.querySelector('.jobs-grid');
+    expect(grid).toHaveClass('reveal-stagger');
+    expect(grid.querySelector('.job-card').style.getPropertyValue('--i')).toBe('0');
+  });
+
+  it('renders the final stage counts immediately under reduced motion', async () => {
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const advancedCell = (await screen.findByText('Advanced')).closest('.js-cell');
+    // No tween under reduced motion: the settled stage_counts render at once.
+    expect(within(advancedCell).getByText('2')).toBeInTheDocument();
+    const rejectedCell = screen.getByText('Rejected').closest('.js-cell');
+    expect(within(rejectedCell).getByText('4')).toBeInTheDocument();
+  });
+
+  it('does not re-fire the card stagger when a filter changes', async () => {
+    setReducedMotion(false);
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    await screen.findByText('Backend Engineer');
+    const grid = document.querySelector('.jobs-grid');
+    // The one-shot stagger retires itself after its animation window.
+    await waitFor(() => expect(grid).not.toHaveClass('reveal-stagger'), { timeout: 2000 });
+
+    // Changing a filter re-renders the grid but must NOT re-arm the stagger.
+    fireEvent.click(screen.getByRole('button', { name: /With open candidates/i }));
+    await screen.findByText('Backend Engineer');
+    expect(document.querySelector('.jobs-grid')).not.toHaveClass('reveal-stagger');
   });
 });

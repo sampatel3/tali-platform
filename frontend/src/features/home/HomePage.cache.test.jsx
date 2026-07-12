@@ -38,7 +38,9 @@ vi.mock('../../context/ToastContext', () => ({
 // Render only the numbers we assert on — the cache logic under test lives in
 // HomePage, and these props are exactly what it computes and hands down.
 vi.mock('../../shared/layout/AgentHeader', () => ({
-  AgentHeader: ({ kicker }) => <div data-testid="kicker">{kicker}</div>,
+  AgentHeader: ({ kicker, className }) => (
+    <div data-testid="kicker" className={className}>{kicker}</div>
+  ),
 }));
 vi.mock('./HomeNow', () => ({
   HomeNow: ({ loading, staleCount, rolesBreakdown: roles, pendingOrdered }) => (
@@ -97,6 +99,8 @@ test('cached home numbers paint instantly on re-mount without a loading flash', 
   await waitFor(() => {
     expect(first.getByTestId('kicker').textContent).toContain('7 AWAITING YOU · 3 ACTIVE ROLES');
   });
+  // The header opts into the shared entrance reveal on mount.
+  expect(first.getByTestId('kicker').className).toContain('reveal');
   await waitFor(() => {
     expect(first.getByTestId('hn').textContent).toBe('loading:false stale:4 roles:2 pending:2');
   });

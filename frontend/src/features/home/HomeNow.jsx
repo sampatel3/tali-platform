@@ -269,23 +269,23 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
   return (
   <aside className="rq-split-list">
     <div className="rq-split-list-head">
-      <span style={{ fontFamily: 'var(--font-display)', fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>
+      <span style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--fs-body-lg)', fontWeight: 600, color: 'var(--ink)' }}>
         {staleOnly ? 'Needs re-eval' : 'Pending'} <span style={{ color: 'var(--purple)', marginLeft: 4 }}>{pending.length}</span>
       </span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65625rem', color: 'var(--mute)', letterSpacing: '.06em' }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-eyebrow)', color: 'var(--mute)', letterSpacing: '.06em' }}>
         {oldestCreatedAt ? `OLDEST ${formatRelativeAge(oldestCreatedAt)}` : ''}
       </span>
     </div>
-    <div className="rq-split-list-body">
+    <div className="rq-split-list-body reveal-stagger">
       {loading && pending.length === 0 ? (
-        <div style={{ padding: 16, fontSize: '0.8125rem', color: 'var(--mute)' }}>Loading…</div>
+        <div style={{ padding: 16, fontSize: 'var(--fs-body)', color: 'var(--mute)' }}>Loading…</div>
       ) : pending.length === 0 ? (
         <div className="home-empty" style={{ margin: 6 }}>
           <Inbox size={18} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
           <div>{staleOnly ? 'No candidates need re-evaluation right now.' : 'Queue is empty. The agent is running unattended.'}</div>
         </div>
       ) : (
-        pending.map((p) => (
+        pending.map((p, idx) => (
           // role="button" instead of a real <button> so the inline <a>
           // candidate-name link below isn't an interactive child of an
           // interactive parent (invalid HTML, breaks click + keyboard
@@ -299,6 +299,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
             key={p.id}
             role="button"
             tabIndex={0}
+            style={{ '--i': idx }}
             className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
             onKeyDown={(e) => {
@@ -359,7 +360,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
     </div>
     <div style={{
       padding: '10px 14px', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mono)',
-      fontSize: '0.65625rem', color: 'var(--mute)', letterSpacing: '.06em',
+      fontSize: 'var(--fs-eyebrow)', color: 'var(--mute)', letterSpacing: '.06em',
       display: 'flex', alignItems: 'center', gap: 6,
     }}>
       <ListChecks size={12} aria-hidden="true" />
@@ -1109,7 +1110,7 @@ export const HomeNow = ({
   }, [bulkConfirm, bulkStagesReady]);
 
   return (
-    <section className="home-section">
+    <section className="home-section reveal" style={{ '--reveal-delay': '0.08s' }}>
       {/* Funnel leads the column (above the queue) so the pending count always
           has its denominator — how many are already advanced / in review /
           rejected — in view, matching the hub layout. */}
@@ -1253,7 +1254,7 @@ export const HomeNow = ({
                   {`Approve ${bulkConfirm.count} ${bulkConfirm.typeLabel}${bulkConfirm.count === 1 ? '' : 's'} on ${bulkConfirm.roleScope}?`}
                 </h3>
                 {bulkConfirm.sample ? (
-                  <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--ink-2)', maxWidth: 420, lineHeight: 1.5 }}>
+                  <p style={{ margin: 0, fontSize: 'var(--fs-body)', color: 'var(--ink-2)', maxWidth: 420, lineHeight: 1.5 }}>
                     {`${bulkConfirm.sample}${bulkConfirm.more}`}
                   </p>
                 ) : null}
@@ -1265,7 +1266,7 @@ export const HomeNow = ({
 
             <div className="rq-modal-body">
               {(bulkConfirm.postHandoverRejects || []).length > 0 ? (
-                <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.5 }}>
+                <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: 'var(--fs-body)', fontWeight: 500, lineHeight: 1.5 }}>
                   <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />
                   <span>
                     <strong>Heads up —</strong> this batch rejects{' '}
@@ -1288,13 +1289,13 @@ export const HomeNow = ({
                     const picked = bulkStages[r.role_id];
                     return (
                       <div key={r.role_id} style={{ marginTop: 10 }}>
-                        <div style={{ fontSize: '0.78125rem', color: 'var(--ink-2)', marginBottom: 6 }}>
+                        <div style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-2)', marginBottom: 6 }}>
                           {r.role_name} · {r.count} advancing
                         </div>
                         {raw === undefined || raw === 'loading' ? (
-                          <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>Loading stages…</span>
+                          <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)' }}>Loading stages…</span>
                         ) : raw === 'error' ? (
-                          <span style={{ fontSize: '0.75rem', color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                             Couldn&apos;t load Workable stages.
                             <button
                               type="button"
@@ -1307,7 +1308,7 @@ export const HomeNow = ({
                             </button>
                           </span>
                         ) : stages.length === 0 ? (
-                          <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>
+                          <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)' }}>
                             No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                           </span>
                         ) : (
@@ -1334,7 +1335,7 @@ export const HomeNow = ({
                   })}
                 </div>
               ) : null}
-              <p style={{ margin: bulkConfirm.advanceRoles.length > 0 ? '12px 0 0' : 0, fontSize: '0.8125rem', color: 'var(--mute)', lineHeight: 1.5 }}>
+              <p style={{ margin: bulkConfirm.advanceRoles.length > 0 ? '12px 0 0' : 0, fontSize: 'var(--fs-body)', color: 'var(--mute)', lineHeight: 1.5 }}>
                 This runs each approval in turn and reports any failures.
               </p>
             </div>

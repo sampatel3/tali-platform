@@ -4,6 +4,8 @@ import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAle
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
+import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
+import '../../shared/motion/reveal.css';
 import { useToast } from '../../context/ToastContext';
 import {
   Button,
@@ -200,8 +202,28 @@ export const IntegrityChip = ({ verdict, trustBand, warnings, corroborations, un
   );
 };
 
+// One 5-Ds axis score, counted up from 0 on enter via the shared production
+// useCountUp ticker. Extracted so the hook is called once per axis (hooks can't
+// live inside the map callback). Reduced-motion (or no signal) → the final
+// integer with no tween.
+export const DimScore = ({ score, hasSignal, reduced }) => {
+  const value = useCountUp(hasSignal ? Math.round(score) : 0, {
+    reduced,
+    format: (n) => Math.round(n),
+  });
+  return (
+    <span className="mc-overview-dim-score">
+      {hasSignal ? value : '—'}
+      {hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
+    </span>
+  );
+};
+
 export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
+  // Synchronous reduced-motion read, shared by the 5-Ds score tickers below so
+  // reduced-motion users land on the final integers with no count-up.
+  const reducedMotion = useReducedMotionSync();
   // ``shareToken`` is set when the SPA is mounted via the public
   // ``/share/:shareToken`` route. ``applicationId`` is set on the
   // recruiter-side ``/c/:applicationId`` and ``/candidates/:applicationId``
@@ -1232,7 +1254,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             onReEvaluate={handleDecisionReEvaluate}
             onRunFullEvaluation={handleRunFullEvaluation}
           />
-          <main className="dossier-main">
+          <main className="dossier-main reveal">
         <div className="vtabs report-tabs" role="tablist" aria-label="Candidate report sections">
           {(() => {
             const visibleTabs = REPORT_TABS.filter((tab) => availableTabIds.has(tab.id));
@@ -1382,22 +1404,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <span className="mc-kicker">SCORECARD · THE 5 Ds</span>
                     <span className="mc-overview-dim-note">from the assessment</span>
                   </div>
-                  <div className="mc-overview-dimensions-grid">
-                    {scorecard.map((axis) => {
+                  <div className="mc-overview-dimensions-grid reveal-stagger">
+                    {scorecard.map((axis, i) => {
                       const pct = axis.hasSignal ? Math.max(0, Math.min(100, Math.round(axis.score))) : 0;
                       // Lavender (low) variant when the axis is a weak signal —
                       // mirrors report-preview's `.fill.low` (< 45 reads as weak).
                       const isLow = axis.hasSignal && pct < 45;
                       return (
-                        <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
+                        <div key={axis.key} className="mc-overview-dim-row" style={{ '--i': i }} title={axis.blurb}>
                           <span className="mc-overview-dim-label">{axis.label}</span>
                           <div className="mc-overview-dim-bar" aria-hidden="true">
                             <i className={isLow ? 'low' : ''} style={{ width: `${pct}%` }} />
                           </div>
-                          <span className="mc-overview-dim-score">
-                            {axis.hasSignal ? Math.round(axis.score) : '—'}
-                            {axis.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
-                          </span>
+                          <DimScore score={axis.score} hasSignal={axis.hasSignal} reduced={reducedMotion} />
                         </div>
                       );
                     })}

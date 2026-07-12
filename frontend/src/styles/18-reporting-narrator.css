@@ -52,7 +52,7 @@
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font: inherit;
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   font-weight: 500;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
@@ -75,7 +75,7 @@
   background: rgba(0, 0, 0, 0.18);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
-  font-size: 0.84375rem;
+  font-size: var(--fs-body-lg);
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.92);
   max-width: 880px;

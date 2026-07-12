@@ -2,7 +2,7 @@
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
@@ -10,7 +10,7 @@
 
 .cand-row {
   border-bottom: 1px solid var(--line);
-  font-size: 0.875rem;
+  font-size: var(--fs-body-lg);
   cursor: pointer;
   transition: background 0.12s, box-shadow 0.12s;
 }
@@ -67,19 +67,19 @@
 
 .c-name .e {
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
   margin-top: 2px;
 }
 
 .c-role {
   color: var(--ink-2);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
 }
 
 .c-role .r-meta {
   color: var(--mute);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   font-family: var(--font-mono);
   margin-top: 2px;
 }
@@ -87,7 +87,7 @@
 /* HANDOFF v2 / canvas CandidatesDirectoryPage — CV match column. */
 .c-cvmatch {
   font-family: var(--font-mono);
-  font-size: 0.78125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
 }
 
@@ -95,7 +95,7 @@
    Mono, weight 600, ink color; purple when score >= 80. */
 .c-score {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--ink);
 }
@@ -117,7 +117,7 @@
 
 .c-score-unified .pct {
   font-family: var(--font-mono);
-  font-size: 0.84375rem;
+  font-size: var(--fs-body-lg);
   font-weight: 600;
   display: inline-flex;
   align-items: center;
@@ -127,7 +127,7 @@
 .c-score-unified .pct.un {
   color: var(--mute);
   font-weight: 500;
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -190,7 +190,7 @@
 
 .c-score-unified .wk-pip {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   color: #2d8cff;
   font-weight: 500;
 }
@@ -201,7 +201,7 @@
   padding: 1px 6px;
   border-radius: 4px;
   font-family: var(--font-mono);
-  font-size: 0.59375rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   font-weight: 600;
   text-transform: uppercase;
@@ -226,7 +226,7 @@
   background: color-mix(in oklab, var(--red) 14%, transparent);
   color: var(--red);
   font-family: var(--font-mono);
-  font-size: 0.59375rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.06em;
   font-weight: 600;
   margin-top: 4px;
@@ -234,7 +234,7 @@
 
 .candidate-status-chip {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
 }
 
 .candidate-status-chip .dot {
@@ -264,7 +264,7 @@
 .c-time {
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 0.78125rem;
+  font-size: var(--fs-caption);
 }
 
 .candidate-table .pagination {
@@ -274,7 +274,7 @@
   gap: 12px;
   padding: 16px 22px;
   color: var(--mute);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   border-top: 1px solid var(--line);
 }
 
@@ -332,21 +332,21 @@
 }
 
 .candidate-triage-name {
-  font-size: 1rem;
+  font-size: var(--fs-subtitle);
   font-weight: 600;
   color: var(--ink);
 }
 
 .candidate-triage-role {
   margin-top: 2px;
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   color: var(--ink-2);
 }
 
 .candidate-triage-email {
   margin-top: 4px;
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
+  font-size: var(--fs-caption);
   color: var(--mute);
 }
 
@@ -368,7 +368,7 @@
 .candidate-triage-score-card .k,
 .candidate-triage-label {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
@@ -377,7 +377,7 @@
 .candidate-triage-score-card .v {
   margin-top: 4px;
   font-family: var(--font-mono);
-  font-size: 1rem;
+  font-size: var(--fs-subtitle);
   font-weight: 600;
   color: var(--ink);
 }
@@ -411,7 +411,7 @@
   color: var(--mute);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--fs-eyebrow);
   letter-spacing: 0.04em;
   padding: 6px 12px;
   white-space: nowrap;
@@ -446,7 +446,7 @@
   border-radius: 10px;
   background: var(--bg);
   color: var(--ink);
-  font-size: 0.8125rem;
+  font-size: var(--fs-body);
   padding: 9px 32px 9px 12px;
 }
 

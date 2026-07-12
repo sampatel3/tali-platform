@@ -14,6 +14,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
 import './home.css';
+import '../../shared/motion/reveal.css';
 import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared/metrics';
 import { HomeNow } from './HomeNow';
 import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
@@ -578,6 +579,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       {/* Full-width page header — consistent with every other page (spans the
           whole width, above the agent rail + chat dock). */}
       <AgentHeader
+        className="reveal"
         breadcrumbs={[{ label: 'Home' }]}
         kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}

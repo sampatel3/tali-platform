@@ -7,21 +7,36 @@
 import React from 'react';
 import { LineChart, ArrowUpRight } from 'lucide-react';
 
-import { formatCount } from '../../shared/metrics';
+import { formatCount, formatMoneyUsd } from '../../shared/metrics';
+import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
 
 const pct = (v) => `${Math.round(Number(v) || 0)}%`;
 
+// One pulse cell's value. Each cell owns a useCountUp so the number tweens up
+// once its live value settles after first paint (the values arrive from the
+// org-status poll). Reduced-motion users get the final value with no tween.
+const PulseValue = ({ to, format, reduced, unit }) => {
+  const shown = useCountUp(Number(to) || 0, { reduced, format });
+  return (
+    <div className="home-pulse-v">
+      {shown}
+      {unit ? <span className="home-pulse-unit"> {unit}</span> : null}
+    </div>
+  );
+};
+
 export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }) => {
+  const reduced = useReducedMotionSync();
   const cells = [
-    { k: 'Decisions today', v: formatCount(kpis.today || 0) },
-    { k: 'Auto-advanced', v: formatCount(kpis.auto_applied_today || 0) },
-    { k: 'Override rate', v: pct(kpis.override_rate_pct) },
-    { k: 'Taught', v: pct(kpis.teach_rate_pct) },
-    { k: 'Spend · MTD', v: orgBudget?.value || '—', unit: orgBudget?.unit || '' },
+    { k: 'Decisions today', to: kpis.today || 0, format: formatCount },
+    { k: 'Auto-advanced', to: kpis.auto_applied_today || 0, format: formatCount },
+    { k: 'Override rate', to: kpis.override_rate_pct || 0, format: pct },
+    { k: 'Taught', to: kpis.teach_rate_pct || 0, format: pct },
+    { k: 'Spend · MTD', to: kpis.org_budget_spent_cents || 0, format: formatMoneyUsd, unit: orgBudget?.unit || '' },
   ];
 
   return (
-    <section className="home-section home-pulse">
+    <section className="home-section home-pulse reveal" style={{ '--reveal-delay': '0.16s' }}>
       <div className="home-section-head home-pulse-head">
         <span className="kicker">ANALYTICS · PLATFORM PULSE</span>
         <button
@@ -38,10 +53,7 @@ export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }
         {cells.map((c) => (
           <div className="home-pulse-stat" key={c.k}>
             <div className="home-pulse-k">{c.k}</div>
-            <div className="home-pulse-v">
-              {c.v}
-              {c.unit ? <span className="home-pulse-unit"> {c.unit}</span> : null}
-            </div>
+            <PulseValue to={c.to} format={c.format} reduced={reduced} unit={c.unit} />
           </div>
         ))}
       </div>

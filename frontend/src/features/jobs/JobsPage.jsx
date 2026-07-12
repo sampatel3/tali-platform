@@ -42,10 +42,27 @@ import {
   JOBS_SHOWCASE,
   JOBS_SHOWCASE_ORG,
 } from '../demo/productWalkthroughModels';
+import { useCountUp, useReducedMotionSync } from '../../shared/motion/useCountUp';
+import '../../shared/motion/reveal.css';
 
 // Canonical funnel for the role-card stat row — shared with the home
 // "Pipeline" strip and the job-detail funnel via src/shared/metrics.
 const STAGES = PIPELINE_FUNNEL_STAGES;
+
+// One per-stage count on a role card. A tiny component so the count-up hook
+// runs per cell (hooks can't live inside the STAGES.map body). Reduced motion —
+// or a zero count — renders the final value immediately with no tween.
+const StageCount = ({ value, reduced }) => (
+  useCountUp(value, {
+    reduced: reduced || value === 0,
+    duration: 900,
+    format: (n) => formatCount(n),
+  })
+);
+
+// Card stagger is capped so a long role list can't push the last card's delay
+// out to several seconds (0.06s × index).
+const STAGGER_CAP = 12;
 
 // Progressive load: paint this many roles first (the active / starred /
 // recently-synced head of the list, per the backend's sort), then fetch the
@@ -255,6 +272,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
+  const reduced = useReducedMotionSync();
+  // The card grid staggers in ONCE, on the first render it becomes visible.
+  // A ref guards against re-arming; the state flips off the stagger class after
+  // the animation window so filter-chip / department / phase-2 re-renders don't
+  // re-fire the reveal (the grid re-renders on every filter change).
+  const gridRevealArmedRef = useRef(false);
+  const [gridStaggerDone, setGridStaggerDone] = useState(false);
 
   const loadJobsHub = useCallback(async () => {
     if (isShowcase) {
@@ -540,6 +564,23 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       .filter((role) => clientFilter === 'all' || role?.client_id === clientFilter)
   ), [roles, sourceFilter, clientFilter]);
 
+  // Arm the one-shot card stagger the first time the grid is actually shown,
+  // then retire the stagger class once its animation window has passed so later
+  // filter re-renders paint instantly. Reduced motion skips straight to done.
+  useEffect(() => {
+    if (gridRevealArmedRef.current) return undefined;
+    if (loading || error || filtered.length === 0) return undefined;
+    gridRevealArmedRef.current = true;
+    if (reduced) {
+      setGridStaggerDone(true);
+      return undefined;
+    }
+    // Cover the last (capped) card's delay + the 0.48s reveal duration.
+    const windowMs = Math.min(STAGGER_CAP, filtered.length) * 60 + 480 + 120;
+    const id = window.setTimeout(() => setGridStaggerDone(true), windowMs);
+    return () => window.clearTimeout(id);
+  }, [loading, error, filtered.length, reduced]);
+
   // Per-client rollup (open/waiting · filled · external) for the selected client.
   const clientRollup = useMemo(() => (
     clientFilter === 'all'
@@ -703,12 +744,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             redundant chrome and is gone per the canvas spec. */}
 
         {orgData?.workable_connected ? (
-          <div className="wk-strip">
+          <div className="wk-strip reveal" style={{ '--reveal-delay': '0s' }}>
             <div className="lg">
               <WorkableLogo size={30} className="!rounded-[7px] !shadow-none" />
             </div>
             <div>
-              <div style={{ fontSize: '13.5px', fontWeight: 600, marginBottom: '2px' }}>
+              <div style={{ fontSize: 'var(--fs-h3)', fontWeight: 600, marginBottom: '2px' }}>
                 Synced from Workable · {workableRolesCount} role{workableRolesCount === 1 ? '' : 's'}{sourceCounts.manual > 0 ? ` · ${sourceCounts.manual} created in Taali` : ''}
               </div>
               <div className="meta">
@@ -774,7 +815,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           const orgBudgetCapCents = Number(orgKpis?.org_budget_cap_cents || 0);
           const budget = budgetTile(Number(orgKpis?.org_budget_spent_cents || 0), orgBudgetCapCents);
           return (
-            <div style={{ marginBottom: 18 }}>
+            <div className="reveal" style={{ marginBottom: 18, '--reveal-delay': '0.08s' }}>
             <KpiStrip
               columns={4}
               tiles={[
@@ -813,7 +854,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           );
         })()}
 
-        <div className="filter-row" id="jobs-source-filters">
+        <div className="filter-row reveal" id="jobs-source-filters" style={{ '--reveal-delay': '0.16s' }}>
           <span className="filter-row-label">Show</span>
           {SOURCE_FILTERS.map((filter) => (
             <button
@@ -891,8 +932,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             )}
           />
         ) : (
-          <div className="jobs-grid">
-            {filtered.map((role) => {
+          <div className={`jobs-grid${gridStaggerDone ? '' : ' reveal-stagger'}`}>
+            {filtered.map((role, roleIndex) => {
               const stageCounts = role?.stage_counts || {};
               const workableRole = String(role?.source || '').toLowerCase() === 'workable';
               const roleLive = isRoleLive(role);
@@ -932,7 +973,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       onNavigate('job-pipeline', { roleId: role.id });
                     }
                   }}
-                  style={{ cursor: 'pointer' }}
+                  style={{ cursor: 'pointer', '--i': Math.min(roleIndex, STAGGER_CAP) }}
                 >
                   {/* Card header — canvas jobs-list role-card:
                       ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
@@ -985,11 +1026,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                         <h3 className="role-name">{role.name}</h3>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--mute)' }}>#{role.id}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)' }}>#{role.id}</span>
                         {workableRole ? (
                           <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[0.59375rem]" />
                         ) : (
-                          <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 10 }}>
+                          <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 'var(--fs-caption)' }}>
                             {roleBadgeLabel}
                           </span>
                         )}
@@ -1047,7 +1088,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             className="v"
                             style={tone === 'term' ? { color: 'var(--mute)' } : undefined}
                           >
-                            {formatCount(value)}
+                            <StageCount value={value} reduced={reduced} />
                           </div>
                         </div>
                       );

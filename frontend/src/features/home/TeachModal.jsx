@@ -170,7 +170,7 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
             <h3 id="rq-teach-title" className="home-title-md" style={{ margin: '6px 0 2px' }}>
               What did the agent get wrong?
             </h3>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>
+            <p style={{ margin: 0, fontSize: 'var(--fs-subtitle)', color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>
               Your correction is logged against this decision. The decision goes back to the queue with your note attached so the next reviewer sees it.
             </p>
           </div>
@@ -275,7 +275,7 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
 
           <div className="rq-modal-section rq-modal-impact">
             <span className="kicker mute">WHAT HAPPENS</span>
-            <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none', fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+            <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none', fontSize: 'var(--fs-subtitle)', color: 'var(--ink-2)', lineHeight: 1.6 }}>
               <li>· Decision <span style={{ fontFamily: 'var(--font-mono)' }}>D-{decision.id}</span> goes back to <strong>Pending</strong> with your note attached.</li>
               <li>· Your correction is logged in the Signal section.</li>
               <li>· {attributedTo === 'policy_combination' ? 'Overall call' : ATTRIBUTED_TO.find((a) => a.id === attributedTo)?.l} gets a training example tagged "{direction === 'over' ? 'too high' : 'too low'}".</li>
@@ -284,7 +284,7 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
           </div>
 
           {error ? (
-            <div style={{ color: 'var(--red)', fontSize: 12.5 }}>{error}</div>
+            <div style={{ color: 'var(--red)', fontSize: 'var(--fs-subtitle)' }}>{error}</div>
           ) : null}
         </div>
 
