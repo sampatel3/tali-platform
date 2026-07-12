@@ -245,6 +245,14 @@
   font-size: 0.8125rem;
 }
 
+/* Marketing header nav links (Product / How it works / Developers / Blog /
+   Sign in / Book a demo) — one step larger than the default small button so the
+   top nav reads clearly, matching the recruiter shell nav tabs (.mc-nav-tab).
+   Scoped to .app-nav so it never touches btn-sm used elsewhere in the app. */
+.app-nav .btn-sm {
+  font-size: 0.9375rem;
+}
+
 .btn-lg {
   padding: 14px 24px;
   font-size: 0.96875rem;
