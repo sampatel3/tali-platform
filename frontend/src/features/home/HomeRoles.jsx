@@ -76,7 +76,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
               <span className="rq-r-num">{r.today}</span>
               <span className="rq-r-num">{r.week}</span>
               <span className="rq-r-budget">
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 500, color: overBudget ? 'var(--red)' : 'var(--ink-2)' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', fontWeight: 500, color: overBudget ? 'var(--red)' : 'var(--ink-2)' }}>
                   {formatUsd(spent)}
                   {cap > 0 ? <span style={{ color: 'var(--mute)' }}>/{formatUsd(cap)}</span> : null}
                 </span>
@@ -86,7 +86,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
                   </span>
                 ) : null}
               </span>
-              <span style={{ display: 'flex', flexDirection: 'column', gap: 2, fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)' }}>
                 <span style={{ color: r.override_rate_pct > 15 ? 'var(--amber)' : 'var(--ink-2)' }}>
                   OVR {r.override_rate_pct}%
                 </span>

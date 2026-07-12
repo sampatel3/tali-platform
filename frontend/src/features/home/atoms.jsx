@@ -86,7 +86,7 @@ export const TypeBadge = ({ type, size = 'md' }) => {
         background: `color-mix(in oklab, ${cfg.color} 18%, transparent)`,
         color: cfg.color,
         fontFamily: 'var(--font-mono)',
-        fontSize: small ? 10.5 : 11.5,
+        fontSize: small ? 'var(--fs-body)' : 'var(--fs-body-lg)',
         letterSpacing: small ? '.06em' : '.08em',
         fontWeight: 600,
       }}
@@ -126,7 +126,7 @@ export const VerdictPill = ({ type }) => {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 4,
-        fontSize: 10,
+        fontSize: 'var(--fs-body)',
         fontWeight: 500,
         borderRadius: 999,
         padding: '2px 8px',
@@ -149,7 +149,7 @@ export const ConfBar = ({ value }) => {
       <span style={{ width: 64, height: 5, borderRadius: 3, background: 'var(--bg-3)', overflow: 'hidden' }}>
         <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: color, borderRadius: 3 }} />
       </span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ink-2)', fontWeight: 600 }}>{pct}%</span>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--ink-2)', fontWeight: 600 }}>{pct}%</span>
     </span>
   );
 };
@@ -174,7 +174,7 @@ export const ScoreChip = ({ score, size = 'md' }) => {
         background: 'color-mix(in oklab, var(--purple) 12%, transparent)',
         color: 'var(--purple)',
         fontFamily: 'var(--font-mono)',
-        fontSize: small ? 10.5 : 11.5,
+        fontSize: small ? 'var(--fs-body)' : 'var(--fs-body-lg)',
         fontWeight: 600,
         letterSpacing: '.04em',
         lineHeight: 1.4,
@@ -263,15 +263,15 @@ export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
     </span>
     {value ? (
       <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: '0.72rem', color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
+        <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
           {label}
         </span>
-        <span style={{ fontSize: '0.8rem', color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 'var(--fs-body)', color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {value}
         </span>
       </span>
     ) : (
-      <span style={{ fontSize: '0.78rem', color: 'var(--ink)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: 'var(--fs-body)', color: 'var(--ink)', fontWeight: 500, whiteSpace: 'nowrap' }}>
         {label}
       </span>
     )}
@@ -304,7 +304,7 @@ export const RolePill = ({ roleName, roleId, onClick }) => {
     background: 'color-mix(in oklab, var(--purple) 12%, transparent)',
     color: 'var(--purple)',
     fontFamily: 'var(--font-mono)',
-    fontSize: 10.5,
+    fontSize: 'var(--fs-body)',
     fontWeight: 600,
     letterSpacing: '.04em',
     lineHeight: 1.4,
