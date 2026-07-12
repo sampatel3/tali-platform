@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { prospects as prospectsApi } from '../../shared/api/prospectsClient';
+import { roles as rolesApi } from '../../shared/api';
+import { SourceCandidatesPanel } from '../jobs/SourceCandidatesPanel';
 import CampaignsPanel from './CampaignsPanel';
 import './SourcingPage.css';
 
@@ -36,6 +38,101 @@ function formatDate(iso) {
   } catch (e) {
     return '';
   }
+}
+
+// "Find candidates" tab — pick an open role, then reuse the role-scoped
+// SourceCandidatesPanel (the same LinkedIn search-string generator + paste-a-
+// profile outreach drafter that lives on the job page). Everything it produces
+// is copy-paste text the recruiter runs by hand; nothing is sent or automated.
+// A role is worth sourcing for only while it's still recruiting. `rolesApi.list()`
+// returns every non-deleted role (the backend filters only `deleted_at`), so we
+// drop the terminal ones here: filled/cancelled requisitions and closed/archived
+// Workable jobs. Roles with no status yet (draft/manual) are kept — they may still
+// be sourced for before publishing.
+const TERMINAL_JOB_STATUS = new Set(['filled', 'filled_external', 'cancelled']);
+const TERMINAL_WORKABLE_STATE = new Set(['closed', 'archived']);
+function isSourceableRole(role) {
+  const jobStatus = String(role?.job_status || '').toLowerCase();
+  const workableState = String(role?.workable_job_state || '').toLowerCase();
+  if (TERMINAL_JOB_STATUS.has(jobStatus)) return false;
+  if (TERMINAL_WORKABLE_STATE.has(workableState)) return false;
+  return true;
+}
+
+function FindCandidatesTab() {
+  const [roles, setRoles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [selectedRoleId, setSelectedRoleId] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    rolesApi
+      .list()
+      .then((res) => {
+        if (!active) return;
+        const all = Array.isArray(res.data) ? res.data : [];
+        setRoles(all.filter(isSourceableRole));
+        setError('');
+      })
+      .catch(() => active && setError('Could not load your roles.'))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <div className="src-find">
+      <p className="src-find-intro">
+        Pick an open role, then generate ready-to-paste search strings for
+        LinkedIn and Google. These are just search text you run yourself —
+        nothing is sent or automated. You can also paste a profile to draft a
+        first outreach message.
+      </p>
+
+      {loading ? (
+        <div className="src-muted">Loading your roles…</div>
+      ) : error ? (
+        <div className="src-form-error">{error}</div>
+      ) : roles.length === 0 ? (
+        <div className="src-muted">
+          No open roles yet. Create a job first, then come back to generate
+          search strings for it.
+        </div>
+      ) : (
+        <>
+          <label className="src-find-picker">
+            <span className="src-find-label">Role</span>
+            <select
+              className="src-input"
+              value={selectedRoleId}
+              onChange={(e) => setSelectedRoleId(e.target.value)}
+              aria-label="Pick a role"
+            >
+              <option value="">Choose a role…</option>
+              {roles.map((r) => (
+                <option key={r.id} value={String(r.id)}>
+                  {r.name} (#{r.id})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selectedRoleId ? (
+            <SourceCandidatesPanel
+              key={selectedRoleId}
+              roleId={Number(selectedRoleId)}
+              defaultOpen
+            />
+          ) : (
+            <div className="src-muted">Pick a role to generate search strings.</div>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 // Outreach foundations — the sourced-prospect list. Recruiters add prospects
@@ -135,7 +232,13 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
         <header className="src-head">
           <div>
             <h1 className="src-title">Sourcing</h1>
-            <p className="src-sub">Sourced prospects and outreach campaigns.</p>
+            <p className="src-sub">
+              Build your own shortlist — candidates you go out and find, rather
+              than people who apply to you. Generate ready-to-paste LinkedIn
+              searches from any open role, keep the people you find as prospects,
+              and send AI-drafted outreach emails that you approve before
+              anything goes out.
+            </p>
           </div>
           {tab === 'prospects' ? (
             <div className="src-actions">
@@ -170,6 +273,15 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
           <button
             type="button"
             role="tab"
+            aria-selected={tab === 'find'}
+            className={`src-tab ${tab === 'find' ? 'src-tab-active' : ''}`}
+            onClick={() => setTab('find')}
+          >
+            Find candidates
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={tab === 'campaigns'}
             className={`src-tab ${tab === 'campaigns' ? 'src-tab-active' : ''}`}
             onClick={() => setTab('campaigns')}
@@ -180,6 +292,8 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
 
         {tab === 'campaigns' ? (
           <CampaignsPanel initialCampaignId={initial.campaignId} />
+        ) : tab === 'find' ? (
+          <FindCandidatesTab />
         ) : (
         <>
 
@@ -270,7 +384,21 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
         {loading ? (
           <div className="src-muted">Loading prospects…</div>
         ) : rows.length === 0 ? (
-          <div className="src-muted">No prospects yet. Add one or import a CSV.</div>
+          <div className="src-empty">
+            <p className="src-empty-title">No prospects yet.</p>
+            <p className="src-empty-body">
+              Prospects are the people you find yourself and want to reach out
+              to. Add one by hand or import a CSV to start your list — or open{' '}
+              <button
+                type="button"
+                className="src-link"
+                onClick={() => setTab('find')}
+              >
+                Find candidates
+              </button>{' '}
+              to generate ready-to-paste LinkedIn searches for one of your roles.
+            </p>
+          </div>
         ) : (
           <table className="src-table">
             <thead>

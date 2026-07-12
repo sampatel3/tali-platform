@@ -223,6 +223,57 @@
   color: #8a7ab0;
 }
 
+/* Sub-tab header explainer wraps to a readable measure. */
+.src-sub {
+  max-width: 620px;
+  line-height: 1.5;
+}
+
+/* Empty-state prospects panel — orients a first-time user. */
+.src-empty {
+  border: 1px dashed var(--border, #e5e0f0);
+  border-radius: 12px;
+  padding: 20px;
+  background: var(--surface, #fff);
+}
+
+.src-empty-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--text, #1a1a2e);
+}
+
+.src-empty-body {
+  margin: 0;
+  max-width: 560px;
+  line-height: 1.5;
+  color: var(--text-muted, #6b6b83);
+  font-size: 13px;
+}
+
+/* "Find candidates" tab — role picker + reused SourceCandidatesPanel. */
+.src-find-intro {
+  max-width: 620px;
+  margin: 0 0 16px;
+  line-height: 1.5;
+  color: var(--text-muted, #6b6b83);
+  font-size: 13px;
+}
+
+.src-find-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+  margin-bottom: 16px;
+}
+
+.src-find-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #6b6b83);
+}
+
 @media (max-width: 640px) {
   .src-form-grid {
     grid-template-columns: 1fr;
