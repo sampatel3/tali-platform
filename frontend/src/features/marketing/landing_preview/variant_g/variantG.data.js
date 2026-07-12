@@ -72,14 +72,35 @@ export const FUNNEL_STATS = [
   { k: 'Advanced', v: '9', hot: true },
 ];
 
-// Footer link columns (mono uppercase heads).
-export const FOOTER_COLS = {
-  Product: ['The funnel', 'AI fluency', 'Control', 'Assessments', 'Integrations'],
-  Solutions: ['Engineering', 'Knowledge work', 'High-volume', 'Agencies'],
-  Resources: ['Docs', 'Guides', 'Changelog', 'Security'],
-  Company: ['About', 'Careers', 'Blog', 'Contact'],
-  Legal: ['Privacy', 'Terms', 'DPA', 'Fair-hiring'],
-};
+// Footer link columns (mono uppercase heads). ONLY real, working destinations —
+// no links to pages that don't exist. `section` scrolls to an in-page anchor
+// (via onSection); `page` is a real route rendered through <PageLink>; `href` is
+// a literal link (mailto). Privacy/Terms/DPA pages don't exist yet, so they are
+// deliberately omitted rather than faked.
+export const FOOTER_COLS = [
+  {
+    head: 'Product',
+    links: [
+      { label: 'How it works', section: 'how-it-works' },
+      { label: 'AI fluency', section: 'platform' },
+      { label: 'Control', section: 'g-control' },
+    ],
+  },
+  {
+    head: 'Company',
+    links: [
+      { label: 'Blog', page: 'blog' },
+      { label: 'Book a demo', page: 'demo-lead' },
+      { label: 'Sign in', page: 'login' },
+    ],
+  },
+  {
+    head: 'Contact',
+    links: [
+      { label: 'hello@taali.ai', href: 'mailto:hello@taali.ai' },
+    ],
+  },
+];
 
 export const COMPOSITE = Math.round(DDS.reduce((a, d) => a + d.val, 0) / DDS.length);
 

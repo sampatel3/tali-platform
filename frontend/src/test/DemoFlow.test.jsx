@@ -81,10 +81,13 @@ describe('Demo flow redesign', () => {
     const onNavigate = vi.fn();
     renderLanding(onNavigate);
 
-    // The shared MarketingNav header now carries "Sign in" → the login page (a
-    // real <a href> so cmd/ctrl-click opens a tab; rendered outside a Router in
-    // this test, PageLink falls back to a plain anchor).
-    expect(screen.getByRole('link', { name: /Sign in/i })).toHaveAttribute('href', '/login');
+    // "Sign in" → the login page. It appears in both the shared MarketingNav
+    // header and the footer, each a real <a href> (PageLink; rendered outside a
+    // Router in this test, it falls back to a plain anchor). Every one resolves
+    // to /login.
+    const signIn = screen.getAllByRole('link', { name: /Sign in/i });
+    expect(signIn.length).toBeGreaterThan(0);
+    signIn.forEach((link) => expect(link).toHaveAttribute('href', '/login'));
 
     // "See it live" (hero + closing band) → the live product walkthrough
     // (the old landing's "Try the live walkthrough" target).
