@@ -25,6 +25,7 @@ from ...services.fireflies_service import (
     normalized_transcript_bundle,
     verify_fireflies_webhook_signature,
 )
+from ...services.application_notes import create_interview_transcript_note
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.resend_webhook_service import (
@@ -239,6 +240,7 @@ async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
         stage=stage,
         bundle=bundle,
     )
+    create_interview_transcript_note(db, app=app, interview=interview, source_label="Fireflies")
     db.commit()
     return {
         "status": "linked",

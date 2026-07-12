@@ -91,7 +91,7 @@ from ...services.fireflies_service import (
     normalized_transcript_bundle,
 )
 from ...services.application_events import on_application_created
-from ...services.application_notes import create_recruiter_note
+from ...services.application_notes import create_interview_transcript_note, create_recruiter_note
 from ...services.cv_score_orchestrator import (
     enqueue_score,
     latest_score_status,
@@ -958,6 +958,7 @@ def create_manual_application_interview(
     interview.meeting_date = data.meeting_date or datetime.now(timezone.utc)
     interview.linked_at = datetime.now(timezone.utc)
     refresh_application_interview_support(app)
+    create_interview_transcript_note(db, app=app, interview=interview, author=current_user)
     try:
         db.commit()
         db.refresh(interview)
@@ -1013,6 +1014,7 @@ def link_fireflies_interview(
     interview.meeting_date = normalized.get("meeting_date")
     interview.linked_at = datetime.now(timezone.utc)
     refresh_application_interview_support(app, organization=org)
+    create_interview_transcript_note(db, app=app, interview=interview, author=current_user)
     try:
         db.commit()
         db.refresh(interview)

@@ -1836,6 +1836,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   ranking: meta.ranking != null ? Number(meta.ranking) : null,
                   linkUrl: linkUrlMeta,
                   linkLabel: linkLabelMeta,
+                  transcriptUrl: String(meta.transcript_url || '').trim(),
                 };
               })
               .filter((note) => note.body && note.body.trim());
@@ -1937,6 +1938,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                                 ? null
                                 : note.body
                             )}
+                            {note.transcriptUrl && !isLink ? (
+                              <a
+                                href={note.transcriptUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mc-notes-link"
+                                style={{ display: 'inline-block', marginTop: 6, color: 'var(--purple)', textDecoration: 'underline' }}
+                              >
+                                View full transcript ↗
+                              </a>
+                            ) : null}
                           </div>
                         </div>
                       );

@@ -622,3 +622,35 @@ def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
         assert app_detail.json()["screening_interview_summary"]["fireflies"]["status"] == "linked"
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+    # Auto-match drops a summary note on the candidate timeline.
+    from app.services.application_notes import list_recruiter_notes
+
+    db.expire_all()
+    transcript_notes = [
+        note
+        for note in list_recruiter_notes(db, application_id=app_row.id)
+        if (note.event_metadata or {}).get("interview_transcript_id")
+    ]
+    assert len(transcript_notes) == 1
+    note_meta = transcript_notes[0].event_metadata
+    assert note_meta["interview_source"] == "fireflies"
+    assert note_meta["actor_name"] == "Fireflies"
+    assert note_meta["transcript_url"] == "https://fireflies.ai/view/meeting-789"
+    assert "concrete scaling examples" in note_meta["note"]
+
+    # A redelivered webhook upserts the same interview row and must not spawn a
+    # duplicate note.
+    resp_again = client.post(
+        "/api/v1/webhooks/fireflies",
+        data=raw,
+        headers={"x-hub-signature": signature, "Content-Type": "application/json"},
+    )
+    assert resp_again.status_code == 200, resp_again.text
+    db.expire_all()
+    transcript_notes_after = [
+        note
+        for note in list_recruiter_notes(db, application_id=app_row.id)
+        if (note.event_metadata or {}).get("interview_transcript_id")
+    ]
+    assert len(transcript_notes_after) == 1
