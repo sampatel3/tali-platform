@@ -41,12 +41,11 @@
   --taali-inverse-bg: var(--ink);
   --taali-inverse-text: var(--bg);
   --taali-muted: var(--mute);
-  /* Header fill for both navs (.mc-nav app shell + .app-nav marketing). A
-     subtle on-brand lavender tint — clearly NOT white, and distinct from the
-     near-white lavender page bg (--bg) — so the header reads as its own clean
-     bar. Kept slightly translucent so the backdrop blur still frosts content
-     that scrolls under it. */
-  --taali-nav-bg: color-mix(in oklab, var(--purple-soft) 92%, transparent);
+  /* Header fill for both navs (.mc-nav app shell + .app-nav marketing).
+     Opaque white — the nav reads as a clean white bar, delineated from the
+     near-white lavender page bg (--bg) by its border-bottom. Backdrop blur is
+     retained on the nav elements themselves. */
+  --taali-nav-bg: var(--bg-2);
   --taali-nav-pill-bg: color-mix(in oklab, var(--bg-2) 92%, transparent);
   --taali-purple: var(--purple);
   --taali-purple-hover: var(--purple-2);
