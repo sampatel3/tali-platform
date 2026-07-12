@@ -47,3 +47,16 @@ export const ACTIVE_ATS_LABELS = {
 
 export const activeAtsLabel = (activeAts) =>
   ACTIVE_ATS_LABELS[activeAts] || ACTIVE_ATS_LABELS.standalone;
+
+// Derive the active ATS from the org's LIVE connection fields, in registry order
+// (Workable-wins), mirroring the backend resolver precedence. We derive rather
+// than read the serialized `org.active_ats` so the indicator updates the instant
+// a card connects (e.g. the Workable token path flips `workable_connected` in
+// local state) — the backend field only refreshes on a full `/organizations/me`
+// refetch. Falls back to standalone when no available provider is connected.
+export const deriveActiveAts = (org) => {
+  for (const provider of ATS_PROVIDERS) {
+    if (provider.available(org) && provider.connected(org)) return provider.id;
+  }
+  return 'standalone';
+};

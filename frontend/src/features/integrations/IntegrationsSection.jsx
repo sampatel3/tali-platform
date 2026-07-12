@@ -1,15 +1,17 @@
 import React from 'react';
 
 import { IntegrationCard } from './IntegrationCard';
-import { ATS_PROVIDERS, activeAtsLabel } from './atsProviders';
+import { ATS_PROVIDERS, activeAtsLabel, deriveActiveAts } from './atsProviders';
 
 // The unified Integrations surface: an "Active ATS" indicator derived from the
-// backend-resolved org.active_ats, an informational standalone state when no
-// ATS is connected, then one card per AVAILABLE provider. Provider bodies come
-// from `bodies[id]` (a slot — used for Workable's state-coupled inline block)
-// or fall back to the provider's registry Component (e.g. BullhornConnection).
+// org's live connection fields (so it updates the instant a card connects,
+// rather than waiting for a full org refetch of the serialized active_ats), an
+// informational standalone state when no ATS is connected, then one card per
+// AVAILABLE provider. Provider bodies come from `bodies[id]` (a slot — used for
+// Workable's state-coupled inline block) or fall back to the provider's registry
+// Component (e.g. BullhornConnection).
 export const IntegrationsSection = ({ org = null, providers = ATS_PROVIDERS, bodies = {} }) => {
-  const activeAts = org?.active_ats || 'standalone';
+  const activeAts = deriveActiveAts(org);
   const isStandalone = activeAts === 'standalone';
   const available = providers.filter((p) => p.available(org));
 

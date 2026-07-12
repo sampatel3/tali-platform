@@ -40,6 +40,15 @@ describe('IntegrationsSection', () => {
     expect(screen.getByText('Standalone', { selector: '.settings-integration-chip' })).toBeInTheDocument();
   });
 
+  it('reflects a fresh Workable connect even before active_ats refetches', () => {
+    // The token-connect path flips workable_connected in local state but the
+    // serialized active_ats stays stale ('standalone') until a full refetch —
+    // the indicator must derive from the live connection fields and show Workable.
+    renderSection({ active_ats: 'standalone', workable_connected: true });
+    expect(screen.getByText('Workable', { selector: '.settings-integration-chip' })).toBeInTheDocument();
+    expect(screen.queryByText(/Taali runs standalone/i)).not.toBeInTheDocument();
+  });
+
   it('always renders the Workable card and its body slot', () => {
     renderSection({ active_ats: 'standalone' });
     expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
