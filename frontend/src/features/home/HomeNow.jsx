@@ -317,7 +317,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                   target="_blank"
                   rel="noopener noreferrer"
                   className="rq-qname rq-inline-link"
-                  style={{ color: 'inherit', textDecoration: 'none' }}
+                  style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600 }}
                   onClick={(e) => e.stopPropagation()}
                   title="Open candidate report in a new tab"
                 >
