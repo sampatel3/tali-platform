@@ -81,11 +81,12 @@ describe('Demo flow redesign', () => {
     const onNavigate = vi.fn();
     renderLanding(onNavigate);
 
-    // Nav "Log in" → the login page (matches the old landing's "Sign in").
-    fireEvent.click(screen.getByRole('button', { name: /^Log in$/i }));
-    expect(onNavigate).toHaveBeenCalledWith('login');
+    // The shared MarketingNav header now carries "Sign in" → the login page (a
+    // real <a href> so cmd/ctrl-click opens a tab; rendered outside a Router in
+    // this test, PageLink falls back to a plain anchor).
+    expect(screen.getByRole('link', { name: /Sign in/i })).toHaveAttribute('href', '/login');
 
-    // "See it live" (nav + hero + closing band) → the live product walkthrough
+    // "See it live" (hero + closing band) → the live product walkthrough
     // (the old landing's "Try the live walkthrough" target).
     fireEvent.click(screen.getAllByRole('button', { name: /See it live/i })[0]);
     expect(onNavigate).toHaveBeenCalledWith('showcase');

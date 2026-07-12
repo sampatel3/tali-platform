@@ -409,23 +409,25 @@ describe('LandingPreviewPage', () => {
     expect(container.textContent).not.toMatch(/build with AI/i);
   });
 
-  it('wires every variant-G nav anchor to a matching section (nav href targets resolve)', () => {
+  it('wears the shared marketing header and resolves its section anchors', () => {
     const { container } = renderAt('?v=g');
-    // The core requirement: each center nav link points at a section that exists.
-    const links = Array.from(container.querySelectorAll('.lvg .nav-links a'));
-    expect(links.length).toBe(3);
-    const ids = links.map((a) => (a.getAttribute('href') || '').replace('#', ''));
-    expect(ids).toEqual(['g-funnel', 'g-fluency', 'g-control']);
-    ids.forEach((id) => {
+    // The landing now uses the site's shared MarketingNav (rendered OUTSIDE the
+    // scoped `.lvg` root) rather than a bespoke variant nav — so the chrome
+    // matches /blog, /demo and the app. Its section tabs are present.
+    expect(container.querySelector('.app-nav')).toBeTruthy();
+    expect(container.querySelector('.lvg .nav-links')).toBeNull();
+    expect(screen.getByRole('button', { name: /How it works/i })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^Product$/i }).length).toBeGreaterThan(0);
+    // Those tabs resolve to the site's canonical marketing anchors, now carried
+    // by variant G's first two body sections; the closing section + hero anchor
+    // also exist.
+    ['how-it-works', 'platform', 'g-control', 'g-top'].forEach((id) => {
       expect(container.querySelector(`#${id}`)).toBeTruthy();
     });
     // The standalone Proof section is gone (its CTA now closes Control).
     expect(container.querySelector('#g-proof')).toBeNull();
-    // The brand + hero anchor to the top section.
-    expect(container.querySelector('.lvg .brand[href="#g-top"]')).toBeTruthy();
-    expect(container.querySelector('#g-top')).toBeTruthy();
-    // Every mapped section is a one-screen `.section-vp` band.
-    ['g-funnel', 'g-fluency', 'g-control'].forEach((id) => {
+    // Every mapped body section is a one-screen `.section-vp` band.
+    ['how-it-works', 'platform', 'g-control'].forEach((id) => {
       expect(container.querySelector(`.section-vp#${id}`)).toBeTruthy();
     });
   });

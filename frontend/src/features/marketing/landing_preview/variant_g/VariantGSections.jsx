@@ -4,8 +4,11 @@ import { Reveal } from '../../../../shared/motion/previewMotion';
 import { CANDIDATES, FUNNEL, DDS, CONTROL, COMPOSITE } from './variantG.data';
 
 // The body sections — each its OWN one-screen destination for a nav item, in
-// order: #g-funnel (the 5-step funnel) → #g-fluency (the 5-Ds scorecard) →
-// #g-control (the agent advises, you decide — closing with the CTA band). Every
+// order: #how-it-works (the 5-step funnel) → #platform (the 5-Ds scorecard) →
+// #g-control (the agent advises, you decide — closing with the CTA band). The
+// first two carry the site's canonical marketing anchors so the shared
+// MarketingNav tabs ("How it works" → #how-it-works, "Product" → #platform) and
+// cross-page deep links resolve straight to them. Every
 // section is `.section-vp` (min-height min(100svh,900px), content
 // vertically centred) so clicking its nav item shows the whole section without
 // further scrolling. Entrances reuse the shared one-shot CSS <Reveal>. Copy is
@@ -36,9 +39,9 @@ const FunnelViz = ({ viz }) => {
   );
 };
 
-// ── #g-funnel — AGENTIC HIRING: the 5-step funnel, one screen. ──
+// ── #how-it-works — AGENTIC HIRING: the 5-step funnel, one screen. ──
 export const FunnelSection = ({ reduced }) => (
-  <section className="section-vp" id="g-funnel">
+  <section className="section-vp" id="how-it-works">
     <div className="wrap section-vp-in">
       <Reveal className="section-head" reduced={reduced} y={20}>
         <span className="eyebrow">AGENTIC HIRING</span>
@@ -64,9 +67,9 @@ export const FunnelSection = ({ reduced }) => (
   </section>
 );
 
-// ── #g-fluency — AI-NATIVE ASSESSMENTS: the 5-Ds scorecard, one screen. ──
+// ── #platform — AI-NATIVE ASSESSMENTS: the 5-Ds scorecard, one screen. ──
 export const FluencySection = ({ reduced }) => (
-  <section className="section-vp fluencyC" id="g-fluency">
+  <section className="section-vp fluencyC" id="platform">
     <div className="wrap section-vp-in">
       <Reveal className="section-head" reduced={reduced} y={20}>
         <span className="eyebrow">AI-NATIVE ASSESSMENTS</span>
