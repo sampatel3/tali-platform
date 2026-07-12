@@ -64,7 +64,7 @@ export const RecentDecisions = ({ roleId = null, collapsedCount = 5, refreshKey 
   const shown = expanded ? decided : decided.slice(0, collapsedCount);
 
   return (
-    <section className="home-section">
+    <section className="home-section rq-recent-card">
       <div className="home-section-head">
         <div>
           <span className="kicker">RECENT DECISIONS</span>
