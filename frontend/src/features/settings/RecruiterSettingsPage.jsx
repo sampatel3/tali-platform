@@ -1359,8 +1359,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         subtitle="Workspace, scoring policy, integrations, and access. Changes apply to new recruiter-facing surfaces immediately."
         actions={(
           <>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'rgba(255,255,255,0.55)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Workspace</span>
-            <span style={{ fontSize: 13, fontWeight: 500, color: '#fff', padding: '5px 10px', background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 8 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-eyebrow)', color: 'var(--mute)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Workspace</span>
+            <span className="chip ink">
               {orgData?.name || user?.organization?.name || 'Workspace'}
             </span>
           </>
