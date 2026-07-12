@@ -479,33 +479,6 @@
   }
 }
 
-/* Landing "Candidates work here" IDE preview. The desktop workspace is scaled
-   down to fit a fixed 740px band. On phones that trick squashes/clips the
-   ~1440px workspace into an unreadable miniature (same problem the showcase
-   iframes solved above), so drop the scale and let the band grow to fit. */
-.mc-landing-ide {
-  height: 740px;
-  overflow: hidden;
-  position: relative;
-}
-.mc-landing-ide-scale {
-  width: 140%;
-  height: calc(100% / 0.714);
-  transform: scale(0.714);
-  transform-origin: top left;
-}
-@media (max-width: 768px) {
-  .mc-landing-ide {
-    height: auto;
-    overflow: visible;
-  }
-  .mc-landing-ide-scale {
-    width: 100%;
-    height: auto;
-    transform: none;
-  }
-}
-
 .mc-show-frame-tip {
   position: absolute;
   left: 16px;
