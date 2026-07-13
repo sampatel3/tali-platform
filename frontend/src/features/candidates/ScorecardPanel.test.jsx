@@ -16,8 +16,11 @@ function makeRolesApi() {
     getScorecardSummary: vi.fn(),
     upsertScorecard: vi.fn(),
     submitScorecard: vi.fn(),
+    draftScorecardFromTranscript: vi.fn(),
   };
 }
+
+const withTranscript = [{ id: 3, transcript_text: 'Candidate: I led the migration.' }];
 
 describe('ScorecardPanel', () => {
   let rolesApi;
@@ -112,6 +115,50 @@ describe('ScorecardPanel', () => {
     render(<ScorecardPanel applicationId={5} rolesApi={rolesApi} />);
     expect(await screen.findByText(/Panel summary/)).toBeInTheDocument();
     expect(screen.getByText('great')).toBeInTheDocument();
+  });
+
+  it('drafts from the transcript and loads the agent draft into the editor', async () => {
+    rolesApi.listScorecards.mockResolvedValue({ data: [] });
+    rolesApi.getScorecardSummary.mockResolvedValue({ data: emptySummary });
+    rolesApi.draftScorecardFromTranscript.mockResolvedValue({
+      data: {
+        id: 11,
+        overall_recommendation: 'yes',
+        overall_rating: 3,
+        notes: "Strong on ownership: 'I led the migration.'",
+        submitted_at: null,
+        ai_drafted: true,
+      },
+    });
+
+    render(
+      <ScorecardPanel applicationId={5} rolesApi={rolesApi} interviews={withTranscript} />,
+    );
+    expect(await screen.findByText('Your scorecard')).toBeInTheDocument();
+
+    const draftBtn = screen.getByText('Draft from transcript');
+    expect(draftBtn).not.toBeDisabled();
+    fireEvent.click(draftBtn);
+
+    await waitFor(() =>
+      expect(rolesApi.draftScorecardFromTranscript).toHaveBeenCalledWith(5, {}),
+    );
+    // The agent draft is loaded into the editor with a clear review banner; it
+    // is NOT auto-submitted (the human still owns the submit).
+    expect(await screen.findByText(/review, edit, and submit/i)).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("Strong on ownership: 'I led the migration.'"),
+    ).toBeInTheDocument();
+    expect(rolesApi.submitScorecard).not.toHaveBeenCalled();
+  });
+
+  it('disables Draft from transcript when no transcript is linked', async () => {
+    rolesApi.listScorecards.mockResolvedValue({ data: [] });
+    rolesApi.getScorecardSummary.mockResolvedValue({ data: emptySummary });
+
+    render(<ScorecardPanel applicationId={5} rolesApi={rolesApi} interviews={[]} />);
+    expect(await screen.findByText('Your scorecard')).toBeInTheDocument();
+    expect(screen.getByText('Draft from transcript')).toBeDisabled();
   });
 
   it('hides the editor and shows read-only cards on a share view', async () => {

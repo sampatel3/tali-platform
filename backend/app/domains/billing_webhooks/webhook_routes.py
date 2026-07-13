@@ -27,6 +27,7 @@ from ...services.fireflies_service import (
 )
 from ...services.application_notes import create_interview_transcript_note
 from ...services.interview_support_service import refresh_application_interview_support
+from ...services.scorecard_draft_service import maybe_autodraft_from_webhook
 from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.resend_webhook_service import (
     apply_resend_event,
@@ -241,6 +242,9 @@ async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
         bundle=bundle,
     )
     create_interview_transcript_note(db, app=app, interview=interview, source_label="Fireflies")
+    # Optional agent auto-draft of the scorecard (flag-gated, default OFF). Never
+    # raises into the webhook and never submits — the human still owns the card.
+    maybe_autodraft_from_webhook(db, org=org, app=app, interview=interview)
     db.commit()
     return {
         "status": "linked",

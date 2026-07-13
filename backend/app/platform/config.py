@@ -601,6 +601,13 @@ class Settings(BaseSettings):
     # webhook is populating real data.
     ASSESSMENT_NUDGES_ENABLED: bool = False
 
+    # Auto-draft an interview scorecard when a Fireflies transcript is matched
+    # to an interview. Default OFF: the agent authors the draft (a billable LLM
+    # call) only on the on-demand "Draft from transcript" action until this is
+    # deliberately turned on. Never auto-submits — a draft is always
+    # human-reviewed and human-submitted.
+    SCORECARD_AUTODRAFT_ENABLED: bool = False
+
     @property
     def mvp_flags(self) -> MvpFeatureFlags:
         return MvpFeatureFlags(

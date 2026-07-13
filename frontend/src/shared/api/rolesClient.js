@@ -115,6 +115,11 @@ export const roles = {
     api.post(`/applications/${applicationId}/scorecards`, data),
   submitScorecard: (applicationId, feedbackId) =>
     api.post(`/applications/${applicationId}/scorecards/${feedbackId}/submit`),
+  // Agent-draft the caller's scorecard from a linked interview transcript. The
+  // agent authors the DRAFT; the interviewer reviews, edits, and submits it. The
+  // agent never submits. Optional { interview_id } picks a specific interview.
+  draftScorecardFromTranscript: (applicationId, data = {}) =>
+    api.post(`/applications/${applicationId}/scorecards/draft-from-transcript`, data),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
     api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob', ...config }),
