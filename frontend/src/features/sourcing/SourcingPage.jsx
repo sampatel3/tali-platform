@@ -19,7 +19,7 @@ import { prospects as prospectsApi } from '../../shared/api/prospectsClient';
 import { roles as rolesApi } from '../../shared/api';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { useToast } from '../../context/ToastContext';
-import { SourceCandidatesPanel } from '../jobs/SourceCandidatesPanel';
+import { SourceCandidatesPanel } from './SourceCandidatesPanel';
 import CampaignsPanel from './CampaignsPanel';
 import './SourcingPage.css';
 

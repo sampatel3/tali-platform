@@ -40,7 +40,6 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
-import { SourceCandidatesPanel } from './SourceCandidatesPanel';
 import { DistributeRolePanel } from './DistributeRolePanel';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
@@ -1715,10 +1714,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               {role?.requisition ? (
                 <RequisitionSpecSections requisition={role.requisition} />
               ) : null}
-
-              {/* Source candidates — copy-paste LinkedIn X-ray/boolean + a
-                  paste-a-profile outreach draft. No LinkedIn API/automation. */}
-              {role?.id ? <SourceCandidatesPanel roleId={role.id} /> : null}
 
               {/* Distribute this role — copy-paste LinkedIn post + share links +
                   the careers XML feed URL. Points at the public job page; no

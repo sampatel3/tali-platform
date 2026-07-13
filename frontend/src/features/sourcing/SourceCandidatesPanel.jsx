@@ -4,11 +4,11 @@ import { ChevronDown, Copy, Loader2, UserPlus } from 'lucide-react';
 import { roles as rolesApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 
-// "Source candidates" panel on the role detail page. Search and outreach
-// artefacts are run by the recruiter on LinkedIn / Google — there is NO
-// LinkedIn API, scraping, or automated sending. The Sourcing page can pass an
-// optional `onPrepareProspect` handoff so pasted profile context is carried into
-// the prospect form instead of being thrown away.
+// "Source candidates" toolbox owned by the standalone Sourcing workspace.
+// Search and outreach artefacts are run by the recruiter on LinkedIn / Google —
+// there is NO LinkedIn API, scraping, or automated sending. The optional
+// `onPrepareProspect` handoff carries pasted profile context into the prospect
+// form instead of throwing it away.
 //
 // Two tools:
 //  - Generate search strings: deterministic Google X-ray + LinkedIn boolean,

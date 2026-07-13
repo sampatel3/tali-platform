@@ -1,15 +1,7 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 
-vi.mock('../../shared/api/outreachClient', () => ({
-  outreach: {
-    createCampaign: vi.fn(() => Promise.resolve({ data: { id: 42 } })),
-    addAudience: vi.fn(() => Promise.resolve({ data: { added: 2, skipped: [] } })),
-  },
-}));
-
 import CandidateEvidenceCard from './CandidateEvidenceCard';
-import { outreach as outreachApi } from '../../shared/api/outreachClient';
 
 // Build a one-candidate card payload with the given criteria rows.
 function cardWith(criteria) {
@@ -163,12 +155,7 @@ test('an ERROR criterion shows "couldn’t verify" — NOT the false no-evidence
   expect(screen.queryByText(/No supporting evidence/)).toBeNull();
 });
 
-test('rediscovery card: "Start outreach" creates a campaign, adds audience, and deep-links', async () => {
-  const assignMock = vi.fn();
-  const originalLocation = window.location;
-  delete window.location;
-  window.location = { ...originalLocation, assign: assignMock };
-
+test('rediscovery stays focused on evidence and does not expose sourcing actions', () => {
   render(
     <CandidateEvidenceCard
       data={{
@@ -186,19 +173,6 @@ test('rediscovery card: "Start outreach" creates a campaign, adds audience, and 
     />,
   );
 
-  const btn = screen.getByText(/Start outreach to these 2/);
-  fireEvent.click(btn);
-
-  await waitFor(() => expect(outreachApi.createCampaign).toHaveBeenCalledTimes(1));
-  expect(outreachApi.createCampaign).toHaveBeenCalledWith(
-    expect.objectContaining({ role_id: 7 }),
-  );
-  await waitFor(() =>
-    expect(outreachApi.addAudience).toHaveBeenCalledWith(42, { application_ids: [101, 102] }),
-  );
-  await waitFor(() =>
-    expect(assignMock).toHaveBeenCalledWith('/sourcing?tab=campaigns&campaign=42'),
-  );
-
-  window.location = originalLocation;
+  expect(screen.queryByRole('button', { name: /start outreach/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/campaign/i)).not.toBeInTheDocument();
 });
