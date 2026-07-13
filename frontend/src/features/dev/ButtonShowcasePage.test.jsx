@@ -7,14 +7,14 @@ describe('ButtonShowcasePage', () => {
   it('presents the canonical system and every mapped legacy family', () => {
     render(<ButtonShowcasePage />);
 
-    expect(screen.getAllByTestId(/^button-family-/)).toHaveLength(14);
+    expect(screen.getAllByTestId(/^button-family-/)).toHaveLength(13);
     expect(screen.getByRole('heading', { name: 'One button system, everywhere.' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Assessment runtime actions' })).toBeInTheDocument();
     expect(screen.getByText('7', { selector: '.button-lab__audit strong' })).toBeInTheDocument();
     expect(screen.getByText('4', { selector: '.button-lab__audit strong' })).toBeInTheDocument();
-    expect(screen.getByText('14', { selector: '.button-lab__audit strong' })).toBeInTheDocument();
+    expect(screen.getByText('12', { selector: '.button-lab__audit strong' })).toBeInTheDocument();
     expect(screen.getByText('1', { selector: '.button-lab__audit strong' })).toBeInTheDocument();
-    expect(screen.getAllByText('mapped', { selector: '.button-lab__variant-label' })).toHaveLength(13);
+    expect(screen.getAllByText('mapped', { selector: '.button-lab__variant-label' })).toHaveLength(12);
     expect(screen.getByText('canonical', { selector: '.button-lab__variant-label' })).toBeInTheDocument();
 
     expect(screen.queryByText(/unsupported purple/i)).not.toBeInTheDocument();

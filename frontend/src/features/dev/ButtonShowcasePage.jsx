@@ -114,7 +114,7 @@ const AuditSummary = () => (
       <small>28px through 48px</small>
     </div>
     <div>
-      <strong>14</strong>
+      <strong>12</strong>
       <span>legacy families mapped</span>
       <small>kept below as migration proof</small>
     </div>
@@ -632,7 +632,7 @@ export const ButtonShowcasePage = () => {
             <h1>One button system, everywhere.</h1>
             <p className="button-lab__lede">
               Seven semantic variants and four sizes now power actions across the platform.
-              The fourteen sections below preserve the old families as proof that every one
+              The thirteen sections below preserve the old families as proof that every one
               maps into the same geometry, hierarchy, and interaction states.
             </p>
           </div>
@@ -673,7 +673,7 @@ export const ButtonShowcasePage = () => {
         <AssessmentRuntimeFamily />
 
         <footer className="button-lab__footer">
-          <ChevronDown size={14} /> End of catalogue · 14 mappings · 1 system
+          <ChevronDown size={14} /> End of catalogue · 13 families · 1 system
         </footer>
       </main>
     </div>
