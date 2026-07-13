@@ -599,6 +599,35 @@ def test_approve_and_send_no_drafts_400(client, db):
     assert resp.status_code == 400
 
 
+def test_approve_and_send_while_generating_409_no_queue(client, db):
+    """A stale UI or direct call cannot batch-send while draft generation is
+    still running: the campaign is 'generating', so the request 409s and no
+    drafts are queued (the generator would otherwise overwrite the send)."""
+    from app.models.outreach_campaign import OutreachCampaign
+
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    d1 = _seed_draft(db, org_id, cid, "d1@example.com")
+    d2 = _seed_draft(db, org_id, cid, "d2@example.com")
+    campaign = db.query(OutreachCampaign).filter(OutreachCampaign.id == cid).first()
+    campaign.status = "generating"
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={"confirm": True},
+            headers=headers,
+        )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Campaign is still generating drafts"
+    delay.assert_not_called()
+    for m in (d1, d2):
+        db.refresh(m)
+        assert m.status == MESSAGE_STATUS_DRAFT  # nothing queued
+
+
 def test_approve_and_send_archived_409(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
