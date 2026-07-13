@@ -1733,7 +1733,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 <div className="role-spec-source">
                   {role?.source === 'workable' ? 'Workable ingested job spec' : 'Role job spec'}
                   {parsedJobSpec.meta.applyUrl ? (
-                    <a href={parsedJobSpec.meta.applyUrl} target="_blank" rel="noreferrer">Open source posting</a>
+                    <a href={parsedJobSpec.meta.applyUrl} target="_blank" rel="noopener noreferrer">Open source posting</a>
                   ) : null}
                 </div>
                 {parsedJobSpec.sections.length ? parsedJobSpec.sections.map((section, index) => (

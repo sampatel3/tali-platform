@@ -653,6 +653,24 @@
   margin: 0 0 8px;
 }
 
+.role-sec p,
+.role-sec ul,
+.role-spec-subheading {
+  max-width: 82ch;
+}
+
+.role-spec-subheading {
+  margin: 16px 0 7px;
+  color: var(--ink);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.role-spec-subheading:first-of-type {
+  margin-top: 10px;
+}
+
 .role-sec ul {
   margin: 0;
   padding-left: 20px;
