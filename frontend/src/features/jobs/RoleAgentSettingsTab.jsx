@@ -316,7 +316,7 @@ const RoleAgentSettingsTab = ({
               key: 'auto_promote',
               value: autoPromote,
               title: 'Auto-promote',
-              sub: 'Sending an assessment and advancing to interview happen without approval. Off: each invite/advance queues as a Decision Hub card.',
+              sub: 'The agent sends assessments automatically to candidates who pass screening, and advances them to interview — no per-candidate approval. It still holds a batch for your review in the Decision Hub if it hits this role’s daily send limit or budget cap. Off: each invite and advance queues as a Decision Hub card.',
             },
             {
               key: 'auto_skip_assessment',
