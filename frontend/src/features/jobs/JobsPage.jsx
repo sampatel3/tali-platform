@@ -70,9 +70,10 @@ const StageCount = ({ value }) => <MotionNumber value={value} format={formatCoun
 // out to several seconds (0.06s × index).
 const STAGGER_CAP = MOTION_STAGGER.maxItems;
 
-// Inactive Workable roles keep the same settled opacity as the longstanding
-// `.job-card.not-live` treatment. Motion owns the reveal opacity now, so it
-// needs an explicit dimmed target instead of always settling every card at 1.
+// Inactive roles keep the same settled opacity as the longstanding non-live
+// treatment. A role is visually active only while its agent is running; agent
+// OFF / PAUSED and non-live Workable lifecycle states settle dimmed. Motion
+// owns the reveal opacity, so the inactive target must be explicit here.
 const ROLE_CARD_DIMMED_OPACITY = 0.55;
 const roleCardFadeVariants = Object.freeze({
   ...fadeVariants,
@@ -966,7 +967,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   const stageCounts = role?.stage_counts || {};
                   const workableRole = String(role?.source || '').toLowerCase() === 'workable';
                   const roleLive = isRoleLive(role);
-                  const roleDimmed = isRoleDimmed(role);
+                  const lifecycleDimmed = isRoleDimmed(role);
                   const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
                   const roleBadgeLabel = getRoleBadgeLabel(role);
                   const agentEnabled = Boolean(role?.agentic_mode_enabled);
@@ -974,6 +975,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   // agent_paused_at, so an enabled-but-paused role must read
                   // "AGENT PAUSED", not "AGENT ON".
                   const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
+                  const agentActive = agentEnabled && !agentPaused;
+                  const roleActive = agentActive && !lifecycleDimmed;
+                  const roleDimmed = !roleActive;
                   // Live agent status from the /roles/{id}/agent/status fan-out.
                   // When loaded, the indicator shows the canvas-spec
                   // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
@@ -1000,7 +1004,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       transition={{
                         layout: reduced ? motionTransition.instant : motionTransition.layout,
                       }}
-                      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''} ${roleDimmed ? 'not-live' : ''}`}
+                      className={`job-card ${workableRole ? 'from-wk' : ''} ${roleActive ? 'agent-on' : 'agent-inactive'} ${lifecycleDimmed ? 'not-live' : ''}`}
                       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                       role="button"
                       tabIndex={0}

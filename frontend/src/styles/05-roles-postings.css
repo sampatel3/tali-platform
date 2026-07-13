@@ -53,14 +53,12 @@
   border: 1px solid var(--line);
 }
 
-/* Filled / closed / draft Workable postings — not actively recruiting.
-   Persistently de-emphasised so live (published) roles stand out, regardless
-   of hover, focus, or whether the recruiter has starred it. "Not active" is a
-   state, independent of sync: a filled star on a greyed card means the role is
-   not live but is still kept in continuous sync. Still fully clickable.
-   JobsPage's Motion variants repeat this settled opacity so the entrance reveal
-   cannot override the inactive state with an inline opacity of 1. */
-.job-card.not-live {
+/* Roles are visually active only while their agent is running. Agent OFF / PAUSED
+   cards and filled / closed / draft Workable postings stay de-emphasised through
+   hover and focus, but remain fully clickable. JobsPage's Motion variants repeat
+   this settled opacity so its entrance reveal cannot override the inactive state. */
+.job-card.not-live,
+.job-card.agent-inactive {
   opacity: 0.55;
   filter: grayscale(0.3);
   box-shadow: none;

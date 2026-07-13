@@ -114,11 +114,14 @@ const RoleCard = ({ role, agentLive, reduced }) => {
   const stageCounts = role?.stage_counts || {};
   const workableRole = String(role?.source || '').toLowerCase() === 'workable';
   const roleLive = isRoleLive(role);
-  const roleDimmed = isRoleDimmed(role);
+  const lifecycleDimmed = isRoleDimmed(role);
   const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || null;
   const roleBadgeLabel = getRoleBadgeLabel(role);
   const agentEnabled = Boolean(role?.agentic_mode_enabled);
   const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
+  const agentActive = agentEnabled && !agentPaused;
+  const roleActive = agentActive && !lifecycleDimmed;
+  const roleDimmed = !roleActive;
   const agentBudget = Number(agentLive?.monthly_budget_cents ?? 0) / 100;
   const agentSpent = agentLive ? Number(agentLive.monthly_spent_cents || 0) / 100 : null;
   const pendingCount = Number(agentLive?.pending_decisions || 0);
@@ -135,7 +138,7 @@ const RoleCard = ({ role, agentLive, reduced }) => {
         },
       }}
       whileHover={reduced ? undefined : { y: -4, transition: { duration: 0.18, ease: EASE_OUT } }}
-      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''} ${roleDimmed ? 'not-live' : ''}`}
+      className={`job-card ${workableRole ? 'from-wk' : ''} ${roleActive ? 'agent-on' : 'agent-inactive'} ${lifecycleDimmed ? 'not-live' : ''}`}
       style={{ cursor: 'default' }}
     >
       <div className="job-head">

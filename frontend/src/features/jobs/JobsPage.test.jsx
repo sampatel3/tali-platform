@@ -202,7 +202,7 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelector('.job-agent-pill.is-on')).toBeNull();
   });
 
-  it('keeps non-live Workable roles greyed after Motion settles and fully actionable', async () => {
+  it('greys agent-off, paused, and non-live roles after Motion settles while keeping them actionable', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
         {
@@ -210,12 +210,14 @@ describe('JobsPage Workable sync states', () => {
           id: 101,
           name: 'Published Role',
           workable_job_state: 'published',
+          agentic_mode_enabled: true,
         },
         {
           ...baseRoles[0],
           id: 102,
           name: 'Closed Role',
           workable_job_state: 'closed',
+          agentic_mode_enabled: true,
         },
         {
           ...baseRoles[0],
@@ -247,13 +249,20 @@ describe('JobsPage Workable sync states', () => {
     const pausedPublishedCard = screen.getByText('Paused Published Role').closest('.job-card');
 
     expect(closedCard).toHaveClass('not-live');
+    expect(closedCard).toHaveClass('agent-inactive');
+    expect(closedCard).not.toHaveClass('agent-on');
     expect(publishedCard).not.toHaveClass('not-live');
     expect(manualCard).not.toHaveClass('not-live');
     expect(pausedPublishedCard).not.toHaveClass('not-live');
+    expect(publishedCard).toHaveClass('agent-on');
+    expect(publishedCard).not.toHaveClass('agent-inactive');
+    expect(manualCard).toHaveClass('agent-inactive');
+    expect(pausedPublishedCard).toHaveClass('agent-inactive');
+    expect(pausedPublishedCard).not.toHaveClass('agent-on');
     await waitFor(() => expect(closedCard).toHaveStyle({ opacity: '0.55' }));
     expect(publishedCard).toHaveStyle({ opacity: '1' });
-    expect(manualCard).toHaveStyle({ opacity: '1' });
-    expect(pausedPublishedCard).toHaveStyle({ opacity: '1' });
+    expect(manualCard).toHaveStyle({ opacity: '0.55' });
+    expect(pausedPublishedCard).toHaveStyle({ opacity: '0.55' });
 
     expect(closedCard).toHaveAttribute('role', 'button');
     expect(closedCard).toHaveAttribute('tabindex', '0');
