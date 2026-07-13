@@ -37,6 +37,7 @@ from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services import cohort_signals_service
+from ..services.assessment_autosend_guard import check_auto_send
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
 
 
@@ -962,6 +963,42 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
+    # Cross-role guard (mirrors _tool_resend_assessment_invite). The agent runs
+    # in the context of one role, but send_assessment.run reloads the
+    # application and creates the assessment for the APPLICATION'S OWN role
+    # (app.role_id). If we let a different-role application through here, every
+    # downstream decision — the auto_promote gate AND the budget/volume
+    # auto-send guard below — would be evaluated against the running role, not
+    # the role that actually receives the invite, letting role B's caps be
+    # bypassed while role A is under its limits. Refuse the send when the
+    # application doesn't belong to the running role; the agent should only send
+    # for its own role's candidates.
+    app_row = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == application_id,
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    if app_row is None:
+        return {
+            "status": "not_found",
+            "application_id": application_id,
+            "detail": "application not found in this organization",
+        }
+    if app_row.role_id is None or int(app_row.role_id) != int(role.id):
+        return {
+            "status": "wrong_role",
+            "application_id": application_id,
+            "detail": (
+                f"application {application_id} belongs to role "
+                f"{app_row.role_id}, not the running role {int(role.id)}; "
+                "refusing send to avoid bypassing the other role's HITL "
+                "policy and budget/volume caps"
+            ),
+        }
+
     # No assessment stage on this role — either no task is configured, or
     # the recruiter flipped auto_skip_assessment — so there is nothing to
     # send. Rather than dead-end (the approve/dispatch path would 422 on a
@@ -1008,16 +1045,32 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
             "redirected_to": "advance_to_interview",
         }
 
-    # HITL gate per Role.auto_promote.
+    # HITL gate per Role.auto_promote — plus the auto-send safety guard.
     #
-    # auto_promote=True  → dispatch the send immediately as a system action.
     # auto_promote=False → queue an AgentDecision(decision_type='send_assessment').
     #                      Recruiter approves/overrides on the Home page; the
     #                      approve path calls send_assessment.run directly.
     #                      The agent never has to ``consume`` an answer — once
     #                      the decision is approved, the action ran; the
     #                      next agent cycle sees the candidate already moved.
-    if not bool(getattr(role, "auto_promote", False)):
+    # auto_promote=True  → dispatch the send immediately as a system action,
+    #                      UNLESS the auto-send guard trips (role monthly budget
+    #                      cap or the per-day volume cap). On a trip we neither
+    #                      send silently nor drop the candidate: we fall through
+    #                      to the same HITL card the auto_promote=False path
+    #                      produces, tagged with the reason, so the recruiter can
+    #                      approve the batch ("send anyway") or hold. Autonomous
+    #                      within the guard; human-in-the-loop only at the cap.
+    #                      See services.assessment_autosend_guard.
+    auto_promote = bool(getattr(role, "auto_promote", False))
+    guard_hold_reason: Optional[str] = None
+    if auto_promote:
+        guard = check_auto_send(db, role=role)
+        if not guard.ok:
+            auto_promote = False
+            guard_hold_reason = guard.reason
+
+    if not auto_promote:
         existing = _existing_decision_for_subject(
             db,
             role=role,
@@ -1044,13 +1097,24 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
             evidence["task_id"] = int(task_id)
         if duration is not None:
             evidence["duration_minutes"] = int(duration)
+        # When the guard downgraded an auto_promote=True send to a card, tag
+        # the reason so the Decision Hub can show why it's awaiting approval.
+        if guard_hold_reason is not None:
+            evidence["auto_send_hold"] = guard_hold_reason
 
+        # No generic placeholder: pass the agent's rationale when it wrote one,
+        # else leave it empty so queue_decision derives the canonical cv_match
+        # summary — one consistent card shape for every producer. Prefix the
+        # guard note when the send was held so the card reads self-explanatory.
+        base_reasoning = str(args.get("reasoning") or "")
+        if guard_hold_reason is not None:
+            hold_note = f"Auto-send held for review: {guard_hold_reason}."
+            reasoning = f"{hold_note} {base_reasoning}".strip()
+        else:
+            reasoning = base_reasoning
         queue_args = {
             "application_id": application_id,
-            # No generic placeholder: pass the agent's rationale when it wrote
-            # one, else leave it empty so queue_decision derives the canonical
-            # cv_match summary — one consistent card shape for every producer.
-            "reasoning": str(args.get("reasoning") or ""),
+            "reasoning": reasoning,
             "evidence": evidence or None,
             "confidence": float(args.get("confidence") or 0.85),
         }
@@ -1063,7 +1127,7 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
         )
         # _queue returns {decision_id, status, decision_type}; the agent
         # reads ``status`` to decide whether to retry or move on.
-        return {
+        out = {
             "status": (
                 "awaiting_recruiter_approval"
                 if result["status"] == "pending"
@@ -1072,6 +1136,9 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
             "decision_id": result["decision_id"],
             "application_id": application_id,
         }
+        if guard_hold_reason is not None:
+            out["auto_send_hold"] = guard_hold_reason
+        return out
 
     task_id = args.get("task_id")
     duration = args.get("duration_minutes")
@@ -1330,6 +1397,15 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
 }
 
 
+# Decision types whose auto-execution is subject to the assessment auto-send
+# guard (role monthly budget cap + per-day volume cap). Only ``send_assessment``
+# creates a new candidate-facing assessment invite at volume; advance/reject are
+# out of scope and a resend targets an already-invited candidate (no new
+# Assessment row). Kept here as the single source of truth for the ``_queue``
+# defense-in-depth check that mirrors the gate in ``_tool_send_assessment``.
+_AUTO_SEND_GUARDED_TYPES: frozenset[str] = frozenset({"send_assessment"})
+
+
 # Off-policy auto-execution guard (TAA-22 / AUDIT_02 P2-TALI-01).
 #
 # "Deterministic verdict, never LLM" is structural in the mainspring
@@ -1553,6 +1629,31 @@ def _queue(
             role.id, args["application_id"], decision_type,
             engine_verdict, agent_run.id,
         )
+    # Auto-send guard (defense-in-depth for the gate in _tool_send_assessment).
+    # A send_assessment queued while auto_promote=True would auto-execute below;
+    # hold it instead when the role's budget cap or per-day volume cap is hit, so
+    # the pending card stays for the recruiter to approve ("send anyway"). This
+    # mirrors, and re-checks, the same guard _tool_send_assessment consulted.
+    guard_ok = True
+    guard_hold_reason: Optional[str] = None
+    if decision_type in _AUTO_SEND_GUARDED_TYPES and toggle_on and just_created:
+        _guard = check_auto_send(db, role=role)
+        guard_ok = _guard.ok
+        guard_hold_reason = _guard.reason
+    auto_send_held = bool(
+        decision_type in _AUTO_SEND_GUARDED_TYPES
+        and toggle_on and on_policy and not human_confirm_required
+        and just_created and str(decision.status) == "pending" and not guard_ok
+    )
+    if auto_send_held and guard_hold_reason is not None:
+        ev = dict(decision.evidence or {})
+        ev.setdefault("auto_send_hold", guard_hold_reason)
+        decision.evidence = ev
+        db.add(decision)
+        logging.getLogger("taali.agent.autosend").info(
+            "auto_send_held role_id=%s app_id=%s reason=%s run_id=%s",
+            role.id, args["application_id"], guard_hold_reason, agent_run.id,
+        )
     # Only auto-execute a freshly-created, still-pending decision. A dedup
     # return (existing pending, recently-discarded, or a prior_approved C4
     # match) carries _just_created=False and may already be resolved —
@@ -1562,6 +1663,7 @@ def _queue(
         auto_attr
         and not human_confirm_required
         and on_policy
+        and guard_ok
         and bool(getattr(role, auto_attr, False))
         and just_created
         and str(decision.status) == "pending"
@@ -1586,6 +1688,9 @@ def _queue(
         # have auto-executed but the queued decision_type did not match the
         # deterministic engine verdict, so it was held pending for review.
         "off_policy_withheld": off_policy_withheld,
+        # Surface the auto-send guard: True when auto_promote would have sent
+        # immediately but the budget/volume cap held it pending for review.
+        "auto_send_held": auto_send_held,
     }
 
 

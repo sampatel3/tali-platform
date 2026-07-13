@@ -359,6 +359,12 @@ class Settings(BaseSettings):
     ASSESSMENT_PRICE_MAJOR: int = 25
     ASSESSMENT_PRICE_MINOR: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
+    # Safety cap on the agent's autonomous assessment sends (role.auto_promote).
+    # At most this many assessments may be created for a single role per UTC day
+    # by the agent before further auto-sends are HELD as Decision Hub cards for
+    # the recruiter to approve ("send anyway") — so turning auto_promote on can't
+    # blast a whole cleared batch at candidates in one go. 0 disables the cap.
+    ASSESSMENT_AUTO_SEND_DAILY_CAP: int = 25
     EMAIL_FROM: str = brand_email_from()
 
     # Prompt Scoring Weights (configurable per deployment)
