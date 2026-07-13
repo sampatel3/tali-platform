@@ -180,6 +180,33 @@ describe('JobPipelinePage', () => {
     expect(within(settingsRegion).queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
+  it('marks the pipeline header with the role ATS mode', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, source: 'manual' } });
+    renderPipeline();
+    // A native role's header states it runs on Taali's own full ATS.
+    expect(await screen.findByText('Full ATS')).toBeInTheDocument();
+  });
+
+  it('demotes the manual Process mirror and flags the agent when it runs the role', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    renderPipeline();
+
+    // "The agent's got it" indicator appears in the candidates toolbar.
+    expect(await screen.findByText(/Agent is running this role/i)).toBeInTheDocument();
+    // The manual Process button stays available but drops from the purple
+    // primary to a muted outline so it no longer competes with the agent.
+    const processBtn = screen.getByRole('button', { name: /Process \d+ candidate/i });
+    expect(processBtn).toHaveClass('btn-outline');
+    expect(processBtn).not.toHaveClass('btn-purple');
+  });
+
+  it('keeps the manual Process button as the primary action when the agent is off', async () => {
+    renderPipeline();
+    const processBtn = await screen.findByRole('button', { name: /Process \d+ candidate/i });
+    expect(processBtn).toHaveClass('btn-purple');
+    expect(screen.queryByText(/Agent is running this role/i)).not.toBeInTheDocument();
+  });
+
   it('shows stage-aware card signals instead of pre-screen scores in early stages', async () => {
     renderPipeline();
     await switchToPipelineView();

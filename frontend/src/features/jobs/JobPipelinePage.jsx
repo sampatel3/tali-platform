@@ -41,6 +41,7 @@ import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { DistributeRolePanel } from './DistributeRolePanel';
+import { AtsTypeTag, atsTypeColumnLabel, roleAtsType } from './atsType';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
   formatCount,
@@ -1185,6 +1186,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     return buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
   }, [agentStatus, role]);
 
+  // When the agent is actively running this role it already processes new
+  // candidates and keeps stages synced on its own, so the manual "Process"
+  // and "Sync" buttons are redundant mirrors. We don't remove them (they stay
+  // as a manual override) — we just demote them from primary/secondary to a
+  // muted state so they stop competing with "the agent's got it". HITL
+  // controls (approve / reject / override / share / submittal) are untouched.
+  const agentRunning = Boolean(roleAgent?.on && !roleAgent?.paused);
+
   // Turn-off confirm dialog state (the "also discard pending decisions" opt-in).
   // Declared with the other hooks — before any early return — so hook order
   // stays stable across the loading/loaded renders.
@@ -1341,7 +1350,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
       <AgentHeader
         kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
-        title={role?.name || 'Role'}
+        title={(
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <span>{role?.name || 'Role'}<span className="ah-period">.</span></span>
+            {/* States the mode this pipeline runs in: synced from an external
+                ATS, or Taali's own full ATS. */}
+            {role ? <AtsTypeTag role={role} size="sm" /> : null}
+          </span>
+        )}
+        period={false}
         breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
         actions={(
           <>
@@ -1558,7 +1575,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
             {triageApplication ? (
               <div className="kanban-triage-row">
-                <CandidateTriageDrawer {...triageDrawerProps} />
+                <CandidateTriageDrawer {...triageDrawerProps} agentRunning={agentRunning} />
               </div>
             ) : null}
 
@@ -1830,13 +1847,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               {/* Manual stage refresh: pull each candidate's current Workable
                   stage on demand (recovery for sync lag / a move that raced a
                   stale sync). Only for Workable-linked roles. */}
+              {agentRunning ? (
+                <span className="pipeline-agent-running" title="The agent is processing and syncing this role automatically. The controls to the right are a manual override.">
+                  <AgentLoop kind="pulse"><Sparkles size={12} strokeWidth={2} /></AgentLoop>
+                  Agent is running this role
+                </span>
+              ) : null}
               {role?.workable_job_id ? (
                 <button
                   type="button"
-                  className="btn btn-outline btn-sm"
+                  className={`btn btn-sm ${agentRunning ? 'btn-ghost' : 'btn-outline'}`}
                   onClick={handleSyncWorkableStages}
                   disabled={syncingStages}
-                  title="Pull each candidate's current Workable stage and update it here"
+                  title={agentRunning
+                    ? 'Manual override — the agent already keeps candidate stages synced. Use this only to force a refresh.'
+                    : "Pull each candidate's current Workable stage and update it here"}
                 >
                   {syncingStages ? (
                     <><Loader2 size={12} className="animate-spin" />Syncing…</>
@@ -1863,9 +1888,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   ProcessCandidatesDialog. Label flips live during runs. */}
               <button
                 type="button"
-                className="btn btn-purple btn-sm"
+                className={`btn btn-sm ${agentRunning ? 'btn-outline' : 'btn-purple'}`}
                 onClick={() => setProcessDialogOpen(true)}
                 disabled={String(processJobs?.[numericRoleId]?.status || '').toLowerCase() === 'running'}
+                title={agentRunning
+                  ? 'Manual override — the agent processes new candidates automatically. Use this only to run a pass yourself.'
+                  : undefined}
               >
                 {(() => {
                   const pj = processJobs?.[numericRoleId];
@@ -1923,7 +1951,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                           <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">Score{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
                         </th>
                         <th>Stage</th>
-                        <th>Workable</th>
+                        {/* External-ATS roles show the synced ATS stage;
+                            full-ATS roles show the native Taali pipeline stage
+                            (never a wall of dashes). */}
+                        <th title={roleAtsType(role) === 'full_ats' ? 'Stage in the Taali pipeline' : `Current stage in ${atsTypeColumnLabel(role)}`}>{atsTypeColumnLabel(role)}</th>
                         <th>Agent</th>
                         <th aria-sort={tableSortField === 'last_updated' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
                           <button type="button" className="ctable-sort" onClick={() => handleTableSort('last_updated')} aria-label="Sort by last updated" title="Sort by last updated">Last updated{tableSortField === 'last_updated' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
@@ -1984,7 +2015,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
-                              <td>{application?.workable_disqualified ? (<span className="stage-pill is-disqualified" title={application?.workable_stage ? `Disqualified in Workable (was: ${formatStatusLabel(application.workable_stage)})` : 'Disqualified in Workable'}>Disqualified</span>) : application?.workable_stage ? (<span className="stage-pill" title="Current stage in Workable">{formatStatusLabel(application.workable_stage)}</span>) : (<span className="ctable-em">—</span>)}</td>
+                              <td>{roleAtsType(role) === 'full_ats' ? (<span className="stage-pill" title="Stage in the Taali pipeline">{stageLabel}</span>) : application?.workable_disqualified ? (<span className="stage-pill is-disqualified" title={application?.workable_stage ? `Disqualified in Workable (was: ${formatStatusLabel(application.workable_stage)})` : 'Disqualified in Workable'}>Disqualified</span>) : application?.workable_stage ? (<span className="stage-pill" title="Current stage in Workable">{formatStatusLabel(application.workable_stage)}</span>) : (<span className="ctable-em">—</span>)}</td>
                               <td>
                                 {agentLabel ? (
                                   <span className="ai-action">
@@ -2012,7 +2043,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
                                 <td colSpan={8} className="ctable-triage-cell">
-                                  <CandidateTriageDrawer {...triageDrawerProps} />
+                                  <CandidateTriageDrawer {...triageDrawerProps} agentRunning={agentRunning} />
                                 </td>
                               </tr>
                             ) : null}

@@ -130,6 +130,11 @@ export function CandidateTriageDrawer({
   onViewFullReport,
   onReject,
   onMoveToWorkableStage,
+  // True when the agent is actively running this role. Sending an assessment
+  // is then a redundant mirror of what the agent does automatically, so the
+  // Send control is demoted to a quiet manual override. Every decisive HITL
+  // control (move forward, reject, move-to-Workable) stays as-is.
+  agentRunning = false,
 }) {
   // Default to the "move forward" tab — recruiters open the drawer on a
   // candidate who already has a score most of the time, so picking the
@@ -449,6 +454,11 @@ export function CandidateTriageDrawer({
               </>
             )}
           </div>
+          {agentRunning ? (
+            <div className="ctc-agent-note">
+              The agent sends assessments automatically for this role. Sending here is a manual override.
+            </div>
+          ) : null}
           <div className="ctc-action-row">
             <a
               className="ctc-link"
@@ -460,7 +470,7 @@ export function CandidateTriageDrawer({
             <span className="ctc-grow" />
             <Button
               type="button"
-              variant="primary"
+              variant={agentRunning ? 'secondary' : 'primary'}
               size="sm"
               disabled={!canAct || !selectedTaskId || assessmentBusy}
               onClick={() => onSendAssessment?.(application, selectedTaskId)}

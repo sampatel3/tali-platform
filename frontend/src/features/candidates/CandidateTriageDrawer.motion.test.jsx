@@ -59,6 +59,52 @@ describe('CandidateTriageDrawer shared motion', () => {
     await waitFor(() => expect(screen.queryByText('Audit history')).not.toBeInTheDocument());
   });
 
+  it('demotes Send assessment to a manual override when the agent runs the role, keeping HITL controls', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          agentRunning
+        />
+      </MotionSystemProvider>,
+    );
+
+    // The decisive HITL path (Move forward, incl. Reject) stays present.
+    expect(screen.getByRole('tab', { name: 'Move forward' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+
+    // A quiet note flags that sending is a manual override...
+    expect(screen.getByText(/manual override/i)).toBeInTheDocument();
+    // ...and the Send button is demoted from primary to secondary.
+    const sendBtn = screen.getByRole('button', { name: /Send invite/i });
+    expect(sendBtn).toHaveClass('taali-btn-secondary');
+    expect(sendBtn).not.toHaveClass('taali-btn-primary');
+  });
+
+  it('keeps Send assessment as the primary action when the agent is off', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+        />
+      </MotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+
+    expect(screen.queryByText(/manual override/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send invite/i })).toHaveClass('taali-btn-primary');
+  });
+
   it('uses instant native scrolling under reduced motion', () => {
     window.matchMedia = vi.fn().mockImplementation((query) => ({
       matches: String(query).includes('prefers-reduced-motion'),

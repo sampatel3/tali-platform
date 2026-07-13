@@ -34,10 +34,10 @@ import {
 import {
   SyncPulse,
   WorkableLogo,
-  WorkableTag,
   formatRelativeDateTime,
   resolveSyncHealth,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { AtsTypeTag } from './atsType';
 import {
   JOBS_SHOWCASE,
   JOBS_SHOWCASE_ORG,
@@ -213,12 +213,6 @@ const getSyncSummaryValue = (summary, keys, fallback = 0) => {
     if (value != null && value !== '') return value;
   }
   return fallback;
-};
-
-const getRoleBadgeLabel = (role) => {
-  if (String(role?.source || '').toLowerCase() === 'workable') return null;
-  if (isRoleDraft(role)) return 'Draft';
-  return 'Role';
 };
 
 // Maps the org-aggregate /agent/status payload (or the showcase fixture) into
@@ -969,7 +963,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   const roleLive = isRoleLive(role);
                   const lifecycleDimmed = isRoleDimmed(role);
                   const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
-                  const roleBadgeLabel = getRoleBadgeLabel(role);
                   const agentEnabled = Boolean(role?.agentic_mode_enabled);
                   // Soft pause keeps agentic_mode_enabled=true but stamps
                   // agent_paused_at, so an enabled-but-paused role must read
@@ -1068,13 +1061,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                             <h3 className="role-name">{role.name}</h3>
                             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)' }}>#{role.id}</span>
-                            {workableRole ? (
-                              <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[0.59375rem]" />
-                            ) : (
-                              <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 'var(--fs-caption)' }}>
-                                {roleBadgeLabel}
-                              </span>
-                            )}
+                            {/* Every role reads as exactly one mode: Workable /
+                                Bullhorn (synced from an external ATS) or Full ATS
+                                (Taali runs the whole pipeline natively). The
+                                Draft/Open/Filled lifecycle chip is separate. */}
+                            <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
                             {role?.job_status && JOB_STATUS_META[role.job_status] ? (
                               <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
                                 {JOB_STATUS_META[role.job_status].label}
