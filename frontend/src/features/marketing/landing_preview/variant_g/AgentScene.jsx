@@ -109,7 +109,7 @@ export const AgentScene = ({ loop = true }) => {
         <div className="job-top">
           <div>
             <div className="job-title">AI Engineer</div>
-            <div className="job-meta">#312 · ENGINEERING · REMOTE · 312 APPLIED</div>
+            <div className="job-meta">#312 · ENGINEERING · REMOTE<br />312 APPLIED</div>
           </div>
           {on ? (
             <AgentLoop kind="flow" className="agent-pill">
