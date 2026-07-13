@@ -94,6 +94,28 @@ const normalizeSectionTitle = (value = '') => stripMarkdownSyntax(value)
 
 const canonicalSpecSectionTitle = (value = '') => SPEC_SECTION_ALIASES.get(normalizeSectionTitle(value).toLowerCase()) || '';
 
+const safeExternalUrl = (value = '') => {
+  const candidate = stripMarkdownSyntax(value);
+  if (!candidate) return '';
+  try {
+    const url = new URL(candidate);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+};
+
+const setSpecMeta = (meta, key, value) => {
+  const cleanValue = stripMarkdownSyntax(value);
+  if (!key || !cleanValue) return;
+  if (key === 'applyUrl') {
+    const safeUrl = safeExternalUrl(cleanValue);
+    if (safeUrl) meta[key] = safeUrl;
+    return;
+  }
+  meta[key] = cleanValue;
+};
+
 const isLikelySectionTitle = (value = '') => {
   const label = normalizeSectionTitle(value);
   if (!label) return false;
@@ -351,7 +373,7 @@ const parseJobSpec = (raw = '', roleName = '') => {
       const content = boldLabelMatch[2]?.trim() || '';
       const key = SPEC_META_LABELS[label.toLowerCase()];
       if (key && content) {
-        meta[key] = stripMarkdownSyntax(content);
+        setSpecMeta(meta, key, content);
         return;
       }
       const canonicalLabel = canonicalSpecSectionTitle(label);
@@ -372,7 +394,7 @@ const parseJobSpec = (raw = '', roleName = '') => {
     if (metaMatch) {
       const key = SPEC_META_LABELS[metaMatch[1].toLowerCase().trim()];
       if (key) {
-        meta[key] = stripMarkdownSyntax(metaMatch[2]);
+        setSpecMeta(meta, key, metaMatch[2]);
         return;
       }
       const label = normalizeSectionTitle(metaMatch[1]);
@@ -415,11 +437,25 @@ const parseJobSpec = (raw = '', roleName = '') => {
 };
 
 const renderSpecInline = (value = '') => {
-  const parts = String(value || '').split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+  const parts = String(value || '')
+    .split(/(\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g)
+    .filter(Boolean);
   return parts.map((part, index) => {
+    const strongEmphasis = part.match(/^\*\*\*([^*]+)\*\*\*$/);
+    if (strongEmphasis) {
+      return (
+        <strong key={`${part}-${index}`}>
+          <em>{strongEmphasis[1]}</em>
+        </strong>
+      );
+    }
     const strong = part.match(/^\*\*([^*]+)\*\*$/);
     if (strong) {
       return <strong key={`${part}-${index}`}>{strong[1]}</strong>;
+    }
+    const emphasis = part.match(/^\*([^*]+)\*$/);
+    if (emphasis) {
+      return <em key={`${part}-${index}`}>{emphasis[1]}</em>;
     }
     return <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>;
   });
@@ -437,16 +473,51 @@ const FormattedJobSpecSection = ({ section, marker }) => {
     return titleCasedWords.length >= Math.max(1, Math.ceil(words.length * 0.7));
   };
 
-  const items = section.lines
+  const isStandaloneSpecSubheading = (line = '') => {
+    const match = String(line || '').match(/^(\*{1,3})(.+)\1$/);
+    if (!match) return false;
+    const text = stripMarkdownSyntax(match[2]);
+    const words = text.split(/\s+/).filter(Boolean);
+    return Boolean(text) && words.length <= 12 && text.length <= 120 && !/[.!?:;]$/.test(text);
+  };
+
+  const classifiedItems = section.lines
     .map((line) => {
       const bulletMatch = line.match(/^(?:[-•]|\d+[.)])\s+(.+)$/);
-      const inferredBullet = !bulletMatch && isStandaloneSpecItem(line);
+      if (bulletMatch) {
+        return { type: 'bullet', text: bulletMatch[1].trim() };
+      }
+      if (isStandaloneSpecSubheading(line)) {
+        return { type: 'subheading', text: line };
+      }
       return {
-        type: bulletMatch || inferredBullet ? 'bullet' : 'paragraph',
-        text: bulletMatch ? bulletMatch[1].trim() : line,
+        type: isStandaloneSpecItem(line) ? 'bulletCandidate' : 'paragraph',
+        text: line,
       };
     })
     .filter((item) => stripMarkdownSyntax(item.text));
+
+  // Flattened specs sometimes lose list markers entirely. Only infer a list
+  // when there is evidence of one: a run of multiple short items, or a short
+  // item immediately following a colon/semicolon lead-in. This keeps codes and
+  // isolated subheads such as "DL34" out of accidental one-item lists.
+  const items = [];
+  for (let index = 0; index < classifiedItems.length;) {
+    const item = classifiedItems[index];
+    if (item.type !== 'bulletCandidate') {
+      items.push(item);
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (classifiedItems[end]?.type === 'bulletCandidate') end += 1;
+    const candidates = classifiedItems.slice(index, end);
+    const previous = items[items.length - 1];
+    const followsListLeadIn = previous?.type === 'paragraph' && /[:;]\s*$/.test(stripMarkdownSyntax(previous.text));
+    const candidateType = candidates.length > 1 || followsListLeadIn ? 'bullet' : 'paragraph';
+    candidates.forEach((candidate) => items.push({ ...candidate, type: candidateType }));
+    index = end;
+  }
 
   const blocks = [];
   let pendingBullets = [];
@@ -478,6 +549,9 @@ const FormattedJobSpecSection = ({ section, marker }) => {
               ))}
             </ul>
           );
+        }
+        if (block.type === 'subheading') {
+          return <h4 key={`h-${index}`} className="role-spec-subheading">{renderSpecInline(block.text)}</h4>;
         }
         return <p key={`p-${index}`}>{renderSpecInline(block.text)}</p>;
       })}

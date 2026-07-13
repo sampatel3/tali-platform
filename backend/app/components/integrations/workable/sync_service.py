@@ -212,6 +212,57 @@ def _job_spec_block_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
+def _merge_cached_workable_job_data(cached: dict | None, current: dict) -> dict:
+    """Merge a list-job payload over the last good Workable payload.
+
+    ``GET /jobs`` is deliberately lightweight while ``GET /jobs/:shortcode``
+    carries the description.  When that detail request transiently returns no
+    payload, keep the last good nested detail fields while still accepting fresh
+    list metadata such as title/state.  Empty values from the lightweight payload
+    must not erase non-empty cached values during that degraded sync.
+
+    Successful detail fetches do not use this helper, so their payload remains the
+    source of truth exactly as before.
+    """
+    merged = dict(cached) if isinstance(cached, dict) else {}
+    for key, value in (current or {}).items():
+        cached_value = merged.get(key)
+        if isinstance(cached_value, dict) and isinstance(value, dict):
+            merged[key] = _merge_cached_workable_job_data(cached_value, value)
+            continue
+        if value not in (None, "", [], {}) or key not in merged:
+            merged[key] = value
+
+    # Expanded list rows can carry only one fresh spec field (commonly
+    # ``description``) while the cached detail payload still owns the other
+    # sections. The formatter flattens nested ``job``/``details`` dictionaries
+    # over top-level values, so remove stale nested copies of each fresh
+    # top-level field; otherwise the cached description would silently win.
+    fresh_top_level_spec_keys = {
+        key
+        for key in ("description", "full_description", "requirements", "benefits")
+        if isinstance((current or {}).get(key), str) and (current or {}).get(key).strip()
+    }
+
+    def _without_stale_spec_keys(value: dict) -> dict:
+        cleaned = {}
+        for key, item in value.items():
+            if key in fresh_top_level_spec_keys:
+                continue
+            if key in ("job", "details") and isinstance(item, dict):
+                cleaned[key] = _without_stale_spec_keys(item)
+            else:
+                cleaned[key] = item
+        return cleaned
+
+    if fresh_top_level_spec_keys:
+        for wrapper_key in ("job", "details"):
+            wrapper = merged.get(wrapper_key)
+            if isinstance(wrapper, dict):
+                merged[wrapper_key] = _without_stale_spec_keys(wrapper)
+    return merged
+
+
 def _format_job_spec_from_api(job_data: dict) -> str:
     """Build a well-formatted job spec string from Workable job API data.
     Handles: list response (minimal), job details response ({job: {...}}), or flat dict.
@@ -1662,7 +1713,8 @@ class WorkableSyncService:
                             return sanitize_text_for_storage(v)
             return ""
 
-        description = _get_desc(details) or _get_desc(job) or ""
+        list_description = _get_desc(job) or ""
+        description = _get_desc(details) or list_description
         role = None
         if job_id:
             role = (
@@ -1709,7 +1761,18 @@ class WorkableSyncService:
         # from our DB. TTL-gated so even the 5-min starred/agent syncs only hit
         # Workable for this every few hours per role.
         self._refresh_role_stages(role, role.workable_job_id)
-        role.workable_job_data = sanitize_json_for_storage({**job, "details": details} if details else job)
+        # A failed/empty detail fetch must not throw away the last known rich job
+        # payload.  Merge the lightweight list row over the cached data so fresh
+        # state/title metadata still lands while prior description HTML survives.
+        # On a successful detail fetch retain the original replacement behaviour.
+        if details:
+            next_job_data = {**job, "details": details}
+        else:
+            next_job_data = _merge_cached_workable_job_data(
+                role.workable_job_data if isinstance(role.workable_job_data, dict) else None,
+                job,
+            )
+        role.workable_job_data = sanitize_json_for_storage(next_job_data)
         role.name = title
         # Build one formatted spec from full API data for display and attachment.
         # Capture the prior spec FIRST so we only re-do the expensive, churn-
@@ -1717,10 +1780,25 @@ class WorkableSyncService:
         # re-derive) when the spec actually changed — see ``spec_changed`` below.
         prev_job_spec = (role.job_spec_text or "")
         formatted_spec = _format_job_spec_from_api(role.workable_job_data or {})
-        if formatted_spec:
+        # ``_format_job_spec_from_api`` always emits at least a title for a list
+        # row.  During an empty detail response, do not treat that degraded input
+        # as authoritative enough to replace an existing spec.  The raw cache was
+        # still merged above, so fresh list metadata is retained and a later
+        # successful detail fetch can rebuild the text normally.
+        preserve_existing_spec_after_empty_detail = bool(
+            not details and not list_description and prev_job_spec.strip()
+        )
+        if formatted_spec and not preserve_existing_spec_after_empty_detail:
             safe_spec = sanitize_text_for_storage(formatted_spec)
             role.job_spec_text = safe_spec
             role.description = safe_spec
+        elif preserve_existing_spec_after_empty_detail:
+            logger.warning(
+                "Preserving existing Workable job spec after empty detail response "
+                "for role_id=%s workable_job_id=%s",
+                role.id,
+                role.workable_job_id,
+            )
         else:
             stripped = _strip_html(description) if isinstance(description, str) and description.strip() else ""
             safe_desc = sanitize_text_for_storage(stripped)
