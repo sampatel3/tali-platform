@@ -122,12 +122,23 @@ def invite_team_user(
         #    update the name and resend the invite email;
         #  - removed verified member: restore as-is — they already have a
         #    password and can just log in, so no invite email and no rename.
-        can_restore = (
-            existing.organization_id == current_user.organization_id
-            and not existing.is_active
-        )
+        same_org = existing.organization_id == current_user.organization_id
+        can_restore = same_org and not existing.is_active
         if not can_restore:
-            raise HTTPException(status_code=400, detail="Email already exists")
+            # Explain why instead of a terse "Email already exists".
+            if not same_org:
+                # Never leak that this email belongs to another workspace.
+                detail = "This email address is already in use."
+            elif existing.id == current_user.id:
+                detail = "You're already a member of this workspace."
+            elif existing.is_verified:
+                detail = f"{existing.email} is already a member of this workspace."
+            else:
+                detail = (
+                    f"{existing.email} already has a pending invite — "
+                    "use Resend invite to send it again."
+                )
+            raise HTTPException(status_code=400, detail=detail)
         existing.is_active = True
         # Ownership is only ever granted explicitly — a restored member comes
         # back as member even if they were an owner when removed.

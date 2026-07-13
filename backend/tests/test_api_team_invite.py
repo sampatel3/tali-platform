@@ -399,13 +399,83 @@ def test_reinvite_revoked_email_reactivates(client):
     assert email in [m["email"] for m in list_resp.json()]
 
 
-def test_reinvite_existing_active_email_still_400(client):
+def test_reinvite_pending_invite_gives_resend_hint(client):
+    # Re-inviting a still-pending (not yet accepted) invite is rejected with a
+    # message pointing at Resend invite — not a terse "Email already exists".
     headers, _ = auth_headers(client)
     email = "dup@example.com"
     assert _invite(client, headers, email).status_code == 201
     resp = _invite(client, headers, email)
     assert resp.status_code == 400
-    assert "Email already exists" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "pending invite" in detail
+    assert "Resend invite" in detail
+
+
+def test_invite_self_400(client):
+    headers, _ = auth_headers(client, email="owner-self@ex.com", organization_name="Self Org")
+    resp = _invite(client, headers, "owner-self@ex.com")
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "You're already a member of this workspace."
+
+
+def test_invite_existing_verified_member_400(client):
+    # Invite → accept (member becomes verified/active) → re-invite same email.
+    headers, _ = auth_headers(client, email="own@ex.com", organization_name="Verified Member Org")
+    email = "member-accepted@ex.com"
+    assert _invite(client, headers, email).status_code == 201
+    member = _get_user(email)
+    accept = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": generate_invite_token(member), "password": "MemberPass123!"},
+    )
+    assert accept.status_code == 200, accept.text
+    resp = _invite(client, headers, email)
+    assert resp.status_code == 400
+    assert "already a member of this workspace" in resp.json()["detail"]
+
+
+def test_invite_email_from_other_org_400_without_leaking(client):
+    # Email registered in org A; org B owner tries to invite it → generic
+    # "already in use", never revealing the other-workspace membership.
+    headers_a, _ = auth_headers(client, email="a-owner@a.com", organization_name="Leak Org A")
+    email = "shared@a.com"
+    assert _invite(client, headers_a, email).status_code == 201
+
+    headers_b, _ = auth_headers(client, email="b-owner@b.com", organization_name="Leak Org B")
+    resp = _invite(client, headers_b, email)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "This email address is already in use."
+
+
+def test_unverified_owner_serializes_active_not_invited(client):
+    # An owner whose email was never verified (e.g. legacy account) must still
+    # read as active — owners are never a pending invite.
+    from app.schemas.user import UserResponse
+
+    owner = UserResponse.model_validate(
+        {
+            "id": 1,
+            "email": "legacy-owner@ex.com",
+            "is_active": True,
+            "is_verified": False,
+            "role": "owner",
+            "created_at": "2024-01-01T00:00:00",
+        }
+    )
+    assert owner.status == "active"
+
+    member = UserResponse.model_validate(
+        {
+            "id": 2,
+            "email": "pending@ex.com",
+            "is_active": True,
+            "is_verified": False,
+            "role": "member",
+            "created_at": "2024-01-01T00:00:00",
+        }
+    )
+    assert member.status == "invited"
 
 
 def test_reinvite_removed_verified_member_restores_without_email(client):
