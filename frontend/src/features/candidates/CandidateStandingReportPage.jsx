@@ -2227,7 +2227,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             role="tabpanel"
             aria-labelledby="report-tab-scorecards"
           >
-            <ScorecardPanel applicationId={application.id} rolesApi={rolesApi} />
+            <ScorecardPanel
+              applicationId={application.id}
+              rolesApi={rolesApi}
+              interviews={application.interviews || []}
+            />
           </div>
         ) : null}
           </main>

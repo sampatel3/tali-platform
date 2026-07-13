@@ -34,7 +34,12 @@ const recVariant = (v) =>
  * panel summary tallies the SUBMITTED cards. Read-only on share links (no
  * authenticated caller to file feedback under).
  */
-export const ScorecardPanel = ({ applicationId, rolesApi, readOnly = false }) => {
+export const ScorecardPanel = ({
+  applicationId,
+  rolesApi,
+  readOnly = false,
+  interviews = [],
+}) => {
   const [cards, setCards] = useState(null);
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState(null);
@@ -44,6 +49,44 @@ export const ScorecardPanel = ({ applicationId, rolesApi, readOnly = false }) =>
     notes: '',
   });
   const [saving, setSaving] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  // True once the agent has drafted the card into the editor, so the UI can
+  // flag "review and submit" — the human still owns the verdict.
+  const [aiDrafted, setAiDrafted] = useState(false);
+
+  // A transcript is required to draft from. The endpoint auto-picks the latest
+  // transcript-bearing interview; the button is disabled with a reason when
+  // none is linked.
+  const hasTranscript = (interviews || []).some(
+    (iv) => (iv?.transcript_text || '').trim().length > 0,
+  );
+
+  const draftFromTranscript = async () => {
+    setDrafting(true);
+    setError(null);
+    try {
+      const { data: card } = await rolesApi.draftScorecardFromTranscript(applicationId, {});
+      setDraft({
+        overall_recommendation: card.overall_recommendation === 'no_decision'
+          ? ''
+          : card.overall_recommendation || '',
+        overall_rating: card.overall_rating == null ? '' : String(card.overall_rating),
+        notes: card.notes || '',
+      });
+      setAiDrafted(true);
+      await reload();
+    } catch (err) {
+      setError(
+        err?.response?.status === 400
+          ? 'No interview transcript is linked yet — link one to draft from.'
+          : err?.response?.status === 409
+            ? 'You already submitted this scorecard; it can’t be redrafted.'
+            : 'Could not draft the scorecard from the transcript.',
+      );
+    } finally {
+      setDrafting(false);
+    }
+  };
 
   const reload = () =>
     Promise.all([
@@ -137,7 +180,27 @@ export const ScorecardPanel = ({ applicationId, rolesApi, readOnly = false }) =>
 
       {!readOnly ? (
         <Card className="px-4 py-4">
-          <h3 className="text-sm font-semibold text-[var(--taali-text)]">Your scorecard</h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-[var(--taali-text)]">Your scorecard</h3>
+            <Button
+              variant="secondary"
+              disabled={drafting || !hasTranscript}
+              title={
+                hasTranscript
+                  ? 'Let the agent draft this scorecard from the interview transcript'
+                  : 'Link an interview transcript to enable an agent draft'
+              }
+              onClick={draftFromTranscript}
+            >
+              {drafting ? 'Drafting…' : 'Draft from transcript'}
+            </Button>
+          </div>
+          {aiDrafted ? (
+            <div className="mt-3 rounded-md border border-[var(--taali-accent-border,var(--taali-border))] bg-[var(--taali-accent-soft,var(--taali-surface-2))] px-3 py-2 text-xs text-[var(--taali-text)]">
+              Drafted from the interview transcript — review, edit, and submit. You own the
+              final verdict; the agent never submits.
+            </div>
+          ) : null}
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="mb-1 block text-xs text-[var(--taali-muted)]">Recommendation</span>

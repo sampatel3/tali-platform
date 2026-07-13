@@ -26,6 +26,11 @@ from ...models.interview_feedback import (
 )
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.scorecard_draft_service import (
+    SubmittedCardError,
+    run_scorecard_draft,
+    select_draftable_interview,
+)
 from .role_support import get_application
 
 router = APIRouter(tags=["Roles"])
@@ -83,6 +88,9 @@ class InterviewFeedbackResponse(BaseModel):
     submitted_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # True only on the response of the draft-from-transcript endpoint, so the UI
+    # can flag "drafted by the agent — review and submit". Not persisted.
+    ai_drafted: bool = False
 
 
 def interview_feedback_to_dict(fb: InterviewFeedback) -> dict[str, Any]:
@@ -477,3 +485,74 @@ def submit_scorecard(
         raise HTTPException(status_code=500, detail="Failed to submit scorecard")
     db.refresh(card)
     return interview_feedback_to_dict(card)
+
+
+class ScorecardDraftFromTranscript(BaseModel):
+    # Optional: which interview to draft from. Omitted → the most recent
+    # transcript-bearing interview on the application.
+    interview_id: Optional[int] = None
+
+
+@router.post(
+    "/applications/{application_id}/scorecards/draft-from-transcript",
+    response_model=InterviewFeedbackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def draft_scorecard_from_transcript(
+    application_id: int,
+    data: Optional[ScorecardDraftFromTranscript] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Agent-draft the caller's scorecard from a linked interview transcript.
+
+    Taali removes the toil, not the judgment: the agent authors the DRAFT
+    (recommendation + 5-Ds ratings + grounded notes) from the transcript; the
+    interviewer edits and submits it via the normal scorecard flow. The draft
+    is filed under the CALLER (interviewer_user_id = current_user) — the
+    transcript names speakers, not user ids, so the human who asked for the
+    draft owns it. Idempotent: re-drafting edits the caller's existing draft;
+    a card the human already submitted is never overwritten. NEVER auto-submits.
+    """
+    app = get_application(application_id, current_user.organization_id, db)
+    interview_id = data.interview_id if data else None
+    interview = select_draftable_interview(app, interview_id=interview_id)
+    if interview is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No interview transcript is linked to draft from. Link a "
+                "transcript to an interview first."
+            ),
+        )
+
+    role_name = getattr(getattr(app, "role", None), "name", None)
+    candidate = getattr(app, "candidate", None)
+    candidate_name = getattr(candidate, "full_name", None) or getattr(candidate, "email", None)
+    try:
+        result, card = run_scorecard_draft(
+            db,
+            app=app,
+            interview=interview,
+            interviewer_user_id=current_user.id,
+            role_name=role_name,
+            candidate_name=candidate_name,
+        )
+    except SubmittedCardError:
+        raise HTTPException(
+            status_code=409,
+            detail="You already submitted this scorecard; a submitted card can't be redrafted.",
+        )
+    if not result.ok or card is None:
+        raise HTTPException(
+            status_code=502, detail="Could not draft the scorecard from the transcript"
+        )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save the drafted scorecard")
+    db.refresh(card)
+    payload = interview_feedback_to_dict(card)
+    payload["ai_drafted"] = True
+    return payload
