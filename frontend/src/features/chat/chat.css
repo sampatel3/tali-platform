@@ -226,6 +226,7 @@
   color: var(--c-mute);
   line-height: 1.45;
 }
+.cp-conv-row { position: relative; }
 .cp-conv-del {
   position: absolute;
   right: 8px;
@@ -389,6 +390,9 @@
      width, so the active wash reads as a contained pill. */
   margin: 0 4px;
   padding: 9px 11px;
+  /* The delete control is an absolute 28px icon button. Reserve its footprint
+     plus an 8px gap so long two-line titles never render underneath it. */
+  padding-inline-end: calc(var(--taali-button-height-xs, 28px) + 12px);
   border-radius: 9px;
   font-size: 0.78125rem;
   color: var(--c-ink-2);

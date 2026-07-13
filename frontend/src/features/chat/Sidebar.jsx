@@ -81,7 +81,7 @@ const AskList = ({ conversations, activeId, onSelect, onNew, onDelete, listError
       <div className="cp-group">
         <div className="cp-group-h">{label}</div>
         {rows.map((r) => (
-          <div key={r.id} style={{ position: 'relative' }}>
+          <div key={r.id} className="cp-conv-row">
             <button
               type="button"
               className={`cp-conv ${r.id === activeId ? 'cp-active' : ''}`}
