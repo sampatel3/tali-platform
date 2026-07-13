@@ -32,8 +32,15 @@ class UserResponse(BaseModel):
     @computed_field
     @property
     def status(self) -> str:
-        """Invite lifecycle: an unverified user has a pending invite."""
-        return "active" if self.is_verified else "invited"
+        """Invite lifecycle: an unverified member has a pending invite.
+
+        Owners are never "pending" — they created the workspace or were
+        explicitly promoted, so they always read as active even if their
+        email was never verified (e.g. legacy accounts predating email
+        verification). Only a non-owner who hasn't accepted is "invited"."""
+        if self.is_verified or self.role == "owner":
+            return "active"
+        return "invited"
 
 
 class TeamInviteResponse(UserResponse):
