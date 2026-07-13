@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AgentLoop, MOTION_EASE, stagger, useAnimate, useReducedMotionSync } from '../../../../shared/motion';
 import { CANDIDATES, FUNNEL_STATS, verdictLabel } from './variantG.data';
 
@@ -7,97 +7,90 @@ import { CANDIDATES, FUNNEL_STATS, verdictLabel } from './variantG.data';
 // desaturated, "AGENT OFF"), flips ON, then three candidate rows flow into a
 // decision lane and each verdict pill "stamps" in.
 //
-// TECHNIQUE — a Motion `useAnimate` timeline that holds in its AGENT-OFF beat at
-// the top of the page and fires ONCE, on the user's FIRST scroll down past a
-// small threshold (SCROLL_TRIGGER). It never autoplays on load — the hero reads
-// OFF until the visitor engages. Beats are the handoff's playAgentScene:
-//   • 700ms  — card flips ON (gradient border/glow + purple "hot" cell), pill
-//              swaps OFF→ON.
-//   • 1150ms — candidate rows animate in from translateY(10px)/opacity 0,
-//              staggered +480ms each.
-//   • +180ms after each row lands — its verdict pill stamps (scale .7→1.06→1).
-// `completedRef` gates the settled state so it holds once played.
+// TECHNIQUE — a Motion `useAnimate` timeline that plays automatically ON MOUNT
+// (page load) and then LOOPS continuously: it holds its quiet AGENT-OFF beat,
+// flips ON, flows the candidate rows into the decision lane, stamps each
+// verdict, holds the settled ON state a moment, then resets to OFF and replays.
+// The beats are a relaxed, slowed-down version of the handoff's playAgentScene:
+//   • OFF_HOLD  — the card reads quiet/desaturated ("AGENT OFF").
+//   • FLIP_ON   — card flips ON (gradient border/glow + purple "hot" cell),
+//                 pill swaps OFF→ON.
+//   • rows flow in from translateY(12px)/opacity 0, staggered.
+//   • each verdict pill stamps (scale .7→1.06→1) shortly after its row lands.
+//   • SETTLE_HOLD — the fully-decided ON state holds before looping to OFF.
 //
 // Reduced motion → render the settled ON state immediately (rows visible,
-// verdicts stamped, no data-armed, no timeline) so meaningful content is never
-// gated behind a scroll the user can't trigger. The scoped CSS hides rows only
-// while `data-armed`.
+// verdicts stamped, no data-armed, no timeline, NO loop) so meaningful content
+// is never gated behind motion. The scoped CSS hides rows only while
+// `data-armed`.
+//
+// `loop` (default true) can be turned off by a caller that wants a single
+// play-through; the landing + preview both loop on load.
 // ---------------------------------------------------------------------------
 
-// Handoff timings, in seconds.
-const FLIP_ON = 0.7; // card + pill flip ON
-const ROWS_AT = 1.15; // first row lands
-const ROW_STAGGER = 0.48; // each subsequent row
-const STAMP_OFFSET = 0.18; // verdict stamps after its row lands
-const SCROLL_TRIGGER = 24; // px scrolled down before the OFF→ON timeline fires
+// Handoff timings, in seconds — a relaxed reveal (deliberately slower than the
+// original snap so the OFF→ON→decide story reads at a calm pace).
+const OFF_HOLD = 1.3; // hold on the quiet AGENT-OFF beat before flipping ON
+const FLIP_ON_HOLD = 1.3; // dwell on the ON flip before candidates flow in
+const ROWS_AT = 0.2; // first row lands (measured from the flow beat start)
+const ROW_STAGGER = 0.75; // each subsequent candidate row
+const STAMP_OFFSET = 0.28; // verdict stamps after its row lands
+const ROW_DURATION = 0.85; // a row's flow-in
+const STAMP_DURATION = 0.6; // a verdict's stamp
+const SETTLE_HOLD = 3.4; // hold the fully-decided ON state before looping to OFF
 
-export const AgentScene = () => {
+export const AgentScene = ({ loop = true }) => {
   const [scope, animate] = useAnimate();
   const reduced = useReducedMotionSync();
   // `on` drives the card frame (.is-on) + the OFF→ON pill swap. Reduced motion
   // seeds it ON so the scene reads as its settled final state.
   const [on, setOn] = useState(reduced);
-  // `triggered` arms the timeline. Starts false so the scene holds OFF at the
-  // top of the page; the first scroll past SCROLL_TRIGGER flips it true (once).
-  const [triggered, setTriggered] = useState(false);
-  const completedRef = useRef(false);
-
-  // Fire on the user's first scroll down. If the page is already scrolled on
-  // mount (deep-link / restored position) arm immediately. Detaches after one
-  // trigger. Lenis drives native window scroll, so a plain listener suffices.
-  useEffect(() => {
-    if (reduced || typeof window === 'undefined') return undefined;
-    if (window.scrollY > SCROLL_TRIGGER) {
-      setTriggered(true);
-      return undefined;
-    }
-    const onScroll = () => {
-      if (window.scrollY > SCROLL_TRIGGER) {
-        setTriggered(true);
-        window.removeEventListener('scroll', onScroll);
-      }
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [reduced]);
 
   useEffect(() => {
     if (reduced) {
       setOn(true);
       return undefined;
     }
-    if (!triggered || completedRef.current) return undefined;
 
     let cancelled = false;
-    const timers = [];
+    const sleep = (s) => new Promise((resolve) => { setTimeout(resolve, s * 1000); });
 
-    // Beat 0 — reset to the quiet, agent-OFF state.
-    setOn(false);
-    animate('.cand-row', { opacity: 0, y: 10 }, { duration: 0 });
-    animate('.cand-row .verdict', { opacity: 0, scale: 0.7 }, { duration: 0 });
+    // One full play-through: quiet OFF → flip ON → rows flow → verdicts stamp.
+    const playOnce = async () => {
+      // Beat 0 — reset to the quiet, agent-OFF state.
+      setOn(false);
+      await animate('.cand-row', { opacity: 0, y: 12 }, { duration: 0 });
+      await animate('.cand-row .verdict', { opacity: 0, scale: 0.7 }, { duration: 0 });
+      await sleep(OFF_HOLD);
+      if (cancelled) return;
 
-    // Beat 1 — the job's agent flips ON (card frame + pill swap via `on`).
-    timers.push(setTimeout(() => { if (!cancelled) setOn(true); }, FLIP_ON * 1000));
+      // Beat 1 — the job's agent flips ON (card frame + pill swap via `on`).
+      setOn(true);
+      await sleep(FLIP_ON_HOLD);
+      if (cancelled) return;
+
+      // Beats 2 + 3 — candidate rows flow into the decision lane, then each
+      // verdict pill stamps in shortly after its row lands.
+      await animate([
+        ['.cand-row', { opacity: [0, 1], y: [12, 0] }, { duration: ROW_DURATION, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT }), ease: MOTION_EASE.emphasized }],
+        ['.cand-row .verdict', { opacity: [0, 1], scale: [0.7, 1.06, 1] }, { duration: STAMP_DURATION, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT + STAMP_OFFSET }), ease: MOTION_EASE.confirm }],
+      ]);
+    };
 
     (async () => {
       try {
-        await animate([
-          // Beat 2 — candidate rows flow into the decision lane.
-          ['.cand-row', { opacity: [0, 1], y: [10, 0] }, { duration: 0.5, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT }), ease: MOTION_EASE.emphasized }],
-          // Beat 3 — each verdict pill stamps in, .18s after its row lands.
-          ['.cand-row .verdict', { opacity: [0, 1], scale: [0.7, 1.06, 1] }, { duration: 0.42, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT + STAMP_OFFSET }), ease: MOTION_EASE.confirm }],
-        ]);
-        if (!cancelled) completedRef.current = true; // settled — hold it
+        do {
+          await playOnce();
+          if (cancelled) break;
+          await sleep(SETTLE_HOLD); // hold the decided state before looping
+        } while (loop && !cancelled);
       } catch {
         /* stopped on cleanup (unmounted mid-play) */
       }
     })();
 
-    return () => {
-      cancelled = true;
-      timers.forEach(clearTimeout);
-    };
-  }, [triggered, reduced, animate]);
+    return () => { cancelled = true; };
+  }, [reduced, animate, loop]);
 
   return (
     <AgentLoop

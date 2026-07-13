@@ -5,6 +5,27 @@ import { MarketingNav } from '../../shared/layout/TaaliLayout';
 import { POSTS, formatPostDate } from './posts';
 import './blog.css';
 
+// Evergreen SEO guides — static HTML in frontend/public/*.html, served via
+// Vercel rewrites. Surfaced here so /blog carries both posts AND guides on one
+// page (the landing footer no longer has a separate Guides column).
+const GUIDES = [
+  {
+    href: '/agentic-hiring',
+    title: 'What is agentic hiring?',
+    description: 'How an AI agent runs sourcing, screening, assessment, and decisions end to end — with you on every call that matters.',
+  },
+  {
+    href: '/ai-native-hiring',
+    title: 'AI-native hiring',
+    description: 'What changes when hiring is built around an agent from the ground up, not bolted onto a legacy ATS.',
+  },
+  {
+    href: '/ai-native-assessments',
+    title: 'AI-native assessments',
+    description: 'Measuring how people actually work with AI — the five dimensions scored from a real working session.',
+  },
+];
+
 const BlogFooter = () => (
   <footer className="blog-footer">
     <div className="blog-container">
@@ -39,6 +60,16 @@ export const BlogIndexPage = ({ onNavigate }) => (
           <p>{post.description}</p>
         </Link>
       ))}
+
+      <section className="blog-guides">
+        <h2 className="blog-guides-title">Guides</h2>
+        {GUIDES.map((guide) => (
+          <a key={guide.href} href={guide.href} className="blog-card">
+            <h2>{guide.title}</h2>
+            <p>{guide.description}</p>
+          </a>
+        ))}
+      </section>
     </div>
 
     <BlogFooter />
