@@ -466,6 +466,182 @@ def test_reject_sent_message_409(client, db):
     assert m.status == "sent"
 
 
+# ---------------------------------------------------------------------------
+# Approve & send all (one campaign-level HITL)
+# ---------------------------------------------------------------------------
+
+
+def test_approve_and_send_estimate_excludes_rejected_and_suppressed(client, db):
+    """The confirm=false estimate reports what will actually go out: drafts +
+    approved minus suppressed, with rejected/suppressed counts excluded."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    _seed_draft(db, org_id, cid, "d1@example.com")
+    _seed_draft(db, org_id, cid, "d2@example.com")
+    # A pre-approved draft (an earlier per-message approve) is still sendable.
+    a = _seed_draft(db, org_id, cid, "a1@example.com")
+    a.status = MESSAGE_STATUS_APPROVED
+    # A rejected message (back to pending) is excluded.
+    r = _seed_draft(db, org_id, cid, "rej@example.com")
+    r.status = MESSAGE_STATUS_PENDING
+    # A draft whose email is suppressed is counted but excluded from will_send.
+    _seed_draft(db, org_id, cid, "sup@example.com")
+    suppress(db, email="sup@example.com", reason="unsubscribed", organization_id=org_id)
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send", json={}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sendable_count"] == 4  # d1, d2, a1, sup (draft/approved)
+    assert body["suppressed_excluded"] == 1
+    assert body["will_send"] == 3
+    assert body["rejected_excluded"] == 1
+    assert "status" not in body  # not enqueued without confirm
+
+
+def test_approve_and_send_confirm_sends_all_pending(client, db):
+    """Confirm approves every draft (and pre-approved) and enqueues one send;
+    rejected/failed rows stay put."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    d1 = _seed_draft(db, org_id, cid, "d1@example.com")
+    d2 = _seed_draft(db, org_id, cid, "d2@example.com")
+    a1 = _seed_draft(db, org_id, cid, "a1@example.com")
+    a1.status = MESSAGE_STATUS_APPROVED
+    rej = _seed_draft(db, org_id, cid, "rej@example.com")
+    rej.status = MESSAGE_STATUS_PENDING
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={"confirm": True},
+            headers=headers,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "sending"
+    delay.assert_called_once_with(cid)
+    for m in (d1, d2, a1):
+        db.refresh(m)
+        assert m.status == "queued"
+    db.refresh(rej)
+    assert rej.status == MESSAGE_STATUS_PENDING  # rejected untouched
+
+
+def test_approve_and_send_skips_already_sent(client, db):
+    """A message already sent is never re-queued by the batch action."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    sent = _seed_draft(db, org_id, cid, "sent@example.com")
+    sent.status = "sent"
+    draft = _seed_draft(db, org_id, cid, "new@example.com")
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={"confirm": True},
+            headers=headers,
+        )
+    assert resp.status_code == 200, resp.text
+    delay.assert_called_once_with(cid)
+    db.refresh(sent)
+    assert sent.status == "sent"  # not re-queued
+    db.refresh(draft)
+    assert draft.status == "queued"
+
+
+def test_approve_and_send_idempotent_under_double_call(client, db):
+    """A racing second confirm 409s and does not enqueue a second send; the
+    atomic draft->queued flip means only one send task can ever run."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    m = _seed_draft(db, org_id, cid, "d@example.com")
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        first = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={"confirm": True},
+            headers=headers,
+        )
+        assert first.status_code == 200, first.text
+        db.refresh(m)
+        assert m.status == "queued"
+        duplicate = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={"confirm": True},
+            headers=headers,
+        )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "Campaign is already sending"
+    delay.assert_called_once_with(cid)
+
+
+def test_approve_and_send_no_drafts_400(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    m = _seed_draft(db, org_id, cid, "rej@example.com")
+    m.status = MESSAGE_STATUS_PENDING  # only a rejected/pending message
+    db.commit()
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={"confirm": True},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_approve_and_send_while_generating_409_no_queue(client, db):
+    """A stale UI or direct call cannot batch-send while draft generation is
+    still running: the campaign is 'generating', so the request 409s and no
+    drafts are queued (the generator would otherwise overwrite the send)."""
+    from app.models.outreach_campaign import OutreachCampaign
+
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    d1 = _seed_draft(db, org_id, cid, "d1@example.com")
+    d2 = _seed_draft(db, org_id, cid, "d2@example.com")
+    campaign = db.query(OutreachCampaign).filter(OutreachCampaign.id == cid).first()
+    campaign.status = "generating"
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={"confirm": True},
+            headers=headers,
+        )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Campaign is still generating drafts"
+    delay.assert_not_called()
+    for m in (d1, d2):
+        db.refresh(m)
+        assert m.status == MESSAGE_STATUS_DRAFT  # nothing queued
+
+
+def test_approve_and_send_archived_409(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    _seed_draft(db, org_id, cid)
+    client.post(f"/api/v1/outreach/campaigns/{cid}/archive", headers=headers)
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={"confirm": True},
+        headers=headers,
+    )
+    assert resp.status_code == 409
+
+
 def test_audience_excludes_linked_prospect_with_open_application(client, db):
     """A prospect linked to a candidate whose open application is under a
     DIFFERENT email must still be excluded."""

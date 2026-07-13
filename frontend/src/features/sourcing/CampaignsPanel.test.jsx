@@ -15,6 +15,7 @@ vi.mock('../../shared/api/outreachClient', () => ({
     approve: vi.fn(),
     reject: vi.fn(),
     send: vi.fn(),
+    approveAndSend: vi.fn(),
   },
 }));
 
@@ -113,6 +114,54 @@ describe('CampaignsPanel', () => {
     await waitFor(() =>
       expect(outreachApi.approve).toHaveBeenCalledWith(3, { message_ids: [55] }),
     );
+  });
+
+  it('approve & send all: one HITL confirms the batch and enqueues the send', async () => {
+    outreachApi.getCampaign.mockResolvedValue({
+      data: {
+        id: 30,
+        name: 'Batch Wave',
+        status: 'ready',
+        brief: '',
+        counts: {},
+        messages: [
+          { id: 1, email: 'a@x.com', recipient_name: 'A', status: 'draft' },
+          { id: 2, email: 'b@x.com', recipient_name: 'B', status: 'draft' },
+          { id: 3, email: 'c@x.com', recipient_name: 'C', status: 'approved' },
+          { id: 4, email: 'r@x.com', recipient_name: 'R', status: 'pending' },
+        ],
+      },
+    });
+    outreachApi.approveAndSend.mockImplementation((id, confirm) =>
+      confirm
+        ? Promise.resolve({ data: { status: 'sending', will_send: 3 } })
+        : Promise.resolve({
+            data: {
+              sendable_count: 3,
+              will_send: 3,
+              suppressed_excluded: 0,
+              rejected_excluded: 1,
+              failed_excluded: 0,
+            },
+          }),
+    );
+
+    render(<CampaignsPanel initialCampaignId={30} />);
+    await waitFor(() => expect(screen.getByText('Batch Wave')).toBeInTheDocument());
+
+    // The batch control counts both drafts (2) and the pre-approved (1) = 3.
+    fireEvent.click(screen.getByTestId('approve-send-all'));
+    // estimate call (confirm=false)
+    await waitFor(() => expect(outreachApi.approveAndSend).toHaveBeenCalledWith(30, false));
+    // confirmation is honest about the outward action + excluded rejected
+    await waitFor(() =>
+      expect(screen.getByText(/Send 3 messages to 3 prospects\?/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/1 rejected excluded/)).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve & send all' }));
+    await waitFor(() => expect(outreachApi.approveAndSend).toHaveBeenCalledWith(30, true));
+    expect(await screen.findByText('sending')).toBeInTheDocument();
   });
 
   it('polls a generating campaign until it reaches a stable state', async () => {
