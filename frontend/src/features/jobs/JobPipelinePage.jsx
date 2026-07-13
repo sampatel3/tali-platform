@@ -318,6 +318,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // in-page error state (with Retry) instead of stranding an empty shell.
   const [loadError, setLoadError] = useState('');
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
+  const [savingAssessmentTask, setSavingAssessmentTask] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [suggestedThreshold, setSuggestedThreshold] = useState(null);
   const [savingThresholdMode, setSavingThresholdMode] = useState(false);
@@ -618,12 +619,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   }, [loadRoleWorkspace]);
 
   // The org-wide task list feeds the role-edit task picker on the Job
-  // Specification tab. It's not needed for the candidate table, so defer the
-  // fetch until that tab is first opened — one fewer request on every
-  // role-page load. `loadedAllTasksRef` keeps it to a single fetch.
+  // Specification tab and the assessment-task picker on the Agent settings
+  // tab. It's not needed for the candidate table, so defer the fetch until
+  // one of those tabs is first opened — one fewer request on every role-page
+  // load. `loadedAllTasksRef` keeps it to a single fetch.
   const loadedAllTasksRef = useRef(false);
   useEffect(() => {
-    if (activeView !== 'activity' || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
+    if ((activeView !== 'activity' && activeView !== 'role-fit') || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
     let cancelled = false;
     const loadAllTasks = async () => {
       try {
@@ -1081,6 +1083,38 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setSavingRoleSheet(false);
     }
   };
+
+  // Assign / change / clear the role's assessment task from the Agent settings
+  // tab. Reuses the same role↔task link the Job spec editor writes
+  // (rolesApi.addTask/removeTask) — this is a single-task convenience path, so
+  // it drives the role to exactly [taskId] (or [] to clear). Multi-task A/B
+  // sets are managed on the Job spec tab, which is why the settings control
+  // hands off to that tab when more than one task is linked.
+  const handleAssignAssessmentTask = useCallback(async (taskId) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    setSavingAssessmentTask(true);
+    try {
+      const desired = taskId == null ? [] : [Number(taskId)];
+      const currentIds = (roleTasks || []).map((task) => Number(task.id));
+      if (rolesApi.addTask) {
+        for (const id of desired) {
+          if (!currentIds.includes(id)) await rolesApi.addTask(numericRoleId, id);
+        }
+      }
+      if (rolesApi.removeTask) {
+        for (const id of currentIds) {
+          if (!desired.includes(id)) await rolesApi.removeTask(numericRoleId, id);
+        }
+      }
+      await loadRoleWorkspace();
+      setRefreshTick((value) => value + 1);
+      showToast(taskId == null ? 'Assessment task cleared.' : 'Assessment task assigned.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to update the assessment task.'), 'error');
+    } finally {
+      setSavingAssessmentTask(false);
+    }
+  }, [numericRoleId, roleTasks, loadRoleWorkspace, showToast]);
 
   const handleCandidateSubmit = async ({ email, name, position, cvFile }) => {
     if (!Number.isFinite(numericRoleId) || !rolesApi.createApplication) return;
@@ -1645,6 +1679,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             suggestedThreshold={suggestedThreshold}
             savingThresholdMode={savingThresholdMode}
             onThresholdModeChange={handleThresholdModeChange}
+            roleTasks={roleTasks}
+            allTasks={allTasks}
+            onAssignAssessmentTask={handleAssignAssessmentTask}
+            savingAssessmentTask={savingAssessmentTask}
           />
         ) : activeView === 'activity' ? (
           // HANDOFF v2 §4.4 / canvas jobs-detail-spec — Job spec tab is the

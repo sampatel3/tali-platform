@@ -41,6 +41,10 @@ const RoleAgentSettingsTab = ({
   onThresholdModeChange,
   suggestedThreshold,
   savingThresholdMode,
+  roleTasks = [],
+  allTasks = [],
+  onAssignAssessmentTask,
+  savingAssessmentTask = false,
 }) => {
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
@@ -80,6 +84,35 @@ const RoleAgentSettingsTab = ({
   const workableJobState = String(role?.workable_job_state || '').toLowerCase();
   const handleAutonomyToggle = (key, value) => {
     if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
+  };
+
+  // Assessment task — the skills assessment the agent sends to candidates who
+  // pass screening. Reuses the same role↔task link the Job spec tab writes
+  // (rolesApi.addTask/removeTask), just surfaced here so the whole role config
+  // lives in one place. One task is the norm; more than one is an A/B set the
+  // recruiter manages on the Job spec tab, so we don't offer the single-select
+  // there (it would silently drop one arm of the A/B).
+  const assignedTasks = Array.isArray(roleTasks) ? roleTasks : [];
+  const isAbTest = assignedTasks.length > 1;
+  const primaryAssignedTask = assignedTasks[0] || null;
+  const assignedTaskId = primaryAssignedTask?.id != null ? String(primaryAssignedTask.id) : '';
+  // Merge the catalogue with the assigned task(s) so the current selection
+  // always shows even before the org-wide task list finishes loading.
+  const assessmentTaskOptions = (() => {
+    const byId = new Map();
+    for (const task of (Array.isArray(allTasks) ? allTasks : [])) {
+      if (task?.id != null) byId.set(String(task.id), task);
+    }
+    for (const task of assignedTasks) {
+      if (task?.id != null) byId.set(String(task.id), task);
+    }
+    return [...byId.values()];
+  })();
+  const handleAssessmentSelect = (value) => {
+    if (typeof onAssignAssessmentTask !== 'function') return;
+    const next = value ? Number(value) : null;
+    if (next != null && String(next) === assignedTaskId) return;
+    onAssignAssessmentTask(next);
   };
 
   // Per-role monthly budget editor — HANDOFF v2 §4.3 wants
@@ -259,6 +292,82 @@ const RoleAgentSettingsTab = ({
             <p className="mc-agent-settings-card-help" style={{ marginTop: 18 }}>
               Pipeline distribution will populate once candidates are scored.
             </p>
+          )}
+        </section>
+
+        {/* Assessment task — which skills assessment the agent sends. Ties
+            into the auto-promote toggle below (auto-send needs a task here). */}
+        <section className="mc-agent-settings-card">
+          <div className="mc-agent-settings-card-head">
+            <div>
+              <h2 className="mc-agent-settings-card-title">
+                Assessment <em>task</em>
+              </h2>
+              <p className="mc-agent-settings-card-help">
+                Which skills assessment the agent sends to candidates who pass screening. Auto-promote (below) needs a task assigned here before it can send anything.
+              </p>
+            </div>
+          </div>
+          {isAbTest ? (
+            <>
+              <div className="mc-agent-settings-threshold-current" style={{ marginBottom: 8 }}>
+                A/B test · <b>{assignedTasks.map((task) => task.name).join(' · ')}</b>
+              </div>
+              <p className="mc-agent-settings-card-help">
+                More than one task is linked, so each candidate is assigned one automatically (split evenly, stable per candidate). Manage the A/B set on the <a href="?view=activity" style={{ color: 'var(--purple)' }}>Job spec tab</a>.
+              </p>
+            </>
+          ) : (
+            <>
+              {assignedTaskId ? (
+                <div className="mc-agent-settings-threshold-current" style={{ marginBottom: 12 }}>
+                  Sending <b>{primaryAssignedTask.name}</b> to candidates who pass screening.
+                </div>
+              ) : (
+                <div className="mc-agent-warn" role="alert" style={{ marginBottom: 12 }}>
+                  <svg
+                    className="mc-agent-warn-icon"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z M12 9v4 M12 17h.01"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <div>
+                    <div className="mc-agent-warn-title">No assessment task assigned</div>
+                    <div className="mc-agent-warn-body">
+                      The agent has nothing to send when a candidate passes screening. Pick a task below to enable assessment invites — and auto-promote.
+                    </div>
+                  </div>
+                </div>
+              )}
+              <label className="mc-agent-settings-threshold-mode">
+                <span className="kicker mute">ASSESSMENT TASK</span>
+                <Select
+                  inline
+                  value={assignedTaskId}
+                  onChange={(event) => handleAssessmentSelect(event.target.value)}
+                  aria-label="Assessment task"
+                  disabled={savingAssessmentTask}
+                >
+                  <option value="">No assessment task</option>
+                  {assessmentTaskOptions.map((task) => (
+                    <option key={task.id} value={String(task.id)}>{task.name}</option>
+                  ))}
+                </Select>
+              </label>
+              {assessmentTaskOptions.length === 0 ? (
+                <p className="mc-agent-settings-card-help" style={{ marginTop: 8 }}>
+                  No assessment tasks in your library yet. Create one from the Tasks page, then assign it here.
+                </p>
+              ) : null}
+            </>
           )}
         </section>
 
