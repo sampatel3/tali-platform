@@ -180,6 +180,57 @@ export const WorkableTagSm = ({ className = '' }) => (
   <WorkableTag label="WK" size="sm" className={className} />
 );
 
+// A job Taali runs as its own full ATS (not synced from Workable/Bullhorn).
+// Symmetric with WorkableTag — same pill slot/size — but in brand purple so a
+// native role reads as a first-class identity, not "no Workable tag". The
+// briefcase mark says "Taali owns this whole pipeline".
+export const FullAtsTag = ({
+  label = 'Full ATS',
+  size = 'md',
+  className = '',
+}) => (
+  <span
+    className={cx(
+      'inline-flex items-center gap-1 rounded-full border px-3 py-1 font-medium tracking-[0.01em]',
+      size === 'sm' ? 'text-[0.6875rem]' : 'text-[0.75rem]',
+      className
+    )}
+    style={{
+      borderColor: 'color-mix(in oklab, var(--taali-purple) 30%, var(--taali-line))',
+      background: 'linear-gradient(135deg, color-mix(in oklab, var(--taali-purple) 16%, transparent) 0%, color-mix(in oklab, var(--taali-purple) 7%, transparent) 100%)',
+      color: 'var(--taali-purple-hover)',
+    }}
+  >
+    <BriefcaseBusiness size={size === 'sm' ? 11 : 12} strokeWidth={2.2} />
+    <span>{label}</span>
+  </span>
+);
+
+// A job synced from Bullhorn. External-ATS family like WorkableTag (same
+// pill, ArrowRight "synced-in" mark) but neutral-toned so it's distinct from
+// both the blue Workable tag and the purple native Full-ATS identity.
+export const BullhornTag = ({
+  label = 'Bullhorn',
+  size = 'md',
+  className = '',
+}) => (
+  <span
+    className={cx(
+      'inline-flex items-center gap-1 rounded-full border px-3 py-1 font-medium tracking-[0.01em]',
+      size === 'sm' ? 'text-[0.6875rem]' : 'text-[0.75rem]',
+      className
+    )}
+    style={{
+      borderColor: 'color-mix(in oklab, var(--taali-muted) 34%, var(--taali-line))',
+      background: 'color-mix(in oklab, var(--taali-muted) 8%, transparent)',
+      color: 'var(--taali-muted)',
+    }}
+  >
+    <ArrowRight size={size === 'sm' ? 11 : 12} strokeWidth={2.2} />
+    <span>{label}</span>
+  </span>
+);
+
 export const WorkableScorePip = ({ value, className = '' }) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;

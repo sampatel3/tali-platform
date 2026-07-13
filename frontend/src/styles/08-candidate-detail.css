@@ -428,6 +428,15 @@
   font-weight: 600;
 }
 
+/* Quiet note above the Send-assessment action when the agent runs this role —
+   flags that sending is a manual override, not the primary path. */
+.ctc-agent-note {
+  margin-top: 8px;
+  font-size: var(--fs-eyebrow);
+  line-height: 1.4;
+  color: var(--mute);
+}
+
 /* When the drawer renders inline within the candidates table, the
    parent <td> needs to drop the table cell padding so the drawer
    sits flush under the row. */

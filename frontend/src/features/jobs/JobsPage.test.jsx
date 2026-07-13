@@ -281,6 +281,29 @@ describe('JobsPage Workable sync states', () => {
     expect(onNavigate).toHaveBeenCalledWith('job-pipeline', { roleId: 102 });
   });
 
+  it('marks each role as Workable or Full ATS on its card', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        { ...baseRoles[0], id: 101, name: 'Synced Role', source: 'workable' },
+        { ...baseRoles[0], id: 103, name: 'Native Role', source: 'manual', workable_job_state: null },
+      ],
+    });
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const nativeCard = (await screen.findByText('Native Role')).closest('.job-card');
+    const syncedCard = screen.getByText('Synced Role').closest('.job-card');
+    // The native role reads as a first-class "Full ATS" identity, not a
+    // generic 'Role' chip.
+    expect(within(nativeCard).getByText('Full ATS')).toBeInTheDocument();
+    expect(within(nativeCard).queryByText('Role')).toBeNull();
+    expect(within(syncedCard).getByText('Workable')).toBeInTheDocument();
+    expect(within(syncedCard).queryByText('Full ATS')).toBeNull();
+  });
+
   it('paints the first page, then swaps in the full role list in the background', async () => {
     // A full first page (== the limit) signals there may be more roles, so the
     // hub follows up with an unlimited fetch and replaces the list. A small org
