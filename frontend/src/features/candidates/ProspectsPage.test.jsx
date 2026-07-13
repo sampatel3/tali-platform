@@ -94,12 +94,22 @@ describe('ProspectsPage', () => {
     expect(screen.getByRole('checkbox', { name: /Select Blocked Person/i })).toBeDisabled();
   });
 
-  it('links a converted prospect through to its candidate', async () => {
+  it('shows a non-navigating indicator for a prospect linked to an existing candidate', async () => {
     const onNavigate = vi.fn();
     render(<ProspectsPage onNavigate={onNavigate} />);
     await screen.findByText('Blocked Person');
-    fireEvent.click(screen.getByRole('button', { name: /Candidate linked/i }));
-    expect(onNavigate).toHaveBeenCalledWith('candidate-report', { candidateApplicationId: 55 });
+    // The candidate report route is application-scoped; a prospect (candidate
+    // id, 0..n applications) has no unambiguous application to open, so the
+    // linked state is a label, not a clickable link.
+    const indicator = screen.getByText('In your candidates');
+    expect(indicator).toBeInTheDocument();
+    expect(indicator.tagName).toBe('SPAN');
+    expect(screen.queryByRole('button', { name: /In your candidates/i })).not.toBeInTheDocument();
+    fireEvent.click(indicator);
+    expect(onNavigate).not.toHaveBeenCalledWith(
+      'candidate-report',
+      expect.objectContaining({ candidateApplicationId: 55 }),
+    );
   });
 
   it('opens the Campaigns management view from the header action', async () => {

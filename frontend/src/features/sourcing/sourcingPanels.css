@@ -690,15 +690,6 @@
   color: color-mix(in oklab, var(--purple) 58%, var(--ink));
 }
 
-.src-badge-link {
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.src-badge-link:hover {
-  background: color-mix(in oklab, var(--purple) 24%, var(--bg-2));
-}
-
 .src-status-contacted,
 .cmp-chip-sent,
 .cmp-chip-delivered,

@@ -599,14 +599,18 @@ export default function ProspectsPage({ onNavigate, NavComponent = null }) {
                           <div className="src-person-name">
                             {prospect.full_name}
                             {prospect.candidate_id ? (
-                              <button
-                                type="button"
-                                className="src-badge src-badge-link"
-                                onClick={() => onNavigate?.('candidate-report', { candidateApplicationId: prospect.candidate_id })}
-                                title="Open the linked candidate"
+                              // Non-navigating indicator: a prospect links to a
+                              // candidate (candidate id), but the candidate
+                              // report route is application-scoped and a prospect
+                              // has 0..n applications — there is no unambiguous
+                              // application id to open, so this is a label, not a
+                              // link.
+                              <span
+                                className="src-badge"
+                                title="This prospect matches an existing candidate in your pipeline"
                               >
-                                Candidate linked
-                              </button>
+                                In your candidates
+                              </span>
                             ) : null}
                           </div>
                           <div className="src-person-meta">
