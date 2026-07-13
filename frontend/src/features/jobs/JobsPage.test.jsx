@@ -202,6 +202,66 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelector('.job-agent-pill.is-on')).toBeNull();
   });
 
+  it('keeps non-live Workable roles greyed after Motion settles and fully actionable', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          id: 101,
+          name: 'Published Role',
+          workable_job_state: 'published',
+        },
+        {
+          ...baseRoles[0],
+          id: 102,
+          name: 'Closed Role',
+          workable_job_state: 'closed',
+        },
+        {
+          ...baseRoles[0],
+          id: 103,
+          name: 'Manual Role',
+          source: 'manual',
+          workable_job_state: null,
+        },
+        {
+          ...baseRoles[0],
+          id: 104,
+          name: 'Paused Published Role',
+          workable_job_state: 'published',
+          agentic_mode_enabled: true,
+          agent_paused_at: '2026-05-30T18:53:00Z',
+        },
+      ],
+    });
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+    const onNavigate = vi.fn();
+
+    render(<MemoryRouter><JobsPage onNavigate={onNavigate} /></MemoryRouter>);
+
+    const publishedCard = (await screen.findByText('Published Role')).closest('.job-card');
+    const closedCard = screen.getByText('Closed Role').closest('.job-card');
+    const manualCard = screen.getByText('Manual Role').closest('.job-card');
+    const pausedPublishedCard = screen.getByText('Paused Published Role').closest('.job-card');
+
+    expect(closedCard).toHaveClass('not-live');
+    expect(publishedCard).not.toHaveClass('not-live');
+    expect(manualCard).not.toHaveClass('not-live');
+    expect(pausedPublishedCard).not.toHaveClass('not-live');
+    await waitFor(() => expect(closedCard).toHaveStyle({ opacity: '0.55' }));
+    expect(publishedCard).toHaveStyle({ opacity: '1' });
+    expect(manualCard).toHaveStyle({ opacity: '1' });
+    expect(pausedPublishedCard).toHaveStyle({ opacity: '1' });
+
+    expect(closedCard).toHaveAttribute('role', 'button');
+    expect(closedCard).toHaveAttribute('tabindex', '0');
+    expect(closedCard).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(closedCard);
+    expect(onNavigate).toHaveBeenCalledWith('job-pipeline', { roleId: 102 });
+  });
+
   it('paints the first page, then swaps in the full role list in the background', async () => {
     // A full first page (== the limit) signals there may be more roles, so the
     // hub follows up with an unlimited fetch and replaces the list. A small org

@@ -70,6 +70,19 @@ const StageCount = ({ value }) => <MotionNumber value={value} format={formatCoun
 // out to several seconds (0.06s × index).
 const STAGGER_CAP = MOTION_STAGGER.maxItems;
 
+// Inactive Workable roles keep the same settled opacity as the longstanding
+// `.job-card.not-live` treatment. Motion owns the reveal opacity now, so it
+// needs an explicit dimmed target instead of always settling every card at 1.
+const ROLE_CARD_DIMMED_OPACITY = 0.55;
+const roleCardFadeVariants = Object.freeze({
+  ...fadeVariants,
+  dimmed: Object.freeze({ opacity: ROLE_CARD_DIMMED_OPACITY, transition: motionTransition.base }),
+});
+const reducedRoleCardFadeVariants = Object.freeze({
+  ...reducedFadeVariants,
+  dimmed: Object.freeze({ opacity: ROLE_CARD_DIMMED_OPACITY, transition: motionTransition.instant }),
+});
+
 // Progressive load: paint this many roles first (the active / starred /
 // recently-synced head of the list, per the backend's sort), then fetch the
 // full list in the background. Sized to comfortably cover a recruiter's live +
@@ -980,9 +993,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                     <m.div
                       key={role.id}
                       layout={reduced ? false : 'position'}
-                      variants={reduced ? reducedFadeVariants : fadeVariants}
+                      variants={reduced ? reducedRoleCardFadeVariants : roleCardFadeVariants}
                       initial="hidden"
-                      animate="visible"
+                      animate={roleDimmed ? 'dimmed' : 'visible'}
                       exit="exit"
                       transition={{
                         layout: reduced ? motionTransition.instant : motionTransition.layout,

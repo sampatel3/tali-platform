@@ -32,6 +32,7 @@ import {
 import './JobsMotionPreview.css';
 
 const STAGES = PIPELINE_FUNNEL_STAGES;
+const ROLE_CARD_DIMMED_OPACITY = 0.55;
 
 const JOB_STATUS_META = {
   draft: { label: 'Draft', tone: 'draft' },
@@ -70,6 +71,13 @@ const PREVIEW_ROLES = JOBS_SHOWCASE.map((role) => {
       workable_job_state: 'published',
       agentic_mode_enabled: true,
       agent_paused_at: '2026-04-27T06:00:00.000Z',
+    };
+  }
+  if (role.id === 7004) {
+    return {
+      ...role,
+      source: 'workable',
+      workable_job_state: 'draft',
     };
   }
   return role;
@@ -119,7 +127,13 @@ const RoleCard = ({ role, agentLive, reduced }) => {
 
   return (
     <m.div
-      variants={staggerItem}
+      variants={{
+        ...staggerItem,
+        show: {
+          ...staggerItem.show,
+          opacity: roleDimmed ? ROLE_CARD_DIMMED_OPACITY : 1,
+        },
+      }}
       whileHover={reduced ? undefined : { y: -4, transition: { duration: 0.18, ease: EASE_OUT } }}
       className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''} ${roleDimmed ? 'not-live' : ''}`}
       style={{ cursor: 'default' }}

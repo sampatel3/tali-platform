@@ -38,6 +38,8 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     // Real agent-status pill vocabulary (ON with spend) + the pending count.
     expect(screen.getByText('ON · $18/$50')).toBeInTheDocument();
     expect(screen.getByText(/3 awaiting you/)).toBeInTheDocument();
+    const inactiveCard = screen.getByText('Staff Backend Engineer').closest('.job-card');
+    expect(inactiveCard).toHaveClass('not-live');
     // Preview switcher chip.
     expect(screen.getByText(/PREVIEW · Jobs on Motion/i)).toBeInTheDocument();
   });
