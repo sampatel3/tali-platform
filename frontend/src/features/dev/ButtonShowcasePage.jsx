@@ -25,7 +25,6 @@ import { VARIANT_G_CSS } from '../marketing/landing_preview/variant_g/variantG.s
 import '../home/home.css';
 import '../home/agentchat/agentchat.css';
 import '../chat/chat.css';
-import '../sourcing/SourcingPage.css';
 import '../requisitions/requisitions.css';
 import '../clientintake/clientintake.css';
 import '../jobpage/jobpage.css';
@@ -42,7 +41,6 @@ const FAMILY_META = [
   { id: 'E', name: 'Agent chat actions' },
   { id: 'F', name: 'Chat and composer actions' },
   { id: 'G', name: 'Requisition actions' },
-  { id: 'H', name: 'Sourcing actions' },
   { id: 'I', name: 'Demo actions' },
   { id: 'J', name: 'Candidate report actions' },
   { id: 'K', name: 'Public and form CTAs' },
@@ -410,29 +408,6 @@ const RequisitionFamily = (props) => (
   </Family>
 );
 
-const SourcingFamily = (props) => (
-  <Family
-    {...props}
-    id="H"
-    title="Sourcing actions"
-    selector=".src-btn"
-    usage="primary · secondary"
-    radius="mapped to 10px · sm"
-    status="mapped"
-    description="Sourcing’s isolated pair is now canonical: the filled action maps to primary and the former ghost outline maps to secondary, including common hover and disabled states."
-  >
-    <Sample label="Primary">
-      <GalleryButton className="src-btn"><Plus size={13} /> New prospect</GalleryButton>
-    </Sample>
-    <Sample label="Ghost">
-      <GalleryButton className="src-btn src-btn-ghost">Import CSV</GalleryButton>
-    </Sample>
-    <Sample label="Disabled">
-      <GalleryButton className="src-btn" disabled>Generating</GalleryButton>
-    </Sample>
-  </Family>
-);
-
 const DemoFamily = (props) => (
   <Family
     {...props}
@@ -690,7 +665,6 @@ export const ButtonShowcasePage = () => {
         <AgentChatFamily />
         <ChatFamily />
         <RequisitionFamily />
-        <SourcingFamily />
         <DemoFamily />
         <CandidateReportFamily />
         <PublicCtaFamily />
