@@ -238,6 +238,8 @@ function CampaignDetail({ campaignId, onBack }) {
   const [genEst, setGenEst] = useState(null);
   const [sendConfirm, setSendConfirm] = useState(false);
   const [sendMeta, setSendMeta] = useState(null);
+  const [batchConfirm, setBatchConfirm] = useState(false);
+  const [batchMeta, setBatchMeta] = useState(null);
   const [archiveConfirm, setArchiveConfirm] = useState(false);
   const [skipped, setSkipped] = useState(null);
   const [busyAction, setBusyAction] = useState('');
@@ -437,6 +439,40 @@ function CampaignDetail({ campaignId, onBack }) {
     }
   };
 
+  // One campaign-level HITL: approve every remaining draft and send the batch.
+  // The recruiter's per-message edit/reject still runs first (rejected drafts
+  // are excluded); this replaces the separate approve-all + send confirm steps.
+  const openApproveAndSend = async () => {
+    if (actionsDisabled || drafts.length + approved.length === 0) return;
+    clearFeedback();
+    setBusyAction('prepare-batch');
+    try {
+      const res = await outreachApi.approveAndSend(campaignId, false);
+      setBatchMeta(res.data);
+      setBatchConfirm(true);
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'Could not prepare the send.'));
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const runApproveAndSend = async () => {
+    setBatchConfirm(false);
+    if (!canEditCampaign || busyAction) return;
+    clearFeedback();
+    setBusyAction('batch-send');
+    try {
+      const res = await outreachApi.approveAndSend(campaignId, true);
+      setCampaign((current) => ({ ...current, status: res.data?.status || 'sending' }));
+      setNotice('Approved and sending the campaign.');
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'Could not approve and send the campaign.'));
+    } finally {
+      setBusyAction('');
+    }
+  };
+
   const approveAll = async () => {
     if (actionsDisabled || drafts.length === 0) return;
     clearFeedback();
@@ -541,13 +577,26 @@ function CampaignDetail({ campaignId, onBack }) {
         <button type="button" className="src-btn" onClick={openGenerate} disabled={actionsDisabled || pending.length === 0}>
           {busyAction === 'estimate' ? 'Estimating…' : `Generate drafts (${pending.length})`}
         </button>
+        {drafts.length + approved.length > 0 ? (
+          <button
+            type="button"
+            className="src-btn"
+            onClick={openApproveAndSend}
+            disabled={actionsDisabled}
+            data-testid="approve-send-all"
+          >
+            {busyAction === 'prepare-batch'
+              ? 'Preparing…'
+              : `Approve & send all (${drafts.length + approved.length})`}
+          </button>
+        ) : null}
         {drafts.length > 0 ? (
           <button type="button" className="src-btn src-btn-ghost" onClick={approveAll} disabled={actionsDisabled}>
             {busyAction === 'approve' ? 'Approving…' : `Approve all (${drafts.length})`}
           </button>
         ) : null}
-        <button type="button" className="src-btn" onClick={openSend} disabled={actionsDisabled || approved.length === 0}>
-          {busyAction === 'prepare-send' ? 'Preparing…' : `Send (${approved.length} approved)`}
+        <button type="button" className="src-btn src-btn-ghost" onClick={openSend} disabled={actionsDisabled || approved.length === 0}>
+          {busyAction === 'prepare-send' ? 'Preparing…' : `Send approved (${approved.length})`}
         </button>
       </div>
 
@@ -575,6 +624,22 @@ function CampaignDetail({ campaignId, onBack }) {
         confirmLabel="Send"
         onConfirm={runSend}
         onCancel={() => setSendConfirm(false)}
+      />
+      <ConfirmDialog
+        open={batchConfirm}
+        title={`Send ${batchMeta?.will_send ?? 0} message${batchMeta?.will_send === 1 ? '' : 's'} to ${batchMeta?.will_send ?? 0} prospect${batchMeta?.will_send === 1 ? '' : 's'}?`}
+        detail={[
+          `Each goes out with your email as reply-to and a one-click unsubscribe.`,
+          batchMeta?.suppressed_excluded
+            ? `${batchMeta.suppressed_excluded} suppressed excluded.`
+            : '',
+          batchMeta?.rejected_excluded
+            ? `${batchMeta.rejected_excluded} rejected excluded.`
+            : '',
+        ].filter(Boolean).join(' ')}
+        confirmLabel="Approve & send all"
+        onConfirm={runApproveAndSend}
+        onCancel={() => setBatchConfirm(false)}
       />
       <ConfirmDialog
         open={archiveConfirm}

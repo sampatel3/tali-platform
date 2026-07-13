@@ -27,4 +27,10 @@ export const outreach = {
   // confirm=false → { approved_count }; confirm=true → enqueues send.
   send: (id, confirm = false) =>
     api.post(`/outreach/campaigns/${id}/send`, { confirm }),
+
+  // One campaign-level HITL: approve every pending draft and send the batch.
+  // confirm=false → { sendable_count, will_send, suppressed_excluded,
+  // rejected_excluded, failed_excluded }; confirm=true → approves + enqueues.
+  approveAndSend: (id, confirm = false) =>
+    api.post(`/outreach/campaigns/${id}/approve-and-send`, { confirm }),
 };

@@ -410,3 +410,82 @@ def send_campaign(
 
     send_campaign_messages.delay(campaign.id)
     return {**estimate, "status": campaign.status}
+
+
+# --------------------------------------------------------------------------- #
+# Approve & send all (one campaign-level HITL, two-phase confirm)
+# --------------------------------------------------------------------------- #
+
+
+class ApproveAndSendPayload(BaseModel):
+    confirm: bool = False
+
+
+@router.post("/{campaign_id}/approve-and-send")
+def approve_and_send(
+    campaign_id: int,
+    payload: ApproveAndSendPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Approve every pending draft and send the whole campaign in one action.
+
+    The agent drafts all messages; the recruiter may edit or reject a few
+    individually, then makes ONE decision to send the rest. This collapses the
+    approve-all + send confirm into a single campaign-level HITL. Idempotent and
+    race-safe: the ``draft -> approved -> queued`` flip is one atomic transaction
+    claimed by a compare-and-set on the campaign, so a racing second call finds
+    the campaign already ``sending`` (409) and nothing is double-sent. Rejected
+    (``pending``), already-``sent``, ``failed`` and ``suppressed`` rows are left
+    untouched; suppression is re-checked again in the send task."""
+    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    if svc.is_archived(campaign):
+        raise HTTPException(status_code=409, detail="Campaign is archived")
+    if campaign.status == CAMPAIGN_STATUS_SENDING:
+        raise HTTPException(status_code=409, detail="Campaign is already sending")
+
+    estimate = svc.approve_and_send_estimate(
+        db, campaign.id, current_user.organization_id
+    )
+    if not payload.confirm:
+        return estimate
+    if estimate["sendable_count"] == 0:
+        raise HTTPException(status_code=400, detail="No drafted messages to send")
+
+    # Claim the campaign with a compare-and-set: whichever call flips it to
+    # sending first wins; a racing second confirm finds status == sending and
+    # 409s. This closes the window where two confirms both read the drafts
+    # before either commits.
+    claimed = (
+        db.query(OutreachCampaign)
+        .filter(
+            OutreachCampaign.id == campaign.id,
+            OutreachCampaign.organization_id == current_user.organization_id,
+            OutreachCampaign.status != CAMPAIGN_STATUS_SENDING,
+        )
+        .update(
+            {OutreachCampaign.status: CAMPAIGN_STATUS_SENDING},
+            synchronize_session=False,
+        )
+    )
+    if claimed != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Campaign is already sending")
+
+    # Approve all drafts, then move approved -> queued in the same transaction.
+    # 'queued' stays reachable only from 'approved', preserving the send task's
+    # nothing-sends-unapproved invariant; the send task selects only 'queued'.
+    db.query(OutreachMessage).filter(
+        OutreachMessage.campaign_id == campaign.id,
+        OutreachMessage.status == MESSAGE_STATUS_DRAFT,
+    ).update({OutreachMessage.status: MESSAGE_STATUS_APPROVED}, synchronize_session=False)
+    db.query(OutreachMessage).filter(
+        OutreachMessage.campaign_id == campaign.id,
+        OutreachMessage.status == MESSAGE_STATUS_APPROVED,
+    ).update({OutreachMessage.status: MESSAGE_STATUS_QUEUED}, synchronize_session=False)
+    db.commit()
+
+    from ...tasks.outreach_tasks import send_campaign_messages
+
+    send_campaign_messages.delay(campaign.id)
+    return {**estimate, "status": CAMPAIGN_STATUS_SENDING}

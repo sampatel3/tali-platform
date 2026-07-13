@@ -23,6 +23,8 @@ from ...models.outreach_campaign import (
     CAMPAIGN_STATUS_ARCHIVED,
     MESSAGE_STATUS_APPROVED,
     MESSAGE_STATUS_DRAFT,
+    MESSAGE_STATUS_FAILED,
+    MESSAGE_STATUS_PENDING,
     OutreachCampaign,
     OutreachMessage,
 )
@@ -355,6 +357,56 @@ def approved_count(db: Session, campaign_id: int) -> int:
         )
         .count()
     )
+
+
+def approve_and_send_estimate(
+    db: Session, campaign_id: int, org_id: int
+) -> dict[str, int]:
+    """What one campaign-level "approve & send all" would actually do.
+
+    ``sendable`` = every message still in ``draft`` or ``approved`` — the set
+    the batch approves and enqueues. Suppression is re-checked here (bulk, no
+    N+1) so the confirmation is honest about how many will really go out; the
+    send task re-checks it again at send time. ``rejected`` (drafted then
+    rejected back to ``pending``) and ``failed`` drafts are reported as excluded
+    so the recruiter sees exactly who is left out."""
+    from ...services.email_suppression_service import suppressed_set
+
+    rows = (
+        db.query(OutreachMessage.email)
+        .filter(
+            OutreachMessage.campaign_id == campaign_id,
+            OutreachMessage.status.in_(
+                [MESSAGE_STATUS_DRAFT, MESSAGE_STATUS_APPROVED]
+            ),
+        )
+        .all()
+    )
+    sendable_emails = [e for (e,) in rows if e]
+    suppressed = suppressed_set(db, emails=sendable_emails, organization_id=org_id)
+    suppressed_excluded = sum(1 for e in sendable_emails if e in suppressed)
+
+    from sqlalchemy import func as sa_func
+
+    def _count(status: str) -> int:
+        return int(
+            db.query(sa_func.count(OutreachMessage.id))
+            .filter(
+                OutreachMessage.campaign_id == campaign_id,
+                OutreachMessage.status == status,
+            )
+            .scalar()
+            or 0
+        )
+
+    sendable_count = len(rows)
+    return {
+        "sendable_count": sendable_count,
+        "will_send": sendable_count - suppressed_excluded,
+        "suppressed_excluded": suppressed_excluded,
+        "rejected_excluded": _count(MESSAGE_STATUS_PENDING),
+        "failed_excluded": _count(MESSAGE_STATUS_FAILED),
+    }
 
 
 def resolve_job_page_token(db: Session, role_id: Optional[int]) -> Optional[str]:
