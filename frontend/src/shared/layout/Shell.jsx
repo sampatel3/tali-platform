@@ -46,7 +46,7 @@ import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 const NAV_TABS = [
   { id: 'home',     label: 'Home',     Icon: Home },
   { id: 'jobs',     label: 'Jobs',     Icon: Briefcase },
-  { id: 'sourcing', label: 'Sourcing', Icon: UserPlus },
+  { id: 'candidates', label: 'Candidates', Icon: UserPlus },
   { id: 'chat',     label: 'Chat',     Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
   { id: 'analytics', label: 'Analytics', Icon: LineChart },
@@ -273,9 +273,10 @@ export const Shell = ({ currentPage, onNavigate }) => {
   // Map non-tab page identifiers onto the canonical nav tab that owns them.
   //   - 'analytics' IS a real tab now — keep it (do NOT fold into Home).
   //   - legacy 'reporting' → the Analytics tab (its route redirects there).
-  //   - candidate detail, assessments inbox, and requisitions all live under
-  //     the Jobs tab, so highlight Jobs on those surfaces.
-  const JOBS_TAB_PAGES = new Set(['assessments', 'candidates', 'requisitions']);
+  //   - assessments inbox and requisitions live under the Jobs tab, so
+  //     highlight Jobs on those surfaces. 'candidates' is its own top-level
+  //     tab now (the Prospects surface) — no longer folded into Jobs.
+  const JOBS_TAB_PAGES = new Set(['assessments', 'requisitions']);
   const resolvedPage = JOBS_TAB_PAGES.has(currentPage)
     ? 'jobs'
     : currentPage === 'reporting'

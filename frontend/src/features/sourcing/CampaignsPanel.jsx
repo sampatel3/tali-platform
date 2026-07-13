@@ -4,6 +4,7 @@ import { outreach as outreachApi } from '../../shared/api/outreachClient';
 import { prospects as prospectsApi } from '../../shared/api/prospectsClient';
 import { roles as rolesApi } from '../../shared/api/rolesClient';
 import ConfirmDialog from '../chat/ConfirmDialog';
+import './sourcingPanels.css';
 
 // Per-message draft cost (USD) — mirrors the backend COST_PER_DRAFT_USD so the
 // cost-confirm dialog shows the same estimate before the recruiter confirms.

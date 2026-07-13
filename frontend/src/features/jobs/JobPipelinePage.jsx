@@ -17,6 +17,7 @@ import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimit
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
+import { SourceCandidatesPanel } from '../sourcing/SourceCandidatesPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
 import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
@@ -1836,6 +1837,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </div>
         ) : activeView === 'hiring-team' ? (
           <HiringTeamPanel roleId={role?.id} />
+        ) : activeView === 'find' ? (
+          <div>
+            <p className="src-find-intro">
+              <strong>Find people for this role.</strong>
+              <span>
+                Turn the role criteria into LinkedIn and Google searches, and draft a
+                grounded first message from a pasted profile. Nothing is sent or
+                automated — you run the search and the outreach yourself.
+              </span>
+            </p>
+            {numericRoleId ? (
+              <SourceCandidatesPanel roleId={numericRoleId} defaultOpen />
+            ) : null}
+          </div>
         ) : (
           <>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — KPI row
