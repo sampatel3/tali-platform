@@ -78,14 +78,6 @@ const footerColumns = [
       { label: 'Contact', href: 'mailto:hello@taali.ai' },
     ],
   },
-  {
-    title: 'Guides',
-    items: [
-      { label: 'What is agentic hiring?', href: '/agentic-hiring' },
-      { label: 'AI-native hiring', href: '/ai-native-hiring' },
-      { label: 'AI-native assessments', href: '/ai-native-assessments' },
-    ],
-  },
 ];
 
 export const LandingPage = ({ onNavigate }) => {
@@ -313,7 +305,7 @@ export const LandingPage = ({ onNavigate }) => {
 
       <footer className="border-t border-[var(--line)] bg-[var(--ink)] text-[var(--bg)]">
         <div className={`${containerClass} py-14`}>
-          <div className="grid gap-10 lg:grid-cols-[1.1fr_.9fr_.9fr_.9fr]">
+          <div className="grid gap-10 lg:grid-cols-[1.4fr_.9fr_.9fr]">
             <div>
               <TaaliLogo onClick={() => onNavigate('landing')} wordmarkClassName="!text-[var(--bg)]" />
               <p className="mt-5 max-w-[17.5rem] text-[0.9375rem] leading-7 text-[var(--taali-inverse-text)] opacity-70">
@@ -352,12 +344,8 @@ export const LandingPage = ({ onNavigate }) => {
             ))}
           </div>
 
-          <div className="mt-12 font-[var(--font-display)] text-[clamp(72px,12vw,164px)] leading-none tracking-[-0.08em] text-[var(--taali-inverse-text)] opacity-[0.08]">
-            taali<em className="text-[var(--purple)] not-italic">.</em>
-          </div>
-
           <div
-            className="mt-6 flex flex-col gap-3 border-t pt-5 text-[0.8125rem] text-[var(--taali-inverse-text)] md:flex-row md:items-center md:justify-between"
+            className="mt-12 flex flex-col gap-3 border-t pt-5 text-[0.8125rem] text-[var(--taali-inverse-text)] md:flex-row md:items-center md:justify-between"
             style={{
               borderColor: 'color-mix(in oklab, var(--taali-inverse-text) 10%, transparent)',
               color: 'color-mix(in oklab, var(--taali-inverse-text) 52%, transparent)',
