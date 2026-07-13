@@ -18,8 +18,10 @@
 import React from 'react';
 import { Brain, Check, Clock, Flag, RefreshCw, Sparkles, X } from 'lucide-react';
 
+import '../../styles/09-standing-report.css';
+
 import { ScoreRing } from '../../shared/ui/ScoreRing';
-import { AgentLoop } from '../../shared/motion';
+import { AgentLoop, Reveal } from '../../shared/motion';
 import { ScoreProvenance } from './ScoreProvenance';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
@@ -114,7 +116,7 @@ export const DecisionRail = ({
   const metaItems = (Array.isArray(candidateMeta) ? candidateMeta : []).filter(Boolean);
 
   return (
-    <aside className="dossier-rail dr-reveal">
+    <Reveal as="aside" className="dossier-rail" x={-16} y={0}>
       {candidateName ? (
         <div className="dr-id">
           <div className="dr-id-avatar" aria-hidden="true">{candidateInitials || 'C'}</div>
@@ -333,7 +335,7 @@ export const DecisionRail = ({
       {provenance ? (
         <ScoreProvenance provenance={provenance} className="dr-prov" density="full" />
       ) : null}
-    </aside>
+    </Reveal>
   );
 };
 

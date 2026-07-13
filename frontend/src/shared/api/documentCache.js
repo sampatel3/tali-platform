@@ -8,7 +8,8 @@
 // Entries expire after CACHE_TTL_MS so the next view re-presigns the
 // S3 URL before the 10-minute window the backend grants.
 
-import { roles as rolesApi, candidates as candidatesApi } from './index';
+import { candidates as candidatesApi } from './candidatesClient';
+import { roles as rolesApi } from './rolesClient';
 
 const CACHE_TTL_MS = 9 * 60 * 1000; // 9 min — under the 10-min S3 presign window
 

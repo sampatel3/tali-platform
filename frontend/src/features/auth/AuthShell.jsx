@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
+import '../../styles/14-auth-shell.css';
 
 // AuthShell — two-pane layout used by login / register / forgot / reset /
 // verify-email per HANDOFF §4.3. Editorial pane (deep purple gradient with

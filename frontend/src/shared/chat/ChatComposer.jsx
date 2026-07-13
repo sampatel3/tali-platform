@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Mic, Square } from 'lucide-react';
 
+import { MotionLoop } from '../motion';
+
 const autosize = (el, max = 200) => {
   if (!el) return;
   el.style.height = 'auto';
@@ -131,7 +133,10 @@ export function ChatComposer({
         )}
         <div className="tk-composer-actions">
           {voiceSupported ? (
-            <button
+            <MotionLoop
+              as="button"
+              active={listening}
+              kind="signal"
               type="button"
               className={`tk-mic-btn${listening ? ' is-listening' : ''}`}
               onClick={toggleVoice}
@@ -142,7 +147,7 @@ export function ChatComposer({
             >
               <Mic size={13} />
               {listening ? <span className="tk-mic-text">listening…</span> : null}
-            </button>
+            </MotionLoop>
           ) : null}
           {streaming ? (
             <button type="button" className="tk-stop-btn" onClick={onStop}>

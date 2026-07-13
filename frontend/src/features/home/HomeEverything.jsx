@@ -450,7 +450,13 @@ export const AnalyticsDrillIns = ({ summary, breakdown }) => {
                   color: 'var(--ink)',
                 }}
               />
-              <Bar dataKey="count" fill="var(--purple)" radius={[6, 6, 0, 0]} maxBarSize={48} />
+              <Bar
+                dataKey="count"
+                fill="var(--purple)"
+                radius={[6, 6, 0, 0]}
+                maxBarSize={48}
+                isAnimationActive={false}
+              />
             </BarChart>
           </ResponsiveContainer>
         </div>

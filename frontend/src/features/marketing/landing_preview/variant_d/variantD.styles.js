@@ -218,9 +218,7 @@ export const VARIANT_D_CSS = `
 }
 .lvd.is-on .lvd-scrollcue, .lvd.is-static .lvd-scrollcue { opacity: 1; transform: none; }
 .lvd-scrollcue:hover { color: var(--lvd-purple); }
-.lvd-scrollcue-chev { width: 18px; height: 18px; animation: lvdBob 1.8s ease-in-out infinite; }
-.lvd.is-static .lvd-scrollcue-chev { animation: none; }
-@keyframes lvdBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
+.lvd-scrollcue-chev { width: 18px; height: 18px; }
 
 /* ── PINNED SCENE ─────────────────────────────────────────────────────── */
 .lvd-scene-wrap { position: relative; height: 500vh; }

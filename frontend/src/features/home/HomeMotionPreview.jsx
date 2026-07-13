@@ -248,9 +248,9 @@ export const HomeMotionPreview = () => {
                   animate="show"
                   variants={{ hidden: {}, show: { transition: { delayChildren: stagger(MOTION_STAGGER.default, { startDelay: 0.1 }) } } }}
                 >
-                  {kpiTiles.map((tile) => (
+                  {kpiTiles.map(({ key: tileKey, ...tile }) => (
                     <m.div
-                      key={tile.key || tile.label}
+                      key={tileKey || tile.label}
                       className="hmp-kpi-cell"
                       variants={{
                         hidden: { opacity: 0, y: 14, scale: 0.99 },
@@ -272,9 +272,8 @@ export const HomeMotionPreview = () => {
                 </Reveal>
 
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
-                  {/* Decision feed. Rows are appended one at a time on flip; a
-                      scoped CSS keyframe (.hmp-feed .rq-stream-item) fades each
-                      one in as it mounts, so the queue visibly populates. */}
+                  {/* Decision feed. Rows append one at a time on flip; the
+                      shared MotionList animates each inserted row. */}
                   <Reveal delay={MOTION_DURATION.fast} className="hmp-feed" reduced={reduced}>
                     {rows.length === 0 ? (
                       <div className="hmp-feed-empty">

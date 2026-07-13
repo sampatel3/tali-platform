@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
 import { AgentLoop } from '../../shared/motion';
+import '../../styles/21-demo.css';
 
 // Recruiter-readable agent feed shown on the dark editorial pane. Same
 // vocabulary the real Hub decision feed uses (advance / reject / taught)

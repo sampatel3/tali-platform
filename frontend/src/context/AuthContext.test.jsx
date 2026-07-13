@@ -6,7 +6,7 @@ import { vi } from 'vitest';
 // resolution races test teardown, surfacing as an "invalid onError
 // method" unhandled rejection that fails CI even though every test
 // passed. Mock the module so the call is a no-op.
-vi.mock('../shared/api', () => ({
+vi.mock('../shared/api/authClient', () => ({
   auth: {
     me: vi.fn().mockResolvedValue({ data: { id: 1, email: 'user@example.com' } }),
     login: vi.fn(),

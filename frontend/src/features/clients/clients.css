@@ -596,17 +596,7 @@
   color: var(--mute);
   font-size: 0.875rem;
 }
-
-.cl-spinner {
-  display: inline-block;
-  width: 15px;
-  height: 15px;
-  border: 2px solid color-mix(in oklab, currentColor 30%, transparent);
-  border-top-color: currentColor;
-  border-radius: 50%;
-  animation: cl-spin 0.7s linear infinite;
-}
-@keyframes cl-spin { to { transform: rotate(360deg); } }
+.cl-motion-spinner { color: inherit; }
 
 @media (max-width: 640px) {
   .cl-head { flex-direction: column; align-items: stretch; }

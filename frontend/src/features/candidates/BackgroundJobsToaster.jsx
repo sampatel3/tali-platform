@@ -1,7 +1,11 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, X } from 'lucide-react';
+
+import './BackgroundJobsToaster.css';
 
 import { useJobStatus } from '../../contexts/JobStatusContext';
+import { MotionProgress } from '../../shared/motion';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 // Turn a raw backend job error_message (e.g. "v3_failed: rate_limit",
 // "missing_inputs", "cancelled_by_recruiter") into a short plain-English
@@ -262,15 +266,15 @@ function JobRow({ entry, onCancel, onDismiss }) {
           ? <AlertTriangle size={18} />
           : isTerminal
             ? <CheckCircle2 size={18} />
-            : <Loader2 size={18} className="animate-spin" />}
+            : <Spinner size={18} className="!text-current" />}
       </div>
       <div className="bg-jobs-body">
         <div className="bg-jobs-title">{title}</div>
         <div className="bg-jobs-detail">{detail}</div>
         <div className="bg-jobs-bar" aria-hidden="true">
-          <div
+          <MotionProgress
             className="bg-jobs-bar-fill"
-            style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+            value={Math.max(0, Math.min(100, pct)) / 100}
           />
         </div>
         <div className="bg-jobs-actions">

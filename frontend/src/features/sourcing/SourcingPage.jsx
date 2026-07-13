@@ -254,12 +254,15 @@ export default function SourcingPage({ onNavigate, NavComponent = null }) {
   }, []);
 
   useEffect(() => {
+    const nextQ = q.trim();
+    if (nextQ === debouncedQ) return undefined;
+
     const timer = window.setTimeout(() => {
-      setDebouncedQ(q.trim());
+      setDebouncedQ(nextQ);
       setPage(0);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [q]);
+  }, [debouncedQ, q]);
 
   const loadProspects = useCallback(async () => {
     const requestId = ++requestSequence.current;

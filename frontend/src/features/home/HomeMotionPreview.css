@@ -37,18 +37,6 @@
 .hmp-kpi-cell { display: flex; }
 .hmp-kpi-cell > .kpi-tile { flex: 1; }
 
-/* Queue rows fade + rise in as they mount (progressive append drives the
-   cascade). Disabled under reduced motion so rows render in their final state. */
-@media (prefers-reduced-motion: no-preference) {
-  .hmp-feed .rq-stream-list > li {
-    animation: hmpRowIn var(--motion-duration-reveal) var(--motion-ease-enter) both;
-  }
-}
-@keyframes hmpRowIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
-}
-
 /* Empty states shown before the agent is turned on. */
 .hmp-feed-empty {
   display: flex;

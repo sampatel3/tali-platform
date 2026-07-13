@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import '../../styles/17-settings-shell.css';
 import {
   AlertTriangle,
   CreditCard,
@@ -1514,9 +1515,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       type="button"
                       className="btn btn-purple btn-sm"
                       onClick={handleSaveAgentDefaults}
-                      disabled={agentDefaultsSaving}
+                      disabled={agentDefaultsSaving || formsInitForOrgIdRef.current !== orgData?.id}
                     >
-                      {agentDefaultsSaving ? 'Saving...' : 'Save budget & threshold'}
+                      {agentDefaultsSaving
+                        ? 'Saving...'
+                        : formsInitForOrgIdRef.current !== orgData?.id
+                          ? 'Loading defaults...'
+                          : 'Save budget & threshold'}
                     </button>
                   </div>
                 </SectionPanel>

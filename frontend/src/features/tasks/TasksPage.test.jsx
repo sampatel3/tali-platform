@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const showToast = vi.fn();
@@ -49,5 +49,36 @@ describe('TasksPage', () => {
     const previewLink = screen.getByRole('link', { name: /Preview as candidate/i });
     expect(previewLink).toHaveAttribute('target', '_blank');
     expect(previewLink).toHaveAttribute('href', '/tasks/12/preview');
+  });
+
+  it('shows a recoverable error instead of an empty library when loading fails', async () => {
+    tasksApi.list
+      .mockRejectedValueOnce({
+        response: { data: { detail: 'The task library is temporarily unavailable.' } },
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 12,
+            name: 'AI Full Stack Readiness',
+            role: 'AI Full Stack Engineer',
+          },
+        ],
+      });
+
+    render(<TasksPage />);
+
+    const error = await screen.findByRole('alert');
+    expect(error).toHaveTextContent('We couldn’t load the task library.');
+    expect(error).toHaveTextContent('The task library is temporarily unavailable.');
+    expect(screen.queryByText('No tasks in the library yet.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('AI Full Stack Readiness')).toBeInTheDocument();
+    });
+    expect(tasksApi.list).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

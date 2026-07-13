@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, FileText, Paperclip, Send, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
-import { motionSafeScrollBehavior } from '../../shared/motion';
+import { MotionSpinner, motionSafeScrollBehavior } from '../../shared/motion';
 import { publicIntakeApi } from '../requisitions/api';
 import './clientintake.css';
 
@@ -591,7 +591,7 @@ export function ClientIntakePage() {
               {composer.trim() === '' && attachments.length > 0 ? (
                 <div className="ci-send-attachments">
                   <button type="button" className="ci-btn-sm is-primary" onClick={() => sendTurn()} disabled={!canSend}>
-                    {turnInFlight ? <span className="ci-spinner" /> : null} Send {attachments.length} attachment{attachments.length === 1 ? '' : 's'}
+                    {turnInFlight ? <MotionSpinner className="ci-motion-spinner" size={15} /> : null} Send {attachments.length} attachment{attachments.length === 1 ? '' : 's'}
                   </button>
                 </div>
               ) : null}
@@ -614,7 +614,7 @@ export function ClientIntakePage() {
                 onClick={submit}
                 disabled={submitting || turnInFlight}
               >
-                {submitting ? <span className="ci-spinner" /> : <Send size={15} />}
+                {submitting ? <MotionSpinner className="ci-motion-spinner" size={15} /> : <Send size={15} />}
                 {' '}Submit to {orgLabel}
               </button>
               <p className="ci-submit-hint">Keep chatting until it feels complete — then send it over.</p>

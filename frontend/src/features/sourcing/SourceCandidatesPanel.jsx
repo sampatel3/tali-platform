@@ -1,8 +1,9 @@
 import React, { useCallback, useState } from 'react';
-import { ChevronDown, Copy, Loader2, UserPlus } from 'lucide-react';
+import { ChevronDown, Copy, UserPlus } from 'lucide-react';
 
 import { roles as rolesApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 // "Source candidates" toolbox owned by the standalone Sourcing workspace.
 // Search and outreach artefacts are run by the recruiter on LinkedIn / Google —
@@ -177,7 +178,7 @@ export function SourceCandidatesPanel({ roleId, defaultOpen = false, onPreparePr
                 onClick={generateSearches}
                 disabled={loadingSearches}
               >
-                {loadingSearches ? <Loader2 className="animate-spin" size={12} /> : null}
+                {loadingSearches ? <Spinner size={12} className="!text-current" /> : null}
                 {searches ? 'Regenerate' : 'Generate search strings'}
               </button>
             </div>
@@ -221,7 +222,7 @@ export function SourceCandidatesPanel({ roleId, defaultOpen = false, onPreparePr
                 onClick={generateDraft}
                 disabled={loadingDraft}
               >
-                {loadingDraft ? <Loader2 className="animate-spin" size={12} /> : null}
+                {loadingDraft ? <Spinner size={12} className="!text-current" /> : null}
                 {draft ? 'Regenerate' : 'Draft outreach'}
               </button>
             </div>

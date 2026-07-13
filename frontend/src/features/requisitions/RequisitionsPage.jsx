@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
-import { motionSafeScrollBehavior } from '../../shared/motion';
+import { MotionSkeleton, MotionSpinner, motionSafeScrollBehavior } from '../../shared/motion';
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
@@ -828,7 +828,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
               ) : null}
             </div>
             <button type="button" className="rq-new-btn" onClick={createReq} disabled={creating}>
-              {creating ? <span className="rq-spinner" /> : <Plus size={15} />} New requisition
+              {creating ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Plus size={15} />} New requisition
             </button>
           </div>
           <ul className="rq-side-list">
@@ -837,8 +837,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
               // the "No requisitions yet" empty copy before the list arrives.
               [0, 1, 2].map((i) => (
                 <li key={`sk-${i}`} className="rq-side-item is-skeleton" aria-hidden="true">
-                  <span className="rq-skel-line rq-skel-title" />
-                  <span className="rq-skel-line rq-skel-meta" />
+                  <MotionSkeleton className="rq-skel-line rq-skel-title" />
+                  <MotionSkeleton className="rq-skel-line rq-skel-meta" />
                 </li>
               ))
             ) : briefs.length === 0 ? (
@@ -872,11 +872,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
             // title/status/conversation never shows under the new selection.
             <div className="rq-switching" aria-busy="true" aria-live="polite">
               <div className="rq-switching-head">
-                <span className="rq-skel-line rq-skel-h1" />
-                <span className="rq-skel-line rq-skel-sub" />
+                <MotionSkeleton className="rq-skel-line rq-skel-h1" />
+                <MotionSkeleton className="rq-skel-line rq-skel-sub" />
               </div>
               <div className="rq-switching-body">
-                <span className="rq-spinner" />
+                <MotionSpinner className="rq-motion-spinner" size={15} />
                 <span className="rq-switching-note">Loading requisition…</span>
               </div>
             </div>
@@ -894,7 +894,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     button) is hidden, so this CTA is the only way in — keep it
                     reachable here so the empty state isn't a dead end. */}
                 <button type="button" className="rq-publish-btn rq-blank-cta" onClick={createReq} disabled={creating}>
-                  {creating ? <span className="rq-spinner" /> : <Plus size={15} />} Start a requisition
+                  {creating ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Plus size={15} />} Start a requisition
                 </button>
               </div>
             </div>
@@ -958,7 +958,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       disabled={clientLinking}
                       title="Get a no-login link to send to the hiring manager"
                     >
-                      {clientLinking ? <span className="rq-spinner" /> : <Share2 size={14} />} Share with hiring manager
+                      {clientLinking ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Share2 size={14} />} Share with hiring manager
                     </button>
                   )}
 
@@ -995,7 +995,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           disabled={publishing || requiredRemaining > 0}
                           title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
                         >
-                          {publishing ? <span className="rq-spinner" /> : <RefreshCw size={13} />} Re-publish
+                          {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <RefreshCw size={13} />} Re-publish
                         </button>
                       </div>
                       {careersUrl ? (
@@ -1045,7 +1045,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         disabled={publishing || requiredRemaining > 0}
                         title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
                       >
-                        {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish job page
+                        {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Rocket size={15} />} Publish job page
                       </button>
                       {requiredRemaining > 0 ? (
                         <span className="rq-publish-hint">
@@ -1159,7 +1159,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     {composer.trim() === '' && attachments.length > 0 ? (
                       <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
                         <button type="button" className="rq-btn-sm is-primary" onClick={() => sendTurn()} disabled={!canSend}>
-                          {turnInFlight ? <span className="rq-spinner" /> : null} Send {attachments.length} attachment{attachments.length === 1 ? '' : 's'}
+                          {turnInFlight ? <MotionSpinner className="rq-motion-spinner" size={15} /> : null} Send {attachments.length} attachment{attachments.length === 1 ? '' : 's'}
                         </button>
                       </div>
                     ) : null}
@@ -1189,7 +1189,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     </button>
                   </div>
                   {loadingBrief ? (
-                    <div className="rq-brief"><div className="rq-brief-scroll"><span className="rq-spinner" /></div></div>
+                    <div className="rq-brief"><div className="rq-brief-scroll"><MotionSpinner label="Loading requisition" size={15} /></div></div>
                   ) : rightTab === 'jobspec' ? (
                     <JobSpec
                       template={template}

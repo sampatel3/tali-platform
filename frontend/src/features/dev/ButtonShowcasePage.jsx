@@ -3,7 +3,6 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  Loader2,
   Mic,
   MoreHorizontal,
   Plus,
@@ -15,7 +14,7 @@ import {
   Trash2,
 } from 'lucide-react';
 
-import { Button } from '../../shared/ui/TaaliPrimitives';
+import { Button, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 import { VARIANT_G_CSS } from '../marketing/landing_preview/variant_g/variantG.styles';
 
@@ -29,6 +28,9 @@ import '../requisitions/requisitions.css';
 import '../clientintake/clientintake.css';
 import '../jobpage/jobpage.css';
 import '../clients/clients.css';
+import '../../styles/09-standing-report.css';
+import '../../styles/21-demo.css';
+import '../../styles/14-auth-shell.css';
 import '../../shared/ui/CriteriaEditor.css';
 import '../../shared/chat/chat-kit.css';
 import './ButtonShowcasePage.css';
@@ -254,7 +256,7 @@ const AuthFamily = (props) => (
       <div className="button-lab__bounded-control"><GalleryButton className="mc-auth-cta mc-auth-cta-outline">Sign in with SSO</GalleryButton></div>
     </Sample>
     <Sample label="Loading" className="is-wide">
-      <div className="button-lab__bounded-control"><GalleryButton className="mc-auth-cta" disabled><Loader2 size={14} className="animate-spin" /> Signing in</GalleryButton></div>
+      <div className="button-lab__bounded-control"><GalleryButton className="mc-auth-cta" disabled><Spinner size={14} className="!text-current" /> Signing in</GalleryButton></div>
     </Sample>
   </Family>
 );

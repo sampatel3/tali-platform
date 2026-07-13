@@ -1,8 +1,11 @@
 import React, {
+  Children,
   createContext,
+  forwardRef,
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -11,6 +14,8 @@ import {
   LayoutGroup,
   animate,
   m,
+  stagger,
+  useAnimate,
   useInView,
   useMotionValue,
   useMotionValueEvent,
@@ -23,39 +28,120 @@ import {
   motionTransition,
   reducedFadeVariants,
 } from './presets';
-import { MOTION_DURATION } from './tokens';
+import { motionElementFor } from './effects';
+import { MOTION_DURATION, MOTION_EASE, MOTION_STAGGER } from './tokens';
 import { useReducedMotionSync } from './useReducedMotionSync';
 
 const cx = (...values) => values.filter(Boolean).join(' ');
 
 /** A true, once-only in-view entrance for narrative/marketing content. */
 export function Reveal({
+  as = 'div',
   children,
   className,
   delay = 0,
+  x = 0,
   y = 12,
-  amount = 0.2,
+  amount = 0.01,
   once = true,
   reduced: reducedOverride,
+  onFocusCapture,
   ...props
 }) {
   const ref = useRef(null);
   const inView = useInView(ref, { amount, once });
+  const [focusVisible, setFocusVisible] = useState(false);
   const systemReduced = useReducedMotionSync();
   const reduced = systemReduced || Boolean(reducedOverride);
-  const visible = reduced || inView;
+  const visible = reduced || focusVisible || inView;
+  const Component = motionElementFor(as);
 
   return (
-    <m.div
+    <Component
       ref={ref}
       className={className}
       initial={false}
-      animate={visible ? { opacity: 1, y: 0 } : { opacity: 0, y }}
+      animate={visible ? { opacity: 1, x: 0, y: 0 } : { opacity: 0, x, y }}
       transition={reduced ? motionTransition.instant : { ...motionTransition.reveal, delay }}
+      data-motion-reveal={x ? 'horizontal' : 'vertical'}
+      data-motion-reveal-state={visible ? 'visible' : 'hidden'}
+      onFocusCapture={(event) => {
+        // An offscreen reveal may contain the next tabbable control. Make the
+        // whole region visible in the same focus event rather than allowing a
+        // keyboard user to land on an opacity-zero button for a frame.
+        setFocusVisible(true);
+        onFocusCapture?.(event);
+      }}
       {...props}
     >
       {children}
-    </m.div>
+    </Component>
+  );
+}
+
+/** Staggers existing direct children without adding wrappers or changing semantics. */
+export function MotionStagger({
+  as = 'div',
+  children,
+  className,
+  delay = 0,
+  distance = 12,
+  reduced: reducedOverride,
+  step = MOTION_STAGGER.default,
+  ...props
+}) {
+  const [scope, animateChildren] = useAnimate();
+  const systemReduced = useReducedMotionSync();
+  const reduced = systemReduced || Boolean(reducedOverride);
+  const Component = motionElementFor(as);
+  const childSignature = Children.toArray(children)
+    .map((child, index) => child?.key ?? index)
+    .join('|');
+  const animatedNodesRef = useRef(new WeakSet());
+  const controlsRef = useRef(new Set());
+
+  useLayoutEffect(() => {
+    const nodes = Array.from(scope.current?.children || []);
+    if (!nodes.length) return undefined;
+    const targets = reduced
+      ? nodes
+      : nodes.filter((node) => !animatedNodesRef.current.has(node));
+    if (!targets.length) return undefined;
+    targets.forEach((node) => animatedNodesRef.current.add(node));
+    if (reduced) {
+      controlsRef.current.forEach((controls) => controls.stop());
+      controlsRef.current.clear();
+    }
+    const controls = animateChildren(
+      targets,
+      reduced
+        ? { opacity: 1, y: 0 }
+        : { opacity: [0, 1], y: [distance, 0] },
+      reduced
+        ? motionTransition.instant
+        : {
+            duration: MOTION_DURATION.reveal,
+            ease: MOTION_EASE.enter,
+            delay: stagger(step, { startDelay: delay }),
+          },
+    );
+    controlsRef.current.add(controls);
+    controls.then(
+      () => controlsRef.current.delete(controls),
+      () => controlsRef.current.delete(controls),
+    );
+    return undefined;
+  }, [animateChildren, childSignature, delay, distance, reduced, scope, step]);
+
+  useEffect(() => () => {
+    controlsRef.current.forEach((controls) => controls.stop());
+    controlsRef.current.clear();
+  }, []);
+
+  return (
+    <Component ref={scope} className={className} {...props}>
+      {children}
+    </Component>
   );
 }
 
@@ -194,37 +280,48 @@ export function MotionTab({ value, children, className, indicatorClassName, ...p
 }
 
 /** Layout-aware list shell; list items opt into presence individually. */
-export function MotionList({ children, className, initial = false, ...props }) {
+export function MotionList({ as = 'div', children, className, initial = false, ...props }) {
   const reduced = useReducedMotionSync();
+  const Component = motionElementFor(as);
   return (
     <LayoutGroup>
-      <m.div layout={reduced ? false : true} className={className} {...props}>
+      <Component layout={reduced ? false : true} className={className} {...props}>
         <AnimatePresence initial={initial} mode={reduced ? 'sync' : 'popLayout'}>
           {children}
         </AnimatePresence>
-      </m.div>
+      </Component>
     </LayoutGroup>
   );
 }
 
-export function MotionListItem({ children, className, index = 0, density = 'default', ...props }) {
+export const MotionListItem = forwardRef(function MotionListItem({
+  as = 'div',
+  children,
+  className,
+  density = 'default',
+  index = 0,
+  initial = 'hidden',
+  ...props
+}, forwardedRef) {
   const reduced = useReducedMotionSync();
+  const Component = motionElementFor(as);
   return (
-    <m.div
+    <Component
+      ref={forwardedRef}
       layout={reduced ? false : true}
       className={className}
       custom={{ index, density }}
       variants={reduced ? reducedFadeVariants : listItemVariants}
-      initial={false}
+      initial={reduced ? false : initial}
       animate="visible"
       exit="exit"
       transition={{ layout: reduced ? motionTransition.instant : motionTransition.layout }}
       {...props}
     >
       {children}
-    </m.div>
+    </Component>
   );
-}
+});
 
 /** Interpolates from the previous value; first render is already settled. */
 export function MotionNumber({
@@ -241,16 +338,22 @@ export function MotionNumber({
   const reduced = systemReduced || Boolean(reducedOverride);
   const startingValue = reduced || initialValue == null ? numericValue : Number(initialValue) || 0;
   const motionValue = useMotionValue(startingValue);
+  const textRef = useRef(null);
   const formatRef = useRef(format);
   formatRef.current = format;
-  const [rendered, setRendered] = useState(() => format(startingValue));
 
-  useMotionValueEvent(motionValue, 'change', (latest) => setRendered(formatRef.current(latest)));
+  useMotionValueEvent(motionValue, 'change', (latest) => {
+    if (textRef.current) textRef.current.textContent = String(formatRef.current(latest));
+  });
 
   useEffect(() => {
     if (reduced) {
       motionValue.set(numericValue);
-      setRendered(formatRef.current(numericValue));
+      if (textRef.current) textRef.current.textContent = String(formatRef.current(numericValue));
+      return undefined;
+    }
+    if (Object.is(motionValue.get(), numericValue)) {
+      if (textRef.current) textRef.current.textContent = String(formatRef.current(numericValue));
       return undefined;
     }
     const controls = animate(motionValue, numericValue, { ...motionTransition.data, duration });
@@ -259,7 +362,7 @@ export function MotionNumber({
 
   return (
     <span className={className} aria-label={String(format(numericValue))} {...props}>
-      <span aria-hidden="true">{rendered}</span>
+      <span ref={textRef} aria-hidden="true">{format(startingValue)}</span>
     </span>
   );
 }

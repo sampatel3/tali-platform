@@ -68,7 +68,7 @@ describe('Button', () => {
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute('aria-busy', 'true');
     expect(button).not.toHaveTextContent('Save');
-    expect(button.querySelector('.taali-btn-spinner')).toHaveClass('animate-spin');
+    expect(button.querySelector('.taali-btn-spinner')).toHaveAttribute('data-motion-loop', 'spin');
     expect(button.querySelector('.taali-btn-spinner')).toHaveAttribute('aria-hidden', 'true');
   });
 

@@ -1,5 +1,7 @@
 import React from 'react';
 
+import '../../styles/09-standing-report.css';
+
 import { Badge, Card, cx } from '../../shared/ui/TaaliPrimitives';
 
 const variantConfig = {
@@ -16,7 +18,10 @@ const variantConfig = {
   preview: {
     padding: 'p-3',
     columns: 'md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.1fr)]',
-    timelineColumns: 'md:grid-cols-3',
+    // The motion preview composes this card inside a narrower report column.
+    // A nested three-column timeline collapsed each role into an unreadable
+    // pill; keep the role history as a compact vertical list here.
+    timelineColumns: 'grid-cols-1',
   },
 };
 
@@ -121,10 +126,24 @@ export function CandidateSnapshotCard({ snapshot, variant = 'page', className = 
   }
 
   const config = variantConfig[variant] || variantConfig.page;
+  const sectionCount = Number(Boolean(yearsLabel))
+    + Number(topSkills.length > 0)
+    + Number(timeline.length > 0);
+  let responsiveColumns = config.columns;
+  if (variant !== 'sheet') {
+    if (sectionCount <= 1) responsiveColumns = 'grid-cols-1';
+    else if (!yearsLabel && topSkills.length && timeline.length) {
+      responsiveColumns = 'md:grid-cols-[minmax(0,1fr)_minmax(12rem,0.6fr)]';
+    } else if (yearsLabel && topSkills.length && !timeline.length) {
+      responsiveColumns = 'md:grid-cols-[auto_minmax(0,1fr)]';
+    } else if (yearsLabel && !topSkills.length && timeline.length) {
+      responsiveColumns = 'md:grid-cols-[auto_minmax(12rem,1fr)]';
+    }
+  }
 
   return (
     <Card className={cx(config.padding, className)}>
-      <div className={cx('grid gap-4', config.columns)}>
+      <div className={cx('grid gap-4', responsiveColumns)}>
         {yearsLabel ? (
           <div className="flex min-w-[8.75rem] flex-col gap-1">
             <SectionLabel>Experience</SectionLabel>

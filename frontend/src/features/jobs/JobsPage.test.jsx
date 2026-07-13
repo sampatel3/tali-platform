@@ -27,7 +27,12 @@ vi.mock('../../shared/api', () => ({
   },
 }));
 
+vi.mock('../../contexts/JobStatusContext', () => ({
+  useJobStatus: vi.fn(),
+}));
+
 import * as apiClient from '../../shared/api';
+import { useJobStatus } from '../../contexts/JobStatusContext';
 import { MotionSystemProvider } from '../../shared/motion';
 import { JobsPage } from './JobsPage';
 
@@ -70,6 +75,8 @@ const baseOrg = {
 };
 
 describe('JobsPage Workable sync states', () => {
+  const trackWorkableSync = vi.fn();
+
   beforeEach(() => {
     vi.clearAllMocks();
     // Default to reduced motion so the per-stage count-up tickers render their
@@ -84,15 +91,18 @@ describe('JobsPage Workable sync states', () => {
     apiClient.agent.orgStatus.mockResolvedValue({
       data: { org_budget_spent_cents: 4200, org_budget_cap_cents: 9000 },
     });
+    trackWorkableSync.mockReset();
+    useJobStatus.mockReturnValue({ workableSyncJob: null, trackWorkableSync });
   });
 
   it('reattaches to an active sync on first load', async () => {
-    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
-      data: {
+    useJobStatus.mockReturnValue({
+      trackWorkableSync,
+      workableSyncJob: {
         run_id: 77,
         sync_in_progress: true,
         workable_last_sync_at: '2026-04-25T13:00:00Z',
-        workable_last_sync_status: 'success',
+        workable_last_sync_status: 'running',
         workable_last_sync_summary: { jobs_seen: 80, candidates_seen: 83217, errors: [] },
       },
     });
@@ -100,7 +110,7 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     expect(await screen.findByRole('button', { name: /Syncing/i })).toBeDisabled();
-    expect(apiClient.organizations.getWorkableSyncStatus).toHaveBeenCalledWith();
+    expect(trackWorkableSync).toHaveBeenCalled();
   });
 
   it('treats an already-running sync response as active work instead of an error', async () => {
@@ -139,7 +149,7 @@ describe('JobsPage Workable sync states', () => {
       expect(screen.getByRole('button', { name: /Syncing/i })).toBeDisabled();
     });
     expect(screen.queryByText('Workable sync could not be started.')).not.toBeInTheDocument();
-    expect(apiClient.organizations.getWorkableSyncStatus).toHaveBeenCalledWith(88);
+    expect(trackWorkableSync).toHaveBeenCalled();
   });
 
   it('surfaces the advanced and rejected counts on the job card', async () => {
@@ -327,20 +337,17 @@ describe('JobsPage entrance motion', () => {
     });
   });
 
-  it('adds the reveal classes to the strip / KPI / filter rows and staggers the cards on first mount', async () => {
+  it('uses Motion-native reveals and a capped card stagger on first mount', async () => {
     setReducedMotion(false);
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     await screen.findByText('Backend Engineer');
-    // Sequential entrance reveal above the grid.
-    expect(document.querySelector('.wk-strip')).toHaveClass('reveal');
-    expect(document.querySelector('.filter-row')).toHaveClass('reveal');
-    // KpiStrip wrapper + the two rows above are the three .reveal elements.
-    expect(document.querySelectorAll('.reveal').length).toBeGreaterThanOrEqual(3);
-    // Card grid staggers in once, and each card carries its capped index.
+    expect(document.querySelector('.wk-strip')).toHaveAttribute('data-motion-reveal', 'vertical');
+    expect(document.querySelector('.filter-row')).toHaveAttribute('data-motion-reveal', 'vertical');
+    expect(document.querySelectorAll('[data-motion-reveal]').length).toBeGreaterThanOrEqual(3);
     const grid = document.querySelector('.jobs-grid');
-    expect(grid).toHaveClass('reveal-stagger');
-    expect(grid.querySelector('.job-card').style.getPropertyValue('--i')).toBe('0');
+    expect(grid).toHaveAttribute('data-motion-stagger');
+    expect(grid.querySelector('.job-card')).toHaveAttribute('data-motion-index', '0');
   });
 
   it('renders the final stage counts immediately under reduced motion', async () => {
@@ -359,13 +366,12 @@ describe('JobsPage entrance motion', () => {
 
     await screen.findByText('Backend Engineer');
     const grid = document.querySelector('.jobs-grid');
-    // The one-shot stagger retires itself after its animation window.
-    await waitFor(() => expect(grid).not.toHaveClass('reveal-stagger'), { timeout: 2000 });
+    await waitFor(() => expect(grid).toHaveAttribute('data-motion-stagger', 'settled'), { timeout: 2000 });
 
     // Changing a filter re-renders the grid but must NOT re-arm the stagger.
     fireEvent.click(screen.getByRole('button', { name: /With open candidates/i }));
     await screen.findByText('Backend Engineer');
-    expect(document.querySelector('.jobs-grid')).not.toHaveClass('reveal-stagger');
+    expect(document.querySelector('.jobs-grid')).toHaveAttribute('data-motion-stagger', 'settled');
   });
 
   it('keeps filtered cards present for their exit and preserves the surviving card', async () => {
@@ -390,7 +396,7 @@ describe('JobsPage entrance motion', () => {
     await screen.findByText('Dormant Role');
     const grid = document.querySelector('.jobs-grid');
     const survivingCard = screen.getByText('Backend Engineer').closest('.job-card');
-    await waitFor(() => expect(grid).not.toHaveClass('reveal-stagger'), { timeout: 2000 });
+    await waitFor(() => expect(grid).toHaveAttribute('data-motion-stagger', 'settled'), { timeout: 2000 });
 
     fireEvent.click(screen.getByRole('button', { name: /With open candidates/i }));
 
@@ -400,6 +406,6 @@ describe('JobsPage entrance motion', () => {
     await waitFor(() => expect(screen.queryByText('Dormant Role')).not.toBeInTheDocument());
     expect(screen.getByText('Backend Engineer').closest('.job-card')).toBe(survivingCard);
     expect(document.querySelector('.jobs-grid')).toBe(grid);
-    expect(grid).not.toHaveClass('reveal-stagger');
+    expect(grid).toHaveAttribute('data-motion-stagger', 'settled');
   });
 });

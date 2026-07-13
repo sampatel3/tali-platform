@@ -81,6 +81,7 @@ export const ComparisonRadar = ({
                   fill={color}
                   fillOpacity={isHighlight ? 0.25 : 0.12}
                   strokeWidth={isHighlight ? 2 : 1.5}
+                  isAnimationActive={false}
                 />
               );
             })}

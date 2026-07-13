@@ -1,6 +1,6 @@
 import React from 'react';
 
-import { AgentLoop, Reveal } from '../../../../shared/motion';
+import { AgentLoop, MotionProgress, Reveal } from '../../../../shared/motion';
 import { CANDIDATES, FUNNEL, DDS, CONTROL, PROOF, COMPOSITE } from './variantF.data';
 
 // The scrolling body sections, in narrative order: Problem → Agentic hiring
@@ -144,7 +144,15 @@ export const FluencySection = ({ reduced }) => (
                 <div className="dd-name">{d.name}</div>
                 <div className="dd-def">{d.def}</div>
               </div>
-              <div className="dd-track"><AgentLoop kind="flow" className="dd-fill" style={{ width: `${d.val}%` }} /></div>
+              <div className="dd-track">
+                <MotionProgress
+                  as="span"
+                  className="dd-fill-progress"
+                  style={{ display: 'block', width: `${d.val}%`, height: '100%', borderRadius: 999 }}
+                >
+                  <AgentLoop kind="flow" className="dd-fill" style={{ display: 'block', width: '100%', height: '100%' }} />
+                </MotionProgress>
+              </div>
               <div className="dd-val">{d.val}</div>
             </div>
           ))}

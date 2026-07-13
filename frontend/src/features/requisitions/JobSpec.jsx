@@ -17,6 +17,7 @@ import { Pencil, RotateCcw, Sparkles } from 'lucide-react';
 // full-height markdown editor seeded with the current rendered text; "Reset to
 // auto" clears the override and reverts to the live template-filled draft.
 import { ChatMarkdown } from '../../shared/chat';
+import { MotionSpinner } from '../../shared/motion';
 
 // Markdown shown in place of an empty / missing value so gaps are visible in
 // the live draft.
@@ -224,7 +225,7 @@ export function JobSpec({
                   onClick={saveEdit}
                   disabled={savingOverride}
                 >
-                  {savingOverride ? <span className="rq-spinner" /> : null} Save
+                  {savingOverride ? <MotionSpinner className="rq-motion-spinner" size={15} /> : null} Save
                 </button>
               </div>
             </div>
@@ -255,7 +256,7 @@ export function JobSpec({
                       disabled={draftingResponsibilities || savingOverride}
                       title="Let the AI draft the “What you’ll do” responsibilities from the brief"
                     >
-                      {draftingResponsibilities ? <span className="rq-spinner" /> : <Sparkles size={13} />} Draft responsibilities (AI)
+                      {draftingResponsibilities ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Sparkles size={13} />} Draft responsibilities (AI)
                     </button>
                   ) : null}
                 </div>
@@ -268,7 +269,7 @@ export function JobSpec({
                         onClick={resetToAuto}
                         disabled={savingOverride || draftingResponsibilities}
                       >
-                        {savingOverride ? <span className="rq-spinner" /> : <RotateCcw size={13} />} Reset to auto
+                        {savingOverride ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <RotateCcw size={13} />} Reset to auto
                       </button>
                     ) : null}
                     <button

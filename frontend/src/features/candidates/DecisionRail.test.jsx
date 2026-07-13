@@ -65,11 +65,12 @@ describe('DecisionRail re-score / staleness guarding', () => {
 });
 
 describe('DecisionRail entrance motion', () => {
-  it('carries the slide-in reveal class on the rail (gated to reduced-motion in CSS)', () => {
+  it('uses the shared horizontal Motion reveal for the rail', () => {
     const { container } = renderRail();
     const rail = container.querySelector('.dossier-rail');
     expect(rail).not.toBeNull();
-    expect(rail).toHaveClass('dr-reveal');
+    expect(rail).toHaveAttribute('data-motion-reveal', 'horizontal');
+    expect(rail).not.toHaveClass('dr-reveal');
   });
 });
 

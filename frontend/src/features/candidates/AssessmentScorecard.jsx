@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 
+import '../../styles/09-standing-report.css';
+
 import {
   FLUENCY_4D_AXES,
   axisForRubricDimension,

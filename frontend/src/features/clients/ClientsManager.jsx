@@ -9,6 +9,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Building2, Mail, Plus, User } from 'lucide-react';
 
+import { MotionSpinner } from '../../shared/motion';
 import { clientApi } from './api';
 import './clients.css';
 
@@ -112,12 +113,12 @@ export function ClientsManager() {
           <input id="cl-contact-email" className="cl-input" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="jane@acme.com" />
         </div>
         <button type="submit" className="cl-new-btn" disabled={!name.trim() || creating}>
-          {creating ? <span className="cl-spinner" /> : <Plus size={15} />} New department
+          {creating ? <MotionSpinner className="cl-motion-spinner" size={15} /> : <Plus size={15} />} New department
         </button>
       </form>
 
       {loading ? (
-        <div className="cl-loading"><span className="cl-spinner" /> Loading hiring departments…</div>
+        <div className="cl-loading"><MotionSpinner className="cl-motion-spinner" size={15} /> Loading hiring departments…</div>
       ) : clients.length === 0 ? (
         <div className="cl-empty">
           <div className="cl-empty-glyph"><Building2 size={22} /></div>

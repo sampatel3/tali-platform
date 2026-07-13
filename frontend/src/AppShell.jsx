@@ -9,43 +9,51 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
-
 import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { JobStatusProvider } from './contexts/JobStatusContext';
-import {
-  assessments as assessmentsApi,
-  organizations as organizationsApi,
-} from './shared/api';
+import { assessments as assessmentsApi } from './shared/api/assessmentsClient';
 import { pathForPage } from './app/routing';
-import { mapAssessmentToCandidateView } from './features/candidates/assessmentViewModels';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
-import { Button, Panel } from './shared/ui/TaaliPrimitives';
+import { Button, Panel, Spinner } from './shared/ui/TaaliPrimitives';
 import { ScrollToTop } from './shared/ui/ScrollToTop';
 import { RouteMeta } from './shared/seo/RouteMeta';
 import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
 import { useKeyboardShortcut } from './shared/hooks/useKeyboardShortcut';
 import { MotionSystemProvider } from './shared/motion';
 
-import {
-  ForgotPasswordPage,
-  LoginPage,
-  RegisterPage,
-  ResetPasswordPage,
-  VerifyEmailPage,
-  AcceptInvitePage,
-} from './features/auth';
-import { Shell as DashboardNav } from './shared/layout/Shell';
 import { PreviewNavGuard } from './shared/layout/PreviewNavGuard';
-import {
-  ConnectWorkableButton,
-  WorkableCallbackPage,
-} from './features/integrations/WorkableConnection';
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 
 const LandingPage = lazy(() =>
   import('./features/marketing/LandingPage').then((m) => ({ default: m.LandingPage }))
+);
+const LoginPage = lazy(() =>
+  import('./features/auth/LoginPage').then((m) => ({ default: m.LoginPage }))
+);
+const RegisterPage = lazy(() =>
+  import('./features/auth/RegisterPage').then((m) => ({ default: m.RegisterPage }))
+);
+const ForgotPasswordPage = lazy(() =>
+  import('./features/auth/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage }))
+);
+const ResetPasswordPage = lazy(() =>
+  import('./features/auth/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage }))
+);
+const VerifyEmailPage = lazy(() =>
+  import('./features/auth/VerifyEmailPage').then((m) => ({ default: m.VerifyEmailPage }))
+);
+const AcceptInvitePage = lazy(() =>
+  import('./features/auth/AcceptInvitePage').then((m) => ({ default: m.AcceptInvitePage }))
+);
+const DashboardNav = lazy(() =>
+  import('./shared/layout/Shell').then((m) => ({ default: m.Shell }))
+);
+const ConnectWorkableButton = lazy(() =>
+  import('./features/integrations/WorkableConnection').then((m) => ({ default: m.ConnectWorkableButton }))
+);
+const WorkableCallbackPage = lazy(() =>
+  import('./features/integrations/WorkableConnection').then((m) => ({ default: m.WorkableCallbackPage }))
 );
 const NotFoundPage = lazy(() =>
   import('./features/marketing/NotFoundPage').then((m) => ({ default: m.NotFoundPage }))
@@ -267,6 +275,26 @@ const resolveSafeNextPath = (rawValue) => {
   return nextPath;
 };
 
+// Batch/sync discovery is recruiter-only infrastructure. Keeping it outside
+// public, auth, candidate-share, and preview routes avoids background probes
+// and prevents the toaster chunk from loading where it can never render.
+function RecruiterJobStatusBoundary({ children }) {
+  const { isAuthenticated } = useAuth();
+  const location = useLocation();
+  const enabled = isAuthenticated
+    && isProtectedRecruiterPath(location.pathname, location.search);
+
+  if (!enabled) return children;
+  return (
+    <JobStatusProvider>
+      {children}
+      <Suspense fallback={null}>
+        <BackgroundJobsToaster />
+      </Suspense>
+    </JobStatusProvider>
+  );
+}
+
 function AppContent() {
   const { isAuthenticated, loading: authLoading } = useAuth();
   const location = useLocation();
@@ -440,7 +468,8 @@ function AppContent() {
     setLoadingCandidateDetail(true);
     setCandidateDetailFetchFailed(false);
     assessmentsApi.get(candidateDetailAssessmentId)
-      .then((res) => {
+      .then(async (res) => {
+        const { mapAssessmentToCandidateView } = await import('./features/candidates/assessmentViewModels');
         if (cancelled) return;
         setSelectedCandidate(mapAssessmentToCandidateView(res.data || {}));
         setLoadingCandidateDetail(false);
@@ -457,17 +486,23 @@ function AppContent() {
     };
   }, [location.pathname, candidateDetailAssessmentId, isAuthenticated, selectedCandidate]);
 
-  if (authLoading) {
+  // Public marketing, candidate, and preview routes do not depend on recruiter
+  // identity. Let them paint while a cached token is validated instead of
+  // serialising public content behind the /me request.
+  if (authLoading && (
+    isAuthenticated
+    || isProtectedRecruiterPath(location.pathname, location.search)
+  )) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--purple)' }} />
+        <Spinner size={32} />
       </div>
     );
   }
 
   const lazyFallback = (
     <div className="min-h-screen flex items-center justify-center">
-      <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
+      <Spinner size={28} />
     </div>
   );
   // workflowModeLoading removed — there is no per-org workflow probe anymore.
@@ -666,12 +701,12 @@ function AppContent() {
           </Suspense>
         )}
       />
-      <Route path="/login" element={<LoginPage onNavigate={navigateToPage} />} />
-      <Route path="/register" element={<RegisterPage onNavigate={navigateToPage} />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage onNavigate={navigateToPage} />} />
-      <Route path="/reset-password" element={<ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} />} />
-      <Route path="/verify-email" element={<VerifyEmailPage onNavigate={navigateToPage} token={verifyEmailToken} />} />
-      <Route path="/accept-invite" element={<AcceptInvitePage onNavigate={navigateToPage} token={acceptInviteToken} />} />
+      <Route path="/login" element={<Suspense fallback={lazyFallback}><LoginPage onNavigate={navigateToPage} /></Suspense>} />
+      <Route path="/register" element={<Suspense fallback={lazyFallback}><RegisterPage onNavigate={navigateToPage} /></Suspense>} />
+      <Route path="/forgot-password" element={<Suspense fallback={lazyFallback}><ForgotPasswordPage onNavigate={navigateToPage} /></Suspense>} />
+      <Route path="/reset-password" element={<Suspense fallback={lazyFallback}><ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} /></Suspense>} />
+      <Route path="/verify-email" element={<Suspense fallback={lazyFallback}><VerifyEmailPage onNavigate={navigateToPage} token={verifyEmailToken} /></Suspense>} />
+      <Route path="/accept-invite" element={<Suspense fallback={lazyFallback}><AcceptInvitePage onNavigate={navigateToPage} token={acceptInviteToken} /></Suspense>} />
 
       <Route
         path="/dashboard"
@@ -943,7 +978,7 @@ function AppContent() {
             // first paint. Once the fetch resolves (a legacy assessment with no
             // application, or a confirmed failure) we fall through to the panel.
             <div className="min-h-screen flex items-center justify-center">
-              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
+              <Spinner size={28} />
             </div>
           ) : (
             <div>
@@ -1066,12 +1101,14 @@ function AppContent() {
       <Route
         path="/settings/workable/callback"
         element={(
-          <WorkableCallbackPage
-            code={searchParams.get('code')}
-            error={searchParams.get('error')}
-            errorDescription={searchParams.get('error_description')}
-            onNavigate={navigateToPage}
-          />
+          <Suspense fallback={lazyFallback}>
+            <WorkableCallbackPage
+              code={searchParams.get('code')}
+              error={searchParams.get('error')}
+              errorDescription={searchParams.get('error_description')}
+              onNavigate={navigateToPage}
+            />
+          </Suspense>
         )}
       />
 
@@ -1200,15 +1237,11 @@ function App() {
     <MotionSystemProvider>
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ToastProvider>
-          <JobStatusProvider>
+          <RecruiterJobStatusBoundary>
             <ErrorBoundary>
               <AppContent />
             </ErrorBoundary>
-            {/* Global job panel — outside routes so it survives navigation */}
-            <Suspense fallback={null}>
-              <BackgroundJobsToaster />
-            </Suspense>
-          </JobStatusProvider>
+          </RecruiterJobStatusBoundary>
         </ToastProvider>
       </BrowserRouter>
     </MotionSystemProvider>

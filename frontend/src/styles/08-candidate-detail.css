@@ -968,27 +968,6 @@ label.field {
   color: var(--mute);
 }
 
-.pulse {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--green);
-  animation: pulse 1.8s infinite;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  50% {
-    opacity: 0.5;
-    transform: scale(0.8);
-  }
-}
-
 .bar {
   position: relative;
   overflow: hidden;
@@ -2030,8 +2009,4 @@ body.interview-view .page {
   display: block;
   border: 0;
   background: var(--bg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pulse { animation: none; }
 }

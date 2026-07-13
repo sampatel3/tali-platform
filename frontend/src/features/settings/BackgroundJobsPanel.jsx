@@ -4,7 +4,7 @@ import { Loader2, X } from 'lucide-react';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { roles as rolesApi } from '../../shared/api';
 import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitives';
-import { AgentLoop } from '../../shared/motion';
+import { AgentLoop, MotionLoop } from '../../shared/motion';
 
 const HISTORY_POLL_MS = 5000;
 // Hide terminal-state history rows older than this so the panel stays focused
@@ -750,11 +750,15 @@ export default function BackgroundJobsPanel() {
           decision approvals. The agent fleet (cards + KPIs) lives on the
           Analytics → Agent fleet tab; it used to be duplicated here. */}
       <div className="bg-jobs-panel-header" title={lastUpdatedTitle}>
-        <Loader2
-          size={12}
-          className={hasActive ? 'animate-spin' : ''}
+        <MotionLoop
+          active={hasActive}
+          kind="spin"
+          className="inline-flex"
           style={{ opacity: hasActive ? 1 : 0.45 }}
-        />
+          aria-hidden="true"
+        >
+          <Loader2 size={12} />
+        </MotionLoop>
         <span className="bg-jobs-panel-header-text">
           Auto-refreshing every 5s · finished runs auto-clear after 30 min
         </span>

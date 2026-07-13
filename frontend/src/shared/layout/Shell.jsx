@@ -16,8 +16,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
-import { agent as agentApi, organizations as organizationsApi } from '../api';
-import { readCache, writeCache } from '../api/resourceCache';
+import { organizations as organizationsApi } from '../api/orgClient';
 import {
   readDarkModePreference,
   setDarkModePreference,
@@ -68,61 +67,6 @@ const initialsFor = (name, org) => {
   const seed = `${name} ${org}`.trim();
   const letters = seed.split(/\s+/).filter(Boolean).map((w) => w[0]).join('');
   return letters.slice(0, 2).toUpperCase() || 'TA';
-};
-
-// Poll the org-wide pending count for the Home tab badge. 30s cadence is
-// the same as AgentBar — cheap aggregation, fine for a top-of-page nav.
-//
-// The nav (this Shell) re-mounts on every tab switch, so a plain useState(0)
-// reset the badge to 0 and re-fetched on each navigation — the number
-// flickered away and popped back. Seed the initial value from the shared
-// SWR cache (the same 'home:org-status' entry the Home page fills — PR #949)
-// so a warm re-mount paints the last-known count instantly, with no flash to
-// 0, while the poll below revalidates in the background. Each successful poll
-// also refreshes that cache so Home and the badge stay in lockstep and any
-// surface re-mount reads a warm value.
-const readCachedPending = () => Number(readCache('home:org-status')?.data?.pending || 0);
-
-const useHomePendingCount = (isAuthenticated) => {
-  const [count, setCount] = useState(readCachedPending);
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setCount(0);
-      return undefined;
-    }
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const res = await agentApi.orgStatus();
-        if (cancelled) return;
-        const data = res?.data || null;
-        if (data) {
-          setCount(Number(data.pending || 0));
-          writeCache('home:org-status', data);
-        }
-      } catch {
-        // Silent — a transient 401/5xx shouldn't make the nav badge flicker.
-      }
-    };
-    void tick();
-    // Skip the poll while the tab is hidden so background tabs don't hit the
-    // us-east4 API every 30s; refetch once on becoming visible again (mirrors
-    // AgentBar's document.hidden guard).
-    const id = window.setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      void tick();
-    }, 30_000);
-    const onVisibility = () => {
-      if (typeof document !== 'undefined' && !document.hidden) void tick();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [isAuthenticated]);
-  return count;
 };
 
 const useOrgName = (user) => {
@@ -314,7 +258,16 @@ export const Shell = ({ currentPage, onNavigate }) => {
   const initials = useMemo(() => initialsFor(displayName, orgName), [displayName, orgName]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const homePending = useHomePendingCount(Boolean(user));
+  const {
+    status: orgAgentStatus,
+    payload: orgAgentPayload,
+  } = useAgentStatusOrg(Boolean(user));
+  // The Home badge covers both recommendation decisions and agent questions,
+  // matching the queue's canonical `pending` aggregate. AgentBar's decision
+  // metric remains the narrower pending_decisions value.
+  const homePending = Number(
+    orgAgentPayload?.pending ?? orgAgentStatus?.pending_decisions ?? 0,
+  );
   const navLocked = isPreviewNavSurface();
 
   // Map non-tab page identifiers onto the canonical nav tab that owns them.
@@ -341,7 +294,6 @@ export const Shell = ({ currentPage, onNavigate }) => {
   // also scoped to those two surfaces — anywhere else, the chip is hidden so
   // the nav doesn't double-signal what the page hero already shows.
   const showAgentChip = resolvedPage === 'jobs' || resolvedPage === 'role-pipeline' || resolvedPage === 'role-detail';
-  const { status: orgAgentStatus } = useAgentStatusOrg();
   const agentChipOn = Boolean(
     orgAgentStatus
       && orgAgentStatus.active_role_count > 0

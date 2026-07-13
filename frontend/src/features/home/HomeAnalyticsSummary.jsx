@@ -8,7 +8,7 @@ import React from 'react';
 import { LineChart, ArrowUpRight } from 'lucide-react';
 
 import { formatCount, formatMoneyUsd } from '../../shared/metrics';
-import { MotionNumber } from '../../shared/motion';
+import { MotionNumber, Reveal } from '../../shared/motion';
 
 const pct = (v) => `${Math.round(Number(v) || 0)}%`;
 
@@ -31,7 +31,7 @@ export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }
   ];
 
   return (
-    <section className="home-section home-pulse reveal" style={{ '--reveal-delay': '0.16s' }}>
+    <Reveal as="section" className="home-section home-pulse" delay={0.16}>
       <div className="home-section-head home-pulse-head">
         <span className="kicker">ANALYTICS · PLATFORM PULSE</span>
         <button
@@ -58,7 +58,7 @@ export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }
         full <b>Analytics</b> page — kept off the hub to keep the review loop
         focused.
       </p>
-    </section>
+    </Reveal>
   );
 };
 

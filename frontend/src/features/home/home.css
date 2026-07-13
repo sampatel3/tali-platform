@@ -526,13 +526,6 @@
 .rq-hybrid-detail.is-rescoring > *:not(.rq-rescore-banner) {
   opacity: 0.55;
 }
-@keyframes rq-spin {
-  to { transform: rotate(360deg); }
-}
-.rq-spin {
-  animation: rq-spin 1.4s linear infinite;
-}
-
 /* Invited-candidate tracker ("Assessment pending" view) */
 .rq-invited-row {
   display: flex;

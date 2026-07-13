@@ -9,9 +9,8 @@
 // Data: GET /agent-needs-input?role_id=X&status=resolved.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
-
 import api from '../../shared/api/httpClient';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const formatTimestamp = (value) => {
   if (!value) return '—';
@@ -96,7 +95,7 @@ export default function RecruiterAnswersLog({ roleId }) {
 
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--mute)', fontSize: 13 }}>
-          <Loader2 size={14} className="animate-spin" />
+          <Spinner size={14} className="!text-current" />
           Loading Q&amp;A…
         </div>
       ) : null}

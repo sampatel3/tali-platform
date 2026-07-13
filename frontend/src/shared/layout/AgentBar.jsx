@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { Pause, Play, Sparkles } from 'lucide-react';
 
 import { agent as agentApi } from '../api';
@@ -99,74 +106,156 @@ export const useAgentStatus = (roleId) => {
 // `active_role_count`. org-status splits enabled roles into active (running)
 // vs paused counts, so `active_role_count` = running + paused (total enabled)
 // and `paused` = all-enabled-paused, matching the old fan-out semantics.
-export const useAgentStatusOrg = () => {
-  const [status, setStatus] = useState(null);
-  const [error, setError] = useState(null);
-  const cancelledRef = useRef(false);
+//
+// This is a module-level external store: Shell, Jobs, and AgentBar can all read
+// the same status without mounting duplicate 30-second pollers. The last
+// subscriber stops the timer; the last successful snapshot remains warm for a
+// later route mount.
+const EMPTY_ORG_SNAPSHOT = Object.freeze({ status: null, payload: null, error: null });
+let orgSnapshot = EMPTY_ORG_SNAPSHOT;
+let orgRequest = null;
+let orgTimer = null;
+let orgScopeKey = null;
+let orgGeneration = 0;
+const orgListeners = new Set();
 
-  const fetchOnce = useCallback(async () => {
-    try {
-        const res = await agentApi.orgStatus();
-        if (cancelledRef.current) return;
-        const data = res?.data || {};
-        const running = Number(data.active_role_count || 0);
-        const pausedRoles = Number(data.paused_role_count || 0);
-        const enabledTotal = running + pausedRoles;
+const emitOrgSnapshot = () => orgListeners.forEach((listener) => listener());
 
-        setStatus({
-          // All enabled roles paused → bar reads "Agent mode paused".
-          paused: enabledTotal > 0 && running === 0,
-          any_paused: pausedRoles > 0,
-          paused_reason: data.paused_reason || null,
-          pending_decisions: Number(data.pending_decisions || 0),
-          monthly_spent_cents: Number(data.org_budget_spent_cents || 0),
-          monthly_budget_cents: Number(data.org_budget_cap_cents || 0),
-          current_run: data.current_run || null,
-          last_activity: data.last_activity || null,
-          // Total agent-enabled roles (running + paused) — the bar renders
-          // whenever any role has the agent on, paused or not.
-          active_role_count: enabledTotal,
-        });
-        setError(null);
-      } catch (err) {
-        if (!cancelledRef.current) setError(err);
-      }
-    }, []);
+// A module-level store must never carry one account's aggregate into the next
+// account on the same tab. Tokens rotate during an active session, so scope by
+// the cached user/org identity rather than by the access-token value.
+const readOrgScopeKey = () => {
+  if (typeof localStorage === 'undefined') return 'server';
+  try {
+    const user = JSON.parse(localStorage.getItem('taali_user') || 'null');
+    if (user?.organization_id != null) return `org:${user.organization_id}`;
+    if (user?.id != null) return `user:${user.id}`;
+    if (user?.email) return `email:${user.email}`;
+  } catch {
+    // AuthContext removes malformed cached profiles. Treat this as anonymous
+    // until it has done so rather than retaining the previous account scope.
+  }
+  return 'anonymous';
+};
 
+const ensureOrgScope = () => {
+  const nextScopeKey = readOrgScopeKey();
+  if (orgScopeKey === null) {
+    orgScopeKey = nextScopeKey;
+    return;
+  }
+  if (orgScopeKey === nextScopeKey) return;
+  orgScopeKey = nextScopeKey;
+  orgGeneration += 1;
+  orgRequest = null;
+  orgSnapshot = EMPTY_ORG_SNAPSHOT;
+  emitOrgSnapshot();
+};
+
+const normalizeOrgStatus = (data = {}) => {
+  const running = Number(data.active_role_count || 0);
+  const pausedRoles = Number(data.paused_role_count || 0);
+  const enabledTotal = running + pausedRoles;
+  return {
+    paused: enabledTotal > 0 && running === 0,
+    any_paused: pausedRoles > 0,
+    paused_reason: data.paused_reason || null,
+    pending_decisions: Number(data.pending_decisions || 0),
+    monthly_spent_cents: Number(data.org_budget_spent_cents || 0),
+    monthly_budget_cents: Number(data.org_budget_cap_cents || 0),
+    current_run: data.current_run || null,
+    last_activity: data.last_activity || null,
+    active_role_count: enabledTotal,
+  };
+};
+
+const fetchOrgStatus = async () => {
+  ensureOrgScope();
+  if (orgRequest) return orgRequest;
+  const requestGeneration = orgGeneration;
+  const request = agentApi.orgStatus()
+    .then((res) => {
+      if (requestGeneration !== orgGeneration) return null;
+      const payload = res?.data || {};
+      orgSnapshot = Object.freeze({
+        status: normalizeOrgStatus(payload),
+        payload: Object.freeze({ ...payload }),
+        error: null,
+      });
+      emitOrgSnapshot();
+      return orgSnapshot.status;
+    })
+    .catch((error) => {
+      if (requestGeneration !== orgGeneration) return null;
+      orgSnapshot = Object.freeze({ ...orgSnapshot, error });
+      emitOrgSnapshot();
+      return null;
+    })
+    .finally(() => {
+      if (orgRequest === request) orgRequest = null;
+    });
+  orgRequest = request;
+  return request;
+};
+
+const onOrgVisibilityChange = () => {
+  if (typeof document !== 'undefined' && !document.hidden) void fetchOrgStatus();
+};
+
+const startOrgPolling = () => {
+  ensureOrgScope();
+  if (orgTimer !== null) return;
+  void fetchOrgStatus();
+  orgTimer = window.setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    void fetchOrgStatus();
+  }, POLL_INTERVAL_MS);
+  document.addEventListener('visibilitychange', onOrgVisibilityChange);
+};
+
+const stopOrgPolling = () => {
+  if (orgTimer !== null) window.clearInterval(orgTimer);
+  orgTimer = null;
+  document.removeEventListener('visibilitychange', onOrgVisibilityChange);
+};
+
+const subscribeOrgStatus = (listener) => {
+  orgListeners.add(listener);
+  if (orgListeners.size === 1 && typeof window !== 'undefined') startOrgPolling();
+  return () => {
+    orgListeners.delete(listener);
+    if (orgListeners.size === 0 && typeof document !== 'undefined') stopOrgPolling();
+  };
+};
+
+const noopSubscribe = () => () => {};
+const getOrgSnapshot = () => (
+  orgScopeKey !== null && readOrgScopeKey() !== orgScopeKey
+    ? EMPTY_ORG_SNAPSHOT
+    : orgSnapshot
+);
+const getServerOrgSnapshot = () => EMPTY_ORG_SNAPSHOT;
+
+export const useAgentStatusOrg = (enabled = true) => {
+  const scopeKey = enabled ? readOrgScopeKey() : null;
+  const snapshot = useSyncExternalStore(
+    enabled ? subscribeOrgStatus : noopSubscribe,
+    getOrgSnapshot,
+    getServerOrgSnapshot,
+  );
   useEffect(() => {
-    cancelledRef.current = false;
-    fetchOnce();
-    let timer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      fetchOnce();
-    }, POLL_INTERVAL_MS);
-
-    const onVisibility = () => {
-      if (typeof document !== 'undefined' && !document.hidden) fetchOnce();
-    };
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibility);
-    }
-
-    return () => {
-      cancelledRef.current = true;
-      clearInterval(timer);
-      timer = null;
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibility);
-      }
-    };
-  }, [fetchOnce]);
-
-  return { status, error, refetch: fetchOnce };
+    if (enabled) void fetchOrgStatus();
+  }, [enabled, scopeKey]);
+  return enabled
+    ? { ...snapshot, refetch: fetchOrgStatus }
+    : { status: null, payload: null, error: null, refetch: fetchOrgStatus };
 };
 
 // AgentBar — purple aurora strip rendered globally inside Shell on
 // recruiter routes. Three usage modes:
 //   1. `roleId` set → polls /roles/{id}/agent/status (used on the role
 //      detail "cockpit" page so role-only metrics replace the org rollup).
-//   2. `scope="org"` (default in Shell) → fans out across /roles and
-//      aggregates client-side per HANDOFF Phase 1 (no BE aggregate yet).
+//   2. `scope="org"` (default in Shell) → reads the shared org-status store.
 //   3. Explicit `pending`/`spentCents`/`budgetCents`/`tick`/`paused` →
 //      used by the static landing-page mock and tests.
 //
@@ -185,9 +274,14 @@ export const AgentBar = ({
   onPause,
   hideWhenOrgIdle = true,
 }) => {
-  const roleResult = useAgentStatus(roleId);
-  const orgResult = useAgentStatusOrg();
   const useOrgScope = !roleId && scope === 'org';
+  const shouldPollOrg = useOrgScope
+    && pendingProp == null
+    && spentCentsProp == null
+    && budgetCentsProp == null
+    && tickProp == null;
+  const roleResult = useAgentStatus(roleId);
+  const orgResult = useAgentStatusOrg(shouldPollOrg);
   const status = useOrgScope ? orgResult.status : roleResult.status;
 
   const paused = status?.paused ?? pausedProp;

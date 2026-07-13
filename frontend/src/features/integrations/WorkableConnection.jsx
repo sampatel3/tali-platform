@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { organizations as orgsApi } from '../../shared/api';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const normalizeWorkableError = (input) => {
   const raw = (input || '').toString();
@@ -62,7 +63,7 @@ export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onCl
         disabled={loading}
         className="btn btn-purple btn-sm"
       >
-        {loading ? <Loader2 size={16} className="animate-spin" /> : null}
+        {loading ? <Spinner size={16} className="!text-current" /> : null}
         {loading ? 'Redirecting…' : 'Connect Workable'}
       </button>
       {setupError && !error && <p className="settings-hint mt-2" style={{ color: 'var(--taali-danger)' }}>{normalizeWorkableError(setupError)}</p>}
@@ -124,7 +125,7 @@ export const WorkableCallbackPage = ({
       >
         {status === 'connecting' && (
           <>
-            <Loader2 size={32} className="animate-spin mx-auto mb-4 text-[var(--taali-purple)]" />
+            <Spinner size={32} className="mx-auto mb-4 text-[var(--taali-purple)]" />
             <p className="text-sm text-[var(--taali-text)]">Connecting Workable…</p>
           </>
         )}

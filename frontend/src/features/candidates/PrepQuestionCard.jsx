@@ -5,6 +5,8 @@
 // to keep the page file under the frontend architecture line cap.
 import React from 'react';
 
+import '../../styles/09-standing-report.css';
+
 import { asCleanText } from './candidatesUiUtils';
 
 const toBulletList = (value) => {

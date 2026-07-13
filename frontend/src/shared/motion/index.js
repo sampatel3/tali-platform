@@ -15,10 +15,20 @@ export {
 export { MotionSystemProvider } from './MotionSystemProvider';
 export { AgentFlowButton, AgentLoop, agentLoopPresets, resolveAgentLoop } from './agentLoops';
 export {
+  MOTION_EFFECT_DURATION,
+  MotionLoop,
+  MotionProgress,
+  MotionSkeleton,
+  MotionSpinner,
+  motionLoopPresets,
+  resolveMotionLoop,
+} from './effects';
+export {
   MotionDisclosure,
   MotionList,
   MotionListItem,
   MotionNumber,
+  MotionStagger,
   MotionTab,
   MotionTabs,
   PresenceSwap,
@@ -30,6 +40,7 @@ export {
   prefersReducedMotion,
   useReducedMotionSync,
 } from './useReducedMotionSync';
+export { useDocumentVisibility } from './useDocumentVisibility';
 
 export {
   AGENT_LOOP_DURATION,

@@ -1095,17 +1095,7 @@ a.rq-btn-sm { text-decoration: none; }
   color: var(--ink);
 }
 .rq-blank p { margin: 0; font-size: 0.875rem; line-height: 1.55; }
-
-.rq-spinner {
-  display: inline-block;
-  width: 15px;
-  height: 15px;
-  border: 2px solid color-mix(in oklab, currentColor 30%, transparent);
-  border-top-color: currentColor;
-  border-radius: 50%;
-  animation: rq-spin 0.7s linear infinite;
-}
-@keyframes rq-spin { to { transform: rotate(360deg); } }
+.rq-motion-spinner { color: inherit; }
 
 /* ---- Loading skeletons ----
    A shimmering hairline used for sidebar rows (first load) and the switching
@@ -1113,18 +1103,6 @@ a.rq-btn-sm { text-decoration: none; }
 .rq-skel-line {
   display: block;
   border-radius: 6px;
-  background: linear-gradient(
-    90deg,
-    var(--bg-3) 0%,
-    color-mix(in oklab, var(--bg-3) 55%, var(--bg-2)) 50%,
-    var(--bg-3) 100%
-  );
-  background-size: 200% 100%;
-  animation: rq-shimmer 1.3s ease-in-out infinite;
-}
-@keyframes rq-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
 }
 .rq-side-item.is-skeleton { cursor: default; pointer-events: none; }
 .rq-skel-title { width: 70%; height: 12px; margin-bottom: 8px; }
@@ -1296,7 +1274,3 @@ a.rq-btn-sm { text-decoration: none; }
   border-color: var(--purple);
 }
 .rq-quick-chip:disabled { opacity: 0.5; cursor: not-allowed; }
-
-@media (prefers-reduced-motion: reduce) {
-  .rq-skel-line { animation: none; }
-}

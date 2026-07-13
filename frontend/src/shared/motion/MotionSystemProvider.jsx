@@ -1,7 +1,9 @@
 import React from 'react';
-import { LazyMotion, MotionConfig, domMax } from 'motion/react';
+import { LazyMotion, MotionConfig } from 'motion/react';
 
 import { motionTransition } from './presets';
+
+const loadMotionFeatures = () => import('./motionFeatures').then((module) => module.default);
 
 /**
  * One Motion runtime and accessibility policy for the whole application.
@@ -10,7 +12,7 @@ import { motionTransition } from './presets';
  */
 export function MotionSystemProvider({ children }) {
   return (
-    <LazyMotion features={domMax} strict>
+    <LazyMotion features={loadMotionFeatures} strict>
       <MotionConfig reducedMotion="user" transition={motionTransition.base}>
         {children}
       </MotionConfig>

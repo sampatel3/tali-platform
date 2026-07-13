@@ -6,10 +6,10 @@
 // override / approve / auto nuance. No fabricated rows.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Filter, Loader2 } from 'lucide-react';
+import { Filter } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
-import { Select } from '../../shared/ui/TaaliPrimitives';
+import { Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 import {
   safeNum,
   fmtRelShort,
@@ -91,7 +91,7 @@ export const DecisionLogTab = ({ roleId }) => {
           </span>
         </div>
         {loading ? (
-          <div className="an-empty"><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Loading decisions…</div>
+          <div className="an-empty"><Spinner size={14} className="!text-current" /> Loading decisions…</div>
         ) : filtered.length === 0 ? (
           <div className="an-empty">
             {rows.length === 0

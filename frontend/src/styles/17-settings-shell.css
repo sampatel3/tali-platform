@@ -217,20 +217,6 @@
   background: var(--bg);
 }
 
-/* Destructive actions inside the danger zone read as a red outline
-   button — the one place red is allowed (a genuine "remove data"
-   action). Matches the preview's `.btn.danger`. */
-.btn.danger {
-  border-color: color-mix(in oklab, var(--red) 45%, var(--line));
-  color: var(--red-deep);
-  background: var(--bg-2);
-}
-.btn.danger:hover {
-  border-color: var(--red);
-  background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
-  color: var(--red-deep);
-}
-
 /* Fireflies "configured" status pills → purple, not traffic-light
    green (preview shows `.gchip` in purple-soft with a check). Scoped
    to the settings chip row so the global green chip elsewhere is

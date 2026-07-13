@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Plus, Sparkles, X } from 'lucide-react';
 
+import { MotionSpinner } from '../../shared/motion';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 
 // The live brief panel — rendered FROM the org's requisition spec template.
@@ -243,7 +244,7 @@ function EditActions({ onCancel, onSave, saving }) {
   return (
     <div className="rq-edit-actions">
       <button type="button" className="rq-btn-sm is-primary" onClick={onSave} disabled={saving}>
-        {saving ? <span className="rq-spinner" /> : <Check size={13} />} Save
+        {saving ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Check size={13} />} Save
       </button>
       <button type="button" className="rq-btn-sm is-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
     </div>

@@ -9,10 +9,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:architecture": "node scripts/check-architecture.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs && node scripts/check-motion-system.mjs",
     "generate:landing-fixtures": "node scripts/generate-data-engineer-fixtures.mjs",
     "typecheck": "tsc --noEmit",
-    "lint:ui": "node scripts/lint-ui.mjs"
+    "lint:ui": "node scripts/lint-ui.mjs",
+    "lint:motion": "node scripts/check-motion-system.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

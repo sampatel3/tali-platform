@@ -17,6 +17,7 @@ import {
 
 import { agent as agentApi } from '../../shared/api';
 import { AgentLoop } from '../../shared/motion';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import {
   safeNum,
   fmtUsd,
@@ -142,7 +143,7 @@ export const FleetTab = () => {
   if (!loaded && !panel) {
     return (
       <div className="an-tabpanel">
-        <div className="an-empty"><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Loading agent fleet…</div>
+        <div className="an-empty"><Spinner size={14} className="!text-current" /> Loading agent fleet…</div>
       </div>
     );
   }

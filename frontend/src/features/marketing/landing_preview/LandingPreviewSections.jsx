@@ -1,5 +1,13 @@
-import React from 'react';
+import React, { useRef } from 'react';
 
+import {
+  MOTION_DURATION,
+  MOTION_EASE,
+  MotionLoop,
+  m,
+  useInView,
+  useReducedMotionSync,
+} from '../../../shared/motion';
 import { containerClass } from './LandingPreviewChrome';
 
 // ---------------------------------------------------------------------------
@@ -87,8 +95,8 @@ export const ValuePillars = ({ condensed = false }) => (
 
 // ---------------------------------------------------------------------------
 // The 5 Ds band — an abstract pentagon/radial motif drawn in SVG with a subtle
-// CSS-only draw-in + slow rotation of the outer guides. The five Ds sit around
-// it, each with a one-line definition.
+// Motion-native draw-in + slow, offscreen-aware rotation of the outer guides.
+// The five Ds sit around it, each with a one-line definition.
 // ---------------------------------------------------------------------------
 
 const FIVE_DS = [
@@ -107,6 +115,10 @@ const pentagonPoints = (cx, cy, r) =>
   });
 
 export const FiveDsBand = () => {
+  const motifRef = useRef(null);
+  const motifInView = useInView(motifRef, { amount: 0.25, once: true });
+  const reduced = useReducedMotionSync();
+  const motifVisible = reduced || motifInView;
   const outer = pentagonPoints(100, 100, 78);
   const inner = pentagonPoints(100, 100, 46);
   const outerPoly = outer.map((p) => p.join(',')).join(' ');
@@ -116,33 +128,48 @@ export const FiveDsBand = () => {
       <div className={`${containerClass} py-20 md:py-24`}>
         <div className="grid items-center gap-12 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
           <div className="mx-auto w-full max-w-[320px]">
-            {/* Decorative radial motif. The keyframes are inlined so this stays
-                self-contained; prefers-reduced-motion disables the animation. */}
-            <style>{`
-              @keyframes lpFiveDsDraw { from { stroke-dashoffset: 620; } to { stroke-dashoffset: 0; } }
-              @keyframes lpFiveDsSpin { to { transform: rotate(360deg); } }
-              .lp-5ds-draw { stroke-dasharray: 620; stroke-dashoffset: 620; animation: lpFiveDsDraw 1.6s ease forwards; }
-              .lp-5ds-spin { transform-origin: 100px 100px; animation: lpFiveDsSpin 48s linear infinite; }
-              @media (prefers-reduced-motion: reduce) {
-                .lp-5ds-draw { animation: none; stroke-dashoffset: 0; }
-                .lp-5ds-spin { animation: none; }
-              }
-            `}</style>
-            <svg viewBox="0 0 200 200" width="100%" height="auto" role="img" aria-label="The five Ds, arranged as a pentagon">
-              <g className="lp-5ds-spin" opacity="0.4">
+            <m.svg
+              ref={motifRef}
+              viewBox="0 0 200 200"
+              width="100%"
+              height="auto"
+              role="img"
+              aria-label="The five Ds, arranged as a pentagon"
+            >
+              <MotionLoop
+                as="g"
+                kind="spin"
+                duration={48}
+                reduced={reduced}
+                opacity="0.4"
+                style={{ transformOrigin: '100px 100px' }}
+                aria-hidden="true"
+              >
                 <polygon points={outerPoly} fill="none" stroke="var(--purple)" strokeWidth="1" strokeDasharray="3 5" />
                 {outer.map((p) => (
                   <line key={`spoke-${p.join()}`} x1="100" y1="100" x2={p[0]} y2={p[1]} stroke="var(--purple)" strokeWidth="0.75" />
                 ))}
-              </g>
-              <polygon className="lp-5ds-draw" points={innerPoly} fill="var(--purple-soft)" stroke="var(--purple)" strokeWidth="2" />
+              </MotionLoop>
+              <m.polygon
+                points={innerPoly}
+                fill="var(--purple-soft)"
+                stroke="var(--purple)"
+                strokeWidth="2"
+                strokeDasharray="620"
+                initial={reduced ? false : { strokeDashoffset: 620 }}
+                animate={{ strokeDashoffset: motifVisible ? 0 : 620 }}
+                transition={reduced
+                  ? { duration: 0 }
+                  : { duration: MOTION_DURATION.data, ease: MOTION_EASE.enter }}
+                data-motion-draw="pentagon"
+              />
               {inner.map((p, i) => (
                 <circle key={`v-${p.join()}`} cx={p[0]} cy={p[1]} r="4.5" fill="var(--purple)">
                   <title>{FIVE_DS[i].d}</title>
                 </circle>
               ))}
               <circle cx="100" cy="100" r="5" fill="var(--bg)" stroke="var(--purple)" strokeWidth="2" />
-            </svg>
+            </m.svg>
           </div>
 
           <div>

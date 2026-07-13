@@ -175,6 +175,7 @@ export const HomeActivityTrends = ({ roleId = '', days = 30, onRoleChange }) => 
                   stackId="decisions"
                   fill={b.color}
                   maxBarSize={26}
+                  isAnimationActive={false}
                 />
               ))}
               <Line
@@ -185,6 +186,7 @@ export const HomeActivityTrends = ({ roleId = '', days = 30, onRoleChange }) => 
                 stroke="var(--purple-2)"
                 strokeWidth={2}
                 dot={false}
+                isAnimationActive={false}
               />
             </ComposedChart>
           </ResponsiveContainer>

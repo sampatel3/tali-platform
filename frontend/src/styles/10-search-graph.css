@@ -25,17 +25,11 @@
     transform var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
-@keyframes nl-search-focus-ring {
-  0%   { box-shadow: 0 0 0 0 rgba(108, 92, 231, 0.35); }
-  100% { box-shadow: 0 0 0 6px rgba(108, 92, 231, 0); }
-}
-
 .nl-search__form:focus-within {
   border-color: var(--taali-purple, #6c5ce7);
   box-shadow:
     0 0 0 3px rgba(108, 92, 231, 0.18),
     0 4px 14px -8px rgba(108, 92, 231, 0.30);
-  animation: nl-search-focus-ring var(--motion-duration-data) var(--motion-ease-enter) 1;
 }
 
 .nl-search__icon {
@@ -953,6 +947,5 @@
 .process-dialog__advanced { padding-left: 0; }
 
 @media (prefers-reduced-motion: reduce) {
-  .nl-search__form:focus-within { animation: none; }
   .nl-search__form { transition: none; }
 }

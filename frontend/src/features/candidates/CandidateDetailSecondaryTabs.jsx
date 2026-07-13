@@ -112,9 +112,9 @@ export const CandidateAiUsageTab = ({ candidate }) => {
                 <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} width={28} />
                 <Tooltip />
                 <Legend iconType="plainline" wrapperStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="clarity" name="Clarity" stroke="var(--taali-purple)" strokeWidth={2} dot={{ r: 3 }} />
-                <Line type="monotone" dataKey="specificity" name="Specificity" stroke="#2d2d44" strokeWidth={1.3} dot={false} />
-                <Line type="monotone" dataKey="efficiency" name="Efficiency" stroke="#9ca3af" strokeWidth={1.3} dot={false} />
+                <Line type="monotone" dataKey="clarity" name="Clarity" stroke="var(--taali-purple)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+                <Line type="monotone" dataKey="specificity" name="Specificity" stroke="#2d2d44" strokeWidth={1.3} dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="efficiency" name="Efficiency" stroke="#9ca3af" strokeWidth={1.3} dot={false} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>

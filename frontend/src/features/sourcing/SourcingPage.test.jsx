@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../shared/api/prospectsClient', () => ({
@@ -204,6 +204,8 @@ describe('SourcingPage', () => {
       offset: 25,
       status: 'active',
     }));
+    expect(await screen.findByText('Page 2 of 3')).toBeInTheDocument();
+    await act(() => new Promise((resolve) => window.setTimeout(resolve, 300)));
     expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
   });
 

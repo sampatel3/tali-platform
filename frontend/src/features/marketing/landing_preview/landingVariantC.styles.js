@@ -3,12 +3,11 @@
 // lazy-loads as one chunk with its component and never leaks styles into the
 // rest of the app — every selector is prefixed `.lvc`.
 //
-// LIGHT theme. The OFF→ON "flood" is one transition on `.lvc`: a `filter`
-// (grayscale) plus a set of custom properties that ripple into every child.
-// OFF = desaturated grey-on-white, inert; ON = purple saturates in with
-// restrained lavender glows. Flipping the single `.lvc.is-on` class drives the
-// whole page. Colours are hardcoded from the Taali light purple palette so the
-// look holds regardless of the app's active brand/theme.
+// LIGHT theme. Shared Motion owns the OFF→ON grayscale state, hero entrance,
+// switch movement, in-view reveals, and data progress. CSS owns only layout and
+// settled visual states. OFF = desaturated grey-on-white, inert; ON = purple
+// with restrained lavender glows. Colours are hardcoded from the Taali light
+// purple palette so the look holds regardless of the app's active brand/theme.
 //
 // v3: tighter type scale + rhythm (Gradient Labs / Cursor density, not a
 // poster), a dot-lattice hero motif (replaces the falling CVs), centred section
@@ -30,9 +29,8 @@ export const VARIANT_C_CSS = `
   /* Content column — kept tight so folds carry information, not air. */
   --lvc-maxw: 1140px;
 
-  /* Floodable properties — animate on flip. */
+  /* Floodable visual property — state flips with agent mode. */
   --lvc-glow: 0;                 /* 0 → 1 as agent turns on */
-  --lvc-motion: paused;
 
   position: relative;
   min-height: 100vh;
@@ -43,18 +41,12 @@ export const VARIANT_C_CSS = `
   color: var(--lvc-ink);
   font-family: 'Geist', system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
-  /* OFF: desaturated grey-on-white. ON: full colour. This one line is the flood. */
-  filter: grayscale(0.92);
-  transition: filter 1.1s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .lvc.is-on {
   --lvc-glow: 1;
-  --lvc-motion: running;
-  filter: grayscale(0);
 }
 .lvc.is-reduced,
-.lvc.is-reduced * { transition: none !important; animation: none !important; }
-.lvc.is-reduced { filter: none; }
+.lvc.is-reduced * { transition: none !important; }
 
 .lvc *,
 .lvc *::before,
@@ -105,40 +97,23 @@ export const VARIANT_C_CSS = `
 .lvc-h1-off, .lvc-h1-on {
   grid-area: 1 / 1;
   display: block;
-  transition: opacity 0.6s cubic-bezier(0.16,1,0.3,1);
 }
-.lvc.is-on .lvc-h1-off { opacity: 0; }
-.lvc:not(.is-on) .lvc-h1-on { opacity: 0; pointer-events: none; }
 
 .lvc-word {
   display: inline-block;
   color: var(--lvc-ink);
-  opacity: 0;
-  transform: translateY(0.5em);
-  filter: blur(6px);
-  transition: opacity 0.7s cubic-bezier(0.16,1,0.3,1),
-              transform 0.7s cubic-bezier(0.16,1,0.3,1),
-              filter 0.7s cubic-bezier(0.16,1,0.3,1);
 }
 .lvc-word:last-child { color: var(--lvc-purple); }
-.lvc.is-on .lvc-word { opacity: 1; transform: none; filter: none; }
-.lvc.is-reduced .lvc-word { opacity: 1; transform: none; filter: none; }
 
 .lvc-sub {
   max-width: 620px; margin: 0 auto 30px;
   font-size: clamp(15px, 1.7vw, 17px); line-height: 1.55;
   color: var(--lvc-ink-2);
-  opacity: 0; transform: translateY(10px);
-  transition: opacity 0.8s ease 0.75s, transform 0.8s ease 0.75s;
 }
-.lvc.is-on .lvc-sub, .lvc.is-reduced .lvc-sub { opacity: 1; transform: none; }
 
 .lvc-cta-row {
   display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;
-  opacity: 0; transform: translateY(10px);
-  transition: opacity 0.8s ease 0.95s, transform 0.8s ease 0.95s;
 }
-.lvc.is-on .lvc-cta-row, .lvc.is-reduced .lvc-cta-row { opacity: 1; transform: none; }
 
 .lvc-btn {
   --lvc-btn-bg: var(--lvc-bg-2);
@@ -198,23 +173,19 @@ export const VARIANT_C_CSS = `
   position: absolute; inset: 0; z-index: 1; pointer-events: none;
 }
 .lvc-dot {
-  position: absolute; border-radius: 50%;
+  position: absolute;
   --d: 0s;                      /* per-dot ripple delay, set inline at render */
   transform: translate(-50%, -50%) scale(1);
+}
+.lvc-dot-core {
+  display: block; width: 100%; height: 100%; border-radius: 50%;
   background: rgba(21,18,26,0.16);
   /* Settled ON colour flows in on flip, delayed by distance to the toggle. */
   transition: background 0.5s ease var(--d), box-shadow 0.5s ease var(--d);
 }
-.lvc.is-on .lvc-dot {
+.lvc.is-on .lvc-dot-core {
   background: rgba(94,58,168,0.55);
   box-shadow: 0 0 6px rgba(124,77,255,0.35);
-  /* Scale pop shares the same per-dot delay so the ripple reads as one wave. */
-  animation: lvcDotPop 0.6s cubic-bezier(0.34,1.56,0.64,1) var(--d) forwards;
-}
-@keyframes lvcDotPop {
-  0%   { transform: translate(-50%, -50%) scale(1); }
-  45%  { transform: translate(-50%, -50%) scale(1.9); }
-  100% { transform: translate(-50%, -50%) scale(1); }
 }
 /* The switch — grey when OFF, purple saturates in when ON */
 .lvc-switch-wrap {
@@ -225,10 +196,8 @@ export const VARIANT_C_CSS = `
 .lvc-switch {
   appearance: none; border: 0; padding: 0; cursor: pointer; background: none;
   border-radius: 999px;
-  transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1);
 }
 .lvc-switch:focus-visible { outline: 2px solid var(--lvc-purple); outline-offset: 6px; }
-.lvc-switch.is-pressing { transform: scale(0.94); }
 .lvc-switch-track {
   position: relative; display: block;
   width: 128px; height: 62px; border-radius: 999px;
@@ -257,10 +226,10 @@ export const VARIANT_C_CSS = `
   background: linear-gradient(160deg, #ffffff, #f0ecf7);
   box-shadow: 0 5px 14px rgba(21,18,26,0.22), inset 0 -2px 4px rgba(21,18,26,0.06);
   display: flex; align-items: center; justify-content: center;
-  transition: transform 0.34s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.4s ease;
+  transition: box-shadow 0.4s ease;
 }
 .lvc-switch.is-on .lvc-switch-knob {
-  transform: translateX(66px);
+  left: 71px;
   box-shadow: 0 8px 20px rgba(124,77,255,0.4), inset 0 -2px 4px rgba(94,58,168,0.08);
 }
 .lvc-switch.is-pressing .lvc-switch-knob { width: 60px; }
@@ -278,14 +247,6 @@ export const VARIANT_C_CSS = `
 }
 .lvc-switch-caption b { color: var(--lvc-purple); font-weight: 600; }
 .lvc:not(.is-on) .lvc-switch-caption b { color: var(--lvc-mute); }
-
-/* Reveal primitive (scroll-triggered). Deltas kept subtle (translate/opacity
-   only) so nothing is lost if the reveal never fires — content stays legible. */
-.lvc [data-reveal] {
-  opacity: 0; transform: translateY(24px);
-  transition: opacity 0.9s cubic-bezier(0.16,1,0.3,1), transform 0.9s cubic-bezier(0.16,1,0.3,1);
-}
-.lvc [data-reveal][data-shown="true"] { opacity: 1; transform: none; }
 
 /* ── Shared section header (hero design language, centred) ─────────────── */
 .lvc-sechead { text-align: center; max-width: 720px; margin: 0 auto; }
@@ -322,20 +283,14 @@ export const VARIANT_C_CSS = `
   font-weight: 600; font-size: clamp(22px, 2.6vw, 36px);
   line-height: 1.1; letter-spacing: -0.025em; margin: 0;
   color: var(--lvc-ink);
-  opacity: 0; transform: translateY(28px);
-  transition: opacity 0.85s cubic-bezier(0.16,1,0.3,1), transform 0.85s cubic-bezier(0.16,1,0.3,1);
 }
-.lvc-problem-line[data-shown="true"] { opacity: 1; transform: none; }
 .lvc-problem-line.has-strike { color: var(--lvc-ink-2); }
 .lvc-strike { position: relative; color: var(--lvc-ink); white-space: nowrap; }
-.lvc-strike::after {
-  content: ''; position: absolute; left: -2px; right: -2px; top: 54%; height: 4px;
+.lvc-strike-line {
+  position: absolute; display: block; left: -2px; right: -2px; top: 54%; height: 4px;
   border-radius: 3px; background: var(--lvc-purple);
   box-shadow: 0 0 12px rgba(124,77,255,0.55);
-  transform: scaleX(0); transform-origin: left;
-  transition: transform 0.6s cubic-bezier(0.16,1,0.3,1) 0.5s;
 }
-.lvc-problem-line[data-shown="true"] .lvc-strike::after { transform: scaleX(1); }
 
 /* ── PIPELINE ────────────────────────────────────────────────────────── */
 .lvc-pipeline {
@@ -345,7 +300,7 @@ export const VARIANT_C_CSS = `
 }
 .lvc-body { max-width: 620px; font-size: clamp(15px, 1.6vw, 16px); line-height: 1.6; color: var(--lvc-ink-2); margin: 0; }
 
-/* Abstract ribbon — pure CSS, animates unconditionally when ON */
+/* Abstract ribbon — layout in CSS, shared AgentLoop owns its motion. */
 .lvc-ribbon {
   position: relative; width: 100%; height: 84px;
   display: flex; align-items: center;
@@ -387,12 +342,7 @@ export const VARIANT_C_CSS = `
   padding: 20px 18px;
   box-shadow: 0 10px 30px -22px rgba(21,18,26,0.3);
   display: flex; flex-direction: column;
-  /* Staggered reveal — parent flips data-shown, cards cascade in. */
-  opacity: 0; transform: translateY(14px);
-  transition: opacity 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1);
-  transition-delay: calc(var(--i) * 0.08s);
 }
-.lvc-stage-grid[data-shown="true"] .lvc-stage { opacity: 1; transform: none; }
 .lvc-stage-n {
   font-family: 'Geist Mono', ui-monospace, monospace;
   font-size: 12px; letter-spacing: 0.1em; color: var(--lvc-purple);
@@ -413,10 +363,7 @@ export const VARIANT_C_CSS = `
   display: grid; gap: 14px 20px;
   grid-template-columns: repeat(2, 1fr);
   padding-top: 12px; border-top: 1px solid var(--lvc-line);
-  opacity: 0; transform: translateY(14px);
-  transition: opacity 0.7s cubic-bezier(0.16,1,0.3,1), transform 0.7s cubic-bezier(0.16,1,0.3,1);
 }
-.lvc-stats[data-shown="true"] { opacity: 1; transform: none; }
 .lvc-stat { display: flex; flex-direction: column; gap: 4px; }
 .lvc-stat-big {
   font-weight: 600; font-size: clamp(17px, 1.9vw, 21px);
@@ -437,11 +384,7 @@ export const VARIANT_C_CSS = `
 .lvc-ds-row {
   display: grid; grid-template-columns: 1fr; gap: 6px;
   padding: 16px 0; border-top: 1px solid var(--lvc-line);
-  opacity: 0; transform: translateY(10px);
-  transition: opacity 0.6s ease, transform 0.6s ease;
-  transition-delay: calc(var(--i) * 0.07s);
 }
-.lvc-standard-copy[data-shown="true"] .lvc-ds-row { opacity: 1; transform: none; }
 .lvc-ds-row:last-child { border-bottom: 1px solid var(--lvc-line); }
 .lvc-ds-name { font-weight: 600; font-size: 16px; color: var(--lvc-ink); }
 .lvc-ds-body { display: flex; flex-direction: column; gap: 4px; }
@@ -457,7 +400,7 @@ export const VARIANT_C_CSS = `
   padding: 3px 9px; border-radius: 999px;
 }
 
-/* Trap vignette — light chat, statically composed, CSS-staggered reveal */
+/* Trap vignette — light chat, statically composed, Motion-staggered reveal. */
 .lvc-chat {
   width: 100%;
   border-radius: 16px; padding: 22px;
@@ -474,11 +417,7 @@ export const VARIANT_C_CSS = `
 .lvc-turn {
   display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px;
   padding: 12px 14px; border-radius: 12px;
-  opacity: 0; transform: translateY(8px);
-  transition: opacity 0.5s ease, transform 0.5s ease;
-  transition-delay: calc(var(--i) * 0.35s + 0.15s);
 }
-.lvc-chat[data-shown="true"] .lvc-turn { opacity: 1; transform: none; }
 .lvc-turn--ai { background: rgba(21,18,26,0.04); }
 .lvc-turn--cand { background: var(--lvc-purple-soft); border: 1px solid rgba(196,165,253,0.5); }
 .lvc-turn-who {
@@ -494,20 +433,17 @@ export const VARIANT_C_CSS = `
 }
 .lvc-dial-track { flex: 1; height: 6px; border-radius: 999px; background: rgba(21,18,26,0.06); overflow: hidden; }
 .lvc-dial-fill {
-  display: block; height: 100%; width: 42%;
+  display: block; height: 100%; width: 92%;
   background: linear-gradient(90deg, var(--lvc-purple-2), var(--lvc-purple));
-  border-radius: 999px; transition: width 0.9s cubic-bezier(0.16,1,0.3,1) 0.9s;
+  border-radius: 999px;
+  box-shadow: 0 0 12px rgba(124,77,255,0.6);
 }
-.lvc-chat[data-shown="true"] .lvc-dial-fill { width: 92%; box-shadow: 0 0 12px rgba(124,77,255,0.6); }
 .lvc-trap-badge {
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600;
   letter-spacing: 0.08em; text-transform: uppercase; color: #fff;
   padding: 4px 9px; border-radius: 999px;
   background: linear-gradient(135deg, var(--lvc-purple), var(--lvc-purple-2));
-  opacity: 0; transform: scale(0.6) rotate(-8deg);
-  transition: opacity 0.4s ease 1.2s, transform 0.4s cubic-bezier(0.34,1.56,0.64,1) 1.2s;
 }
-.lvc-chat[data-shown="true"] .lvc-trap-badge { opacity: 1; transform: none; }
 
 /* Claims strip */
 .lvc-claims {
@@ -547,16 +483,13 @@ export const VARIANT_C_CSS = `
 @media (max-width: 560px) {
   .lvc-switch-track { width: 112px; height: 56px; }
   .lvc-switch-knob { width: 46px; height: 46px; }
-  .lvc-switch.is-on .lvc-switch-knob { transform: translateX(56px); }
+  .lvc-switch.is-on .lvc-switch-knob { left: 61px; }
 }
 
-/* Reduced-motion: static composition, no keyframe scenes. The lattice renders
+/* Reduced-motion: static composition. The lattice renders
    in its settled ON state (dots already purple, no drift, no ripple). */
 @media (prefers-reduced-motion: reduce) {
-  .lvc, .lvc * { animation: none !important; }
-  .lvc { filter: none; }
-  .lvc-lattice { animation: none; }
-  .lvc-dot {
+  .lvc-dot-core {
     background: rgba(94,58,168,0.55);
     box-shadow: 0 0 6px rgba(124,77,255,0.35);
     transition: none;

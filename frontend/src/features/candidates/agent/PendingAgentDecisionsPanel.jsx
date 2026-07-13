@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, AlertTriangle, RefreshCw } from 'lucide-react';
 
 import * as apiClient from '../../../shared/api';
+import { MotionLoop } from '../../../shared/motion';
 import { Button, Panel, Spinner } from '../../../shared/ui/TaaliPrimitives';
 import { useToast } from '../../../context/ToastContext';
 import { AgentDecisionCard } from './AgentDecisionCard';
@@ -140,7 +141,9 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
           disabled={loading}
           aria-label="Refresh pending decisions"
         >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden />
+          <MotionLoop active={loading} kind="spin" className="inline-flex" aria-hidden="true">
+            <RefreshCw size={14} />
+          </MotionLoop>
         </Button>
       </header>
 

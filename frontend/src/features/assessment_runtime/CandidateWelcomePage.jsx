@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
-  Loader2,
   Monitor,
   Shield,
   Sparkles,
@@ -12,6 +11,7 @@ import {
 
 import { assessments as assessmentsApi } from '../../shared/api';
 import { CandidateMiniNav } from '../../shared/layout/TaaliLayout';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. Please contact the hiring team to continue.';
 
@@ -179,7 +179,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
         <CandidateMiniNav />
         <div className="flex min-h-[60vh] items-center justify-center px-6">
           <div className="flex items-center gap-3 text-[var(--mute)]">
-            <Loader2 size={20} className="animate-spin text-[var(--purple)]" />
+            <Spinner size={20} className="text-[var(--purple)]" />
             <span className="text-[0.9375rem]">Preparing your assessment…</span>
           </div>
         </div>
@@ -254,7 +254,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                 >
                   {loadingStart ? (
                     <>
-                      <Loader2 size={18} className="animate-spin" />
+                      <Spinner size={18} className="!text-current" />
                       {startButtonLabel}
                     </>
                   ) : (

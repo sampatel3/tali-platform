@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
 import { PageLink } from '../../shared/ui/PageLink';
+import { MotionLoop } from '../../shared/motion';
+import '../../styles/21-demo.css';
 
 // DemoShowcasePage — v4 redesign (HANDOFF chat.md §1).
 // Sells AI-first via 5 tabs that each embed a REAL product page in an
@@ -268,7 +270,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
                 onLoad={guard(t)}
               />
               <div className="mc-show-frame-tip">
-                <span className="dot" /> {t.sub}
+                <MotionLoop kind="pulse" className="dot" /> {t.sub}
               </div>
             </div>
           </div>

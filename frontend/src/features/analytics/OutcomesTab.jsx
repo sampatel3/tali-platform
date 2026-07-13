@@ -8,10 +8,11 @@
 
 import React, { useMemo } from 'react';
 
-import { safeNum, pct, fmtUsd, monthShort, stageLabel } from './analyticsFormat';
+import { safeNum, pct, fmtUsd, monthShort } from './analyticsFormat';
 import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
+import { MotionProgress, cappedStaggerDelay } from '../../shared/motion';
 
-const FunnelRow = ({ stage, prev, isLast }) => {
+const FunnelRow = ({ stage, prev, isLast, index }) => {
   const ofApplied = Math.max(0, Math.min(100, safeNum(stage.percentage)));
   const prevCount = prev ? safeNum(prev.count) : 0;
   const stepPct = !prev
@@ -28,9 +29,14 @@ const FunnelRow = ({ stage, prev, isLast }) => {
     <div className="an-convrow">
       <span className="cl">{titleCase(stage.label)}</span>
       <span className="ctrack">
-        <span className="cfill" style={{ width: `${width}%` }}>
+        <MotionProgress
+          as="span"
+          className="cfill"
+          delay={cappedStaggerDelay(index, 'dense')}
+          style={{ width: `${width}%` }}
+        >
           {safeNum(stage.count).toLocaleString()}
-        </span>
+        </MotionProgress>
       </span>
       <span className="cpct">{stepPct}</span>
     </div>
@@ -61,7 +67,9 @@ const TrendBars = ({ months, valueKey, height = 150 }) => {
         return (
           <div className="an-bar" key={m.month}>
             <div className={`bv${has ? '' : ' muted'}`}>{has ? `${v}%` : '—'}</div>
-            <div
+            <MotionProgress
+              axis="y"
+              delay={cappedStaggerDelay(i, 'dense')}
               className={`bk${!has ? ' empty' : isLast ? ' hl' : ''}`}
               style={{ height: `${h}%` }}
               title={`${monthShort(m.month)} · ${safeNum(m.decisions)} resolved`}
@@ -141,6 +149,7 @@ export const OutcomesTab = ({ summary, breakdown, trend, rolesBreakdown }) => {
               stage={stage}
               prev={i > 0 ? funnel[i - 1] : null}
               isLast={i === funnel.length - 1}
+              index={i}
             />
           ))}
         </div>

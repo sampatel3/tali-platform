@@ -94,6 +94,11 @@ vi.mock('../shared/api', () => ({
   // this — failing the load and stranding the page on its error state.
   agent: {
     listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    orgStatus: vi.fn().mockResolvedValue({ data: {
+      active_role_count: 0,
+      paused_role_count: 0,
+      pending_decisions: 0,
+    } }),
     approveDecision: vi.fn(),
     snoozeDecision: vi.fn(),
     reEvaluateDecision: vi.fn(),
@@ -109,6 +114,10 @@ vi.mock('../shared/api', () => ({
       interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
     }),
   },
+}));
+
+vi.mock('../shared/api/authClient', () => ({
+  auth: { me: vi.fn(), login: vi.fn(), register: vi.fn() },
 }));
 
 vi.mock('recharts', () => ({
@@ -130,7 +139,8 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, roles as rolesApi } from '../shared/api';
+import { auth } from '../shared/api/authClient';
+import { roles as rolesApi } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 

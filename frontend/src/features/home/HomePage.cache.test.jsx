@@ -99,8 +99,9 @@ test('cached home numbers paint instantly on re-mount without a loading flash', 
   await waitFor(() => {
     expect(first.getByTestId('kicker').textContent).toContain('7 AWAITING YOU · 3 ACTIVE ROLES');
   });
-  // The header opts into the shared entrance reveal on mount.
-  expect(first.getByTestId('kicker').className).toContain('reveal');
+  // The header opts into the shared Motion entrance wrapper on mount.
+  expect(first.getByTestId('kicker').closest('[data-motion-reveal]'))
+    .toHaveAttribute('data-motion-reveal', 'vertical');
   await waitFor(() => {
     expect(first.getByTestId('hn').textContent).toBe('loading:false stale:4 roles:2 pending:2');
   });

@@ -26,6 +26,117 @@
   overflow: hidden;
 }
 
+.motion-spinner {
+  display: inline-block;
+  flex: none;
+  border: 2px solid color-mix(in oklab, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  color: var(--taali-purple, var(--purple));
+  vertical-align: -0.125em;
+}
+
+.motion-skeleton {
+  display: inline-block;
+  background: linear-gradient(
+    90deg,
+    var(--bg-3) 0%,
+    color-mix(in oklab, var(--bg-3) 55%, var(--bg-2)) 50%,
+    var(--bg-3) 100%
+  );
+  background-size: 200% 100%;
+}
+
+.motion-loop-host {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.motion-loop-layer-clip {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: inherit;
+  background-size: inherit;
+  pointer-events: none;
+}
+
+.motion-loop-transform-layer {
+  position: absolute;
+  inset: 0 -55%;
+  display: block;
+  background: inherit;
+  background-size: inherit;
+  pointer-events: none;
+}
+
+/* Flowing agent surfaces keep their authored gradient on the host as a static
+   fallback. Motion moves a clipped inherited copy, so continuous activity is
+   composited through transforms instead of repainting background-position. */
+.agent-motion-host {
+  position: relative;
+  isolation: isolate;
+}
+
+.agent-motion-layer-clip {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: inherit;
+  background-size: inherit;
+  background-repeat: inherit;
+  pointer-events: none;
+}
+
+.agent-motion-transform-layer {
+  position: absolute;
+  inset: -30% -24%;
+  display: block;
+  border-radius: inherit;
+  background: inherit;
+  background-size: inherit;
+  background-repeat: inherit;
+  pointer-events: none;
+}
+
+.agent-motion-glow-layer {
+  position: absolute;
+  z-index: -1;
+  inset: -2px;
+  display: block;
+  border-radius: inherit;
+  box-shadow:
+    0 8px 24px -8px rgba(58, 29, 110, 0.62),
+    0 0 0 4px rgba(196, 165, 253, 0.12);
+  pointer-events: none;
+}
+
+[data-motion-state="running"] {
+  will-change: transform;
+}
+
+.agent-motion-host[data-motion-state="running"] {
+  will-change: auto;
+}
+
+.agent-motion-host[data-motion-state="running"] .agent-motion-transform-layer,
+.agent-motion-host[data-motion-state="running"] .agent-motion-glow-layer {
+  will-change: transform, opacity;
+}
+
+.motion-loop-host[data-motion-state="running"] {
+  will-change: auto;
+}
+
+.motion-loop-host[data-motion-state="running"] .motion-loop-transform-layer {
+  will-change: transform;
+}
+
 .motion-tab-indicator {
   position: absolute;
   right: 0;

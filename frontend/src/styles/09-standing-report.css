@@ -12,10 +12,6 @@
   transform-origin: top left;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .wt-tip .dot { animation: none; }
-}
-
 /* Standing report has a narrower native layout, so a smaller scale-up is
    enough — keeps text readable without forcing extra whitespace. */
 .wt-frame[data-pane="profile"] .wt-stage iframe {
@@ -60,7 +56,6 @@
   height: 7px;
   border-radius: 50%;
   background: #b689ff;
-  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .wt-foot {
@@ -2305,7 +2300,15 @@ button.eng-badge-button:focus-visible {
 }
 .mc-overview-dimensions--stacked .mc-overview-dim-label { color: var(--ink-2); }
 .mc-overview-dimensions--stacked .mc-overview-dim-bar { height: 8px; }
-.mc-overview-dimensions--stacked .mc-overview-dim-bar > i.low { background: var(--purple-lav); }
+.mc-overview-dimensions--stacked .mc-overview-dim-bar > [data-motion-progress] {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--purple);
+}
+.mc-overview-dimensions--stacked .mc-overview-dim-bar > [data-motion-progress].low {
+  background: var(--purple-lav);
+}
 @media (max-width: 720px) {
   .mc-overview-dimensions--stacked .mc-overview-dim-row { grid-template-columns: 120px 1fr 56px; gap: 10px; }
 }
@@ -2519,39 +2522,13 @@ button.eng-badge-button:focus-visible {
 .report-eval-drawer[open] > summary { border-bottom: 1px solid var(--line); }
 .report-eval-drawer > .space-y-6 { padding: 14px; }
 
-/* ============================================================
-   Motion — light entrance polish for the standing report.
-   Shares the production reveal.css mechanism (a one-shot CSS
-   keyframe with animation-fill-mode: both, so it can't get stuck
-   mid-fade). Everything here is gated behind prefers-reduced-motion:
-   reduced-motion users get every final state with no movement. The
-   5-Ds score tickers (.mc-overview-dim-score) are driven by
-   useCountUp in JS, gated by the same reduced-motion read.
-   (.dossier-main carries the shared .reveal utility from reveal.css;
-   the 5-Ds rows use .reveal-stagger + per-row --i.)
-   ============================================================ */
-@media (prefers-reduced-motion: no-preference) {
-  /* DecisionRail slides in from the left as the dossier mounts. */
-  .dossier-rail.dr-reveal {
-    animation: drSlideIn var(--motion-duration-reveal) var(--motion-ease-enter) both;
-  }
-  @keyframes drSlideIn {
-    from { opacity: 0; transform: translateX(-16px); }
-    to   { opacity: 1; transform: none; }
-  }
-
-  /* 5-Ds scorecard: each bar grows from 0 to its scored width on
-     enter, offset to match its row's stagger (--i inherits from the
-     .mc-overview-dim-row the bar sits in). scaleX keeps the grow
-     independent of the inline target width, and stays scoped to the
-     report's --stacked variant so no other bar is affected. */
-  .mc-overview-dimensions--stacked .mc-overview-dim-bar > i {
-    transform-origin: left center;
-    animation: barGrow var(--motion-duration-data) var(--motion-ease-enter) both;
-    animation-delay: calc(var(--i, 0) * var(--motion-stagger-default) + var(--motion-duration-fast));
-  }
-  @keyframes barGrow {
-    from { transform: scaleX(0); }
-    to   { transform: scaleX(1); }
+/* The shared Motion system owns report entrances, row staggering, and score
+   fills. Printing must always land on the fully revealed, final state. */
+@media print {
+  .dossier [data-motion-reveal],
+  .dossier .mc-overview-dim-row,
+  .dossier [data-motion-progress] {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }

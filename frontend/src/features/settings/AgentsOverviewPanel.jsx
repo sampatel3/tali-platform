@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -15,6 +14,7 @@ import {
 
 import { agent as agentApi } from '../../shared/api';
 import { AgentLoop } from '../../shared/motion';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 // Polls: the panel summary is cheap (counts + sums) so 5s matches the
 // Background jobs table cadence; the activity feed is heavier so it lags.
@@ -230,7 +230,7 @@ export default function AgentsOverviewPanel() {
 
   if (!loaded && !panel) {
     return (
-      <div className="agz-loading"><Loader2 size={14} className="animate-spin" /> Loading agent overview…</div>
+      <div className="agz-loading"><Spinner size={14} className="!text-current" /> Loading agent overview…</div>
     );
   }
   if (error && !panel) {
@@ -279,8 +279,8 @@ export default function AgentsOverviewPanel() {
               <XAxis dataKey="hour" tick={{ fontSize: 10, fill: C.mute }} interval={5} tickLine={false} axisLine={{ stroke: C.grid }} />
               <YAxis tick={{ fontSize: 10, fill: C.mute }} tickLine={false} axisLine={false} allowDecimals={false} width={28} />
               <Tooltip contentStyle={tooltipStyle} />
-              <Line type="monotone" dataKey="cycles" stroke={C.purple} strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="decisions" stroke={C.purpleLav} strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="cycles" stroke={C.purple} strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="decisions" stroke={C.purpleLav} strokeWidth={2} dot={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -292,7 +292,7 @@ export default function AgentsOverviewPanel() {
               <XAxis dataKey="hour" tick={{ fontSize: 10, fill: C.mute }} interval={5} tickLine={false} axisLine={{ stroke: C.grid }} />
               <YAxis tick={{ fontSize: 10, fill: C.mute }} tickLine={false} axisLine={false} allowDecimals={false} width={28} />
               <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey="errors" fill={C.amber} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="errors" fill={C.amber} radius={[3, 3, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -304,7 +304,7 @@ export default function AgentsOverviewPanel() {
               <XAxis type="number" tick={{ fontSize: 10, fill: C.mute }} tickLine={false} axisLine={{ stroke: C.grid }} allowDecimals={false} />
               <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: C.mute }} tickLine={false} axisLine={false} width={96} />
               <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(94,58,168,0.06)' }} />
-              <Bar dataKey="count" radius={[0, 3, 3, 0]}>
+              <Bar dataKey="count" radius={[0, 3, 3, 0]} isAnimationActive={false}>
                 {typeData.map((entry, i) => (
                   <Cell key={entry.name} fill={[C.purple, C.purpleLav, C.purpleSoft, C.amber, C.mute][i % 5]} />
                 ))}

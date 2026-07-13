@@ -465,17 +465,7 @@
   background: var(--purple);
   color: #fff;
 }
-
-.ci-spinner {
-  display: inline-block;
-  width: 15px;
-  height: 15px;
-  border: 2px solid color-mix(in oklab, currentColor 30%, transparent);
-  border-top-color: currentColor;
-  border-radius: 50%;
-  animation: ci-spin 0.7s linear infinite;
-}
-@keyframes ci-spin { to { transform: rotate(360deg); } }
+.ci-motion-spinner { color: inherit; }
 
 /* ============ Mobile-first: phones (a hiring manager briefing on the go) ====
    Single column, full viewport height: a compact "Role so far" card on top

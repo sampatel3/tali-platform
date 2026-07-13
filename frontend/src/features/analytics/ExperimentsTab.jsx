@@ -6,9 +6,8 @@
 // metrics. Pilot-honest: every rate carries its denominator.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Loader2 } from 'lucide-react';
-
 import { analytics as analyticsApi } from '../../shared/api';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { safeNum } from './analyticsFormat';
 
 const armScore = (arm) => {
@@ -89,7 +88,7 @@ const ExperimentCard = ({ experiment }) => {
         </span>
       </div>
       {loading && !data ? (
-        <div className="an-empty"><Loader2 size={13} className="animate-spin" aria-hidden="true" /> Loading results…</div>
+        <div className="an-empty"><Spinner size={13} className="!text-current" /> Loading results…</div>
       ) : arms.length === 0 ? (
         <div className="an-empty">No results for this comparison yet.</div>
       ) : (
@@ -121,7 +120,7 @@ export const ExperimentsTab = ({ roleId }) => {
   }, [roleId]);
 
   if (loading) {
-    return <div className="an-tabpanel"><div className="an-empty"><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Loading experiments…</div></div>;
+    return <div className="an-tabpanel"><div className="an-empty"><Spinner size={14} className="!text-current" /> Loading experiments…</div></div>;
   }
 
   return (

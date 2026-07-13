@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import '../../styles/16-job-pipeline.css';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   BriefcaseBusiness,
   ChevronDown,
-  Loader2,
   RefreshCw,
   Share2,
   Sparkles,
@@ -13,7 +13,7 @@ import * as apiClient from '../../shared/api';
 import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
-import { Dialog, Button, PageLoader } from '../../shared/ui/TaaliPrimitives';
+import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
@@ -1839,7 +1839,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   title="Pull each candidate's current Workable stage and update it here"
                 >
                   {syncingStages ? (
-                    <><Loader2 size={12} className="animate-spin" />Syncing…</>
+                    <><Spinner size={12} className="!text-current" />Syncing…</>
                   ) : (
                     <><RefreshCw size={12} />Sync from Workable</>
                   )}
@@ -1873,7 +1873,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   if (status === 'running') {
                     const step = pj?.current_step;
                     const label = step === 'fetch' ? 'Fetching CVs' : step === 'pre_screen' ? 'Pre-screening' : step === 'score' ? 'Scoring' : 'Processing';
-                    return (<><Loader2 size={12} className="animate-spin" />{label}…</>);
+                    return (<><Spinner size={12} className="!text-current" />{label}…</>);
                   }
                   const selCount = selectedAppIds.size;
                   if (selCount > 0) return (<><Sparkles size={12} />Process {selCount} selected</>);

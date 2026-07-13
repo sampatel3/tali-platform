@@ -7,8 +7,7 @@ import {
   scrollToMarketingSection,
 } from '../../lib/marketingScroll';
 import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
-import { AgentLoop } from '../../shared/motion';
-import '../../shared/motion/reveal.css';
+import { AgentLoop, MotionProgress, MotionStagger, Reveal } from '../../shared/motion';
 import './heroAgentScene.css';
 import './landingVariantGSections.css';
 
@@ -30,8 +29,8 @@ import './landingVariantGSections.css';
 // The funnel + scorecard markup is a plain-JSX re-render of variant G's sections
 // driven by the SAME data model (variantG.data.js), styled by
 // landingVariantGSections.css (variant G's CSS re-scoped `.lvg` → `.mc-vg`), and
-// revealed by the shared production reveal.css .reveal, while agent-state flow
-// uses the shared Motion system. Chrome is the shared <MarketingNav> and a footer whose
+// revealed by the shared Motion primitives, while agent-state flow uses the
+// same design system. Chrome is the shared <MarketingNav> and a footer whose
 // every link resolves. CTAs route through `onNavigate`.
 
 const containerClass = 'mx-auto max-w-[85rem] px-6 md:px-10 xl:px-16';
@@ -102,7 +101,7 @@ export const LandingPage = ({ onNavigate }) => {
       <section className="relative overflow-hidden pb-16 pt-12 md:pb-24 md:pt-16">
         <div className={containerClass}>
           <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
-            <div className="reveal">
+            <Reveal>
               <div className="mc-kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
                 <span
                   aria-hidden="true"
@@ -171,15 +170,15 @@ export const LandingPage = ({ onNavigate }) => {
                   See it live <span className="arrow">→</span>
                 </button>
               </div>
-            </div>
+            </Reveal>
 
             {/* The agent-ON scene: job card flips OFF→ON on first scroll, three
                 candidates flow into the decision lane, each verdict stamps
                 (Maya 88 Advance / Jordan 84 Advance / Tariq 41 Reject). Scoped
                 under .lvg-scene so heroAgentScene.css styles it. */}
-            <div className="reveal lvg-scene" style={{ '--reveal-delay': '0.12s' }}>
+            <Reveal className="lvg-scene" delay={0.12}>
               <AgentScene />
-            </div>
+            </Reveal>
           </div>
         </div>
       </section>
@@ -189,18 +188,18 @@ export const LandingPage = ({ onNavigate }) => {
           and styled by landingVariantGSections.css (scoped `.mc-vg`). */}
       <section id="how-it-works" className="mc-vg border-t border-[var(--line)] bg-[var(--bg-2)]">
         <div className={`${containerClass} py-20`}>
-          <div className="reveal section-head">
+          <Reveal className="section-head">
             <span className="eyebrow">AGENTIC HIRING</span>
             <h2 className="display mt-3">One agent, <span className="grad-text">your whole funnel.</span></h2>
             <p className="lede">
               It sources, reads every CV, runs the assessment, and puts a decision in front of you with
               the evidence attached. You approve. It executes.
             </p>
-          </div>
+          </Reveal>
 
-          <div className="reveal-stagger funnel mt-4">
+          <MotionStagger className="funnel mt-4" data-motion-stagger="agent-funnel">
             {FUNNEL.map((s, i) => (
-              <div key={s.n} className="fstep" style={{ '--i': i }}>
+              <div key={s.n} className="fstep">
                 {i < FUNNEL.length - 1 ? <span className="fflow-track" aria-hidden="true" /> : null}
                 <span className="fnum">{s.n}</span>
                 <h3>{s.key}</h3>
@@ -208,7 +207,7 @@ export const LandingPage = ({ onNavigate }) => {
                 <div className="fviz"><FunnelViz viz={s.viz} /></div>
               </div>
             ))}
-          </div>
+          </MotionStagger>
         </div>
       </section>
 
@@ -217,16 +216,16 @@ export const LandingPage = ({ onNavigate }) => {
           Discernment / Diligence / Deliverable), the one assessment section. */}
       <section id="platform" className="mc-vg border-t border-[var(--line)] bg-white">
         <div className={`${containerClass} py-20`}>
-          <div className="reveal section-head">
+          <Reveal className="section-head">
             <span className="eyebrow">AI-NATIVE ASSESSMENTS</span>
             <h2 className="display mt-3">Measure how people <span className="grad-text">actually work with AI.</span></h2>
             <p className="lede">
               Five dimensions, scored from the real session. Planted traps they should catch. Same
               rubric, every candidate — engineering or knowledge work.
             </p>
-          </div>
+          </Reveal>
 
-          <div className="reveal scorecard">
+          <Reveal className="scorecard">
             <div className="sc-head">
               <div className="who">
                 <div className="avatar">MC</div>
@@ -246,19 +245,27 @@ export const LandingPage = ({ onNavigate }) => {
                   <div className="dd-name">{d.name}</div>
                   <div className="dd-def">{d.def}</div>
                 </div>
-                <div className="dd-track"><AgentLoop kind="flow" className="dd-fill" style={{ width: `${d.val}%` }} /></div>
+                <div className="dd-track">
+                  <MotionProgress
+                    as="span"
+                    className="dd-fill-progress"
+                    style={{ display: 'block', width: `${d.val}%`, height: '100%', borderRadius: 999 }}
+                  >
+                    <AgentLoop kind="flow" className="dd-fill" style={{ display: 'block', width: '100%', height: '100%' }} />
+                  </MotionProgress>
+                </div>
                 <div className="dd-val">{d.val}</div>
               </div>
             ))}
-          </div>
+          </Reveal>
         </div>
       </section>
 
       {/* BOTTOM CTA — softened, token-based purple gradient */}
       <section className="bg-[var(--bg)]">
         <div className={`${containerClass} py-16`}>
-          <div
-            className="reveal relative overflow-hidden rounded-[18px] px-12 py-14"
+          <Reveal
+            className="relative overflow-hidden rounded-[18px] px-12 py-14"
             style={{
               background:
                 'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, #000) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
@@ -299,7 +306,7 @@ export const LandingPage = ({ onNavigate }) => {
                 </button>
               </div>
             </div>
-          </div>
+          </Reveal>
         </div>
       </section>
 

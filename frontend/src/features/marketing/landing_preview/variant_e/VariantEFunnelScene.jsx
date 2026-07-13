@@ -1,6 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React from 'react';
 import { ArrowUpRight, Check, FileSearch, Inbox, Sparkles } from 'lucide-react';
-import { useInView, useReducedMotionSync } from '../../../../shared/motion';
+import {
+  MOTION_STAGGER,
+  MotionProgress,
+  Reveal,
+  useReducedMotionSync,
+} from '../../../../shared/motion';
 import { Avatar, ScoreChip, VerdictPill, initialsFrom } from '../../../home/atoms';
 
 // ---------------------------------------------------------------------------
@@ -9,11 +14,8 @@ import { Avatar, ScoreChip, VerdictPill, initialsFrom } from '../../../home/atom
 // candidate (Maya Chen) moves through five compact steps, each lighting as it's
 // reached — not four separate feature bands.
 //
-// Motion: `useInView` (Motion) triggers the advance on scroll-in; the reveal
-// itself is a one-shot CSS animation (staggered `animation-delay`, fill `both`),
-// class-gated behind `.is-playing`. This can't get stuck the way an interrupted
-// useAnimate timeline can — CSS + fill:both always resolves to the final state.
-// Reduced motion → the fully-lit final state with no animation.
+// Motion: shared in-view Reveal and MotionProgress primitives own the one-shot
+// sequence. Reduced motion renders the fully-lit final state immediately.
 // ---------------------------------------------------------------------------
 
 const STEPS = [
@@ -44,26 +46,10 @@ const STEPS = [
 ];
 
 export const FunnelScene = () => {
-  const ref = useRef(null);
-  const inView = useInView(ref, { amount: 0.35 });
   const reduced = useReducedMotionSync();
-  const [playing, setPlaying] = useState(false);
-
-  useEffect(() => {
-    if (reduced || !inView) return;
-    setPlaying(true); // one-way: once armed to play, CSS fill:both holds the end state
-  }, [inView, reduced]);
-
-  // `data-armed` hides the animatable children until `.is-playing` runs the
-  // one-shot CSS entrance. Reduced motion never arms — the final state renders.
-  const armed = !reduced;
 
   return (
-    <div
-      className={`lve-fn${playing ? ' is-playing' : ''}`}
-      ref={ref}
-      {...(armed ? { 'data-armed': 'true' } : {})}
-    >
+    <div className="lve-fn">
       {/* The candidate threading the whole funnel — one person, start to finish. */}
       <div className="lve-fn-cand">
         <Avatar initials={initialsFrom('Maya Chen')} size={30} />
@@ -76,18 +62,29 @@ export const FunnelScene = () => {
 
       <div className="lve-fn-track">
         <span className="lve-fn-rail" aria-hidden="true">
-          <span className="lve-fn-rail-fill" />
+          <MotionProgress
+            className="lve-fn-rail-fill"
+            amount={0.35}
+            reduced={reduced}
+          />
         </span>
         <div className="lve-fn-steps">
-          {STEPS.map(({ key, n, label, Icon, glimpse }) => (
-            <div className="lve-fn-step" key={key}>
+          {STEPS.map(({ key, n, label, Icon, glimpse }, index) => (
+            <Reveal
+              as="div"
+              className="lve-fn-step"
+              key={key}
+              amount={0.35}
+              delay={index * MOTION_STAGGER.default}
+              reduced={reduced}
+            >
               <span className="lve-fn-node" aria-hidden="true">
                 <Icon size={15} strokeWidth={2} />
               </span>
               <span className="lve-fn-n">{n}</span>
               <span className="lve-fn-label">{label}</span>
               <span className="lve-fn-glimpse">{glimpse}</span>
-            </div>
+            </Reveal>
           ))}
         </div>
       </div>

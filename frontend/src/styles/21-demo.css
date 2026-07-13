@@ -166,7 +166,6 @@
   border-radius: 50%;
   background: #7dd0a8;
   border: 2px solid var(--ink-deep-3);
-  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .mc-show-marquee-head > div:nth-child(2) {
@@ -502,7 +501,6 @@
   height: 6px;
   border-radius: 50%;
   background: var(--purple-lav);
-  animation: pulse 1.4s ease-in-out infinite;
 }
 
 /* Generic panel grid + cards (legacy v4 panels — kept for backwards
@@ -965,7 +963,6 @@
   height: 6px;
   border-radius: 50%;
   background: var(--purple-lav);
-  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .mc-show-ide-foot {
@@ -2082,10 +2079,4 @@
 .mc-demo-lead-trust strong {
   color: var(--ink);
   font-weight: 600;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mc-show-marquee-icon-dot,
-  .mc-show-frame-tip .dot,
-  .mc-show-ide-typing span { animation: none; }
 }

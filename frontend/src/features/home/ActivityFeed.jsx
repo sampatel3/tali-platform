@@ -13,6 +13,7 @@ import { Check, X } from 'lucide-react';
 import { Avatar, RolePill, ScoreChip, TypeBadge, formatRelativeAge, initialsFrom, humanizeStatusInline } from './atoms';
 import { pathForPage } from '../../app/routing';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
+import { MotionList, MotionListItem } from '../../shared/motion';
 
 // Import home.css here so any surface that renders <ActivityFeed />
 // (the Hub today, marketing landing tomorrow, anywhere else later)
@@ -54,20 +55,32 @@ export const ActivityFeed = ({
     {rows.length === 0 ? (
       <div className="home-empty">Nothing matches these filters yet.</div>
     ) : (
-      <ol className="rq-stream-list">
-        {shown.map((row) => {
+      <MotionList as="ol" className="rq-stream-list">
+        {shown.map((row, rowIndex) => {
           // ``processing`` = approved/overridden and mid-Workable-writeback. It
           // renders in the same rich layout as pending (candidate + reasoning)
           // but greyed + non-actionable so the recruiter can see it's in flight.
           const isProcessing = row.status === 'processing';
           const isPending = row.status === 'pending' || row.status === 'reverted_for_feedback';
           if (isPending || isProcessing) {
+            const interactive = isPending && typeof onSelect === 'function';
             return (
-              <li
+              <MotionListItem
+                as="li"
                 key={row.id}
+                index={rowIndex}
                 className={`rq-stream-item ${selectedId === row.id ? 'rq-stream-active' : ''} ${isProcessing ? 'is-processing' : ''}`.trim()}
-                style={{ cursor: 'pointer' }}
-                onClick={() => onSelect?.(row.id)}
+                style={{ cursor: interactive ? 'pointer' : undefined }}
+                role={interactive ? 'button' : undefined}
+                tabIndex={interactive ? 0 : undefined}
+                onClick={interactive ? () => onSelect(row.id) : undefined}
+                onKeyDown={interactive ? (event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelect(row.id);
+                  }
+                } : undefined}
               >
                 <div className="rq-stream-rail">
                   <Avatar initials={initialsFrom(row.candidate_name)} size={32} />
@@ -114,11 +127,11 @@ export const ActivityFeed = ({
                   </div>
                   <div className="rq-stream-reason">{row.reasoning}</div>
                 </div>
-              </li>
+              </MotionListItem>
             );
           }
           return (
-            <li key={row.id} className="rq-stream-item">
+            <MotionListItem as="li" key={row.id} index={rowIndex} className="rq-stream-item">
               <div className="rq-stream-rail">
                 <span className={`rq-stream-dot ${row.status === 'overridden' ? 'override' : ''}`.trim()}>
                   {row.status === 'approved' ? <Check size={12} aria-hidden="true" /> : <X size={12} aria-hidden="true" />}
@@ -162,10 +175,10 @@ export const ActivityFeed = ({
                   </div>
                 ) : null}
               </div>
-            </li>
+            </MotionListItem>
           );
         })}
-      </ol>
+      </MotionList>
     )}
     {collapsedCount != null && rows.length > collapsedCount ? (
       <button type="button" className="rq-feed-toggle" onClick={() => setExpanded((v) => !v)}>

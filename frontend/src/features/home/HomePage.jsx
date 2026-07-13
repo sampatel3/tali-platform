@@ -10,17 +10,21 @@ import { MessageSquare } from 'lucide-react';
 import { agent as agentApi, agentChat } from '../../shared/api';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
+import { Reveal } from '../../shared/motion';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
 import './home.css';
-import '../../shared/motion/reveal.css';
 import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared/metrics';
 import { HomeNow } from './HomeNow';
 import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
 import { AgentSidebar } from './agentchat/AgentSidebar';
-import { AgentChatDock } from './agentchat/AgentChatDock';
 import './agentchat/agentchat.css';
+
+const LazyAgentChatDock = React.lazy(() => import('./agentchat/AgentChatDock').then((module) => ({
+  default: module.AgentChatDock,
+})));
 
 const ORG_STATUS_POLL_MS = 30_000;
 // Keep the decision cards live. The org-status poll above refreshes the badges
@@ -86,6 +90,10 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const { user } = useAuth() || {};
   const { showToast } = useToast() || { showToast: () => {} };
   const [searchParams, setSearchParams] = useSearchParams();
+  const {
+    payload: sharedOrgStatus,
+    refetch: refetchOrgStatus,
+  } = useAgentStatusOrg(Boolean(user));
 
   // Filters live in the URL so refresh / share preserves them.
   const filters = useMemo(() => ({
@@ -276,25 +284,24 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     }
   }, []);
 
-  // Org-status + roles-breakdown poll — keeps the KPI strip, tab badge,
-  // and the "By role" pending column in lockstep. Polling both together
-  // avoids the stale per-role counts users saw when actions resolved
-  // decisions outside this page's review queue.
+  // Shell and Home share one org-status store/poller. Mirror its full payload
+  // into the Hub's warm cache while this page owns only roles-breakdown.
+  useEffect(() => {
+    if (sharedOrgStatus == null) return;
+    setOrgStatus(sharedOrgStatus);
+    writeCache('home:org-status', sharedOrgStatus);
+  }, [sharedOrgStatus]);
+
+  // Keep the "By role" pending column live without creating a second owner
+  // for /agent/org-status.
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       try {
-        const [statusRes, rolesRes] = await Promise.all([
-          agentApi.orgStatus(),
-          agentApi.rolesBreakdown(),
-        ]);
+        const rolesRes = await agentApi.rolesBreakdown();
         if (cancelled) return;
-        const nextStatus = statusRes?.data || null;
         const nextRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
-        setOrgStatus(nextStatus);
         setRolesBreakdown(nextRoles);
-        // Refresh the SWR cache so the next re-mount paints these instantly.
-        writeCache('home:org-status', nextStatus);
         writeCache('home:roles-breakdown', nextRoles);
       } catch { /* silent */ } finally {
         // The dedicated loadRoles() useEffect was retired in favour of this
@@ -375,16 +382,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   }, []);
 
   const reloadAll = useCallback(async () => {
-    await Promise.all([loadDecisions(), loadRoles()]);
-    try {
-      const res = await agentApi.orgStatus();
-      const next = res?.data || null;
-      setOrgStatus(next);
-      // Keep the cross-navigation cache in step with a manual reload, or a
-      // return to /home would paint the pre-reload value until the next poll.
-      if (next != null) writeCache('home:org-status', next);
-    } catch { /* silent */ }
-  }, [loadDecisions, loadRoles]);
+    await Promise.all([loadDecisions(), loadRoles(), refetchOrgStatus()]);
+  }, [loadDecisions, loadRoles, refetchOrgStatus]);
 
   // Org-wide soft pause / resume from the header's Agent strip. Home = "All
   // roles", so this pauses (or resumes) EVERY agent-enabled role at once via
@@ -658,24 +657,25 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       <div className="home-app">
       {/* Full-width page header — consistent with every other page (spans the
           whole width, above the agent rail + chat dock). */}
-      <AgentHeader
-        className="reveal"
-        // Home carries the same breadcrumb strip as every other page (Jobs,
-        // detail pages) so the header band occupies the SAME vertical space and
-        // the two line up. The lone "Home" crumb is non-clickable text.
-        breadcrumbs={[{ label: 'Home' }]}
-        kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
-        title={greetingFor(user)}
-        subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
-        // All-roles agent strip: Home = every role, so Pause pauses ALL agents
-        // (and Resume resumes them) via /agent/pause-all + /agent/resume-all.
-        agent={headerAgent}
-        onPauseAgent={handlePauseAllAgents}
-        onResumeAgent={handleResumeAllAgents}
-        pauseAllCount={agentRunningCount}
-        resumeAllCount={agentPausedCount}
-        offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
-      />
+      <Reveal className="home-header-reveal" y={8} style={{ flexShrink: 0 }}>
+        <AgentHeader
+          // Home carries the same breadcrumb strip as every other page (Jobs,
+          // detail pages) so the header band occupies the SAME vertical space and
+          // the two line up. The lone "Home" crumb is non-clickable text.
+          breadcrumbs={[{ label: 'Home' }]}
+          kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
+          title={greetingFor(user)}
+          subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
+          // All-roles agent strip: Home = every role, so Pause pauses ALL agents
+          // (and Resume resumes them) via /agent/pause-all + /agent/resume-all.
+          agent={headerAgent}
+          onPauseAgent={handlePauseAllAgents}
+          onResumeAgent={handleResumeAllAgents}
+          pauseAllCount={agentRunningCount}
+          resumeAllCount={agentPausedCount}
+          offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
+        />
+      </Reveal>
       {/* The shell renders immediately (not gated on the async agents fetch),
           so the page lays out once — no flash of the pre-rail layout. */}
       <div className={`ac-shell ${(bulkMode || (activeRoleId != null && !chatHidden)) ? '' : 'ac-dock-collapsed'}`}>
@@ -721,16 +721,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             slim edge handle below reopens it. Re-clicking the agent (or "All
             roles") clears the scope and closes everything. */}
         {(bulkMode || (activeRoleId != null && !chatHidden)) ? (
-          <AgentChatDock
-            roleId={activeRoleId}
-            roleName={activeAgent?.role_name}
-            agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
-            onReload={reloadAll}
-            onCollapse={() => { if (bulkMode) { clearBulk(); } else { setChatHidden(true); } }}
-            bulkSelectedRoles={bulkSelectedRoles}
-            onSendBulk={sendBulk}
-            onClearBulk={clearBulk}
-          />
+          <React.Suspense fallback={null}>
+            <LazyAgentChatDock
+              roleId={activeRoleId}
+              roleName={activeAgent?.role_name}
+              agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
+              onReload={reloadAll}
+              onCollapse={() => { if (bulkMode) { clearBulk(); } else { setChatHidden(true); } }}
+              bulkSelectedRoles={bulkSelectedRoles}
+              onSendBulk={sendBulk}
+              onClearBulk={clearBulk}
+            />
+          </React.Suspense>
         ) : null}
         {/* Chat hidden but the agent stays selected — a slim edge handle brings
             it back without losing the role scope. */}

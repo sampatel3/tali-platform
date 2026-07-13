@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Check } from 'lucide-react';
 
+import { MotionLoop } from '../../shared/motion';
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
 
 // Modern browsers block ``window.close()`` on any tab the user opened
@@ -23,9 +24,9 @@ export const AssessmentStatusScreen = ({
     return (
       <div className={`taali-runtime ${lightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen items-center justify-center bg-[var(--taali-runtime-bg)]`}>
         <div className="text-center">
-          <div className="mx-auto mb-4 animate-pulse w-fit">
+          <MotionLoop as="div" kind="pulse" className="mx-auto mb-4 w-fit">
             <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-[2.7rem] h-[2.7rem]" />
-          </div>
+          </MotionLoop>
           <p className="font-mono text-sm text-[var(--taali-runtime-muted)]">
             Loading assessment...
           </p>

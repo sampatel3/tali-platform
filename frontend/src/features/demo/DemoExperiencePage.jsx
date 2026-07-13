@@ -1,7 +1,10 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 
+import '../../styles/08-candidate-detail.css';
+import '../../styles/09-standing-report.css';
+
 import { assessments as assessmentsApi } from '../../shared/api';
-import { motionSafeScrollBehavior } from '../../shared/motion';
+import { MotionLoop, motionSafeScrollBehavior } from '../../shared/motion';
 import { CandidateMiniNav, MarketingNav } from '../../shared/layout/TaaliLayout';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import { PRODUCT_WALKTHROUGH_TASK } from './productWalkthroughModels';
@@ -418,7 +421,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                         referrerPolicy="no-referrer"
                         onLoad={handleShowcaseFrameLoad(pane)}
                       />
-                      <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
+                      <div className="wt-tip"><MotionLoop kind="pulse" className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
                     </div>
                   </div>
                 </div>

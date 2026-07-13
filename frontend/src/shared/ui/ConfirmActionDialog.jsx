@@ -37,15 +37,19 @@ export function ConfirmActionDialog({
   onClose,
   onConfirm,
 }) {
+  const requestClose = () => {
+    if (!loading) onClose?.();
+  };
+
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={requestClose}
       title={title}
       description={description}
       footer={(
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
+          <Button type="button" variant="ghost" onClick={requestClose} disabled={loading}>
             {cancelLabel}
           </Button>
           <Button

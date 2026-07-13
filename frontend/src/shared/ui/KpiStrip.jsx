@@ -27,8 +27,8 @@ export const KpiTile = ({ label, value, unit = null, emph = false, bar = null, s
 
 export const KpiStrip = ({ tiles, columns = 4 }) => (
   <div className="kpi-strip" style={{ '--kpi-cols': columns }}>
-    {tiles.filter(Boolean).map((tile) => (
-      <KpiTile key={tile.key || tile.label} {...tile} />
+    {tiles.filter(Boolean).map(({ key, ...tile }) => (
+      <KpiTile key={key || tile.label} {...tile} />
     ))}
   </div>
 );

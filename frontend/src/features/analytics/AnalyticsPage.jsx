@@ -15,6 +15,7 @@
 // data is absent every surface renders a proper empty state — nothing is faked.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import '../../styles/25-analytics.css';
 import {
   Bot,
   Brain,
@@ -28,11 +29,11 @@ import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import {
   MotionNumber,
+  MotionStagger,
   MotionTab,
   MotionTabs,
   PresenceSwap,
 } from '../../shared/motion';
-import '../../shared/motion/reveal.css';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Select, PageLoader } from '../../shared/ui/TaaliPrimitives';
 import {
@@ -266,37 +267,38 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         ) : null}
         {/* 6-stat pulse band. Dims + shows a spinner while a scope change is
             in-flight so the numbers under the new label aren't read as final. */}
-        <div
-          className="an-pulse reveal-stagger"
+        <MotionStagger
+          className="an-pulse"
+          data-motion-stagger="analytics-pulse"
           aria-busy={loading && hasLoaded ? 'true' : undefined}
           style={loading && hasLoaded ? { opacity: 0.5, transition: 'opacity 120ms' } : undefined}
         >
-          <div className="an-pcell" style={{ '--i': 0 }}>
+          <div className="an-pcell">
             <div className="k">Decisions</div>
             <div className="v">{decisionsTick}</div>
             <div className="s">{approved.toLocaleString()} approved</div>
           </div>
-          <div className="an-pcell" style={{ '--i': 1 }}>
+          <div className="an-pcell">
             <div className="k">Auto-advanced</div>
             <div className="v">{autoAdvancedTick}</div>
             <div className="s">{autoRejected.toLocaleString()} auto-rejected</div>
           </div>
-          <div className="an-pcell" style={{ '--i': 2 }}>
+          <div className="an-pcell">
             <div className="k">Advance → hire</div>
             <div className="v attn">{advanceHirePct != null ? advanceHireTick : '—'}</div>
             <div className="s">{hired.toLocaleString()} of {advancedTotal.toLocaleString()} advanced</div>
           </div>
-          <div className="an-pcell" style={{ '--i': 3 }}>
+          <div className="an-pcell">
             <div className="k">Override rate</div>
             <div className="v">{overrideRateTick}</div>
             <div className="s">{overridden.toLocaleString()} override{overridden === 1 ? '' : 's'}</div>
           </div>
-          <div className="an-pcell" style={{ '--i': 4 }}>
+          <div className="an-pcell">
             <div className="k">Taught</div>
             <div className="v">{teachRateTick}</div>
             <div className="s">{taught.toLocaleString()} teaching event{taught === 1 ? '' : 's'}</div>
           </div>
-          <div className="an-pcell" style={{ '--i': 5 }}>
+          <div className="an-pcell">
             <div className="k">Spend · MTD</div>
             <div className="v">
               {spendTick}
@@ -304,7 +306,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
             </div>
             <div className="s">{budgetPctValue != null ? `${budgetPctValue}%` : 'no cap set'}</div>
           </div>
-        </div>
+        </MotionStagger>
 
         {/* Underline tabs — shared .vtabs/.vtab vocabulary. */}
         <MotionTabs value={tab} onValueChange={setTab} className="vtabs" aria-label="Analytics views">

@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { X } from 'lucide-react';
 
-import { Button } from '../../shared/ui/TaaliPrimitives';
+import '../../styles/08-candidate-detail.css';
+
+import { Button, Spinner } from '../../shared/ui/TaaliPrimitives';
 import {
   MotionDisclosure,
   MotionTab,
@@ -465,7 +467,7 @@ export function CandidateTriageDrawer({
               disabled={!canAct || !selectedTaskId || assessmentBusy}
               onClick={() => onSendAssessment?.(application, selectedTaskId)}
             >
-              {assessmentBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+              {assessmentBusy ? <Spinner size={14} className="!text-current" /> : null}
               {assessmentBusy ? 'Sending…' : sendLabel}
             </Button>
           </div>
@@ -544,7 +546,7 @@ export function CandidateTriageDrawer({
               disabled={!canAct || !selectedMoveAction || moveBusy}
               onClick={handleConfirmMove}
             >
-              {moveBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+              {moveBusy ? <Spinner size={14} className="!text-current" /> : null}
               {moveButtonLabel}
             </Button>
           </div>

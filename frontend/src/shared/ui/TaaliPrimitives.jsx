@@ -8,9 +8,10 @@ import React, {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, Loader2, X } from 'lucide-react';
+import { Check, ChevronDown, X } from 'lucide-react';
 import {
   AnimatePresence,
+  MotionSpinner,
   backdropVariants,
   createSheetVariants,
   dialogVariants,
@@ -179,7 +180,7 @@ export const Button = React.forwardRef(function Button({
       )}
     >
       {loading ? (
-        <Loader2 className="taali-btn-spinner animate-spin" aria-hidden="true" />
+        <MotionSpinner className="taali-btn-spinner" size={17} />
       ) : null}
       {loading ? loadingLabel ?? children : children}
     </As>
@@ -729,8 +730,8 @@ export const Badge = ({ variant = 'muted', className = '', children }) => (
   </span>
 );
 
-export const Spinner = ({ size = 24, className = '' }) => (
-  <Loader2 size={size} className={cx('animate-spin text-[var(--taali-purple)]', className)} aria-hidden />
+export const Spinner = ({ size = 24, className = '', label }) => (
+  <MotionSpinner size={size} className={className} label={label} />
 );
 
 // PageLoader — the one shared cold-load state: a centred circular spinner.

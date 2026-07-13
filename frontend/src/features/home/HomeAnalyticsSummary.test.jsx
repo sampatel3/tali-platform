@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
 
 // The pulse values use the shared MotionNumber once their live value settles. This
-// pins the two things the motion pass added: the entrance-reveal class on the
+// pins the two things the motion pass added: the shared entrance primitive on the
 // section, and the reduced-motion contract — a reduced-motion viewer must see
 // the FINAL numbers immediately (no 0-flash, nothing left animating/hidden).
 
@@ -33,13 +33,14 @@ const orgBudget = { unit: '/ $50' };
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => { delete window.matchMedia; });
 
-test('renders the pulse section with the entrance-reveal class', () => {
+test('renders the pulse section with the shared Motion reveal', () => {
   mockReducedMotion(true);
   const { container } = render(<HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} />);
   const section = container.querySelector('section.home-pulse');
   expect(section).not.toBeNull();
   expect(section.className).toContain('home-section');
-  expect(section.className).toContain('reveal');
+  expect(section).toHaveAttribute('data-motion-reveal', 'vertical');
+  expect(section.className).not.toContain('reveal');
 });
 
 test('under reduced motion the pulse numbers render their final value immediately', () => {

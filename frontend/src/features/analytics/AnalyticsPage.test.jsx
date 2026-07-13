@@ -5,7 +5,7 @@ import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { AnalyticsPage } from './AnalyticsPage';
 
 // The pulse band lives directly in AnalyticsPage; the five tab bodies are stubbed
-// so this test stays focused on the entrance-reveal classes and the KPI tickers.
+// so this test stays focused on the shared Motion stagger and the KPI tickers.
 vi.mock('../../shared/api', () => ({
   agent: {
     rolesBreakdown: vi.fn(),
@@ -65,19 +65,20 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('AnalyticsPage pulse band', () => {
-  it('renders the entrance-reveal + stagger classes on the pulse band', async () => {
+  it('uses the shared Motion stagger for the pulse band', async () => {
     setReducedMotion(false);
     const { container } = render(<AnalyticsPage />);
 
     const band = container.querySelector('.an-pulse');
     expect(band).toBeTruthy();
-    // Stagger wrapper drives both the band entrance and the per-cell offset.
-    expect(band.classList.contains('reveal-stagger')).toBe(true);
+    // MotionStagger owns the band entrance; there is no legacy CSS animation
+    // class or per-cell CSS delay index left behind.
+    expect(band).toHaveAttribute('data-motion-stagger', 'analytics-pulse');
+    expect(band.classList.contains('reveal-stagger')).toBe(false);
     const cells = container.querySelectorAll('.an-pcell');
     expect(cells).toHaveLength(6);
-    // Each cell carries its stagger index for the reveal offset.
-    expect(cells[0].style.getPropertyValue('--i')).toBe('0');
-    expect(cells[5].style.getPropertyValue('--i')).toBe('5');
+    expect(cells[0].style.getPropertyValue('--i')).toBe('');
+    expect(cells[5].style.getPropertyValue('--i')).toBe('');
   });
 
   it('lands on the final formatted KPI values under prefers-reduced-motion', async () => {

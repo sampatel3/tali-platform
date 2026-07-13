@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
   PIPELINE_FUNNEL_STAGES,
   invitedStageValue,
@@ -24,8 +25,6 @@ import {
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
-import { RoleSheet } from '../candidates/RoleSheet';
-import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
 import {
   EmptyState,
   Select,
@@ -39,16 +38,14 @@ import {
   resolveSyncHealth,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import {
-  JOBS_SHOWCASE,
-  JOBS_SHOWCASE_ORG,
-} from '../demo/productWalkthroughModels';
-import {
   AnimatePresence,
   AgentLoop,
   LayoutGroup,
   MOTION_DURATION,
-  MOTION_STAGGER,
+  MotionLoop,
   MotionNumber,
+  Reveal,
+  cappedStaggerDelay,
   fadeVariants,
   m,
   motionSafeScrollBehavior,
@@ -56,7 +53,6 @@ import {
   reducedFadeVariants,
   useReducedMotionSync,
 } from '../../shared/motion';
-import '../../shared/motion/reveal.css';
 
 // Canonical funnel for the role-card stat row — shared with the home
 // "Pipeline" strip and the job-detail funnel via src/shared/metrics.
@@ -66,18 +62,28 @@ const STAGES = PIPELINE_FUNNEL_STAGES;
 // and reduced motion are already settled, avoiding repeated zero-to-value runs.
 const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
 
-// Card stagger is capped so a long role list can't push the last card's delay
-// out to several seconds (0.06s × index).
-const STAGGER_CAP = MOTION_STAGGER.maxItems;
-
 // Inactive roles keep the same settled opacity as the longstanding non-live
 // treatment. A role is visually active only while its agent is running; agent
 // OFF / PAUSED and non-live Workable lifecycle states settle dimmed. Motion
 // owns the reveal opacity, so the inactive target must be explicit here.
 const ROLE_CARD_DIMMED_OPACITY = 0.55;
 const roleCardFadeVariants = Object.freeze({
-  ...fadeVariants,
-  dimmed: Object.freeze({ opacity: ROLE_CARD_DIMMED_OPACITY, transition: motionTransition.base }),
+  hidden: fadeVariants.hidden,
+  visible: ({ index = 0, stagger = false } = {}) => ({
+    opacity: 1,
+    transition: {
+      ...motionTransition.reveal,
+      delay: stagger ? cappedStaggerDelay(index, 'dense') : 0,
+    },
+  }),
+  dimmed: ({ index = 0, stagger = false } = {}) => ({
+    opacity: ROLE_CARD_DIMMED_OPACITY,
+    transition: {
+      ...motionTransition.reveal,
+      delay: stagger ? cappedStaggerDelay(index, 'dense') : 0,
+    },
+  }),
+  exit: fadeVariants.exit,
 });
 const reducedRoleCardFadeVariants = Object.freeze({
   ...reducedFadeVariants,
@@ -226,8 +232,8 @@ const getRoleBadgeLabel = (role) => {
 // list is intentionally per-role (each role has its own budget cap), so the
 // OFF state on this page guides the user to open a role rather than firing
 // a single org-wide activate.
-const useJobsHeaderAgent = (roles, isShowcase) => {
-  const { status, refetch } = useAgentStatusOrg();
+const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
+  const { status, refetch } = orgStatusResult;
   const agent = useMemo(() => {
     if (isShowcase) {
       return {
@@ -261,20 +267,19 @@ const useJobsHeaderAgent = (roles, isShowcase) => {
 export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => {
   const rolesApi = apiClient.roles;
   const orgApi = apiClient.organizations;
-  const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const [searchParams] = useSearchParams();
   const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
+  const orgStatusResult = useAgentStatusOrg(!isShowcase);
+  const { workableSyncJob, trackWorkableSync } = useJobStatus() ?? {};
 
   const [roles, setRoles] = useState([]);
   // True while the first page is shown and the full role list is still
   // loading in the background (drives the subtle "loading all roles" hint).
   const [rolesPartial, setRolesPartial] = useState(false);
   const [orgData, setOrgData] = useState(null);
-  const [allTasks, setAllTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [syncRunId, setSyncRunId] = useState(null);
   const [error, setError] = useState('');
   // HANDOFF v2 §4 — Live agent spend across roles for the BUDGET USED tile.
   // Fan-out to /roles/{id}/agent/status for every agent-enabled role. Capped
@@ -289,19 +294,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // Consultancy: filter the grid to one client (mirrors the source filter). A
   // role's client rides on its requisition (role.client_id/client_name).
   const [clientFilter, setClientFilter] = useState('all');
-  const [roleSheetOpen, setRoleSheetOpen] = useState(false);
-  const [savingRole, setSavingRole] = useState(false);
-  const [roleSheetError, setRoleSheetError] = useState('');
   const reduced = useReducedMotionSync();
-  // The card grid staggers in ONCE, on the first render it becomes visible.
-  // A ref guards against re-arming; the state flips off the stagger class after
-  // the animation window so filter-chip / department / phase-2 re-renders don't
-  // re-fire the reveal (the grid re-renders on every filter change).
-  const gridRevealArmedRef = useRef(false);
+  // Motion.dev staggers the first visible grid, then later filters/layout
+  // changes settle immediately instead of replaying a page entrance.
   const [gridStaggerDone, setGridStaggerDone] = useState(false);
+  const gridRevealArmedRef = useRef(false);
+  const gridRevealTimerRef = useRef(null);
 
   const loadJobsHub = useCallback(async () => {
     if (isShowcase) {
+      const { JOBS_SHOWCASE, JOBS_SHOWCASE_ORG } = await import('../demo/productWalkthroughModels');
       setRoles(JOBS_SHOWCASE);
       setOrgData(JOBS_SHOWCASE_ORG);
       // Mirror the Home showcase org budget ($18 / $50) so the demo surfaces match.
@@ -309,7 +311,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       // Show a brief "Syncing now" pulse on first load, then settle into the
       // static "Synced X min ago" state. Pure visual — no API calls fire.
       setSyncing(true);
-      setSyncRunId(null);
       setError('');
       setLoading(false);
       window.setTimeout(() => setSyncing(false), 2500);
@@ -319,24 +320,21 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     setError('');
     try {
       // Phase 1 — paint fast. Fetch only the first page of roles (the active /
-      // recently-synced head) alongside org + org-status. On a large org the
+      // recently-synced head) alongside the org. The shared org-status store
+      // loads the KPI/header payload in parallel. On a large org the
       // full /roles pass aggregates over tens of thousands of applications and
       // serialises ~100 roles; scoping to a page makes first paint cheap.
-      const [rolesRes, orgRes, orgStatusRes] = await Promise.all([
+      const [rolesRes, orgRes] = await Promise.all([
         rolesApi.list({ include_pipeline_stats: true, limit: JOBS_FIRST_PAGE }),
         orgApi.get(),
-        apiClient.agent.orgStatus().catch(() => null),
       ]);
-      setOrgKpis(orgStatusRes?.data || null);
       const firstRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
       const nextOrgData = orgRes?.data || null;
-      // Render the hub immediately from the first page + org + org-status. The
+      // Render the hub immediately from the first page + org. The
       // Workable sync badge ("Syncing now" / "Synced X ago") is secondary
       // chrome — read it below WITHOUT awaiting so it can't gate the spinner.
       setRoles(firstRoles);
       setOrgData(nextOrgData);
-      setSyncing(false);
-      setSyncRunId(null);
       setLoading(false);
 
       // Phase 2 — fill in the long tail. If the first page came back full there
@@ -357,26 +355,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       } else {
         setRolesPartial(false);
       }
-      if (nextOrgData?.workable_connected) {
-        try {
-          const statusRes = await orgApi.getWorkableSyncStatus();
-          const statusPayload = statusRes?.data || {};
-          const inProgress = Boolean(statusPayload.sync_in_progress);
-          setOrgData((cur) => mergeSyncStatusIntoOrg(cur || nextOrgData, statusPayload));
-          setSyncing(inProgress);
-          setSyncRunId(inProgress ? (statusPayload.run_id ?? null) : null);
-        } catch {
-          setSyncing(false);
-          setSyncRunId(null);
-        }
-      }
     } catch {
       setRoles([]);
       setRolesPartial(false);
       setOrgData(null);
       setOrgKpis(null);
-      setSyncing(false);
-      setSyncRunId(null);
       setError('Failed to load jobs.');
     } finally {
       setLoading(false);
@@ -386,6 +369,33 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   useEffect(() => {
     void loadJobsHub();
   }, [loadJobsHub]);
+
+  useEffect(() => {
+    if (!isShowcase && orgStatusResult.payload) {
+      setOrgKpis(orgStatusResult.payload);
+    }
+  }, [isShowcase, orgStatusResult.payload]);
+
+  // JobStatusContext is the single Workable status owner. Entering Jobs asks
+  // it to discover once; it keeps polling only while a sync is actually live.
+  useEffect(() => {
+    if (!isShowcase && orgData?.workable_connected) trackWorkableSync?.();
+  }, [isShowcase, orgData?.workable_connected, trackWorkableSync]);
+
+  const workableWasActiveRef = useRef(false);
+  useEffect(() => {
+    if (!workableSyncJob) return;
+    const status = String(
+      workableSyncJob.workable_last_sync_status || workableSyncJob.status || '',
+    ).toLowerCase();
+    const inProgress = Boolean(workableSyncJob.sync_in_progress)
+      || status === 'running'
+      || status === 'cancelling';
+    setOrgData((current) => mergeSyncStatusIntoOrg(current, workableSyncJob));
+    setSyncing(inProgress);
+    if (workableWasActiveRef.current && !inProgress) void loadJobsHub();
+    workableWasActiveRef.current = inProgress;
+  }, [loadJobsHub, workableSyncJob]);
 
   // Per-role agent spend for the BUDGET USED tile. This used to fan out one
   // /roles/{id}/agent/status call per agent-enabled role — up to 20 requests
@@ -436,67 +446,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     };
   }, [isShowcase, roles]);
 
-  useEffect(() => {
-    if (isShowcase) {
-      setAllTasks([]);
-      return undefined;
-    }
-    if (!tasksApi?.list) {
-      setAllTasks([]);
-      return undefined;
-    }
-    let cancelled = false;
-    const loadTasks = async () => {
-      try {
-        const res = await tasksApi.list();
-        if (!cancelled) {
-          setAllTasks(Array.isArray(res?.data) ? res.data : []);
-        }
-      } catch {
-        if (!cancelled) {
-          setAllTasks([]);
-        }
-      }
-    };
-    void loadTasks();
-    return () => {
-      cancelled = true;
-    };
-  }, [isShowcase, tasksApi]);
-
-  useEffect(() => {
-    if (!syncRunId) return undefined;
-    let cancelled = false;
-    const pollStatus = async () => {
-      try {
-        const res = await orgApi.getWorkableSyncStatus(syncRunId);
-        if (cancelled) return;
-        const payload = res?.data || {};
-        const inProgress = Boolean(payload.sync_in_progress);
-        setOrgData((current) => mergeSyncStatusIntoOrg(current, payload));
-        setSyncing(inProgress);
-        if (!inProgress) {
-          setSyncRunId(null);
-          await loadJobsHub();
-          return;
-        }
-        setSyncRunId(payload.run_id ?? syncRunId);
-      } catch {
-        if (cancelled) return;
-        setSyncing(false);
-        setSyncRunId(null);
-      }
-    };
-    void pollStatus();
-    const intervalId = window.setInterval(() => {
-      void pollStatus();
-    }, 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [loadJobsHub, orgApi, syncRunId]);
-
   const handleSyncNow = async () => {
     if (isShowcase) return;
     setError('');
@@ -506,12 +455,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       const payload = res?.data || {};
       const runId = extractRunId(payload);
       if (payload?.status === 'already_running') {
-        if (runId != null) setSyncRunId(runId);
+        trackWorkableSync?.();
         setSyncing(true);
         return;
       }
       if (runId) {
-        setSyncRunId(runId);
+        trackWorkableSync?.();
         return;
       }
       setSyncing(false);
@@ -526,14 +475,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           setOrgData((current) => mergeSyncStatusIntoOrg(current, payload));
           const inProgress = Boolean(payload.sync_in_progress);
           setSyncing(inProgress);
-          setSyncRunId(inProgress ? (payload.run_id ?? runId ?? null) : null);
+          if (inProgress) trackWorkableSync?.();
           if (!inProgress) {
             await loadJobsHub();
           }
           return;
         } catch {
           setSyncing(true);
-          if (runId != null) setSyncRunId(runId);
+          trackWorkableSync?.();
           return;
         }
       }
@@ -584,27 +533,31 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       .filter((role) => clientFilter === 'all' || role?.client_id === clientFilter)
   ), [roles, sourceFilter, clientFilter]);
 
-  // Arm the one-shot card stagger the first time the grid is actually shown,
-  // then retire the stagger class once its animation window has passed so later
-  // filter re-renders paint instantly. Reduced motion skips straight to done.
   useEffect(() => {
-    if (gridRevealArmedRef.current) return undefined;
-    if (loading || error || filtered.length === 0) return undefined;
-    gridRevealArmedRef.current = true;
+    if (gridStaggerDone || loading || error || filtered.length === 0) return;
     if (reduced) {
       setGridStaggerDone(true);
-      return undefined;
+      return;
     }
-    // Cover the last (capped) card's delay + the reveal duration. These values
-    // share the same vocabulary as Motion-driven list changes below.
-    const windowMs = (
-      Math.min(STAGGER_CAP, filtered.length) * MOTION_STAGGER.default * 1000
-      + MOTION_DURATION.reveal * 1000
-      + 120
-    );
-    const id = window.setTimeout(() => setGridStaggerDone(true), windowMs);
-    return () => window.clearTimeout(id);
-  }, [loading, error, filtered.length, reduced]);
+    if (gridRevealArmedRef.current) return;
+
+    gridRevealArmedRef.current = true;
+    const lastStaggeredIndex = Math.min(filtered.length, 8) - 1;
+    const revealWindowMs = Math.ceil((
+      cappedStaggerDelay(lastStaggeredIndex, 'dense')
+      + MOTION_DURATION.reveal
+    ) * 1000) + 80;
+    gridRevealTimerRef.current = window.setTimeout(() => {
+      gridRevealTimerRef.current = null;
+      setGridStaggerDone(true);
+    }, revealWindowMs);
+  }, [error, filtered.length, gridStaggerDone, loading, reduced]);
+
+  useEffect(() => () => {
+    if (gridRevealTimerRef.current !== null) {
+      window.clearTimeout(gridRevealTimerRef.current);
+    }
+  }, []);
 
   // Per-client rollup (open/waiting · filled · external) for the selected client.
   const clientRollup = useMemo(() => (
@@ -636,45 +589,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     }
   }, [isShowcase, rolesApi]);
 
-  const handleRoleSubmit = async ({
-    name,
-    description,
-    jobSpecFile,
-    taskIds,
-  }) => {
-    setSavingRole(true);
-    setRoleSheetError('');
-    try {
-      const createRes = await rolesApi.create({
-        name,
-        description: trimOrUndefined(description),
-      });
-      const createdRoleId = createRes?.data?.id;
-      if (createdRoleId && jobSpecFile && rolesApi.uploadJobSpec) {
-        await rolesApi.uploadJobSpec(createdRoleId, jobSpecFile);
-        if (rolesApi.regenerateInterviewFocus) {
-          try {
-            await rolesApi.regenerateInterviewFocus(createdRoleId);
-          } catch {
-            // Interview focus generation is best-effort on create.
-          }
-        }
-      }
-      if (createdRoleId && rolesApi.addTask) {
-        for (const taskId of taskIds || []) {
-          await rolesApi.addTask(createdRoleId, taskId);
-        }
-      }
-      setRoleSheetOpen(false);
-      await loadJobsHub();
-    } catch (err) {
-      setRoleSheetError(getErrorMessage(err, 'Failed to save role.'));
-    } finally {
-      setSavingRole(false);
-    }
-  };
-
-  const { agent: headerAgent, refetch: refetchAgentStatus } = useJobsHeaderAgent(roles, isShowcase);
+  const { agent: headerAgent, refetch: refetchAgentStatus } = useJobsHeaderAgent(
+    roles,
+    isShowcase,
+    orgStatusResult,
+  );
 
   // Org-wide soft pause / resume driven from the header's Agent panel.
   // Pause flips every agent-enabled role's pause flag (keeping its pending
@@ -769,7 +688,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             redundant chrome and is gone per the canvas spec. */}
 
         {orgData?.workable_connected ? (
-          <div className="wk-strip reveal" style={{ '--reveal-delay': '0s' }}>
+          <Reveal className="wk-strip">
             <div className="lg">
               <WorkableLogo size={30} className="!rounded-[7px] !shadow-none" />
             </div>
@@ -795,7 +714,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 disabled={syncing}
                 aria-label={syncing ? 'Syncing' : 'Sync now'}
               >
-                <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} />
+                <MotionLoop kind="spin" active={syncing} className="inline-flex" aria-hidden="true">
+                  <RefreshCw size={13} />
+                </MotionLoop>
                 {syncing ? 'Syncing…' : 'Sync now'}
               </button>
               <button
@@ -806,7 +727,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 Manage <span className="arrow">→</span>
               </button>
             </div>
-          </div>
+          </Reveal>
         ) : null}
 
         {/* Org KPI strip — shares the <KpiStrip> tile with the Home hub so the
@@ -840,7 +761,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           const orgBudgetCapCents = Number(orgKpis?.org_budget_cap_cents || 0);
           const budget = budgetTile(Number(orgKpis?.org_budget_spent_cents || 0), orgBudgetCapCents);
           return (
-            <div className="reveal" style={{ marginBottom: 18, '--reveal-delay': '0.08s' }}>
+            <Reveal delay={0.08} style={{ marginBottom: 18 }}>
             <KpiStrip
               columns={4}
               tiles={[
@@ -875,11 +796,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 },
               ]}
             />
-            </div>
+            </Reveal>
           );
         })()}
 
-        <div className="filter-row reveal" id="jobs-source-filters" style={{ '--reveal-delay': '0.16s' }}>
+        <Reveal className="filter-row" id="jobs-source-filters" delay={0.16}>
           <span className="filter-row-label">Show</span>
           {SOURCE_FILTERS.map((filter) => (
             <button
@@ -920,7 +841,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <Spinner size={11} /> Loading all roles…
             </span>
           ) : null}
-        </div>
+        </Reveal>
 
         {clientRollup ? (
           <div className="client-rollup" role="status">
@@ -939,8 +860,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             <Spinner size={20} />
           </div>
         ) : error ? (
-          <div className="card flat p-4 text-sm text-[var(--red)]">
-            {error}
+          <div className="card flat flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-[var(--red)]" role="alert">
+            <span>{error}</span>
+            <button type="button" className="btn btn-outline btn-sm" onClick={loadJobsHub}>
+              Retry
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState
@@ -959,7 +883,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         ) : (
           <LayoutGroup id="jobs-role-grid">
             <div
-              className={`jobs-grid${gridStaggerDone ? '' : ' reveal-stagger'}`}
+              className="jobs-grid"
+              data-motion-stagger={gridStaggerDone ? 'settled' : 'entering'}
               style={{ position: 'relative' }}
             >
               <AnimatePresence initial={false} mode={reduced ? 'sync' : 'popLayout'}>
@@ -996,14 +921,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   return (
                     <m.div
                       key={role.id}
-                      layout={reduced ? false : 'position'}
+                      layout={reduced || filtered.length > 40 ? false : 'position'}
+                      custom={{ index: roleIndex, stagger: !gridStaggerDone }}
                       variants={reduced ? reducedRoleCardFadeVariants : roleCardFadeVariants}
-                      initial="hidden"
+                      initial={reduced ? false : 'hidden'}
                       animate={roleDimmed ? 'dimmed' : 'visible'}
                       exit="exit"
                       transition={{
                         layout: reduced ? motionTransition.instant : motionTransition.layout,
                       }}
+                      data-motion-index={roleIndex}
                       className={`job-card ${workableRole ? 'from-wk' : ''} ${roleActive ? 'agent-on' : 'agent-inactive'} ${lifecycleDimmed ? 'not-live' : ''}`}
                       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                       role="button"
@@ -1014,7 +941,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           onNavigate('job-pipeline', { roleId: role.id });
                         }
                       }}
-                      style={{ cursor: 'pointer', '--i': Math.min(roleIndex, STAGGER_CAP) }}
+                      style={{ cursor: 'pointer' }}
                     >
                       {/* Card header — canvas jobs-list role-card:
                           ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
@@ -1169,23 +1096,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               onClick={loadJobsHub}
               disabled={loading || syncing}
             >
-              <RefreshCw size={13} className={loading || syncing ? 'animate-spin' : ''} />
+              <MotionLoop kind="spin" active={loading || syncing} className="inline-flex" aria-hidden="true">
+                <RefreshCw size={13} />
+              </MotionLoop>
               Refresh hub
             </button>
           </div>
         ) : null}
 
-        <RoleSheet
-          open={roleSheetOpen}
-          mode="create"
-          role={null}
-          roleTasks={[]}
-          allTasks={allTasks}
-          saving={savingRole}
-          error={roleSheetError}
-          onClose={() => setRoleSheetOpen(false)}
-          onSubmit={handleRoleSubmit}
-        />
       </div>
     </div>
   );

@@ -11,6 +11,8 @@
 import React from 'react';
 import { ChevronRight } from 'lucide-react';
 
+import '../../styles/09-standing-report.css';
+
 import {
   asArray,
   extractRequirementEvidence,

@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { LandingPreviewPage } from './LandingPreviewPage';
+import { VARIANT_C_CSS } from './landingVariantC.styles';
 
 const renderAt = (search) =>
   render(
@@ -87,6 +88,25 @@ describe('LandingPreviewPage', () => {
     expect(screen.getAllByRole('button', { name: /hello@taali\.ai/i }).length).toBeGreaterThan(0);
     // LeetCode mention is gone from the problem section.
     expect(screen.queryByText(/LeetCode/i)).toBeNull();
+  });
+
+  it('uses the shared Motion system for every variant-C narrative reveal and progress state', () => {
+    const { container } = renderAt('?v=c');
+
+    expect(container.querySelectorAll('[data-motion-reveal]').length).toBeGreaterThan(10);
+    expect(container.querySelectorAll('[data-motion-progress="x"]')).toHaveLength(3);
+    expect(container.querySelector('[data-motion-control="agent-switch"]')).toBeTruthy();
+    expect(container.querySelector('[data-motion-confirm="trap-caught"]')).toBeTruthy();
+
+    // The old page-local reveal state machine could leave marketing content
+    // hidden when its observer did not fire. Shared Motion owns in-view state;
+    // scoped CSS contains no hidden reveal state or observer data selectors.
+    expect(container.querySelector('[data-reveal]')).toBeNull();
+    expect(container.querySelector('[data-shown]')).toBeNull();
+    expect(VARIANT_C_CSS).not.toMatch(/data-reveal|data-shown/);
+    expect(VARIANT_C_CSS).not.toMatch(
+      /\.lvc-(?:problem-line|stage|stats|ds-row|turn|trap-badge)\s*\{[^}]*opacity:\s*0/s,
+    );
   });
 
   it('flips the variant-C agent switch from off to on when clicked', () => {

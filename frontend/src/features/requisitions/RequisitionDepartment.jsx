@@ -10,6 +10,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Building2, Check, Plus, X } from 'lucide-react';
 
+import { MotionSpinner } from '../../shared/motion';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 
 export function RequisitionDepartment({
@@ -98,7 +99,7 @@ export function RequisitionDepartment({
           </button>
         </>
       )}
-      {saving ? <span className="rq-spinner rq-dept-spin" aria-label="Saving" /> : null}
+      {saving ? <MotionSpinner className="rq-dept-spin" label="Saving" size={15} /> : null}
     </div>
   );
 }

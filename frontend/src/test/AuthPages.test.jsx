@@ -12,9 +12,9 @@ import {
   VerifyEmailPage,
 } from '../features/auth';
 import { PasswordStrength } from '../features/auth/PasswordStrength';
-import { auth } from '../shared/api';
+import { auth } from '../shared/api/authClient';
 
-vi.mock('../shared/api', () => ({
+vi.mock('../shared/api/authClient', () => ({
   auth: {
     login: vi.fn(),
     register: vi.fn(),

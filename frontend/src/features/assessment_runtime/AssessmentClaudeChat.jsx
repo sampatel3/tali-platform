@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, FileSearch, Loader2 } from 'lucide-react';
+import { Activity, FileSearch } from 'lucide-react';
 
 import { assessments } from '../../shared/api';
 import { getErrorMessage } from '../../shared/getErrorMessage';
 import { ChatComposer, ChatMarkdown } from '../../shared/chat';
+import { MotionLoop } from '../../shared/motion';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const MESSAGE_BUFFER_LIMIT = 60;
 
@@ -313,7 +315,9 @@ export const AssessmentClaudeChat = ({
         data-testid="assessment-claude-chat-activity-tracker"
       >
         <div className="flex items-center gap-2">
-          <Activity size={12} className={trackerHighlight ? 'animate-pulse' : ''} />
+          <MotionLoop active={trackerHighlight} kind="pulse" className="inline-flex">
+            <Activity size={12} />
+          </MotionLoop>
           <span style={{ letterSpacing: '0.08em', textTransform: 'uppercase' }}>
             Session
           </span>
@@ -362,7 +366,7 @@ export const AssessmentClaudeChat = ({
               </div>
               <div className="inline-block max-w-[94%] rounded-[12px] rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-2.5 text-left">
                 <div className="inline-flex items-center gap-2 font-mono text-[0.8125rem] text-[var(--mute)]">
-                  <Loader2 size={13} className="animate-spin" />
+                  <Spinner size={13} className="!text-current" />
                   <span>Working</span>
                   <span aria-hidden="true">·</span>
                   <span

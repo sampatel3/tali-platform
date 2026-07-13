@@ -159,7 +159,9 @@ describe('SettingsPage recruiter surface', () => {
       expect(screen.getByRole('heading', { name: /Default role criteria/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save budget & threshold' }));
+    const saveButton = await screen.findByRole('button', { name: 'Save budget & threshold' });
+    expect(saveButton).toBeEnabled();
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(orgsApi.update).toHaveBeenCalledWith({

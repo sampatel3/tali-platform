@@ -8,13 +8,22 @@
 // the Evaluate/Notes self-fetching panes) are intentionally skipped.
 //
 // Motion is the signature here: the DecisionRail slides in, the 5-Ds scorecard
-// bars fill from 0 and its rows stagger in on mount (scoped CSS keyframes so the
-// real AssessmentScorecard is untouched), and the evidence report reveals on
-// scroll. Everything respects prefers-reduced-motion via
-// the shared MotionSystemProvider + the reduced flag.
+// bars fill from 0 and its rows stagger in on mount through a scoped Motion
+// timeline (so the real AssessmentScorecard stays untouched), and the evidence
+// report reveals on scroll. Everything respects prefers-reduced-motion via the
+// shared MotionSystemProvider + the reduced flag.
 
-import React, { useMemo } from 'react';
-import { MotionSystemProvider, Reveal, useReducedMotionSync } from '../../shared/motion';
+import React, { useLayoutEffect, useMemo } from 'react';
+import {
+  MOTION_DURATION,
+  MOTION_EASE,
+  MOTION_STAGGER,
+  MotionSystemProvider,
+  Reveal,
+  stagger,
+  useAnimate,
+  useReducedMotionSync,
+} from '../../shared/motion';
 
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { useToast } from '../../context/ToastContext';
@@ -31,6 +40,48 @@ import {
   PreviewSwitcher,
 } from '../../shared/motion/previewMotion';
 import './ReportMotionPreview.css';
+
+const MotionAssessmentScorecard = ({ assessment, reduced }) => {
+  const [scope, animate] = useAnimate();
+
+  useLayoutEffect(() => {
+    if (reduced) return undefined;
+
+    const rows = animate(
+      '.sc5-row',
+      { opacity: [0, 1], y: [12, 0] },
+      {
+        duration: MOTION_DURATION.reveal,
+        ease: MOTION_EASE.enter,
+        delay: stagger(MOTION_STAGGER.default, { startDelay: MOTION_DURATION.fast }),
+      },
+    );
+    const bars = animate(
+      '.sc5-bar > i',
+      { scaleX: [0, 1], transformOrigin: 'left center' },
+      {
+        duration: MOTION_DURATION.data,
+        ease: MOTION_EASE.enter,
+        delay: stagger(MOTION_STAGGER.default, {
+          startDelay: MOTION_DURATION.fast + MOTION_STAGGER.default,
+        }),
+      },
+    );
+
+    return () => {
+      rows.stop();
+      bars.stop();
+    };
+  }, [animate, reduced]);
+
+  return (
+    <Reveal delay={0.08} className="rmp-scorecard" reduced={reduced}>
+      <div ref={scope} data-motion-scorecard="stagger-progress">
+        <AssessmentScorecard assessment={assessment} />
+      </div>
+    </Reveal>
+  );
+};
 
 export const ReportMotionPreview = () => {
   const reduced = useReducedMotionSync();
@@ -76,8 +127,6 @@ export const ReportMotionPreview = () => {
           ]} />
 
           <div className="page">
-            {/* .rmp-dossier scopes the rail slide-in keyframe to the real
-                .dossier-rail aside (disabled under reduced motion in CSS). */}
             <div className="dossier rmp-dossier">
               <DecisionRail
                 candidateName={candidateLabel}
@@ -102,19 +151,16 @@ export const ReportMotionPreview = () => {
               />
 
               <main className="dossier-main">
-                {/* (1) The signature 5-Ds scorecard — the REAL AssessmentScorecard.
-                    The .rmp-scorecard wrapper scopes the bar-fill + row-stagger
-                    keyframes so the component itself stays untouched. */}
-                <Reveal delay={0.08} className="rmp-scorecard" reduced={reduced}>
-                  <AssessmentScorecard assessment={completedAssessment} />
-                </Reveal>
+                {/* (1) The signature 5-Ds scorecard — the REAL AssessmentScorecard,
+                    animated through the scoped Motion timeline above. */}
+                <MotionAssessmentScorecard assessment={completedAssessment} reduced={reduced} />
 
                 {/* (2) The evidence report — the REAL CandidateReportView on the
                     real view-model. Reveals on scroll. */}
                 <Reveal reduced={reduced} className="rmp-report" y={24}>
                   <CandidateReportView
                     model={reportModel}
-                    variant="page"
+                    variant="preview"
                     showRoleFitSection
                     showIntegritySection
                     showEvidenceSections

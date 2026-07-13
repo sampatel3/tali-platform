@@ -24,6 +24,7 @@ import {
   PreviewSwitcher,
 } from '../../shared/motion/previewMotion';
 import './AnalyticsMotionPreview.css';
+import '../../styles/25-analytics.css';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANALYTICS_SHOWCASE — authored fixture shaped to feed the pulse band + the real

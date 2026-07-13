@@ -7,7 +7,8 @@ import React, {
   useState,
 } from 'react';
 
-import * as apiClient from '../shared/api';
+import { organizations as orgsApi } from '../shared/api/orgClient';
+import { roles as rolesApi } from '../shared/api/rolesClient';
 import { useAuth } from '../context/AuthContext';
 
 // How often to poll each tracked role's status.
@@ -69,11 +70,9 @@ function persistToKey(key, ids) {
 const JobStatusContext = createContext(null);
 
 export function JobStatusProvider({ children }) {
-  const rolesApi = apiClient.roles ?? null;
   // Bullhorn sync status/cancel already live on the organizations client
   // (mirrors the Workable sync surface); reuse them here rather than
   // duplicating the endpoints on rolesApi.
-  const orgsApi = apiClient.organizations ?? null;
   // Re-key auth-gated effects (discovery polling) on login state so they
   // re-run after a load-then-login — the provider is mounted at app root
   // and never remounts on authentication.

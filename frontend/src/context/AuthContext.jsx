@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { auth as authApi } from '../shared/api';
+import { auth as authApi } from '../shared/api/authClient';
 import { clearAccessToken, setAccessToken } from '../shared/api/httpClient';
 import { clearCache } from '../shared/api/resourceCache';
 

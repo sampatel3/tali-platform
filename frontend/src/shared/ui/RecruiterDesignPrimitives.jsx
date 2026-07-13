@@ -12,6 +12,7 @@ import {
   Panel,
   cx,
 } from './TaaliPrimitives';
+import { MotionLoop } from '../motion';
 
 const relativeFormatter = typeof Intl !== 'undefined'
   ? new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
@@ -491,7 +492,9 @@ export const WorkableSyncStrip = ({
             onClick={onSyncNow}
             disabled={syncing}
           >
-            <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+            <MotionLoop active={syncing} kind="spin" className="inline-flex" aria-hidden="true">
+              <RefreshCw size={14} />
+            </MotionLoop>
             {syncing ? 'Syncing…' : 'Sync now'}
           </Button>
         </div>

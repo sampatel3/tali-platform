@@ -1,4 +1,5 @@
 import React from 'react';
+import '../../styles/20-role-agent-tab.css';
 import { Check, Edit3, X } from 'lucide-react';
 
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';

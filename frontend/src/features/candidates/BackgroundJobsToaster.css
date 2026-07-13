@@ -1,0 +1,117 @@
+/* ---- Background jobs toaster (bottom-right persistent panel) ---- */
+.bg-jobs-toaster {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9000;
+  width: min(360px, 92vw);
+  background: var(--taali-surface, var(--bg));
+  border: 1px solid var(--taali-border, var(--line));
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  padding: 12px 12px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 70vh;
+  overflow: auto;
+}
+.bg-jobs-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--taali-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+}
+.bg-jobs-dismiss:hover {
+  background: var(--taali-bg-soft, var(--bg-3));
+  color: var(--taali-text);
+}
+.bg-jobs-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding-right: 18px;
+}
+.bg-jobs-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--taali-purple, var(--purple));
+}
+/* A failed job must not read as a purple/success completion — flag it. */
+.bg-jobs-icon-failed {
+  color: var(--taali-danger);
+}
+.bg-jobs-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.bg-jobs-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--taali-text);
+}
+.bg-jobs-detail {
+  margin-top: 2px;
+  font-size: var(--fs-caption);
+  color: var(--taali-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bg-jobs-bar {
+  margin-top: 6px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--taali-bg-soft, var(--bg-3));
+  overflow: hidden;
+}
+.bg-jobs-bar-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--taali-purple, var(--purple));
+}
+
+.bg-jobs-cancel {
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid var(--taali-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: var(--fs-eyebrow);
+  color: var(--taali-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.bg-jobs-cancel:hover:not(:disabled) {
+  background: var(--taali-danger-soft, color-mix(in oklab, var(--red) 8%, transparent));
+  border-color: var(--taali-danger-border, color-mix(in oklab, var(--red) 30%, var(--line)));
+  color: var(--taali-danger, var(--red));
+}
+.bg-jobs-cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.bg-jobs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.bg-jobs-dismiss-row {
+  background: transparent;
+  border: none;
+  color: var(--taali-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+}
+.bg-jobs-dismiss-row:hover {
+  background: var(--taali-bg-soft, var(--bg-3));
+  color: var(--taali-text);
+}

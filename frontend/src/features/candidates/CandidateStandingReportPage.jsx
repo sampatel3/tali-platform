@@ -2,10 +2,20 @@ import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'reac
 import { useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAlert, Sparkles } from 'lucide-react';
 
+import '../../styles/08-candidate-detail.css';
+import '../../styles/09-standing-report.css';
+
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
-import { AgentLoop, MotionNumber } from '../../shared/motion';
-import '../../shared/motion/reveal.css';
+import {
+  AgentLoop,
+  MOTION_DURATION,
+  MOTION_STAGGER,
+  MotionNumber,
+  MotionProgress,
+  MotionStagger,
+  Reveal,
+} from '../../shared/motion';
 import { useToast } from '../../context/ToastContext';
 import {
   Button,
@@ -51,12 +61,6 @@ import {
   reqGradeKey,
   resolveCvMatchDetails,
 } from './candidatesUiUtils';
-import {
-  AI_SHOWCASE_APPLICATION,
-  AI_SHOWCASE_APPLICATION_EVENTS,
-  AI_SHOWCASE_AGENT_DECISION,
-  AI_SHOWCASE_COMPLETED_ASSESSMENT,
-} from '../demo/productWalkthroughModels';
 
 const resolveAssessmentId = (application) => (
   application?.score_summary?.assessment_id
@@ -375,6 +379,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   const loadStandingReport = useCallback(async ({ silent = false } = {}) => {
     if (routeApplicationKey === 'demo') {
+      const {
+        AI_SHOWCASE_APPLICATION,
+        AI_SHOWCASE_APPLICATION_EVENTS,
+        AI_SHOWCASE_AGENT_DECISION,
+        AI_SHOWCASE_COMPLETED_ASSESSMENT,
+      } = await import('../demo/productWalkthroughModels');
       setApplication(AI_SHOWCASE_APPLICATION);
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
       setOrgData(null);
@@ -1243,7 +1253,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             onReEvaluate={handleDecisionReEvaluate}
             onRunFullEvaluation={handleRunFullEvaluation}
           />
-          <main className="dossier-main reveal">
+          <Reveal as="main" className="dossier-main">
         <div className="vtabs report-tabs" role="tablist" aria-label="Candidate report sections">
           {(() => {
             const visibleTabs = REPORT_TABS.filter((tab) => availableTabIds.has(tab.id));
@@ -1393,23 +1403,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <span className="mc-kicker">SCORECARD · THE 5 Ds</span>
                     <span className="mc-overview-dim-note">from the assessment</span>
                   </div>
-                  <div className="mc-overview-dimensions-grid reveal-stagger">
+                  <MotionStagger
+                    className="mc-overview-dimensions-grid"
+                    data-motion-stagger="standing-report-scorecard"
+                  >
                     {scorecard.map((axis, i) => {
                       const pct = axis.hasSignal ? Math.max(0, Math.min(100, Math.round(axis.score))) : 0;
                       // Lavender (low) variant when the axis is a weak signal —
                       // mirrors report-preview's `.fill.low` (< 45 reads as weak).
                       const isLow = axis.hasSignal && pct < 45;
                       return (
-                        <div key={axis.key} className="mc-overview-dim-row" style={{ '--i': i }} title={axis.blurb}>
+                        <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
                           <span className="mc-overview-dim-label">{axis.label}</span>
                           <div className="mc-overview-dim-bar" aria-hidden="true">
-                            <i className={isLow ? 'low' : ''} style={{ width: `${pct}%` }} />
+                            <MotionProgress
+                              className={isLow ? 'low' : ''}
+                              delay={MOTION_DURATION.fast + (i * MOTION_STAGGER.default)}
+                              style={{ width: `${pct}%` }}
+                            />
                           </div>
                           <DimScore score={axis.score} hasSignal={axis.hasSignal} />
                         </div>
                       );
                     })}
-                  </div>
+                  </MotionStagger>
                 </div>
               ) : !completedAssessment ? (
                 // Pre-assessment: the scorecard AND the two assessment-gated
@@ -2234,7 +2251,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             />
           </div>
         ) : null}
-          </main>
+          </Reveal>
         </div>
       </div>
 

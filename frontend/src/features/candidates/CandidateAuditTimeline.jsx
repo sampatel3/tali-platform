@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Bot, RefreshCw, User, Cpu, GitMerge } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { MotionLoop } from '../../shared/motion';
 import { Button, Panel, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { formatStatusLabel } from './candidatesUiUtils';
 
@@ -68,7 +69,9 @@ export const CandidateAuditTimeline = ({ applicationId }) => {
       <header className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-taali-fg-muted">Activity timeline</h3>
         <Button variant="ghost" size="xs" onClick={fetchEvents} disabled={loading} aria-label="Refresh timeline">
-          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} aria-hidden />
+          <MotionLoop active={loading} kind="spin" className="inline-flex" aria-hidden="true">
+            <RefreshCw size={12} />
+          </MotionLoop>
         </Button>
       </header>
 

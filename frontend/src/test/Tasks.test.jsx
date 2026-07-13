@@ -89,6 +89,10 @@ vi.mock('../shared/api', () => ({
   },
 }));
 
+vi.mock('../shared/api/authClient', () => ({
+  auth: { me: vi.fn(), login: vi.fn(), register: vi.fn() },
+}));
+
 // Mock recharts
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
@@ -110,7 +114,8 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, tasks as tasksApi, assessments as assessmentsApi } from '../shared/api';
+import { auth } from '../shared/api/authClient';
+import { tasks as tasksApi, assessments as assessmentsApi } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 

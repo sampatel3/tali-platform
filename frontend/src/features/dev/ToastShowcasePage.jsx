@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Loader2, X } from 'lucide-react';
+import { CheckCircle2, X } from 'lucide-react';
+
+import '../candidates/BackgroundJobsToaster.css';
 
 import { useToast } from '../../context/ToastContext';
+import { MotionProgress } from '../../shared/motion';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 /**
  * ToastShowcasePage
@@ -338,13 +342,13 @@ const StaticJobRow = ({ title, detail, pct, status, onCancel, onDismiss }) => {
   return (
     <div className="bg-jobs-row">
       <div className="bg-jobs-icon">
-        {isTerminal ? <CheckCircle2 size={18} /> : <Loader2 size={18} className="animate-spin" />}
+        {isTerminal ? <CheckCircle2 size={18} /> : <Spinner size={18} className="!text-current" />}
       </div>
       <div className="bg-jobs-body">
         <div className="bg-jobs-title">{title}</div>
         <div className="bg-jobs-detail">{detail}</div>
         <div className="bg-jobs-bar" aria-hidden="true">
-          <div className="bg-jobs-bar-fill" style={{ width: `${pct}%` }} />
+          <MotionProgress className="bg-jobs-bar-fill" value={pct / 100} />
         </div>
         <div className="bg-jobs-actions">
           {!isTerminal && (

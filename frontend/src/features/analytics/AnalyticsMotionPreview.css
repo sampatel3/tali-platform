@@ -1,8 +1,8 @@
 /* Scoped Motion for /analytics-preview. The page shell (.an-page, .an-pulse,
    .an-pcell, .an-card, .an-conv, .an-bars, .vtabs) comes from 25-analytics.css
    and 24-shared-vtabs.css (globally imported) — this file only positions the
-   bespoke chart and layers the funnel/override bar-grow keyframes onto the real
-   OutcomesTab, all gated behind prefers-reduced-motion: no-preference. */
+   bespoke chart. Funnel and override-bar growth live in the real OutcomesTab
+   through the shared MotionProgress primitive. */
 
 .amp-root {
   position: relative;
@@ -34,38 +34,3 @@
 }
 
 .amp-tab-placeholder { margin-top: 16px; }
-
-@media (prefers-reduced-motion: no-preference) {
-  /* Funnel conversion bars grow from the left as the tab enters. */
-  .amp-outcomes .an-conv .cfill {
-    transform-origin: left center;
-    animation: ampGrowX var(--motion-duration-data) var(--motion-ease-enter) both;
-  }
-  .amp-outcomes .an-conv .an-convrow:nth-child(1) .cfill { animation-delay: 0.20s; }
-  .amp-outcomes .an-conv .an-convrow:nth-child(2) .cfill { animation-delay: 0.28s; }
-  .amp-outcomes .an-conv .an-convrow:nth-child(3) .cfill { animation-delay: 0.36s; }
-  .amp-outcomes .an-conv .an-convrow:nth-child(4) .cfill { animation-delay: 0.44s; }
-  .amp-outcomes .an-conv .an-convrow:nth-child(5) .cfill { animation-delay: 0.52s; }
-  .amp-outcomes .an-conv .an-convrow:nth-child(6) .cfill { animation-delay: 0.60s; }
-
-  /* Override-rate-over-time bars rise from the baseline. */
-  .amp-outcomes .an-bars .bk {
-    transform-origin: bottom center;
-    animation: ampGrowY var(--motion-duration-data) var(--motion-ease-enter) both;
-  }
-  .amp-outcomes .an-bars .an-bar:nth-child(1) .bk { animation-delay: 0.24s; }
-  .amp-outcomes .an-bars .an-bar:nth-child(2) .bk { animation-delay: 0.32s; }
-  .amp-outcomes .an-bars .an-bar:nth-child(3) .bk { animation-delay: 0.40s; }
-  .amp-outcomes .an-bars .an-bar:nth-child(4) .bk { animation-delay: 0.48s; }
-  .amp-outcomes .an-bars .an-bar:nth-child(5) .bk { animation-delay: 0.56s; }
-  .amp-outcomes .an-bars .an-bar:nth-child(6) .bk { animation-delay: 0.64s; }
-}
-
-@keyframes ampGrowX {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
-}
-@keyframes ampGrowY {
-  from { transform: scaleY(0); }
-  to { transform: scaleY(1); }
-}

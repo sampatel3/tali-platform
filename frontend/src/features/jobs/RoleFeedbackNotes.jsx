@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2 } from 'lucide-react';
-
 import { roles } from '../../shared/api';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const formatTimestamp = (value) => {
   if (!value) return '—';
@@ -145,7 +144,7 @@ export default function RoleFeedbackNotes({ roleId }) {
               gap: 6,
             }}
           >
-            {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+            {saving ? <Spinner size={14} className="!text-current" /> : null}
             {saving ? 'Saving…' : 'Add feedback'}
           </button>
         </div>
@@ -157,7 +156,7 @@ export default function RoleFeedbackNotes({ roleId }) {
         </div>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--mute)', fontSize: 13 }}>
-            <Loader2 size={14} className="animate-spin" /> Loading…
+            <Spinner size={14} className="!text-current" /> Loading…
           </div>
         ) : loadError ? (
           <div style={{ color: 'var(--purple)', fontSize: 13 }}>{loadError}</div>

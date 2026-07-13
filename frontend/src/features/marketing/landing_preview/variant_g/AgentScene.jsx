@@ -1,5 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { AgentLoop, MOTION_EASE, stagger, useAnimate, useReducedMotionSync } from '../../../../shared/motion';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  AgentLoop,
+  MOTION_EASE,
+  stagger,
+  useAnimate,
+  useDocumentVisibility,
+  useInView,
+  useReducedMotionSync,
+} from '../../../../shared/motion';
 import { CANDIDATES, FUNNEL_STATS, verdictLabel } from './variantG.data';
 
 // ---------------------------------------------------------------------------
@@ -41,26 +49,41 @@ const SETTLE_HOLD = 3.4; // hold the fully-decided ON state before looping to OF
 
 export const AgentScene = ({ loop = true }) => {
   const [scope, animate] = useAnimate();
+  const inView = useInView(scope, { amount: 0.2 });
+  const documentVisible = useDocumentVisibility();
   const reduced = useReducedMotionSync();
   // `on` drives the card frame (.is-on) + the OFF→ON pill swap. Reduced motion
   // seeds it ON so the scene reads as its settled final state.
   const [on, setOn] = useState(reduced);
+  const completedRef = useRef(false);
 
   useEffect(() => {
     if (reduced) {
       setOn(true);
       return undefined;
     }
+    if (!inView || !documentVisible || (!loop && completedRef.current)) return undefined;
 
     let cancelled = false;
-    const sleep = (s) => new Promise((resolve) => { setTimeout(resolve, s * 1000); });
+    let activeControls = null;
+    const pendingSleeps = new Set();
+    const sleep = (seconds) => new Promise((resolve) => {
+      const pending = { id: null, resolve };
+      pending.id = window.setTimeout(() => {
+        pendingSleeps.delete(pending);
+        resolve();
+      }, seconds * 1000);
+      pendingSleeps.add(pending);
+    });
 
     // One full play-through: quiet OFF → flip ON → rows flow → verdicts stamp.
     const playOnce = async () => {
       // Beat 0 — reset to the quiet, agent-OFF state.
       setOn(false);
-      await animate('.cand-row', { opacity: 0, y: 12 }, { duration: 0 });
-      await animate('.cand-row .verdict', { opacity: 0, scale: 0.7 }, { duration: 0 });
+      activeControls = animate('.cand-row', { opacity: 0, y: 12 }, { duration: 0 });
+      await activeControls;
+      activeControls = animate('.cand-row .verdict', { opacity: 0, scale: 0.7 }, { duration: 0 });
+      await activeControls;
       await sleep(OFF_HOLD);
       if (cancelled) return;
 
@@ -71,10 +94,12 @@ export const AgentScene = ({ loop = true }) => {
 
       // Beats 2 + 3 — candidate rows flow into the decision lane, then each
       // verdict pill stamps in shortly after its row lands.
-      await animate([
+      activeControls = animate([
         ['.cand-row', { opacity: [0, 1], y: [12, 0] }, { duration: ROW_DURATION, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT }), ease: MOTION_EASE.emphasized }],
         ['.cand-row .verdict', { opacity: [0, 1], scale: [0.7, 1.06, 1] }, { duration: STAMP_DURATION, delay: stagger(ROW_STAGGER, { startDelay: ROWS_AT + STAMP_OFFSET }), ease: MOTION_EASE.confirm }],
       ]);
+      await activeControls;
+      completedRef.current = true;
     };
 
     (async () => {
@@ -89,8 +114,16 @@ export const AgentScene = ({ loop = true }) => {
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [reduced, animate, loop]);
+    return () => {
+      cancelled = true;
+      activeControls?.stop?.();
+      pendingSleeps.forEach((pending) => {
+        window.clearTimeout(pending.id);
+        pending.resolve();
+      });
+      pendingSleeps.clear();
+    };
+  }, [animate, documentVisible, inView, loop, reduced]);
 
   return (
     <AgentLoop
@@ -99,6 +132,7 @@ export const AgentScene = ({ loop = true }) => {
       active={on}
       className="stage"
       ref={scope}
+      data-motion-scene={reduced ? 'settled' : inView && documentVisible ? 'active' : 'paused'}
       {...(reduced ? {} : { 'data-armed': 'true' })}
     >
       <div className="stage-cap">

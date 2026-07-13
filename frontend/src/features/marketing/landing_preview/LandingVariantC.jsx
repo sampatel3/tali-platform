@@ -2,7 +2,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { TaaliLogo } from '../../../shared/layout/TaaliLayout';
 import { scrollToMarketingSection } from '../../../lib/marketingScroll';
-import { AgentLoop, prefersReducedMotion } from '../../../shared/motion';
+import {
+  AgentLoop,
+  MOTION_DISTANCE,
+  MOTION_DURATION,
+  MOTION_EASE,
+  MOTION_SPRING,
+  MOTION_STAGGER,
+  MotionProgress,
+  Reveal,
+  m,
+  useReducedMotionSync,
+} from '../../../shared/motion';
 import { VARIANT_C_CSS } from './landingVariantC.styles';
 
 // ---------------------------------------------------------------------------
@@ -14,15 +25,14 @@ import { VARIANT_C_CSS } from './landingVariantC.styles';
 // All colour lives on a scoped `.lvc` root as CSS custom properties, using the
 // Taali light purple palette directly (hardcoded, not the brand token) so the
 // look holds regardless of the app's active brand/theme. The OFF→ON flood is a
-// single `filter` (grayscale) + custom-property transition on `.lvc`, driven by
-// one `data-on` attribute — every child animation keys off it.
+// single grayscale state on `.lvc`, driven by one `data-on` attribute; shared
+// Motion owns the state transitions, entrances, progress, and spatial ripple.
 //
-// Constraints honoured: no new deps (shared Motion + CSS transitions — no
+// Constraints honoured: no new deps (shared Motion + CSS state styling — no
 // <canvas>, no rAF), lazy-loaded route, prefers-reduced-motion renders straight
 // to ON with static composition, robust at 80% zoom / 1024–1600 widths,
 // purple-family accents, fixture data only. Nothing depends on
-// IntersectionObserver for correctness — reveals have fallbacks and stay visible
-// even if they never fire.
+// a product-local observer or hidden-content fallback for correctness.
 // ---------------------------------------------------------------------------
 
 // ── Dot lattice (hero background) ──────────────────────────────────────────
@@ -31,7 +41,7 @@ import { VARIANT_C_CSS } from './landingVariantC.styles';
 // colour/scale transition is delayed by its distance to the toggle, so the
 // ripple visibly propagates. After it settles the lattice holds as a calm
 // background. Positions and per-dot delays
-// are computed once at render (deterministic seed) — no rAF, CSS only.
+// are computed once at render (deterministic seed) — no rAF loop.
 const LATTICE_COLS = 14;
 const LATTICE_ROWS = 9; // 14 × 9 = 126 dots ≈ "~120"
 // The toggle lives at bottom-centre of the hero, so the ripple origin is the
@@ -69,7 +79,7 @@ const buildLattice = () => {
   return dots;
 };
 
-const DotLattice = () => {
+const DotLattice = ({ active, reduced }) => {
   const dots = useMemo(buildLattice, []);
   return (
     <div className="lvc-lattice" aria-hidden="true">
@@ -84,30 +94,54 @@ const DotLattice = () => {
             height: `${d.size}px`,
             '--d': `${d.delay}s`,
           }}
-        />
+        >
+          <m.span
+            className="lvc-dot-core"
+            initial={false}
+            animate={active && !reduced ? { scale: [1, 1.9, 1] } : { scale: 1 }}
+            transition={active && !reduced
+              ? {
+                  duration: MOTION_DURATION.reveal,
+                  ease: MOTION_EASE.confirm,
+                  times: [0, 0.45, 1],
+                  delay: d.delay,
+                }
+              : { duration: 0 }}
+          />
+        </span>
       ))}
     </div>
   );
 };
 
 // ── The switch — reuses the product's dark-purple agent-ON vocabulary ──────
-const AgentSwitch = ({ on, pressing, onToggle }) => (
+const AgentSwitch = ({ on, pressing, reduced, onToggle }) => (
   <div className="lvc-switch-wrap">
-    <button
+    <m.button
       type="button"
       role="switch"
       aria-checked={on}
       aria-label={on ? 'Agent on. Turn hiring off.' : 'Agent off. Turn hiring on.'}
       className={`lvc-switch${on ? ' is-on' : ''}${pressing ? ' is-pressing' : ''}`}
       onClick={onToggle}
+      initial={false}
+      animate={{ scale: pressing && !reduced ? 0.94 : 1 }}
+      transition={reduced
+        ? { duration: 0 }
+        : { duration: MOTION_DURATION.fast, ease: MOTION_EASE.confirm }}
+      data-motion-control="agent-switch"
     >
       <AgentLoop kind="flow" active={on} className="lvc-switch-track" aria-hidden="true">
         <span className="lvc-switch-glow" />
-        <span className="lvc-switch-knob">
+        <m.span
+          className="lvc-switch-knob"
+          layout={!reduced}
+          transition={reduced ? { duration: 0 } : MOTION_SPRING.layout}
+        >
           <AgentLoop kind="ring" active={on} className="lvc-switch-ring" />
-        </span>
+        </m.span>
       </AgentLoop>
-    </button>
+    </m.button>
     <span className="lvc-switch-caption" aria-hidden="true">
       agent: <b>{on ? 'on' : 'off'}</b>
     </span>
@@ -117,8 +151,8 @@ const AgentSwitch = ({ on, pressing, onToggle }) => (
 // ── Section header — shared design language (centred eyebrow + H2 + sub) ────
 // Mirrors the hero: a mono eyebrow (dot + uppercase label), an H2 whose last
 // word is purple-accented, and a one-sentence sub in --lvc-ink-2.
-const SectionHeader = ({ eyebrow, headParts, sub, revealRef }) => (
-  <header className="lvc-sechead" ref={revealRef} data-reveal>
+const SectionHeader = ({ eyebrow, headParts, sub, reduced }) => (
+  <Reveal as="header" className="lvc-sechead" reduced={reduced} y={MOTION_DISTANCE.large}>
     <div className="lvc-eyebrow lvc-eyebrow--center">
       <span className="lvc-eyebrow-dot" /> {eyebrow}
     </div>
@@ -127,88 +161,157 @@ const SectionHeader = ({ eyebrow, headParts, sub, revealRef }) => (
       {headParts[1] ? <em className="lvc-h2-accent"> {headParts[1]}</em> : null}
     </h2>
     <p className="lvc-sechead-sub">{sub}</p>
-  </header>
+  </Reveal>
 );
 
 // ── Section 1 · HERO ───────────────────────────────────────────────────────
-const HeroSection = ({ on, pressing, onToggle, onNavigate, onHowItWorks }) => (
+const HeroSection = ({ on, pressing, reduced, onToggle, onNavigate, onHowItWorks }) => (
   <section className="lvc-hero">
-    <DotLattice />
+    <DotLattice active={on} reduced={reduced} />
     <div className="lvc-hero-inner">
       <div className="lvc-kicker">
         <span className="lvc-kicker-dot" /> AGENT-NATIVE HIRING
       </div>
 
       <h1 className="lvc-h1" aria-live="polite">
-        <span className="lvc-h1-off" aria-hidden={on}>
+        <m.span
+          className="lvc-h1-off"
+          aria-hidden={on}
+          initial={false}
+          animate={{ opacity: on ? 0 : 1 }}
+          transition={reduced
+            ? { duration: 0 }
+            : { duration: MOTION_DURATION.reveal, ease: MOTION_EASE.enter }}
+        >
           Hiring runs on guesswork.
-        </span>
-        <span className="lvc-h1-on" aria-hidden={!on}>
+        </m.span>
+        <m.span
+          className="lvc-h1-on"
+          aria-hidden={!on}
+          initial={false}
+          animate={{ opacity: on || reduced ? 1 : 0 }}
+          transition={reduced
+            ? { duration: 0 }
+            : { duration: MOTION_DURATION.reveal, ease: MOTION_EASE.enter }}
+        >
           {['Turn', 'the', 'agent', 'on.'].map((w, i) => (
             <React.Fragment key={w}>
-              <span className="lvc-word" style={{ transitionDelay: `${0.12 + i * 0.09}s` }}>
+              <m.span
+                className="lvc-word"
+                initial={false}
+                animate={on || reduced
+                  ? { opacity: 1, y: 0, filter: 'blur(0px)' }
+                  : { opacity: 0, y: MOTION_DISTANCE.medium, filter: 'blur(6px)' }}
+                transition={reduced
+                  ? { duration: 0 }
+                  : {
+                      duration: MOTION_DURATION.reveal,
+                      ease: MOTION_EASE.enter,
+                      delay: MOTION_STAGGER.default * (i + 2),
+                    }}
+              >
                 {w}
-              </span>
+              </m.span>
               {i < 3 ? ' ' : ''}
             </React.Fragment>
           ))}
-        </span>
+        </m.span>
       </h1>
 
-      <p className="lvc-sub">
+      <m.p
+        className="lvc-sub"
+        initial={false}
+        animate={on || reduced
+          ? { opacity: 1, y: 0 }
+          : { opacity: 0, y: MOTION_DISTANCE.medium }}
+        transition={reduced
+          ? { duration: 0 }
+          : {
+              duration: MOTION_DURATION.reveal,
+              ease: MOTION_EASE.enter,
+              delay: MOTION_DURATION.data,
+            }}
+      >
         Taali works your pipeline end to end and measures the one thing every CV now hides: how well
         this person actually works with AI.
-      </p>
+      </m.p>
 
-      <div className="lvc-cta-row">
+      <m.div
+        className="lvc-cta-row"
+        initial={false}
+        animate={on || reduced
+          ? { opacity: 1, y: 0 }
+          : { opacity: 0, y: MOTION_DISTANCE.medium }}
+        transition={reduced
+          ? { duration: 0 }
+          : {
+              duration: MOTION_DURATION.reveal,
+              ease: MOTION_EASE.enter,
+              delay: MOTION_DURATION.data + MOTION_DURATION.base,
+            }}
+      >
         <button type="button" className="lvc-btn lvc-btn--primary" onClick={() => onNavigate('demo-lead')}>
           See it live <span aria-hidden="true">→</span>
         </button>
         <button type="button" className="lvc-btn lvc-btn--ghost" onClick={onHowItWorks}>
           How it works
         </button>
-      </div>
+      </m.div>
     </div>
 
-    <AgentSwitch on={on} pressing={pressing} onToggle={onToggle} />
+    <AgentSwitch on={on} pressing={pressing} reduced={reduced} onToggle={onToggle} />
   </section>
 );
 
 // ── Section 2 · THE PROBLEM (kinetic typography) ───────────────────────────
-const ProblemSection = ({ reveal }) => (
+const StruckText = ({ children, reduced }) => (
+  <span className="lvc-strike">
+    {children}
+    <MotionProgress
+      className="lvc-strike-line"
+      amount={0.5}
+      delay={MOTION_DURATION.reveal}
+      reduced={reduced}
+      aria-hidden="true"
+    />
+  </span>
+);
+
+const ProblemSection = ({ reduced }) => (
   <section className="lvc-problem">
-    <p
-      ref={reveal('problem-0')}
-      data-reveal
+    <Reveal
+      as="p"
       className="lvc-problem-line"
-      style={{ transitionDelay: '0s' }}
+      y={MOTION_DISTANCE.large}
+      reduced={reduced}
     >
       Everyone works with AI now.
-    </p>
-    <p
-      ref={reveal('problem-1')}
-      data-reveal
+    </Reveal>
+    <Reveal
+      as="p"
       className="lvc-problem-line has-strike"
-      style={{ transitionDelay: '0.05s' }}
+      delay={MOTION_STAGGER.default}
+      y={MOTION_DISTANCE.large}
+      reduced={reduced}
     >
-      <span className="lvc-strike">The&nbsp;CV</span> can’t prove it.{' '}
-      <span className="lvc-strike">The&nbsp;interview</span> can’t catch it.
-    </p>
-    <p
-      ref={reveal('problem-2')}
-      data-reveal
+      <StruckText reduced={reduced}>The&nbsp;CV</StruckText> can’t prove it.{' '}
+      <StruckText reduced={reduced}>The&nbsp;interview</StruckText> can’t catch it.
+    </Reveal>
+    <Reveal
+      as="p"
       className="lvc-problem-line"
-      style={{ transitionDelay: '0.1s' }}
+      delay={MOTION_STAGGER.default * 2}
+      y={MOTION_DISTANCE.large}
+      reduced={reduced}
     >
       You need to watch them work.
-    </p>
+    </Reveal>
   </section>
 );
 
-// ── Section 3 · THE PIPELINE (abstract CSS ribbon + stage cards) ───────────
-// The ribbon is pure CSS: a horizontal rail with five glowing nodes and small
-// dots flowing along it via keyframes. It animates unconditionally when ON;
-// off-screen pausing is a nice-to-have driven by animation-play-state only.
+// ── Section 3 · THE PIPELINE (agent-flow ribbon + stage cards) ─────────────
+// Shared AgentLoop primitives own the rail flow and node pulses. They pause
+// off-screen and settle automatically when reduced motion is requested.
 const RIBBON_NODES = ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'];
 const PipelineRibbon = () => (
   <div className="lvc-ribbon" aria-hidden="true">
@@ -263,10 +366,10 @@ const PIPELINE_STATS = [
   { big: 'Zero', cap: 'webcams or lockdown browsers' },
 ];
 
-const PipelineSection = ({ reveal, pipelineRef }) => (
+const PipelineSection = ({ reduced, pipelineRef }) => (
   <section className="lvc-pipeline" ref={pipelineRef}>
     <SectionHeader
-      revealRef={reveal('pipe-copy')}
+      reduced={reduced}
       eyebrow="THE PIPELINE"
       headParts={['An agent that runs the', 'funnel.']}
       sub="It finds candidates, reads every CV, runs the assessment, and puts a decision in front of you with the evidence attached. You approve. It executes."
@@ -274,23 +377,35 @@ const PipelineSection = ({ reveal, pipelineRef }) => (
 
     <PipelineRibbon />
 
-    <div className="lvc-stage-grid" ref={reveal('pipe-stages')} data-reveal>
+    <div className="lvc-stage-grid">
       {PIPELINE_STAGES.map((s, i) => (
-        <div className="lvc-stage" key={s.t} style={{ '--i': i }}>
+        <Reveal
+          className="lvc-stage"
+          key={s.t}
+          delay={i * MOTION_STAGGER.default}
+          reduced={reduced}
+          y={MOTION_DISTANCE.medium}
+        >
           <span className="lvc-stage-n">{s.n}</span>
           <h3 className="lvc-stage-t">{s.t}</h3>
           <p className="lvc-stage-d">{s.d}</p>
           <span className="lvc-stage-meta">{s.meta}</span>
-        </div>
+        </Reveal>
       ))}
     </div>
 
-    <div className="lvc-stats" ref={reveal('pipe-stats')} data-reveal>
+    <div className="lvc-stats">
       {PIPELINE_STATS.map((s, i) => (
-        <div className="lvc-stat" key={s.big} style={{ '--i': i }}>
+        <Reveal
+          className="lvc-stat"
+          key={`${s.big}-${i}`}
+          delay={i * MOTION_STAGGER.dense}
+          reduced={reduced}
+          y={MOTION_DISTANCE.medium}
+        >
           <span className="lvc-stat-big">{s.big}</span>
           <span className="lvc-stat-cap">{s.cap}</span>
-        </div>
+        </Reveal>
       ))}
     </div>
   </section>
@@ -346,65 +461,93 @@ const CLAIMS = [
   'Same rubric for every candidate',
 ];
 
-// Both turns are rendered statically and revealed with a CSS stagger — no JS
-// typewriter, no observer gating for correctness. The dial fills and the
-// "trap caught" badge stamps in via CSS keyed off the section reveal.
-const StandardSection = ({ reveal }) => (
+// Both turns are rendered statically and revealed through the shared Motion
+// vocabulary — no typewriter or page-local observer. The dial and trap badge
+// remain semantic elements with Motion-owned progress and confirmation states.
+const StandardSection = ({ reduced }) => (
   <section className="lvc-standard">
     <SectionHeader
-      revealRef={reveal('std-head')}
+      reduced={reduced}
       eyebrow="THE STANDARD"
       headParts={['We’re making AI fluency', 'measurable.']}
       sub="Five dimensions. Planted traps. Scored verification. A transcript instead of a webcam. When a Taali score says they can work with AI, they can."
     />
 
     <div className="lvc-standard-body">
-      <div className="lvc-standard-copy" ref={reveal('std-copy')} data-reveal>
+      <div className="lvc-standard-copy">
         <div className="lvc-ds-rows">
           {FIVE_DS.map((row, i) => (
-            <div className="lvc-ds-row" key={row.d} style={{ '--i': i }}>
+            <Reveal
+              className="lvc-ds-row"
+              key={row.d}
+              delay={i * MOTION_STAGGER.default}
+              reduced={reduced}
+              y={MOTION_DISTANCE.medium}
+            >
               <span className="lvc-ds-name">{row.d}</span>
               <div className="lvc-ds-body">
                 <span className="lvc-ds-def">{row.def}</span>
                 <span className="lvc-ds-evidence">{row.evidence}</span>
               </div>
               <span className="lvc-ds-chip">{row.chip}</span>
-            </div>
+            </Reveal>
           ))}
         </div>
       </div>
 
-      <div className="lvc-chat" ref={reveal('std-chat')} data-reveal>
+      <Reveal className="lvc-chat" reduced={reduced} y={MOTION_DISTANCE.medium}>
         <div className="lvc-chat-head">
           <span className="lvc-chat-dot" /> assessment · live transcript
         </div>
         {CHAT_TURNS.map((turn, i) => (
-          <div
+          <Reveal
             key={turn.text}
             className={`lvc-turn lvc-turn--${turn.who === 'AI' ? 'ai' : 'cand'}`}
-            style={{ '--i': i }}
+            delay={MOTION_DURATION.fast + i * MOTION_DURATION.spatial}
+            reduced={reduced}
+            y={MOTION_DISTANCE.small}
           >
             <span className="lvc-turn-who">{turn.who}</span>
             <span className="lvc-turn-text">{turn.text}</span>
-          </div>
+          </Reveal>
         ))}
         <div className="lvc-dial" aria-hidden="true">
           <span className="lvc-dial-label">Discernment</span>
           <span className="lvc-dial-track">
-            <span className="lvc-dial-fill" />
+            <MotionProgress
+              className="lvc-dial-fill"
+              amount={0.5}
+              delay={MOTION_DURATION.data}
+              reduced={reduced}
+            />
           </span>
-          <span className="lvc-trap-badge">trap caught</span>
+          <m.span
+            className="lvc-trap-badge"
+            initial={reduced ? false : { opacity: 0, scale: 0.6, rotate: -8 }}
+            whileInView={{ opacity: 1, scale: 1, rotate: 0 }}
+            viewport={{ once: true, amount: 0.5 }}
+            transition={reduced
+              ? { duration: 0 }
+              : {
+                  duration: MOTION_DURATION.reveal,
+                  ease: MOTION_EASE.confirm,
+                  delay: MOTION_DURATION.data + MOTION_DURATION.base,
+                }}
+            data-motion-confirm="trap-caught"
+          >
+            trap caught
+          </m.span>
         </div>
-      </div>
+      </Reveal>
     </div>
 
-    <div className="lvc-claims" ref={reveal('std-claims')} data-reveal>
+    <Reveal className="lvc-claims" reduced={reduced} y={MOTION_DISTANCE.medium}>
       {CLAIMS.map((c) => (
         <span className="lvc-claim" key={c}>
           {c}
         </span>
       ))}
-    </div>
+    </Reveal>
   </section>
 );
 
@@ -568,16 +711,14 @@ const ProductionFooter = ({ onNavigate }) => (
 );
 
 // ---------------------------------------------------------------------------
-// Root — owns the ON/OFF state, the auto-flip timer, the scroll-reveal
-// observer, and the reduced-motion branch.
+// Root — owns the ON/OFF state, auto-flip timer, and reduced-motion branch.
 // ---------------------------------------------------------------------------
 export const LandingVariantC = ({ onNavigate }) => {
-  const reduced = prefersReducedMotion();
+  const reduced = useReducedMotionSync();
   const [on, setOn] = useState(reduced); // reduced-motion → straight to ON
   const [pressing, setPressing] = useState(false);
   const userToggledRef = useRef(reduced);
   const pipelineRef = useRef(null);
-  const revealRefs = useRef(new Map());
 
   const toggle = useCallback(() => {
     userToggledRef.current = true;
@@ -608,73 +749,39 @@ export const LandingVariantC = ({ onNavigate }) => {
     return () => window.clearTimeout(t);
   }, [reduced]);
 
-  // Scroll-reveal: registers refs and reveals them as they enter view.
-  const reveal = useCallback((key) => (node) => {
-    if (node) revealRefs.current.set(key, node);
-    else revealRefs.current.delete(key);
-  }, []);
-
-  useEffect(() => {
-    if (reduced) {
-      revealRefs.current.forEach((node) => node.setAttribute('data-shown', 'true'));
-      return undefined;
-    }
-    if (typeof IntersectionObserver === 'undefined') {
-      revealRefs.current.forEach((node) => node.setAttribute('data-shown', 'true'));
-      return undefined;
-    }
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            entry.target.setAttribute('data-shown', 'true');
-            obs.unobserve(entry.target);
-          }
-        }
-      },
-      { threshold: 0.2 },
-    );
-    revealRefs.current.forEach((node) => obs.observe(node));
-    // Belt and braces: if the observer never fires (blocked, broken, or
-    // never intersecting because of an ancestor quirk), content must still
-    // appear — an invisible marketing page is the one unacceptable failure.
-    const fallback = window.setTimeout(() => {
-      revealRefs.current.forEach((node) => {
-        if (node.getAttribute('data-shown') !== 'true') {
-          node.setAttribute('data-shown', 'true');
-        }
-      });
-    }, 2600);
-    return () => {
-      window.clearTimeout(fallback);
-      obs.disconnect();
-    };
-  }, [reduced]);
-
   const scrollToPipeline = useCallback(() => {
     pipelineRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
   }, [reduced]);
 
   return (
-    <div className={`lvc${on ? ' is-on' : ''}${reduced ? ' is-reduced' : ''}`} data-on={on ? 'true' : 'false'}>
+    <m.div
+      className={`lvc${on ? ' is-on' : ''}${reduced ? ' is-reduced' : ''}`}
+      data-on={on ? 'true' : 'false'}
+      initial={false}
+      animate={{ filter: on || reduced ? 'grayscale(0)' : 'grayscale(0.92)' }}
+      transition={reduced
+        ? { duration: 0 }
+        : { duration: MOTION_DURATION.reveal, ease: MOTION_EASE.enter }}
+    >
       <style>{VARIANT_C_CSS}</style>
 
       <HeroSection
         on={on}
         pressing={pressing}
+        reduced={reduced}
         onToggle={toggle}
         onNavigate={onNavigate}
         onHowItWorks={scrollToPipeline}
       />
-      <ProblemSection reveal={reveal} />
-      <PipelineSection reveal={reveal} pipelineRef={pipelineRef} />
-      <StandardSection reveal={reveal} />
+      <ProblemSection reduced={reduced} />
+      <PipelineSection reduced={reduced} pipelineRef={pipelineRef} />
+      <StandardSection reduced={reduced} />
 
       <div className="lvc-footer">
         <ClosingCta onNavigate={onNavigate} />
         <ProductionFooter onNavigate={onNavigate} />
       </div>
-    </div>
+    </m.div>
   );
 };
 

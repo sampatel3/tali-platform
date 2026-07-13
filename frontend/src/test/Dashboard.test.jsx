@@ -95,6 +95,7 @@ vi.mock('../shared/api', () => ({
       paused_role_count: 0, active_role_count: 0,
       oldest_pending_age_seconds: null, last_decision_at: null,
     } }),
+    needsReevalCount: vi.fn().mockResolvedValue({ data: { count: 0 } }),
     kpis: vi.fn().mockResolvedValue({ data: {} }),
     rolesBreakdown: vi.fn().mockResolvedValue({ data: [] }),
     sendFeedback: vi.fn(),
@@ -114,6 +115,14 @@ vi.mock('../shared/api', () => ({
       interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
     }),
   },
+}));
+
+vi.mock('../shared/api/authClient', () => ({
+  auth: { me: vi.fn(), login: vi.fn(), register: vi.fn() },
+}));
+
+vi.mock('../shared/api/assessmentsClient', () => ({
+  assessments: { get: vi.fn() },
 }));
 
 // Mock recharts
@@ -140,8 +149,9 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
+import { auth } from '../shared/api/authClient';
+import { assessments as assessmentDetailApi } from '../shared/api/assessmentsClient';
 import {
-  auth,
   assessments as assessmentsApi,
   analytics as analyticsApi,
   tasks as tasksApi,
@@ -709,7 +719,7 @@ describe('AssessmentsPage', () => {
     // A deep-link by assessment id resolves the linked application and
     // redirects to /candidates/:applicationId?tab=assessment.
     window.history.pushState({}, '', '/candidate-detail?assessmentId=1');
-    assessmentsApi.get.mockResolvedValue({
+    assessmentDetailApi.get.mockResolvedValue({
       data: {
         ...mockAssessments[0],
         application_id: 7,
@@ -729,7 +739,7 @@ describe('AssessmentsPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(assessmentsApi.get).toHaveBeenCalledWith(1);
+      expect(assessmentDetailApi.get).toHaveBeenCalledWith(1);
     });
 
     await waitFor(() => {

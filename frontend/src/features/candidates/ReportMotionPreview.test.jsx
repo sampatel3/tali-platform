@@ -27,9 +27,9 @@ afterEach(() => {
 });
 
 describe('ReportMotionPreview (/report-preview)', () => {
-  it('renders logged-out with the real DecisionRail + 5-Ds scorecard', () => {
+  it('renders logged-out with Motion-native rail and 5-Ds scorecard entrances', () => {
     setReducedMotion(false);
-    render(<ReportMotionPreview />);
+    const { container } = render(<ReportMotionPreview />);
 
     // Real DecisionRail — candidate identity (also echoed in the report body)
     // + the Taali score label.
@@ -37,6 +37,10 @@ describe('ReportMotionPreview (/report-preview)', () => {
     expect(screen.getByText('Taali score')).toBeInTheDocument();
     // Real AssessmentScorecard — the 5-Ds spine.
     expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeInTheDocument();
+    expect(container.querySelector('.dossier-rail'))
+      .toHaveAttribute('data-motion-reveal', 'horizontal');
+    expect(container.querySelector('[data-motion-scorecard="stagger-progress"]')).toBeTruthy();
+    expect(container.querySelector('.dr-reveal')).toBeNull();
     // Preview switcher chip.
     expect(screen.getByText(/PREVIEW · Report on Motion/i)).toBeInTheDocument();
   });

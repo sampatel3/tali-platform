@@ -9,6 +9,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download, Github, Globe, Linkedin, Mail, MapPin, Phone } from 'lucide-react';
 
+import '../../styles/09-standing-report.css';
+
 import { getCachedDocumentBlob } from '../../shared/api/documentCache';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { asArray, asCleanText, splitInlineList } from './candidatesUiUtils';

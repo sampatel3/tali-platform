@@ -340,26 +340,6 @@ export const VARIANT_E_CSS = `
 .lve-fn-score { font-weight: 600; font-size: 22px; letter-spacing: -0.02em; color: var(--lve-purple); font-variant-numeric: tabular-nums; }
 .lve-fn-score em { font-style: normal; font-size: 11px; color: var(--lve-mute); font-weight: 500; }
 
-/* Armed (JS mounted, motion allowed) → steps hidden + rail empty until the
-   scroll-in trigger adds .is-playing, which runs the one-shot CSS entrance
-   (fill:both, so it always resolves to the final state — it can't get stuck the
-   way an interrupted useAnimate timeline can). */
-.lve-fn[data-armed] .lve-fn-step { opacity: 0; }
-.lve-fn[data-armed] .lve-fn-rail-fill { transform: scaleX(0); }
-.lve-fn.is-playing .lve-fn-step {
-  animation: lveFnStepIn var(--motion-duration-reveal) var(--motion-ease-enter) both;
-}
-.lve-fn.is-playing .lve-fn-step:nth-child(1) { animation-delay: 0.05s; }
-.lve-fn.is-playing .lve-fn-step:nth-child(2) { animation-delay: 0.24s; }
-.lve-fn.is-playing .lve-fn-step:nth-child(3) { animation-delay: 0.43s; }
-.lve-fn.is-playing .lve-fn-step:nth-child(4) { animation-delay: 0.62s; }
-.lve-fn.is-playing .lve-fn-step:nth-child(5) { animation-delay: 0.81s; }
-.lve-fn.is-playing .lve-fn-rail-fill {
-  animation: lveFnRail 1.5s var(--motion-ease-enter) both;
-}
-@keyframes lveFnStepIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-@keyframes lveFnRail { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-
 @media (min-width: 860px) {
   .lve-fn-steps { grid-template-columns: repeat(5, 1fr); gap: 12px; }
   .lve-fn-rail {
@@ -440,9 +420,4 @@ export const VARIANT_E_CSS = `
 /* ── CLOSING CTA + FOOTER (reused production treatment) ───────────────── */
 .lve-footer { position: relative; z-index: 2; }
 
-/* Reduced-motion: kill any residual keyframes. Scenes already render their final
-   composed state because JS never arms [data-armed] under reduce. */
-@media (prefers-reduced-motion: reduce) {
-  .lve *, .lve *::before, .lve *::after { animation: none !important; }
-}
 `;

@@ -108,6 +108,11 @@ describe('Demo flow redesign', () => {
     expect(container.querySelector('.lvg')).toBeNull();
     expect(container.querySelector('.lvg-scene')).toBeTruthy();
     expect(container.querySelectorAll('.mc-vg').length).toBe(2);
+    // Production entrances use the shared Motion system; the legacy CSS
+    // reveal classes and per-card delay indexes are no longer present.
+    expect(container.querySelectorAll('[data-motion-reveal]').length).toBeGreaterThanOrEqual(5);
+    expect(container.querySelector('[data-motion-stagger="agent-funnel"]')).toBeTruthy();
+    expect(container.querySelector('.reveal, .reveal-stagger')).toBeNull();
     // The internal preview switcher chip lives only on /landing-preview.
     expect(screen.queryByRole('group', { name: /Landing preview variant/i })).toBeNull();
 

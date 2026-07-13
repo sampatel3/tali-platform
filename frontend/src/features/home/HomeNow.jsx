@@ -39,7 +39,7 @@ import { RecentDecisions } from './RecentDecisions';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
-import { PresenceSwap } from '../../shared/motion';
+import { MotionLoop, MotionStagger, PresenceSwap, Reveal } from '../../shared/motion';
 
 
 // The backend returns 409 with a structured detail ({code, message, ...}) when
@@ -281,7 +281,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
         {oldestCreatedAt ? `OLDEST ${formatRelativeAge(oldestCreatedAt)}` : ''}
       </span>
     </div>
-    <div className="rq-split-list-body reveal-stagger">
+    <MotionStagger className="rq-split-list-body" data-motion-stagger="pending-decisions">
       {loading && pending.length === 0 ? (
         <div style={{ padding: 16, fontSize: 'var(--fs-body)', color: 'var(--mute)' }}>Loading…</div>
       ) : pending.length === 0 ? (
@@ -290,7 +290,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
           <div>{staleOnly ? 'No candidates need re-evaluation right now.' : 'Queue is empty. The agent is running unattended.'}</div>
         </div>
       ) : (
-        pending.map((p, idx) => (
+        pending.map((p) => (
           // role="button" instead of a real <button> so the inline <a>
           // candidate-name link below isn't an interactive child of an
           // interactive parent (invalid HTML, breaks click + keyboard
@@ -305,7 +305,6 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
             role="button"
             aria-pressed={selectedId === p.id}
             tabIndex={0}
-            style={{ '--i': idx }}
             className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
             onKeyDown={(e) => {
@@ -348,7 +347,9 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                     className="rq-qstale"
                     title="Re-scoring in progress — refreshes automatically"
                   >
-                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" className="rq-spin" /> re-scoring
+                    <MotionLoop kind="spin" className="inline-flex" aria-hidden="true">
+                      <RefreshCw size={9} strokeWidth={2.4} />
+                    </MotionLoop>{' '}re-scoring
                   </span>
                 ) : p.is_stale ? (
                   <span
@@ -363,7 +364,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
           </div>
         ))
       )}
-    </div>
+    </MotionStagger>
     <div style={{
       padding: '10px 14px', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mono)',
       fontSize: 'var(--fs-eyebrow)', color: 'var(--mute)', letterSpacing: '.06em',
@@ -1117,7 +1118,7 @@ export const HomeNow = ({
   }, [bulkConfirm, bulkStagesReady]);
 
   return (
-    <section className="home-section reveal" style={{ '--reveal-delay': '0.08s' }}>
+    <Reveal as="section" className="home-section" delay={0.08}>
       {/* Funnel leads the column (above the queue) so the pending count always
           has its denominator — how many are already advanced / in review /
           rejected — in view, matching the hub layout. */}
@@ -1369,7 +1370,7 @@ export const HomeNow = ({
           </div>
         </div>
       ) : null}
-    </section>
+    </Reveal>
   );
 };
 

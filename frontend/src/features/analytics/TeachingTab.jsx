@@ -7,9 +7,10 @@
 // prompts to pick one (proper empty state) rather than inventing a series.
 
 import React, { useEffect, useState } from 'react';
-import { Brain, Loader2 } from 'lucide-react';
+import { Brain } from 'lucide-react';
 
 import { analytics as analyticsApi } from '../../shared/api';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { safeNum, monthShort, fmtRelAgo, fmtDay } from './analyticsFormat';
 
 export const FAILURE_LABEL = {
@@ -101,7 +102,7 @@ const ThresholdTimeline = ({ roleId, roleName }) => {
     return (
       <div className="an-card">
         <div className="ct2" style={{ marginBottom: 6 }}>Threshold history</div>
-        <div className="an-empty"><Loader2 size={13} className="animate-spin" aria-hidden="true" /> Loading…</div>
+        <div className="an-empty"><Spinner size={13} className="!text-current" /> Loading…</div>
       </div>
     );
   }

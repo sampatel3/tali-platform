@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowLeft, Check, Mail } from 'lucide-react';
 
+import '../../styles/09-standing-report.css';
+
 import { PageHero } from '../../shared/layout/PageHero';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import { useToast } from '../../context/ToastContext';

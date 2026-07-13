@@ -81,8 +81,8 @@
   gap: 8px;
   flex-shrink: 0;
 }
-/* Voice dictation toggle — quiet pill by default; turns purple + pulses while
-   the browser is listening. Min 36px tap target for phones. */
+/* Voice dictation toggle — quiet pill by default; MotionLoop supplies the
+   listening signal. Min 36px tap target for phones. */
 .tk-mic-btn {
   display: inline-flex;
   align-items: center;
@@ -105,16 +105,8 @@
   background: var(--purple);
   border-color: var(--purple);
   color: #fff;
-  animation: tk-mic-pulse 1.3s ease-in-out infinite;
 }
 .tk-mic-text { font-size: var(--fs-caption); }
-@keyframes tk-mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--purple) 45%, transparent); }
-  50% { box-shadow: 0 0 0 5px color-mix(in oklab, var(--purple) 0%, transparent); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .tk-mic-btn.is-listening { animation: none; }
-}
 
 /* ============ Empty state ============ */
 .tk-empty {

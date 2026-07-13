@@ -600,11 +600,13 @@
 }
 
 .agent-flow-text {
-  background: var(--grad-agent-on-animated);
-  background-size: 300% 300%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent !important;
+  background: linear-gradient(
+    90deg,
+    rgba(107, 70, 193, 0.18),
+    var(--purple-2),
+    rgba(107, 70, 193, 0.18)
+  ) 0 100% / 300% 1px no-repeat;
+  color: var(--purple-2) !important;
 }
 
 .kanban-card .cc-agent-actions .btn-purple:hover {

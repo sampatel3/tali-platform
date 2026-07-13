@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, Copy, ExternalLink, Loader2, Mail } from 'lucide-react';
+import { ChevronDown, Copy, ExternalLink, Mail } from 'lucide-react';
 
 import { roles as rolesApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 // "Distribute this role" panel on the published-role view. Everything here
 // produces copy-paste / one-click-out artefacts that point at the role's
@@ -162,7 +163,7 @@ export function DistributeRolePanel({ roleId, defaultOpen = false }) {
 
           {loading ? (
             <div className="src-warn">
-              <Loader2 className="animate-spin" size={12} /> Loading…
+              <Spinner size={12} className="!text-current" /> Loading…
             </div>
           ) : null}
 

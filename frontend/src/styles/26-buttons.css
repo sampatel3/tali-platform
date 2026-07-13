@@ -591,7 +591,6 @@ button:disabled,
   --button-hover-shadow: 0 8px 22px color-mix(in oklab, var(--purple) 36%, transparent);
   --button-focus-ring: var(--cloud);
   background-size: auto;
-  animation: none;
 }
 
 /* Agent buttons keep the shared geometry/state system above, while Motion.dev
@@ -856,8 +855,6 @@ button:disabled,
 
 @media (prefers-reduced-motion: reduce) {
   :root :is(button, a[role="button"], [role="button"][tabindex]) {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }

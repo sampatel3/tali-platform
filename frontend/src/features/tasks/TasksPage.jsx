@@ -2,11 +2,13 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from
 import { ExternalLink, Lock, Search } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 
+import '../../styles/09-standing-report.css';
+
 import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
 import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Select, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Button, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { GeneratedDraftsPanel } from './GeneratedDraftsPanel';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
@@ -95,10 +97,26 @@ const taskSearchText = (task) => [
   normalizeTaskType(task),
 ].join(' ').toLowerCase();
 
+const TaskLoadError = ({ message, onRetry }) => (
+  <div
+    className="tasks-empty-panel flex flex-wrap items-center justify-between gap-4"
+    role="alert"
+  >
+    <div className="min-w-0">
+      <strong className="block text-[var(--ink)]">We couldn’t load the task library.</strong>
+      <p className="mt-1">{message}</p>
+    </div>
+    <Button type="button" variant="secondary" onClick={onRetry}>
+      Retry
+    </Button>
+  </div>
+);
+
 export const TasksPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
   const [difficultyFilter, setDifficultyFilter] = useState('all');
@@ -106,12 +124,14 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
       const res = await tasksApi.list();
       setTasks(Array.isArray(res?.data) ? res.data : []);
     } catch (error) {
-      setTasks([]);
-      showToast(getErrorMessage(error, 'Failed to load assessment tasks.'), 'error');
+      const message = getErrorMessage(error, 'Failed to load assessment tasks.');
+      setLoadError(message);
+      showToast(message, 'error');
     } finally {
       setLoading(false);
     }
@@ -201,10 +221,16 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
           </div>
         </div>
 
-        {loading ? (
+        {loadError && tasks.length > 0 ? (
+          <TaskLoadError message={loadError} onRetry={() => { void loadTasks(); }} />
+        ) : null}
+
+        {loading && tasks.length === 0 ? (
           <div className="flex min-h-[16.25rem] items-center justify-center">
-            <Spinner size={32} />
+            <Spinner size={32} label="Loading task library" />
           </div>
+        ) : loadError && tasks.length === 0 ? (
+          <TaskLoadError message={loadError} onRetry={() => { void loadTasks(); }} />
         ) : filteredTasks.length === 0 ? (
           tasks.length === 0 ? (
             <div className="tasks-empty-panel">No tasks in the library yet.</div>

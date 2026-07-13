@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../api', () => ({
   agent: {
@@ -15,6 +15,7 @@ describe('AgentBar — org rollup', () => {
   beforeEach(() => {
     agent.status.mockReset();
     agent.orgStatus.mockReset();
+    localStorage.clear();
   });
 
   it('renders nothing when no roles have the agent enabled', async () => {
@@ -85,5 +86,54 @@ describe('AgentBar — org rollup', () => {
 
     render(<AgentBar />);
     await screen.findByText(/Agent mode paused/);
+  });
+
+  it('deduplicates the org poll across simultaneous consumers', async () => {
+    agent.orgStatus.mockResolvedValue({ data: {
+      active_role_count: 1,
+      paused_role_count: 0,
+      pending_decisions: 7,
+      org_budget_spent_cents: 100,
+      org_budget_cap_cents: 5000,
+    } });
+
+    render(<><AgentBar /><AgentBar /></>);
+
+    expect(await screen.findAllByText(/7 awaiting your review/)).toHaveLength(2);
+    expect(agent.orgStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reveal a warm snapshot after the signed-in org changes', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 1, organization_id: 10 }));
+    agent.orgStatus.mockResolvedValueOnce({ data: {
+      active_role_count: 1,
+      paused_role_count: 0,
+      pending_decisions: 2,
+      org_budget_spent_cents: 1100,
+      org_budget_cap_cents: 5000,
+    } });
+    const first = render(<AgentBar />);
+    await screen.findByText(/\$11\.00 \/ \$50\.00/);
+    first.unmount();
+
+    let resolveNext;
+    agent.orgStatus.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveNext = resolve;
+    }));
+    localStorage.setItem('taali_user', JSON.stringify({ id: 2, organization_id: 20 }));
+    const second = render(<AgentBar />);
+
+    expect(second.container).not.toHaveTextContent('$11.00 / $50.00');
+
+    await act(async () => {
+      resolveNext({ data: {
+        active_role_count: 1,
+        paused_role_count: 0,
+        pending_decisions: 1,
+        org_budget_spent_cents: 300,
+        org_budget_cap_cents: 6000,
+      } });
+    });
+    await screen.findByText(/\$3\.00 \/ \$60\.00/);
   });
 });
