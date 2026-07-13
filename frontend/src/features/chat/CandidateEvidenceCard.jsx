@@ -1,39 +1,6 @@
 import React, { useState } from 'react';
 import './CandidateEvidenceCard.css';
 import PoolRescore from './PoolRescore';
-import { outreach as outreachApi } from '../../shared/api/outreachClient';
-
-// Rediscovery CTA: spin the shown pool candidates into a new outreach campaign
-// for this spec's role, then deep-link into the campaign's detail view on the
-// Sourcing page. Kept minimal — one button + one client call.
-function StartOutreach({ applicationIds, roleId, campaignName }) {
-  const [state, setState] = useState('idle'); // idle | busy | error
-  if (!applicationIds || !applicationIds.length) return null;
-
-  const start = () => {
-    setState('busy');
-    outreachApi
-      .createCampaign({ name: campaignName, role_id: roleId || null })
-      .then((res) => {
-        const id = res.data && res.data.id;
-        return outreachApi
-          .addAudience(id, { application_ids: applicationIds })
-          .then(() => {
-            window.location.assign(`/sourcing?tab=campaigns&campaign=${id}`);
-          });
-      })
-      .catch(() => setState('error'));
-  };
-
-  return (
-    <div className="ev-outreach">
-      <button type="button" className="ev-rescore-btn" onClick={start} disabled={state === 'busy'}>
-        {state === 'busy' ? 'Starting outreach…' : `Start outreach to these ${applicationIds.length}`}
-      </button>
-      {state === 'error' ? <div className="ev-rescore-err">Could not start the campaign.</div> : null}
-    </div>
-  );
-}
 
 const QUOTE_CAP = 180;
 // Show at most this many verbatim quotes per criterion — enough to back the
@@ -327,14 +294,6 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
           candidates={candidates.filter((c) =>
             data.rescore_candidate_ids.includes(c.application_id),
           )}
-        />
-      ) : null}
-
-      {isRediscovery ? (
-        <StartOutreach
-          applicationIds={candidates.map((c) => c.application_id).filter(Boolean)}
-          roleId={data.role_id || (spec && spec.role_id) || null}
-          campaignName={`Outreach: ${(spec && spec.query) || 'rediscovered candidates'}`.slice(0, 120)}
         />
       ) : null}
 
