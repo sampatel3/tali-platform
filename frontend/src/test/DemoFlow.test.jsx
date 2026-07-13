@@ -108,6 +108,10 @@ describe('Demo flow redesign', () => {
     expect(container.querySelector('.lvg')).toBeNull();
     expect(container.querySelector('.lvg-scene')).toBeTruthy();
     expect(container.querySelectorAll('.mc-vg').length).toBe(2);
+    // Every full-width landing band must follow the semantic surface tokens so
+    // toggling dark mode cannot leave a white strip across the page.
+    expect(container.querySelector('#platform')).toHaveClass('bg-[var(--bg-2)]');
+    expect(container.querySelector('#platform')).not.toHaveClass('bg-white');
     // The internal preview switcher chip lives only on /landing-preview.
     expect(screen.queryByRole('group', { name: /Landing preview variant/i })).toBeNull();
 

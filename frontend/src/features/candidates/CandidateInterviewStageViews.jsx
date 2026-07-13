@@ -287,7 +287,7 @@ export const CandidateStageOneScreeningTab = ({
               {fraudCopyPaste.evidence.slice(0, 5).map((snippet, idx) => (
                 <li
                   key={`${snippet.cv_word_offset}-${idx}`}
-                  className="rounded border border-[var(--taali-danger-border)] bg-white/60 p-2 text-xs leading-5 text-[var(--taali-text)]"
+                  className="rounded border border-[var(--taali-danger-border)] bg-[var(--taali-surface-elevated)] p-2 text-xs leading-5 text-[var(--taali-text)]"
                 >
                   &ldquo;{snippet.text}&rdquo;
                   <span className="ml-2 text-[var(--taali-muted)]">

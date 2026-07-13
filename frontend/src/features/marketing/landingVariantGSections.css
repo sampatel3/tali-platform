@@ -86,7 +86,12 @@
 .mc-vg .mini-score { font-family: var(--mono); font-size: var(--l-lead); font-weight: 600; color: var(--purple); letter-spacing: -.02em; }
 .mc-vg .mini-score small { font-size: var(--l-eyebrow); color: var(--mute); }
 .mc-vg .fflow-track { position: absolute; top: 50%; right: -14px; width: 14px; height: 2px; background: var(--line); z-index: 1; }
-@media (max-width: 1000px) { .mc-vg .funnel { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1000px) {
+  .mc-vg .funnel { grid-template-columns: repeat(2, 1fr); }
+  /* Connectors only describe the single-row desktop flow. Once cards wrap,
+     the short horizontal strokes point at empty space or the wrong card. */
+  .mc-vg .fflow-track { display: none; }
+}
 @media (max-width: 560px) { .mc-vg .funnel { grid-template-columns: 1fr; } }
 
 /* ============================================================
@@ -134,4 +139,14 @@
 @keyframes mc-vg-dd-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @media (prefers-reduced-motion: reduce) { .mc-vg .dd-fill { animation: none; } }
 .mc-vg .dd-val { font-family: var(--mono); font-size: var(--fs-body-lg); font-weight: 500; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
-@media (max-width: 620px) { .mc-vg .dd-row { grid-template-columns: 1fr 44px; } .mc-vg .dd-track { grid-column: 1 / -1; order: 3; } }
+@media (max-width: 620px) {
+  .mc-vg .sc-head { padding: 14px 16px; }
+  .mc-vg .sc-head .who { gap: 9px; min-width: 0; }
+  .mc-vg .sc-head .who > div:last-child { min-width: 0; }
+  .mc-vg .sc-head .who .avatar { width: 34px; height: 34px; flex: 0 0 34px; }
+  .mc-vg .sc-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mc-vg .sc-sub { display: none; }
+  .mc-vg .sc-total .lbl { display: none; }
+  .mc-vg .dd-row { grid-template-columns: minmax(0, 1fr) 36px; gap: 10px; padding: 12px 16px; }
+  .mc-vg .dd-track { grid-column: 1 / -1; order: 3; }
+}

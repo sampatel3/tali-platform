@@ -97,6 +97,19 @@
   --taali-runtime-terminal-bg: color-mix(in oklab, var(--ink) 94%, black 6%);
   --taali-runtime-terminal-header: color-mix(in oklab, var(--ink) 88%, white 12%);
   --taali-runtime-terminal-text: color-mix(in oklab, var(--bg) 90%, transparent);
+
+  /* Legacy semantic aliases still used by a handful of public/share pages.
+     Keeping them mapped to the canonical palette makes those routes theme
+     with the rest of the app instead of falling through to light-only CSS
+     fallback values. */
+  --bg-1: var(--bg);
+  --card: var(--bg-2);
+  --border: var(--line);
+  --muted: var(--mute);
+  --text: var(--ink);
+  --text-muted: var(--mute);
+  --purple-050: var(--purple-soft);
+  --surface-muted: var(--bg-3);
 }
 
 /* ------------------------------------------------------------------
@@ -132,6 +145,13 @@
 html[data-theme="dark"] {
   --workable: #2faa6e;
   --workable-dark: #1a8754;
+  /* Hiring-state washes are light-theme literals above for pixel parity with
+     the original UI. Re-derive them against the active dark surfaces here so
+     selected agents, decision cards, and paused-state chips never become
+     bright paper panels in dark mode. */
+  --amber-soft: color-mix(in oklab, var(--amber) 16%, var(--bg-2));
+  --amber-ink: color-mix(in oklab, var(--amber) 86%, white 14%);
+  --purple-tint: color-mix(in oklab, var(--purple) 12%, var(--bg-2));
 }
 
 @layer base {

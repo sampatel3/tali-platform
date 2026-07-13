@@ -151,7 +151,7 @@
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fff;
+  background: var(--bg-2);
   color: var(--purple);
   box-shadow: var(--shadow-lg);
   cursor: pointer;
@@ -175,7 +175,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid #fff;
+  border: 2px solid var(--bg-2);
 }
 .ac-reopen:hover .ac-badge-count { background: #fff; color: var(--purple); }
 

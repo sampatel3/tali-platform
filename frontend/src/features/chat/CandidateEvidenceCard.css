@@ -221,7 +221,7 @@
   color: var(--purple-2, #4a2d80);
 }
 .ev-chip-notmet {
-  background: #f3f1f8;
+  background: var(--bg-3, #f3f1f8);
   color: var(--mute, #8b8595);
   border: 1px solid var(--line-2, #d8d0e4);
 }

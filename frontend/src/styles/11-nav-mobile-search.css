@@ -32,6 +32,9 @@
 }
 
 @media (max-width: 720px) {
+  /* The shared marketing/candidate header uses .app-nav-inner. Its desktop
+     48px gutters leave too little room for the logo, CTA, and menu on phones. */
+  .app-nav-inner { padding-left: 16px; padding-right: 16px; }
   .mc-nav { padding: 0 16px; }
   /* Collapse the desktop chrome into the hamburger drawer. Selectors are
      scoped under .mc-nav to outrank the single-class base rules that are

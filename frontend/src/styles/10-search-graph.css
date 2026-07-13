@@ -406,10 +406,10 @@
   font-weight: 600;
   margin-bottom: 8px;
 }
-.score-badge--high    { background: #d4fae8; color: #00704a; }
-.score-badge--medium  { background: #fef3cd; color: #8a6200; }
-.score-badge--low     { background: #fde8e8; color: #b00020; }
-.score-badge--unscored { background: #f0f0f0; color: #888; }
+.score-badge--high    { background: var(--success-soft); color: var(--green); }
+.score-badge--medium  { background: var(--warning-soft); color: var(--amber); }
+.score-badge--low     { background: var(--danger-soft); color: var(--red); }
+.score-badge--unscored { background: var(--bg-3); color: var(--mute); }
 
 /* ── Graph score legend ────────────────────────────────────────────────────── */
 .graph-legend {

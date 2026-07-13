@@ -215,7 +215,7 @@ export const LandingPage = ({ onNavigate }) => {
       {/* AI-NATIVE ASSESSMENT — variant G's single 5-Ds scorecard ("Measure how
           people actually work with AI." — Delegation / Description /
           Discernment / Diligence / Deliverable), the one assessment section. */}
-      <section id="platform" className="mc-vg border-t border-[var(--line)] bg-white">
+      <section id="platform" className="mc-vg border-t border-[var(--line)] bg-[var(--bg-2)]">
         <div className={`${containerClass} py-20`}>
           <div className="reveal section-head">
             <span className="eyebrow">AI-NATIVE ASSESSMENTS</span>
@@ -258,7 +258,7 @@ export const LandingPage = ({ onNavigate }) => {
       <section className="bg-[var(--bg)]">
         <div className={`${containerClass} py-16`}>
           <div
-            className="reveal relative overflow-hidden rounded-[18px] px-12 py-14"
+            className="reveal relative overflow-hidden rounded-[18px] px-6 py-10 sm:px-12 sm:py-14"
             style={{
               background:
                 'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, #000) 0%, var(--purple) 60%, var(--purple-lav) 100%)',

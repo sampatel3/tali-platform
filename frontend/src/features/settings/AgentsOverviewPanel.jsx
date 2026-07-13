@@ -163,11 +163,11 @@ function AgentCard({ a }) {
 }
 
 const tooltipStyle = {
-  background: '#fff',
-  border: '1px solid #e8e2ee',
+  background: 'var(--bg-2)',
+  border: '1px solid var(--line)',
   borderRadius: 10,
   fontSize: 12,
-  color: '#15121a',
+  color: 'var(--ink)',
 };
 
 export default function AgentsOverviewPanel() {
