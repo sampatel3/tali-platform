@@ -963,6 +963,42 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
+    # Cross-role guard (mirrors _tool_resend_assessment_invite). The agent runs
+    # in the context of one role, but send_assessment.run reloads the
+    # application and creates the assessment for the APPLICATION'S OWN role
+    # (app.role_id). If we let a different-role application through here, every
+    # downstream decision — the auto_promote gate AND the budget/volume
+    # auto-send guard below — would be evaluated against the running role, not
+    # the role that actually receives the invite, letting role B's caps be
+    # bypassed while role A is under its limits. Refuse the send when the
+    # application doesn't belong to the running role; the agent should only send
+    # for its own role's candidates.
+    app_row = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == application_id,
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    if app_row is None:
+        return {
+            "status": "not_found",
+            "application_id": application_id,
+            "detail": "application not found in this organization",
+        }
+    if app_row.role_id is None or int(app_row.role_id) != int(role.id):
+        return {
+            "status": "wrong_role",
+            "application_id": application_id,
+            "detail": (
+                f"application {application_id} belongs to role "
+                f"{app_row.role_id}, not the running role {int(role.id)}; "
+                "refusing send to avoid bypassing the other role's HITL "
+                "policy and budget/volume caps"
+            ),
+        }
+
     # No assessment stage on this role — either no task is configured, or
     # the recruiter flipped auto_skip_assessment — so there is nothing to
     # send. Rather than dead-end (the approve/dispatch path would 422 on a

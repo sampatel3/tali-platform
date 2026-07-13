@@ -20,6 +20,9 @@ from app.agent_runtime.tool_registry import _queue, _tool_send_assessment
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.role import Role
 from app.models.usage_event import UsageEvent
 from app.services import assessment_autosend_guard as guard_mod
 from app.services.assessment_autosend_guard import check_auto_send
@@ -177,6 +180,51 @@ def test_toggle_off_queues_without_guard_tag(db):
     # Guard is only consulted for auto_promote=True; a plain HITL send carries
     # no hold tag.
     assert "auto_send_hold" not in result
+
+
+def test_wrong_role_application_refused_not_sent(db):
+    """An application belonging to a *different* role in the same org must be
+    refused before any guard runs — otherwise role B's budget/daily cap could
+    be bypassed by sending its candidate while running role A (under its own
+    limits)."""
+    org, role_a, _, _ = make_world(db, send_requires_approval=False, with_task=True)
+    # Role B in the same org, with its own application. Its auto_promote is off
+    # and it would have its own caps — none of which should be consulted here.
+    role_b = Role(
+        organization_id=org.id,
+        name="Frontend",
+        source="manual",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+        auto_promote=False,
+    )
+    db.add(role_b)
+    db.flush()
+    cand_b = Candidate(organization_id=org.id, email=f"b{id(db)}@x.test", full_name="B")
+    db.add(cand_b)
+    db.flush()
+    app_b = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=cand_b.id,
+        role_id=role_b.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+    )
+    db.add(app_b)
+    db.flush()
+
+    run = _make_run(db, role_a)
+    with patch("app.agent_runtime.tool_registry.send_assessment.run") as send:
+        result = _tool_send_assessment(
+            db, agent_run=run, role=role_a, args={"application_id": int(app_b.id)}
+        )
+    send.assert_not_called()
+    assert result["status"] == "wrong_role"
+    # Nothing was queued against role A for role B's candidate either.
+    assert (
+        db.query(AgentDecision).filter(AgentDecision.role_id == role_a.id).all() == []
+    )
 
 
 def test_queue_defense_in_depth_holds_guarded_send(db):
