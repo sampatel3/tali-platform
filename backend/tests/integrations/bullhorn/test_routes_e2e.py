@@ -251,9 +251,11 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
             tz=timezone.utc,
         )
         assert app.workable_created_at.date() == expected_applied.date()
-        # raw remote status preserved and mapped (Interview Scheduled → advanced).
+        # Raw remote status is preserved; the mapped interview lands on the
+        # provider-neutral hiring axis, not Tali's evaluation axis.
         assert app.bullhorn_status == "Interview Scheduled"
-        assert app.pipeline_stage == "advanced"
+        assert app.pipeline_stage == "applied"
+        assert app.recruiter_stage == "interviewing"
 
         # --- 4. PUT /stage-map (recruiter remaps) --------------------------
         put_resp = client.put(

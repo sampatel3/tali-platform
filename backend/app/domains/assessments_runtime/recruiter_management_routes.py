@@ -458,9 +458,9 @@ def resend_assessment_invite(
         organization_id=int(current_user.organization_id),
         assessment_id=assessment_id,
     )
-    if result.status == "voided":
+    if result.status in {"voided", "no_candidate"}:
         raise HTTPException(status_code=400, detail=result.detail)
-    if result.status == "no_candidate":
-        raise HTTPException(status_code=400, detail=result.detail)
+    if result.status == "blocked":
+        raise HTTPException(status_code=409, detail=result.detail)
     db.commit()
     return {"success": True}

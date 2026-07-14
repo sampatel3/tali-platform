@@ -989,6 +989,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   const roleProvider = roleAtsProvider(role);
                   const roleProviderLabel = atsProviderLabel(roleProvider);
                   const workableRole = roleProvider === 'workable';
+                  const visibleStages = STAGES.filter(
+                    (stage) => stage.key !== 'sourced' || Number(stageCounts?.sourced || 0) > 0,
+                  );
                   const roleLive = isRoleLive(role);
                   const lifecycleDimmed = isRoleDimmed(role);
                   const lastRoleActivity = role?.last_candidate_activity_at
@@ -1174,8 +1177,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         )}
                       </div>
 
-                      <div className="job-stats">
-                        {STAGES.map((stage) => {
+                      <div
+                        className="job-stats"
+                        style={{ '--job-stage-count': visibleStages.length }}
+                      >
+                        {visibleStages.map((stage) => {
                           const value = stage.key === 'invited'
                             ? invitedStageValue(stageCounts)
                             : Number(stageCounts?.[stage.key] || 0);

@@ -62,6 +62,7 @@ def test_survey_intent_gaps_lists_missing_config(db):
     org, role, _, _ = make_world(db)
     role.monthly_usd_budget_cents = None
     role.score_threshold = None
+    role.auto_reject_threshold_mode = "manual"
     role.additional_requirements = None
     db.flush()
     out = survey_role_state(

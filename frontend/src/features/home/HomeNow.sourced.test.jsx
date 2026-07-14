@@ -123,9 +123,18 @@ describe('HomeNow — Sourced tracker', () => {
     // Rows render with name + when-sourced + channel; grouped under role labels.
     expect(await screen.findByText('Ada Sourced')).toBeInTheDocument();
     expect(screen.getByText('Grace Prospect')).toBeInTheDocument();
-    expect(screen.getByText(/added manually/)).toBeInTheDocument();
+    expect(screen.getByText(/via Taali sourcing/)).toBeInTheDocument();
     expect(screen.getByText(/via Workable/)).toBeInTheDocument();
     expect(screen.getAllByText(/Sourced .+ ago/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the empty state agent-first and labels manual additions as exceptional support', async () => {
+    listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
+    renderHome({ filters: { status: 'pending', role_id: null, type: null, q: null, view: 'sourced' } });
+
+    expect(await screen.findByText(/Agent-sourced prospects show up here/i)).toBeInTheDocument();
+    expect(screen.getByText(/Manual additions are exceptional support/i)).toBeInTheDocument();
+    expect(screen.queryByText(/by you or the agent/i)).not.toBeInTheDocument();
   });
 
   it('is separate from the decision queue — no decision actions and no queue rows in the sourced view', async () => {

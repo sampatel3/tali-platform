@@ -9,8 +9,8 @@ surfaced in the Home "Is Taali learning from you?" / REALISED OUTCOMES column
 ``role.agent_calibration["outcomes"]``).
 
 A latent ordering bug meant the recorder never fired for the agent's own
-approve action: the pipeline transition (advance → stage ``advanced``, reject →
-outcome ``rejected``) ran *before* the decision was stamped ``approved``, so the
+approve action: the transition ran *before* the decision was stamped
+``approved``, so the
 recorder's ``status="approved"`` lookup found nothing. The fix records the
 outcome from the approve action itself going forward. This script repairs the
 history that the bug missed.
@@ -18,7 +18,8 @@ history that the bug missed.
 Scope (entries written), mirroring the live recorder
 ----------------------------------------------------
 For every ``approved`` AgentDecision on a non-deleted application:
-* ``advance_to_interview`` + app at stage ``advanced``        → ``interviewed``
+* ``advance_to_interview`` + hiring stage interview/offer/hired
+                                                              → ``interviewed``
 * ``advance_to_interview`` + app outcome ``hired``            → ``hired``
 * ``reject`` / ``skip_assessment_reject`` + outcome ``rejected``
                                                               → ``rejected_confirmed``
@@ -71,8 +72,24 @@ def _entries_for(decision: AgentDecision, app: CandidateApplication):
     later 'hired' transition the going-forward hook handles live)."""
     dtype = str(decision.decision_type)
     if dtype == "advance_to_interview":
-        if str(app.pipeline_stage) == "advanced":
-            yield "interviewed", app.pipeline_stage_updated_at
+        from ..services.recruiter_stage_service import recruiter_stage_from_external
+
+        hiring_stage = str(getattr(app, "recruiter_stage", None) or "").lower()
+        if (
+            not hiring_stage
+            or str(getattr(app, "recruiter_stage_source", None) or "") == "migration"
+        ):
+            hiring_stage = recruiter_stage_from_external(
+                getattr(app, "external_stage_normalized", None)
+                or getattr(app, "external_stage_raw", None)
+                or getattr(app, "workable_stage", None)
+                or getattr(app, "bullhorn_status", None)
+            ) or hiring_stage
+        if hiring_stage in {"interviewing", "offer", "hired"}:
+            yield "interviewed", (
+                getattr(app, "recruiter_stage_updated_at", None)
+                or app.pipeline_stage_updated_at
+            )
         if str(app.application_outcome) == "hired":
             yield "hired", app.application_outcome_updated_at
     elif dtype in ("reject", "skip_assessment_reject"):

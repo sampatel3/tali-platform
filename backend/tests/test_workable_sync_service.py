@@ -13,6 +13,7 @@ from app.components.integrations.workable.sync_service import (
     _candidate_phone,
     _normalize_phone_for_match,
     _normalize_stage_for_terminal,
+    _workable_stage_kind,
     WorkableSyncService,
 )
 from app.components.integrations.workable.service import WorkableService
@@ -579,6 +580,25 @@ def _client_returning(candidates_by_run):
     """MockClient whose candidate list changes per sync run (call count)."""
     state = {"calls": 0}
 
+    def _with_provider_kind(candidate):
+        candidate = dict(candidate)
+        if candidate.get("stage_kind"):
+            return candidate
+        stage = str(candidate.get("stage") or candidate.get("stage_name") or "").lower()
+        if "hired" in stage:
+            candidate["stage_kind"] = "hired"
+        elif "offer" in stage:
+            candidate["stage_kind"] = "offer"
+        elif "interview" in stage:
+            candidate["stage_kind"] = "interview"
+        elif "phone" in stage:
+            candidate["stage_kind"] = "phone-screen"
+        elif stage in {"screening", "review", "rejected"}:
+            # Workable represents disqualification separately; the candidate's
+            # underlying stage still has one of the documented semantic kinds.
+            candidate["stage_kind"] = "shortlisted"
+        return candidate
+
     class MockClient(WorkableService):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
@@ -588,7 +608,7 @@ def _client_returning(candidates_by_run):
 
         def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
             idx = min(state["calls"], len(candidates_by_run) - 1)
-            return candidates_by_run[idx]
+            return [_with_provider_kind(candidate) for candidate in candidates_by_run[idx]]
 
         def get_job_details(self, job_identifier):
             return {}
@@ -597,6 +617,240 @@ def _client_returning(candidates_by_run):
             return None, None, None
 
     return MockClient, state
+
+
+def test_workable_stage_kind_uses_cached_provider_mapping_for_custom_label(db):
+    from app.models.role import Role
+
+    role = Role(
+        name="Mapped stage role",
+        workable_stages=[
+            {
+                "slug": "exec-approval",
+                "name": "Executive approval",
+                "kind": "offer",
+            }
+        ],
+    )
+
+    assert _workable_stage_kind(
+        candidate_payload={"stage": "Executive approval"},
+        candidate_ref={"stage": "exec-approval"},
+        role=role,
+    ) == "offer"
+
+
+def test_workable_custom_label_uses_semantic_kind_without_advancing_tali(db):
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "workable-semantic-stage-kind-org")
+    MockClient, _state = _client_returning([
+        [{
+            "id": "semantic-kind-candidate",
+            "email": "semantic-kind@example.com",
+            "name": "Semantic Kind",
+            "stage": "Founder conversation",
+            "stage_kind": "interview",
+        }],
+    ])
+
+    WorkableSyncService(MockClient()).sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "semantic-kind-candidate",
+    ).one()
+    assert app.pipeline_stage == "applied"
+    assert app.recruiter_stage == "interviewing"
+    assert app.external_stage_raw == "Founder conversation"
+    assert app.external_stage_normalized == "interview"
+    assert app.integration_sync_state["hiring_stage_sync"]["provider_stage_kind"] == "interview"
+
+
+def test_workable_unknown_custom_label_clears_stale_hiring_stage(db):
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "workable-needs-stage-map-org")
+    MockClient, state = _client_returning([
+        [{
+            "id": "needs-map-candidate",
+            "email": "needs-map@example.com",
+            "name": "Needs Map",
+            "stage": "Client interview",
+            "stage_kind": "interview",
+        }],
+        [{
+            "id": "needs-map-candidate",
+            "email": "needs-map@example.com",
+            "name": "Needs Map",
+            "stage": "Founder coffee chat",
+        }],
+    ])
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+    state["calls"] = 1
+    service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "needs-map-candidate",
+    ).one()
+    assert app.pipeline_stage == "applied"
+    assert app.recruiter_stage is None
+    assert app.external_stage_raw == "Founder coffee chat"
+    assert app.external_stage_normalized is None
+    assert app.integration_sync_state["sync_status"] == "needs_mapping"
+    assert app.integration_sync_state["hiring_stage_sync"]["error_code"] == "needs_mapping"
+
+
+def test_workable_first_link_converts_sourced_application_and_runs_intake_once(
+    db, monkeypatch
+):
+    """A Workable application must engage (not duplicate) a sourced lead.
+
+    The first per-application Workable id is the applied signal. Re-syncing the
+    same id is idempotent, while a genuinely new import still takes the normal
+    create path exactly once.
+    """
+    from datetime import datetime, timezone
+
+    from app.components.integrations.workable import sync_service as sync_mod
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.models.candidate_application_event import CandidateApplicationEvent
+    from app.models.role import JOB_STATUS_OPEN, Role
+
+    class LinkClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def get_candidate_activities(self, candidate_id):
+            return []
+
+        def download_candidate_resume(self, candidate_payload):
+            return None
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org = _make_org(db, "workable-sourced-engagement-org")
+    role = Role(
+        organization_id=org.id,
+        name="Platform Engineer",
+        source="workable",
+        workable_job_id="J1",
+        workable_job_data={"id": "J1", "state": "published"},
+        job_status=JOB_STATUS_OPEN,
+        agentic_mode_enabled=True,
+    )
+    candidate = Candidate(
+        organization_id=org.id,
+        email="sourced-workable@example.com",
+        full_name="Sourced Workable",
+    )
+    db.add_all([role, candidate])
+    db.flush()
+    sourced = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="sourced",
+        pipeline_stage="sourced",
+        pipeline_stage_source="agent",
+        application_outcome="open",
+        source="sourced",
+        source_strategy="sourced",
+        version=1,
+    )
+    db.add(sourced)
+    db.commit()
+
+    intake_calls: list[dict] = []
+
+    def capture_intake(app, **kwargs):
+        intake_calls.append({"application_id": app.id, **kwargs})
+
+    monkeypatch.setattr(sync_mod, "on_application_created", capture_intake)
+    service = WorkableSyncService(LinkClient())
+    now = datetime.now(timezone.utc)
+    payload = {
+        "id": "workable-app-1",
+        "email": "sourced-workable@example.com",
+        "name": "Sourced Workable",
+        "stage": "Screening",
+    }
+    call_kwargs = {
+        "db": db,
+        "org": org,
+        "role": role,
+        "job": {"id": "J1", "shortcode": "J1"},
+        "candidate_ref": payload,
+        "now": now,
+        "mode": "full",
+        "prefetched_full_payload": payload,
+    }
+
+    service._sync_candidate_for_role(**call_kwargs)
+    db.flush()
+
+    assert sourced.pipeline_stage == "applied"
+    assert sourced.workable_candidate_id == "workable-app-1"
+    assert sourced.source_strategy == "sourced"
+    assert [call["score"] for call in intake_calls] == [True]
+    event = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == sourced.id,
+            CandidateApplicationEvent.event_type == "pipeline_stage_changed",
+        )
+        .one()
+    )
+    assert (event.from_stage, event.to_stage) == ("sourced", "applied")
+    assert event.actor_type == "sync"
+    assert event.event_metadata["provider"] == "workable"
+
+    # Same remote linkage: no second transition and no second paid intake.
+    service._sync_candidate_for_role(**call_kwargs)
+    db.flush()
+    sourced_calls = [
+        call for call in intake_calls if call["application_id"] == sourced.id
+    ]
+    assert [call["score"] for call in sourced_calls] == [True, False]
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == sourced.id,
+            CandidateApplicationEvent.event_type == "pipeline_stage_changed",
+        )
+        .count()
+        == 1
+    )
+
+    # A brand-new Workable application still reaches the shared intake tail
+    # once; the sourced conversion branch must not double-dispatch it.
+    fresh_payload = {
+        "id": "workable-app-2",
+        "email": "fresh-workable@example.com",
+        "name": "Fresh Workable",
+        "stage": "Screening",
+    }
+    service._sync_candidate_for_role(
+        **{
+            **call_kwargs,
+            "candidate_ref": fresh_payload,
+            "prefetched_full_payload": fresh_payload,
+        }
+    )
+    db.flush()
+    fresh = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.workable_candidate_id == "workable-app-2")
+        .one()
+    )
+    fresh_calls = [
+        call for call in intake_calls if call["application_id"] == fresh.id
+    ]
+    assert [call["score"] for call in fresh_calls] == [True]
 
 
 def test_post_handover_workable_stage_does_not_advance_tali(db):
@@ -646,9 +900,10 @@ def test_sync_stores_per_application_workable_created_at(db):
     assert app.workable_created_at.strftime("%Y-%m-%d %H:%M") == "2026-06-12 09:30"
 
 
-def test_disqualified_candidate_is_flagged_and_advanced(db):
+def test_disqualified_candidate_is_flagged_without_manufacturing_handoff(db):
     """When Workable disqualifies an existing candidate, sync records the flag,
-    refreshes the Workable stage, and parks them in Tali's terminal stage."""
+    refreshes the downstream stage/outcome, and preserves Tali's evaluation
+    stage until an explicit handoff occurs."""
     from app.models.candidate_application import CandidateApplication
 
     org = _make_org(db, "disqualified-update-org")
@@ -674,7 +929,8 @@ def test_disqualified_candidate_is_flagged_and_advanced(db):
     assert app is not None
     assert app.workable_disqualified is True
     assert app.workable_disqualified_at is not None
-    assert app.pipeline_stage == "advanced"
+    assert app.pipeline_stage == "applied"
+    assert app.recruiter_stage == "interviewing"
     # Disqualified is a negative final outcome — captured for model training.
     assert app.application_outcome == "rejected"
     assert (app.workable_stage or "").lower().startswith("technical")
@@ -695,7 +951,7 @@ def test_terminal_outcome_is_captured_for_existing_candidate(db):
           "stage": "Review"}],
         # Second run: one hired, one rejected.
         [{"id": "cand_hire", "email": "hire@example.com", "name": "Will Hire",
-          "stage": "Hired", "hired_at": "2026-05-22T09:00:00Z"},
+          "stage": "Hired - 2026", "hired_at": "2026-05-22T09:00:00Z"},
          {"id": "cand_rej", "email": "rej@example.com", "name": "Will Reject",
           "stage": "Rejected"}],
     ])
@@ -711,7 +967,8 @@ def test_terminal_outcome_is_captured_for_existing_candidate(db):
     ).first()
     assert hired is not None
     assert hired.application_outcome == "hired"
-    assert hired.pipeline_stage == "advanced"
+    assert hired.pipeline_stage == "review"
+    assert hired.recruiter_stage == "hired"
 
     rejected = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == org.id,
@@ -719,13 +976,12 @@ def test_terminal_outcome_is_captured_for_existing_candidate(db):
     ).first()
     assert rejected is not None
     assert rejected.application_outcome == "rejected"
-    assert rejected.pipeline_stage == "advanced"
+    assert rejected.pipeline_stage == "review"
 
 
-def test_offer_is_parked_advanced_outcome_open(db):
-    """An existing candidate moved to Workable 'Offer' is terminal → parked in
-    `advanced`, but the outcome stays `open` (not hired yet). Positive label for
-    the calibrator comes via workable_stage."""
+def test_offer_syncs_hiring_stage_without_manufacturing_handoff(db):
+    """A Workable offer updates the downstream hiring axis while preserving
+    Tali's evaluation stage and leaving outcome open until hire is confirmed."""
     from app.models.candidate_application import CandidateApplication
 
     org = _make_org(db, "offer-terminal-org")
@@ -743,7 +999,8 @@ def test_offer_is_parked_advanced_outcome_open(db):
         CandidateApplication.workable_candidate_id == "cand_offer",
     ).first()
     assert app is not None
-    assert app.pipeline_stage == "advanced"
+    assert app.pipeline_stage == "review"
+    assert app.recruiter_stage == "offer"
     assert app.application_outcome == "open"  # offer != hired yet
     assert (app.workable_stage or "").lower() == "offer"
 
@@ -762,7 +1019,7 @@ def test_advanced_frozen_candidate_later_rejected_flips_to_rejected(db):
     MockClient, state = _client_returning([
         # 1: in review → imported by the normal pipeline (not advanced yet).
         [{"id": "cand_x", "email": "x@example.com", "name": "Ada Adv", "stage": "Review"}],
-        # 2: moved to Offer → parked `advanced`, outcome still open → FROZEN.
+        # 2: moved to Offer after an explicit Tali handoff.
         [{"id": "cand_x", "email": "x@example.com", "name": "Ada Adv", "stage": "Offer"}],
         # 3: rejected downstream, after the handoff.
         [{"id": "cand_x", "email": "x@example.com", "name": "Ada Adv", "stage": "Rejected"}],
@@ -777,13 +1034,28 @@ def test_advanced_frozen_candidate_later_rejected_flips_to_rejected(db):
 
     service.sync_org(db, org)  # run 0: Review → imported
 
-    # Advance + freeze.
+    # Explicit Tali handoff → advance + freeze. Workable must never create it.
+    from app.domains.assessments_runtime.pipeline_service import transition_stage
+
+    app = _app()
+    transition_stage(
+        db,
+        app=app,
+        to_stage="advanced",
+        source="recruiter",
+        actor_type="recruiter",
+        reason="Explicit test handoff",
+    )
+    db.commit()
+
+    # Downstream offer updates the hiring axis without changing Tali's handoff.
     state["calls"] = 1
     service.sync_org(db, org)  # run 1: Offer
     app = _app()
     assert app is not None
     assert app.pipeline_stage == "advanced"
     assert app.application_outcome == "open"
+    assert app.recruiter_stage == "offer"
     assert is_resolved(app)  # genuinely frozen now
 
     # Rejected after the handoff — the freeze must NOT block this flip.
@@ -887,7 +1159,7 @@ def test_email_linked_terminal_app_gets_outcome_captured(db):
     service.sync_org(db, org)
     db.refresh(app)
     assert app.application_outcome == "rejected"
-    assert app.pipeline_stage == "advanced"
+    assert app.pipeline_stage == "review"
     assert app.workable_candidate_id == "cand_email"  # backfilled by the email-fallback lookup
 
 
@@ -932,6 +1204,7 @@ def test_resolved_candidate_is_frozen_except_workable_stage(db):
     assert candidate.full_name == "Original Name"
     # Workable stage still tracked.
     assert (app.workable_stage or "").lower() == "offer"
+    assert app.recruiter_stage == "offer"
     assert app.pipeline_stage == "advanced"
 
 

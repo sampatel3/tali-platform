@@ -40,7 +40,7 @@ describe('DistributeRolePanel', () => {
 
   const open = (props = {}) => {
     render(<DistributeRolePanel roleId={101} {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: /Distribute this role/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Manual distribution support/i }));
   };
 
   it('renders the artefacts for a published role, with copy + share controls', async () => {
@@ -63,6 +63,8 @@ describe('DistributeRolePanel', () => {
 
     // Feed URL shown for boards.
     expect(screen.getByText(publishedPayload.feed_url)).toBeInTheDocument();
+    expect(screen.getByText(/Fallback share helpers/i)).toBeInTheDocument();
+    expect(screen.getByText(/LinkedIn and email require a person to review and send/i)).toBeInTheDocument();
   });
 
   it('shows a Live status view (published, channels, live-since) for a published role', async () => {
@@ -122,7 +124,7 @@ describe('DistributeRolePanel', () => {
     rolesApi.distribution.mockResolvedValue({ data: publishedPayload });
     render(<DistributeRolePanel roleId={101} />);
     expect(rolesApi.distribution).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: /Distribute this role/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Manual distribution support/i }));
     await waitFor(() => expect(rolesApi.distribution).toHaveBeenCalledWith(101));
   });
 

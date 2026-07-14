@@ -227,6 +227,7 @@ def test_agent_mutation_tools_call_shared_action_layer() -> None:
         "_tool_search_applications",
         "_tool_compare_applications",
         "_tool_nl_search_candidates",
+        "_tool_rediscover_candidates",
         "_tool_graph_search_candidates",
         "_tool_refresh_candidate_graph",
         "_tool_get_cohort_signals",

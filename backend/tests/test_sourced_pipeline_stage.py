@@ -381,6 +381,72 @@ def test_create_sourced_candidate_is_idempotent(client):
     assert first.json()["id"] == second.json()["id"]
 
 
+def test_manual_sourced_candidate_rejected_while_role_agent_is_running(client, db):
+    headers, _ = auth_headers(client)
+    role = _make_role(client, headers)
+    role_row = db.get(Role, role["id"])
+    assert role_row is not None
+    role_row.agentic_mode_enabled = True
+    role_row.agent_paused_at = None
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/roles/{role['id']}/sourced-candidates",
+        json={"name": "Agent Owned", "email": "agent-owned@example.com"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "agent is paused or turned off" in resp.json()["detail"]
+    assert (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == role["id"])
+        .count()
+        == 0
+    )
+
+    # Pausing restores only the exceptional support rail; the same request is
+    # then allowed without turning autonomous sourcing off permanently.
+    role_row.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+    paused = client.post(
+        f"/api/v1/roles/{role['id']}/sourced-candidates",
+        json={"name": "Agent Owned", "email": "agent-owned@example.com"},
+        headers=headers,
+    )
+    assert paused.status_code == 201, paused.text
+
+
+def test_manual_sourced_candidate_never_reactivates_deleted_application(client, db):
+    headers, _ = auth_headers(client)
+    role = _make_role(client, headers)
+    payload = {"name": "Removed Lead", "email": "removed-lead@example.com"}
+    created = client.post(
+        f"/api/v1/roles/{role['id']}/sourced-candidates",
+        json=payload,
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+
+    application_id = created.json()["id"]
+    deleted = db.get(CandidateApplication, application_id)
+    assert deleted is not None
+    deleted.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    retried = client.post(
+        f"/api/v1/roles/{role['id']}/sourced-candidates",
+        json=payload,
+        headers=headers,
+    )
+
+    assert retried.status_code == 409, retried.text
+    assert "previously removed" in retried.json()["detail"]
+    db.refresh(deleted)
+    assert deleted.deleted_at is not None
+    assert deleted.pipeline_stage == "sourced"
+
+
 def test_create_sourced_candidate_requires_identity(client):
     headers, _ = auth_headers(client)
     role = _make_role(client, headers)

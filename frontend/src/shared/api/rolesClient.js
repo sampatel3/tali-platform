@@ -142,10 +142,9 @@ export const roles = {
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
     api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob', ...config }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
-  // Add a SOURCED prospect (pre-applied lead) to a role — un-scored, no decision.
-  createSourcedCandidate: (roleId, data) => api.post(`/roles/${roleId}/sourced-candidates`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
+  updateApplicationRecruiterStage: (applicationId, data) => api.patch(`/applications/${applicationId}/recruiter-stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
   // Record/update a recruiter's manual decision (advance/hold/reject +
   // rationale, confidence, next steps) on an application with no assessment
@@ -263,11 +262,6 @@ export const roles = {
   // Workable sync history is at /workable/sync/runs.
   backgroundJobsRuns: (limit = 20) => api.get('/background-jobs/runs', { params: { limit } }),
   backgroundJobRun: (runId) => api.get(`/background-jobs/runs/${runId}`),
-  // Sourcing assist (copy-paste artefacts — no LinkedIn API/scraping).
-  // Deterministic X-ray + LinkedIn boolean plus a metered refined expansion.
-  sourcingSearches: (roleId) => api.post(`/roles/${roleId}/sourcing-searches`),
-  // Paste-a-profile first-touch outreach draft. tone: warm|direct, channel: linkedin|email.
-  outreachDraft: (roleId, data) => api.post(`/roles/${roleId}/outreach-draft`, data),
   // Distribute a PUBLISHED role: copy-paste artefacts (LinkedIn post + share URLs)
   // + the org careers XML feed URL. Returns { published: false } before publish.
   distribution: (roleId) => api.get(`/roles/${roleId}/distribution`),

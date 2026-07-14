@@ -26,6 +26,7 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
 from app.services import background_job_runs
+from app.services import workable_op_runner
 from app.services.background_job_runs import SCOPE_KIND_ORG
 from app.services.workable_actions_service import (
     WorkableWritebackError,
@@ -121,6 +122,130 @@ def _tracked_run_id(org_id: int, op_type: str) -> int:
     )
     assert run_id is not None
     return int(run_id)
+
+
+def test_workable_auto_advance_completes_only_after_confirmed_move(db, monkeypatch):
+    org, role, _user = _seed(db, workable_connected=True)
+    role.auto_advance = True
+    app, decision = _add_decision(
+        db,
+        org,
+        role,
+        status="processing",
+        decision_type="advance_to_interview",
+        workable_linked=True,
+    )
+    db.commit()
+    writes: list[str] = []
+
+    def _confirmed_move(**_kwargs):
+        writes.append("provider")
+        # Local state must still be unresolved at the provider boundary.
+        assert app.pipeline_stage == "review"
+        assert decision.status == "processing"
+        return {"success": True, "config": {"actor_member_id": "m1"}}
+
+    # The handler imports the helper locally, so patch its source module.
+    monkeypatch.setattr(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        _confirmed_move,
+    )
+    monkeypatch.setattr(
+        "app.actions._decision_side_effects.post_decision_summary_to_workable",
+        lambda *_a, **_k: True,
+    )
+
+    result = workable_op_runner.execute_op(
+        db,
+        organization_id=int(org.id),
+        op_type=workable_op_runner.OP_MOVE_STAGE,
+        payload={
+            "application_id": int(app.id),
+            "auto_advance_decision_id": int(decision.id),
+            "role_id": int(role.id),
+            "target_stage": "interview",
+            "target_intent": "advanced",
+            "reason": "Auto-approved per role.auto_advance",
+            "actor_type": "system",
+            "source": "agent",
+        },
+    )
+
+    db.refresh(app)
+    db.refresh(decision)
+    assert result["status"] == "ok"
+    assert writes == ["provider"]
+    assert app.pipeline_stage == "advanced"
+    assert app.pipeline_stage_source == "agent"
+    assert decision.status == "approved"
+    assert decision.human_disposition == "auto_approved"
+    assert decision.evidence["auto_advance_dispatch"]["status"] == "confirmed"
+
+
+def test_terminal_auto_advance_failure_requeues_without_local_advance(db, monkeypatch):
+    org, role, _user = _seed(db, workable_connected=True)
+    role.auto_advance = True
+    app, decision = _add_decision(
+        db,
+        org,
+        role,
+        status="processing",
+        decision_type="advance_to_interview",
+        workable_linked=True,
+    )
+    decision.evidence = {
+        "auto_advance_dispatch": {"status": "queued", "job_run_id": 44}
+    }
+    db.commit()
+
+    def _no_write(**_kwargs):
+        return {
+            "success": False,
+            "skipped": True,
+            "code": "writeback_disabled",
+            "message": "read-only mode",
+            "config": {},
+        }
+
+    monkeypatch.setattr(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        _no_write,
+    )
+    payload = {
+        "application_id": int(app.id),
+        "auto_advance_decision_id": int(decision.id),
+        "role_id": int(role.id),
+        "target_stage": "interview",
+        "target_intent": "advanced",
+        "actor_type": "system",
+        "source": "agent",
+    }
+    with pytest.raises(WorkableWritebackError) as caught:
+        workable_op_runner.execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type=workable_op_runner.OP_MOVE_STAGE,
+            payload=payload,
+        )
+    assert caught.value.code == "writeback_disabled"
+    assert caught.value.retriable is False
+    db.rollback()
+    workable_op_runner.surface_op_failure(
+        db,
+        organization_id=int(org.id),
+        op_type=workable_op_runner.OP_MOVE_STAGE,
+        payload=payload,
+        error=caught.value,
+    )
+
+    db.refresh(app)
+    db.refresh(decision)
+    assert app.pipeline_stage == "review"
+    assert decision.status == "pending"
+    assert decision.human_disposition is None
+    assert decision.evidence["auto_advance_dispatch"]["status"] == "failed"
+    assert decision.evidence["auto_execute_hold"]["status"] == "ats_writeback_failed"
+    assert decision.evidence["auto_execute_hold"]["code"] == "writeback_disabled"
 
 
 def test_mixed_provider_decision_batch_acquires_both_mutexes(db, monkeypatch):

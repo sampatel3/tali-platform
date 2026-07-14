@@ -122,9 +122,10 @@ def test_full_sync_maps_status_and_imports_candidate_history_and_notes(db):
     # applied-date decision surfaces have a real date for Bullhorn apps.
     assert app.workable_created_at is not None
     assert app.workable_created_at.year == 2026 and app.workable_created_at.month == 1
-    # "Interview Scheduled" was mapped (categorization → advanced) so the Taali
-    # stage moved off the funnel top.
-    assert app.pipeline_stage == "advanced"
+    # Bullhorn's interview status updates the downstream hiring axis without
+    # manufacturing Tali's explicit evaluation handoff.
+    assert app.pipeline_stage == "applied"
+    assert app.recruiter_stage == "interviewing"
 
     # --- history → events ---------------------------------------------------
     status_events = (

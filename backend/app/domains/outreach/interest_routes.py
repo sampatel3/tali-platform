@@ -1,14 +1,10 @@
-"""Public interest-capture — the outreach CTA landing.
+"""Public outreach CTA redirect and scanner-safe click tracking.
 
 Each outreach email's CTA points at ``/api/v1/public/outreach/interest/{token}``.
-A GET marks the message ``interested`` (ratchet, idempotent) and, when the
-recipient is a linked prospect, flips ``prospect.status`` to ``interested``, then
-302-redirects to the role's public job page (or a minimal FE thanks page when the
-campaign has no job page).
-
-GET-with-side-effect is intentional here — this is industry-standard click
-tracking. The "effect" is an idempotent flag ratchet, never a destructive write.
-No auth (recipients have no account).
+A GET marks only ``clicked`` and redirects to the campaign's validated apply
+destination. Mail-security scanners follow GET links, so a GET must never
+fabricate the stronger ``interested`` signal. Actual application submission or
+a future explicit POST confirmation owns that conversion.
 """
 from __future__ import annotations
 
@@ -19,12 +15,11 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from ...models.outreach_campaign import (
-    MESSAGE_STATUS_INTERESTED,
+    MESSAGE_STATUS_CLICKED,
     MESSAGE_STATUS_RANK,
     OutreachCampaign,
     OutreachMessage,
 )
-from ...models.prospect import PROSPECT_STATUS_INTERESTED, Prospect
 from ...platform.config import settings
 from ...platform.database import get_db
 
@@ -53,21 +48,13 @@ def capture_interest(interest_token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Invalid interest link")
 
     now = datetime.now(timezone.utc)
-    # Ratchet: never downgrade a more-advanced or failure state. interested is
-    # the strongest positive signal, so it wins over sent/delivered/opened/
-    # clicked; failure states (bounced/complained/etc.) are left as-is.
+    # Ratchet only to clicked. A security scanner may issue this GET; it cannot
+    # prove candidate interest or application intent.
     current_rank = MESSAGE_STATUS_RANK.get(message.status, 0)
-    if current_rank <= MESSAGE_STATUS_RANK[MESSAGE_STATUS_INTERESTED]:
+    if current_rank <= MESSAGE_STATUS_RANK[MESSAGE_STATUS_CLICKED]:
         if message.status in MESSAGE_STATUS_RANK:  # only ratchet from tracking states
-            message.status = MESSAGE_STATUS_INTERESTED
-    message.interested_at = message.interested_at or now
-
-    if message.prospect_id is not None:
-        prospect = (
-            db.query(Prospect).filter(Prospect.id == message.prospect_id).first()
-        )
-        if prospect is not None and prospect.status != PROSPECT_STATUS_INTERESTED:
-            prospect.status = PROSPECT_STATUS_INTERESTED
+            message.status = MESSAGE_STATUS_CLICKED
+    message.clicked_at = message.clicked_at or now
 
     db.commit()
 
@@ -77,7 +64,9 @@ def capture_interest(interest_token: str, db: Session = Depends(get_db)):
         .first()
     )
     target = (
-        _job_page_url(campaign.job_page_token)
+        campaign.destination_url
+        if campaign is not None and campaign.destination_url
+        else _job_page_url(campaign.job_page_token)
         if campaign is not None and campaign.job_page_token
         else _thanks_url()
     )

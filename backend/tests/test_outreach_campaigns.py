@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from sqlalchemy.dialects import postgresql
+
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.role import Role
@@ -16,9 +18,9 @@ from app.models.outreach_campaign import (
     MESSAGE_STATUS_APPROVED,
     MESSAGE_STATUS_DRAFT,
     MESSAGE_STATUS_PENDING,
+    OutreachCampaign,
     OutreachMessage,
 )
-from app.models.prospect import Prospect
 from app.models.user import User
 from app.services.email_suppression_service import suppress
 from tests.conftest import auth_headers
@@ -28,23 +30,20 @@ def _org_id(db, email: str) -> int:
     return db.query(User).filter(User.email == email).first().organization_id
 
 
-def _make_prospect(db, org_id, email, name="P", status="new", candidate_id=None):
-    p = Prospect(
-        organization_id=org_id,
-        full_name=name,
-        email=email,
-        status=status,
-        candidate_id=candidate_id,
-    )
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-    return p
-
-
 def _make_role(db, org_id, name="Backend"):
     role = Role(organization_id=org_id, name=name, source="manual")
     db.add(role)
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+def _make_apply_role(db, org_id, name="Backend"):
+    role = _make_role(db, org_id, name=name)
+    role.workable_job_id = f"job-{role.id}"
+    role.workable_job_data = {
+        "application_url": f"https://apply.workable.com/acme/j/{role.id}/"
+    }
     db.commit()
     db.refresh(role)
     return role
@@ -71,10 +70,31 @@ def _make_candidate_with_app(
     return cand, app
 
 
+def _make_audience_app(db, org_id, campaign_id, email, name="C"):
+    campaign = db.get(OutreachCampaign, int(campaign_id))
+    role = db.get(Role, int(campaign.role_id))
+    _candidate, app = _make_candidate_with_app(
+        db,
+        org_id,
+        email,
+        outcome="rejected",
+        name=name,
+        role=role,
+    )
+    return app
+
+
 def _create_campaign(client, headers, name="Wave 1", role_id=None):
+    if role_id is None:
+        role_response = client.post(
+            "/api/v1/roles",
+            json={"name": f"{name.strip() or 'Outreach'} role"},
+            headers=headers,
+        )
+        assert role_response.status_code == 201, role_response.text
+        role_id = role_response.json()["id"]
     payload = {"name": name}
-    if role_id is not None:
-        payload["role_id"] = role_id
+    payload["role_id"] = role_id
     return client.post("/api/v1/outreach/campaigns", json=payload, headers=headers)
 
 
@@ -100,6 +120,33 @@ def test_create_requires_name(client):
     assert resp.status_code == 400
 
 
+def test_create_requires_role(client):
+    headers, _ = auth_headers(client)
+    resp = client.post(
+        "/api/v1/outreach/campaigns",
+        json={"name": "Role-less wave"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_workable_campaign_captures_external_application_destination(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    role = _make_role(db, org_id)
+    role.workable_job_id = "engineering"
+    role.workable_job_data = {
+        "application_url": "https://apply.workable.com/acme/j/engineering/"
+    }
+    db.commit()
+
+    resp = _create_campaign(client, headers, role_id=role.id)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["destination_provider"] == "workable"
+    assert resp.json()["destination_url"] == role.workable_job_data["application_url"]
+
+
 # ---------------------------------------------------------------------------
 # Audience rails
 # ---------------------------------------------------------------------------
@@ -108,27 +155,29 @@ def test_create_requires_name(client):
 def test_audience_excludes_suppressed_open_dup_missing(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
-    cid = _create_campaign(client, headers).json()["id"]
+    role = _make_role(db, org_id, name="Audience role")
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
 
-    good = _make_prospect(db, org_id, "good@example.com", name="Good")
-    sup = _make_prospect(db, org_id, "blocked@example.com", name="Blocked")
+    good = _make_audience_app(db, org_id, cid, "good@example.com", name="Good")
+    sup = _make_audience_app(db, org_id, cid, "blocked@example.com", name="Blocked")
     suppress(db, email="blocked@example.com", reason="unsubscribed", organization_id=org_id)
     # A candidate with an OPEN application → in-process, excluded.
-    open_cand, open_app = _make_candidate_with_app(db, org_id, "open@example.com", outcome="open")
+    open_cand, open_app = _make_candidate_with_app(
+        db, org_id, "open@example.com", outcome="open", role=role
+    )
     # A candidate with a REJECTED application → eligible pool target.
-    rej_cand, rej_app = _make_candidate_with_app(db, org_id, "pool@example.com", outcome="rejected")
+    rej_cand, rej_app = _make_candidate_with_app(
+        db, org_id, "pool@example.com", outcome="rejected", role=role
+    )
 
     resp = client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
-        json={
-            "prospect_ids": [good.id, sup.id],
-            "application_ids": [open_app.id, rej_app.id],
-        },
+        json={"application_ids": [good.id, sup.id, open_app.id, rej_app.id]},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["added"] == 2  # good prospect + pool candidate
+    assert body["added"] == 2  # eligible sourced/pool applications
     reasons = {s.get("reason") for s in body["skipped"]}
     assert "suppressed" in reasons
     assert "open_application" in reasons
@@ -145,34 +194,49 @@ def test_audience_duplicate_within_and_across_calls(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
     cid = _create_campaign(client, headers).json()["id"]
-    p1 = _make_prospect(db, org_id, "dupe@example.com")
+    app1 = _make_audience_app(db, org_id, cid, "dupe@example.com")
 
     r1 = client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
-        json={"prospect_ids": [p1.id]},
+        json={"application_ids": [app1.id]},
         headers=headers,
     ).json()
     assert r1["added"] == 1
 
     # Adding the same email again → skipped as duplicate.
-    p2 = _make_prospect(db, org_id, "dupe2@example.com")
-    # Force a second prospect with the SAME email is blocked by prospect unique
-    # constraint, so re-add the same prospect id to exercise the campaign-dup path.
+    app2 = _make_audience_app(db, org_id, cid, "dupe2@example.com")
+    # Re-add the first application to exercise the existing campaign-email rail.
     r2 = client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
-        json={"prospect_ids": [p1.id, p2.id]},
+        json={"application_ids": [app1.id, app2.id]},
         headers=headers,
     ).json()
     assert r2["added"] == 1
     assert any(s.get("reason") == "duplicate" for s in r2["skipped"])
 
 
-def test_audience_missing_email(client, db):
+def test_audience_rejects_retired_prospect_ids_field(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
     cid = _create_campaign(client, headers).json()["id"]
+    app = _make_audience_app(db, org_id, cid, "strict-schema@example.com")
+
+    response = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [app.id], "prospect_ids": [123]},
+        headers=headers,
+    )
+
+    assert response.status_code == 422, response.text
+    assert db.query(OutreachMessage).filter_by(campaign_id=cid).count() == 0
+
+
+def test_audience_missing_email(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
     # A candidate with an application but no email.
     role = _make_role(db, org_id)
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
     cand = Candidate(organization_id=org_id, email=None, full_name="No Email")
     db.add(cand)
     db.flush()
@@ -197,13 +261,13 @@ def test_audience_cap_413(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
     cid = _create_campaign(client, headers).json()["id"]
-    pids = []
+    application_ids = []
     for i in range(201):
-        p = _make_prospect(db, org_id, f"cap{i}@example.com")
-        pids.append(p.id)
+        app = _make_audience_app(db, org_id, cid, f"cap{i}@example.com")
+        application_ids.append(app.id)
     resp = client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
-        json={"prospect_ids": pids},
+        json={"application_ids": application_ids},
         headers=headers,
     )
     assert resp.status_code == 413
@@ -217,11 +281,12 @@ def test_audience_cap_413(client, db):
 def test_generate_estimate_without_confirm(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
-    cid = _create_campaign(client, headers).json()["id"]
-    p = _make_prospect(db, org_id, "gen@example.com")
+    role = _make_apply_role(db, org_id)
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
+    app = _make_audience_app(db, org_id, cid, "gen@example.com")
     client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
-        json={"prospect_ids": [p.id]},
+        json={"application_ids": [app.id]},
         headers=headers,
     )
     resp = client.post(
@@ -234,14 +299,75 @@ def test_generate_estimate_without_confirm(client, db):
     assert "status" not in body  # not enqueued
 
 
+def test_generate_requires_real_application_destination(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    role = _make_role(db, org_id, name="Unpublished role")
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
+    app = _make_audience_app(db, org_id, cid, "no-destination@example.com")
+    client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [app.id]},
+        headers=headers,
+    )
+
+    with patch("app.tasks.outreach_tasks.generate_campaign_drafts.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/generate",
+            json={"confirm": True},
+            headers=headers,
+        )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "application_destination_required"
+    delay.assert_not_called()
+    campaign = db.get(OutreachCampaign, int(cid))
+    db.refresh(campaign)
+    assert campaign.status == "draft"
+
+
+def test_generate_reresolves_destination_added_after_creation(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    role = _make_role(db, org_id, name="Destination added later")
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
+    app = _make_audience_app(db, org_id, cid, "destination-ready@example.com")
+    client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [app.id]},
+        headers=headers,
+    )
+    role.workable_job_id = "late-job"
+    role.workable_job_data = {
+        "application_url": "https://apply.workable.com/acme/j/late-job/"
+    }
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.generate_campaign_drafts.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/generate",
+            json={"confirm": True},
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    delay.assert_called_once_with(cid)
+    campaign = db.get(OutreachCampaign, int(cid))
+    db.refresh(campaign)
+    assert campaign.destination_provider == "workable"
+    assert campaign.destination_url == role.workable_job_data["application_url"]
+    assert campaign.job_page_token is None
+
+
 def test_generate_confirm_enqueues(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
-    cid = _create_campaign(client, headers).json()["id"]
-    p = _make_prospect(db, org_id, "gen2@example.com")
+    role = _make_apply_role(db, org_id)
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
+    app = _make_audience_app(db, org_id, cid, "gen2@example.com")
     client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
-        json={"prospect_ids": [p.id]},
+        json={"application_ids": [app.id]},
         headers=headers,
     )
     with patch("app.tasks.outreach_tasks.generate_campaign_drafts.delay") as delay:
@@ -255,14 +381,76 @@ def test_generate_confirm_enqueues(client, db):
     delay.assert_called_once_with(cid)
 
 
-def test_generate_while_generating_conflicts_without_duplicate_enqueue(client, db):
+def test_generate_broker_failure_restores_draft(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    role = _make_apply_role(db, org_id)
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
+    app = _make_audience_app(db, org_id, cid, "retry-generate@example.com")
+    client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [app.id]},
+        headers=headers,
+    )
+
+    with patch(
+        "app.tasks.outreach_tasks.generate_campaign_drafts.delay",
+        side_effect=RuntimeError("broker unavailable"),
+    ):
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/generate",
+            json={"confirm": True},
+            headers=headers,
+        )
+
+    assert resp.status_code == 503, resp.text
+    campaign = db.get(OutreachCampaign, int(cid))
+    db.refresh(campaign)
+    assert campaign.status == "draft"
+
+
+def test_ready_campaign_rejects_audience_and_generation(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
     cid = _create_campaign(client, headers).json()["id"]
-    p = _make_prospect(db, org_id, "gen-once@example.com")
+    _seed_draft(db, org_id, cid)
+    app = _make_audience_app(db, org_id, cid, "too-late@example.com")
+
+    audience = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [app.id]},
+        headers=headers,
+    )
+    with patch("app.tasks.outreach_tasks.generate_campaign_drafts.delay") as delay:
+        generate = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/generate",
+            json={"confirm": True},
+            headers=headers,
+        )
+
+    assert audience.status_code == 409, audience.text
+    assert generate.status_code == 409, generate.text
+    delay.assert_not_called()
+    assert (
+        db.query(OutreachMessage)
+        .filter(
+            OutreachMessage.campaign_id == cid,
+            OutreachMessage.email == "too-late@example.com",
+        )
+        .count()
+        == 0
+    )
+
+
+def test_generate_while_generating_conflicts_without_duplicate_enqueue(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    role = _make_apply_role(db, org_id)
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
+    app = _make_audience_app(db, org_id, cid, "gen-once@example.com")
     client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
-        json={"prospect_ids": [p.id]},
+        json={"application_ids": [app.id]},
         headers=headers,
     )
 
@@ -290,6 +478,8 @@ def test_generate_while_generating_conflicts_without_duplicate_enqueue(client, d
 
 
 def _seed_draft(db, org_id, cid, email="draft@example.com"):
+    campaign = db.get(OutreachCampaign, int(cid))
+    campaign.status = "ready"
     m = OutreachMessage(
         campaign_id=cid,
         organization_id=org_id,
@@ -303,6 +493,86 @@ def _seed_draft(db, org_id, cid, email="draft@example.com"):
     db.commit()
     db.refresh(m)
     return m
+
+
+def test_generating_campaign_blocks_message_and_send_mutations(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    message = _seed_draft(db, org_id, cid)
+    app = _make_audience_app(db, org_id, cid, "blocked-mutation@example.com")
+    campaign = db.get(OutreachCampaign, int(cid))
+    campaign.status = "generating"
+    db.commit()
+
+    responses = [
+        client.patch(
+            f"/api/v1/outreach/campaigns/{cid}",
+            json={"brief": "changed"},
+            headers=headers,
+        ),
+        client.post(
+            f"/api/v1/outreach/campaigns/{cid}/audience",
+            json={"application_ids": [app.id]},
+            headers=headers,
+        ),
+        client.post(
+            f"/api/v1/outreach/campaigns/{cid}/messages/approve",
+            json={"message_ids": [message.id]},
+            headers=headers,
+        ),
+        client.post(
+            f"/api/v1/outreach/campaigns/{cid}/messages/{message.id}",
+            json={"subject": "changed"},
+            headers=headers,
+        ),
+        client.post(
+            f"/api/v1/outreach/campaigns/{cid}/messages/{message.id}/reject",
+            headers=headers,
+        ),
+        client.post(
+            f"/api/v1/outreach/campaigns/{cid}/send",
+            json={"confirm": True},
+            headers=headers,
+        ),
+    ]
+
+    assert all(response.status_code == 409 for response in responses)
+    db.refresh(campaign)
+    db.refresh(message)
+    assert campaign.status == "generating"
+    assert campaign.brief != "changed"
+    assert message.status == MESSAGE_STATUS_DRAFT
+    assert message.subject == "Hi"
+
+
+def test_draft_campaign_cannot_send(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    campaign = db.get(OutreachCampaign, int(cid))
+    message = OutreachMessage(
+        campaign_id=cid,
+        organization_id=org_id,
+        email="approved-too-early@example.com",
+        status=MESSAGE_STATUS_APPROVED,
+    )
+    db.add(message)
+    db.commit()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/send",
+            json={"confirm": True},
+            headers=headers,
+        )
+
+    assert resp.status_code == 409, resp.text
+    delay.assert_not_called()
+    db.refresh(campaign)
+    db.refresh(message)
+    assert campaign.status == "draft"
+    assert message.status == MESSAGE_STATUS_APPROVED
 
 
 def test_edit_only_draft_or_approved(client, db):
@@ -327,6 +597,30 @@ def test_edit_only_draft_or_approved(client, db):
         headers=headers,
     )
     assert r2.status_code == 409
+
+
+def test_editing_approved_message_resets_approval_and_bumps_revision(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    message = _seed_draft(db, org_id, cid)
+    message.status = MESSAGE_STATUS_APPROVED
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/messages/{message.id}",
+        json={"subject": "Edited after approval"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == MESSAGE_STATUS_DRAFT
+    db.refresh(message)
+    campaign = db.get(OutreachCampaign, int(cid))
+    db.refresh(campaign)
+    assert message.status == MESSAGE_STATUS_DRAFT
+    assert message.subject == "Edited after approval"
+    assert campaign.review_revision == 1
 
 
 def test_approve_ids_and_all_drafts(client, db):
@@ -399,6 +693,64 @@ def test_send_no_approved_400(client, db):
         f"/api/v1/outreach/campaigns/{cid}/send", json={"confirm": True}, headers=headers
     )
     assert r.status_code == 400
+
+
+def test_agent_campaign_rejects_legacy_approve_and_send(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    message = _seed_draft(db, org_id, cid)
+    campaign = db.get(OutreachCampaign, int(cid))
+    campaign.origin = "agent"
+    db.commit()
+
+    approve = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/messages/approve",
+        json={"message_ids": [message.id]},
+        headers=headers,
+    )
+    assert approve.status_code == 409, approve.text
+    db.refresh(message)
+    assert message.status == MESSAGE_STATUS_DRAFT
+
+    # Even a historically/pre-existing approved row cannot use the legacy send
+    # path to bypass the campaign-level reviewed snapshot.
+    message.status = MESSAGE_STATUS_APPROVED
+    db.commit()
+    estimate = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/send",
+        json={},
+        headers=headers,
+    )
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        confirm = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/send",
+            json={"confirm": True},
+            headers=headers,
+        )
+    assert estimate.status_code == 409, estimate.text
+    assert confirm.status_code == 409, confirm.text
+    delay.assert_not_called()
+    db.refresh(message)
+    assert message.status == MESSAGE_STATUS_APPROVED
+
+
+def test_campaign_lock_query_compiles_for_postgres(client, db):
+    from app.domains.outreach import campaign_concurrency_service
+
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+
+    query = campaign_concurrency_service._owned_campaign_query(
+        db,
+        cid,
+        org_id,
+        for_update=True,
+    )
+    sql = str(query.statement.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +885,231 @@ def test_approve_and_send_confirm_sends_all_pending(client, db):
         assert m.status == "queued"
     db.refresh(rej)
     assert rej.status == MESSAGE_STATUS_PENDING  # rejected untouched
+    campaign = db.query(OutreachCampaign).filter(OutreachCampaign.id == cid).one()
+    approver = db.query(User).filter(User.email == email).one()
+    assert campaign.approved_by_user_id == approver.id
+    assert campaign.approved_at is not None
+
+
+def test_approve_and_send_rejects_stale_reviewed_count(client, db):
+    """HITL authorization applies only to the outbound count that was shown."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    draft = _seed_draft(db, org_id, cid, "d1@example.com")
+    db.commit()
+
+    estimate = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={},
+        headers=headers,
+    )
+    assert estimate.status_code == 200, estimate.text
+    assert estimate.json()["sendable_count"] == 1
+    assert estimate.json()["will_send"] == 1
+    suppress(
+        db,
+        email="d1@example.com",
+        reason="unsubscribed",
+        organization_id=org_id,
+    )
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={"confirm": True, "expected_will_send_count": 1},
+        headers=headers,
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "outbound audience changed" in resp.json()["detail"]
+    db.refresh(draft)
+    assert draft.status == MESSAGE_STATUS_DRAFT
+    campaign = db.query(OutreachCampaign).filter(OutreachCampaign.id == cid).one()
+    assert campaign.status == "ready"
+    assert campaign.approved_by_user_id is None
+
+
+def test_approve_and_send_rejects_changed_draft_with_same_count(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    draft = _seed_draft(db, org_id, cid, "d1@example.com")
+    draft.subject = "Original subject"
+    draft.body = "Original body"
+    db.commit()
+
+    estimate = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={},
+        headers=headers,
+    ).json()
+    draft.subject = "Changed after review"
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={
+            "confirm": True,
+            "expected_will_send_count": 1,
+            "expected_review_token": estimate["review_token"],
+        },
+        headers=headers,
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "drafts changed" in resp.json()["detail"]
+    db.refresh(draft)
+    assert draft.status == MESSAGE_STATUS_DRAFT
+
+
+def test_agent_campaign_requires_review_snapshot(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    campaign = db.query(OutreachCampaign).filter(OutreachCampaign.id == cid).one()
+    campaign.origin = "agent"
+    _seed_draft(db, org_id, cid, "d1@example.com")
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={"confirm": True, "expected_will_send_count": 1},
+        headers=headers,
+    )
+
+    assert resp.status_code == 428, resp.text
+    assert "Review the agent-prepared" in resp.json()["detail"]
+
+
+def test_agent_campaign_approve_and_send_accepts_exact_review_snapshot(client, db):
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    campaign = db.get(OutreachCampaign, int(cid))
+    campaign.origin = "agent"
+    message = _seed_draft(db, org_id, cid, "agent-reviewed@example.com")
+    db.commit()
+    estimate = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={},
+        headers=headers,
+    ).json()
+
+    with patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={
+                "confirm": True,
+                "expected_will_send_count": estimate["will_send"],
+                "expected_review_token": estimate["review_token"],
+            },
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    delay.assert_called_once_with(cid)
+    db.refresh(message)
+    assert message.status == "queued"
+
+
+def test_review_revision_rejects_edit_race_after_digest_validation(client, db):
+    """SQLite ignores FOR UPDATE, so the persisted revision must still make an
+    edit that starts after digest validation defeat the stale send claim."""
+    from app.domains.outreach import campaign_service
+
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    campaign = db.get(OutreachCampaign, int(cid))
+    campaign.origin = "agent"
+    message = _seed_draft(db, org_id, cid, "race@example.com")
+    db.commit()
+    reviewed = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+        json={},
+        headers=headers,
+    ).json()
+    original_estimate = campaign_service.approve_and_send_estimate
+
+    def _estimate_then_interleave_edit(session, campaign_id, organization_id):
+        estimate = original_estimate(session, campaign_id, organization_id)
+        # This is the write claim an edit route performs before touching the
+        # message. Injecting both writes in the request transaction gives
+        # SQLite a deterministic post-digest interleaving; the stale status CAS
+        # must fail and roll the simulated edit back before anything is queued.
+        session.query(OutreachCampaign).filter(
+            OutreachCampaign.id == campaign_id,
+            OutreachCampaign.status == "ready",
+        ).update(
+            {
+                OutreachCampaign.review_revision: (
+                    OutreachCampaign.review_revision + 1
+                ),
+            },
+            synchronize_session=False,
+        )
+        session.query(OutreachMessage).filter(
+            OutreachMessage.id == message.id,
+        ).update(
+            {OutreachMessage.body: "Concurrent edit"},
+            synchronize_session=False,
+        )
+        return estimate
+
+    with patch.object(
+        campaign_service,
+        "approve_and_send_estimate",
+        side_effect=_estimate_then_interleave_edit,
+    ), patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={
+                "confirm": True,
+                "expected_will_send_count": reviewed["will_send"],
+                "expected_review_token": reviewed["review_token"],
+            },
+            headers=headers,
+        )
+
+    assert resp.status_code == 409, resp.text
+    assert "changed while this request" in resp.json()["detail"]
+    delay.assert_not_called()
+    db.refresh(campaign)
+    db.refresh(message)
+    assert campaign.status == "ready"
+    assert campaign.review_revision == reviewed["review_revision"]
+    assert message.status == MESSAGE_STATUS_DRAFT
+    assert message.body == "Body {{cta_url}}"
+
+
+def test_approve_and_send_broker_failure_restores_retryable_state(client, db):
+    """A durable queue outage cannot strand a campaign in false sending state."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    draft = _seed_draft(db, org_id, cid, "d1@example.com")
+    db.commit()
+
+    with patch(
+        "app.tasks.outreach_tasks.send_campaign_messages.delay",
+        side_effect=RuntimeError("broker unavailable"),
+    ):
+        resp = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/approve-and-send",
+            json={"confirm": True, "expected_will_send_count": 1},
+            headers=headers,
+        )
+
+    assert resp.status_code == 503, resp.text
+    assert "safe to retry" in resp.json()["detail"]
+    db.refresh(draft)
+    assert draft.status == MESSAGE_STATUS_APPROVED
+    campaign = db.query(OutreachCampaign).filter(OutreachCampaign.id == cid).one()
+    approver = db.query(User).filter(User.email == email).one()
+    assert campaign.status == "ready"
+    assert campaign.approved_by_user_id == approver.id
+    assert campaign.approved_at is not None
 
 
 def test_approve_and_send_skips_already_sent(client, db):
@@ -645,23 +1222,37 @@ def test_approve_and_send_archived_409(client, db):
     assert resp.status_code == 409
 
 
-def test_audience_excludes_linked_prospect_with_open_application(client, db):
-    """A prospect linked to a candidate whose open application is under a
-    DIFFERENT email must still be excluded."""
+def test_audience_excludes_sourced_application_when_candidate_is_active_elsewhere(
+    client, db
+):
+    """A sourced lead is excluded when its candidate is active on another role."""
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
-    cand, _app = _make_candidate_with_app(
-        db, org_id, "work-alias@example.com", outcome="open"
+    active_role = _make_role(db, org_id, name="Active role")
+    cand, _active_app = _make_candidate_with_app(
+        db,
+        org_id,
+        "active-elsewhere@example.com",
+        outcome="open",
+        role=active_role,
     )
-    p = _make_prospect(
-        db, org_id, "personal@example.com", name="Open App", candidate_id=cand.id
+    sourcing_role = _make_role(db, org_id, name="Sourcing role")
+    sourced_app = CandidateApplication(
+        candidate_id=cand.id,
+        organization_id=org_id,
+        role_id=sourcing_role.id,
+        application_outcome="open",
+        pipeline_stage="sourced",
     )
-    cid = _create_campaign(client, headers).json()["id"]
+    db.add(sourced_app)
+    db.commit()
+    db.refresh(sourced_app)
+    cid = _create_campaign(client, headers, role_id=sourcing_role.id).json()["id"]
 
     r = client.post(
         f"/api/v1/outreach/campaigns/{cid}/audience",
         headers=headers,
-        json={"prospect_ids": [p.id], "application_ids": []},
+        json={"application_ids": [sourced_app.id]},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -675,15 +1266,26 @@ def test_audience_allows_sourced_but_excludes_applied(client, db):
     open application at a real evaluation stage (``applied``) is still excluded."""
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
-    cid = _create_campaign(client, headers).json()["id"]
+    role = _make_role(db, org_id, name="Sourcing role")
+    cid = _create_campaign(client, headers, role_id=role.id).json()["id"]
 
     # Sourced lead: open outcome, pre-application stage → reachable.
     _sourced_cand, sourced_app = _make_candidate_with_app(
-        db, org_id, "lead@example.com", outcome="open", pipeline_stage="sourced"
+        db,
+        org_id,
+        "lead@example.com",
+        outcome="open",
+        pipeline_stage="sourced",
+        role=role,
     )
     # Real applicant: open outcome, applied stage → in-process, excluded.
     _applied_cand, applied_app = _make_candidate_with_app(
-        db, org_id, "applicant@example.com", outcome="open", pipeline_stage="applied"
+        db,
+        org_id,
+        "applicant@example.com",
+        outcome="open",
+        pipeline_stage="applied",
+        role=role,
     )
 
     resp = client.post(
@@ -710,10 +1312,10 @@ def test_audience_excludes_candidate_with_both_sourced_and_applied_open(client, 
     one wins: they are in-process and must not be an outbound target."""
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)
-    cid = _create_campaign(client, headers).json()["id"]
 
     role_a = _make_role(db, org_id, name="Role-A")
     role_b = _make_role(db, org_id, name="Role-B")
+    cid = _create_campaign(client, headers, role_id=role_a.id).json()["id"]
     cand = Candidate(organization_id=org_id, email="both@example.com", full_name="Both")
     db.add(cand)
     db.flush()

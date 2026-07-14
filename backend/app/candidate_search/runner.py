@@ -72,6 +72,7 @@ def run_search(
     db: Session,
     organization_id: int,
     role_id: int | None = None,
+    metering_role_id: int | None = None,
     nl_query: str,
     base_query,
     rerank_enabled: bool = False,
@@ -101,11 +102,15 @@ def run_search(
                 nl_query,
                 client=parser_client,
                 organization_id=organization_id,
-                role_id=role_id,
+                role_id=(metering_role_id if metering_role_id is not None else role_id),
                 metering={
                     "feature": "search_parse",
                     "organization_id": organization_id,
-                    **({"role_id": int(role_id)} if role_id is not None else {}),
+                    **(
+                        {"role_id": int(metering_role_id)}
+                        if metering_role_id is not None
+                        else ({"role_id": int(role_id)} if role_id is not None else {})
+                    ),
                 },
             )
         except Exception as exc:  # pragma: no cover — parser already swallows
@@ -183,7 +188,7 @@ def run_search(
             kept = rerank_module.rerank_application_ids(
                 db=db,
                 organization_id=organization_id,
-                role_id=role_id,
+                role_id=(metering_role_id if metering_role_id is not None else role_id),
                 application_ids=checked_ids,
                 soft_criteria=parsed.soft_criteria,
                 client=rerank_client,

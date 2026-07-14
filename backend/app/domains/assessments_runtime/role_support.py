@@ -1180,6 +1180,11 @@ def application_to_response(
             }
         )
 
+    from ...services.recruiter_stage_service import (
+        current_recruiter_stage,
+        recruiter_stage_context,
+    )
+
     return ApplicationResponse(
         id=app.id,
         organization_id=app.organization_id,
@@ -1189,6 +1194,10 @@ def application_to_response(
         pipeline_stage=app.pipeline_stage,
         pipeline_stage_updated_at=app.pipeline_stage_updated_at,
         pipeline_stage_source=app.pipeline_stage_source,
+        recruiter_stage=current_recruiter_stage(app),
+        recruiter_stage_source=app.recruiter_stage_source,
+        recruiter_stage_updated_at=app.recruiter_stage_updated_at,
+        hiring_stage_context=recruiter_stage_context(app),
         application_outcome=app.application_outcome,
         application_outcome_updated_at=app.application_outcome_updated_at,
         external_refs=(app.external_refs if isinstance(app.external_refs, dict) else None),

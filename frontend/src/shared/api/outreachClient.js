@@ -11,8 +11,8 @@ export const outreach = {
   patchCampaign: (id, data) => api.patch(`/outreach/campaigns/${id}`, data),
   archiveCampaign: (id) => api.post(`/outreach/campaigns/${id}/archive`),
 
-  addAudience: (id, { prospect_ids = [], application_ids = [] }) =>
-    api.post(`/outreach/campaigns/${id}/audience`, { prospect_ids, application_ids }),
+  addAudience: (id, { application_ids = [] }) =>
+    api.post(`/outreach/campaigns/${id}/audience`, { application_ids }),
 
   // confirm=false → { count, estimated_cost_usd }; confirm=true → enqueues.
   generate: (id, confirm = false) =>
@@ -31,6 +31,19 @@ export const outreach = {
   // One campaign-level HITL: approve every pending draft and send the batch.
   // confirm=false → { sendable_count, will_send, suppressed_excluded,
   // rejected_excluded, failed_excluded }; confirm=true → approves + enqueues.
-  approveAndSend: (id, confirm = false) =>
-    api.post(`/outreach/campaigns/${id}/approve-and-send`, { confirm }),
+  approveAndSend: (
+    id,
+    confirm = false,
+    expectedWillSendCount = null,
+    expectedReviewToken = null,
+  ) =>
+    api.post(`/outreach/campaigns/${id}/approve-and-send`, {
+      confirm,
+      ...(expectedWillSendCount == null
+        ? {}
+        : { expected_will_send_count: expectedWillSendCount }),
+      ...(expectedReviewToken == null
+        ? {}
+        : { expected_review_token: expectedReviewToken }),
+    }),
 };

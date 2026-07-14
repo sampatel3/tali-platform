@@ -14,9 +14,10 @@ function publishedSince(iso) {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-// "Distribute this role" panel on the published-role view. Everything here
-// produces copy-paste / one-click-out artefacts that point at the role's
-// EXISTING public job page — there is NO LinkedIn API, scraping, or automation.
+// Manual distribution fallback on the published-role view. These copy-paste /
+// one-click-out artefacts support teams that do not have an approved publishing
+// connector; they point at the role's EXISTING public job page and never claim
+// LinkedIn API, scraping, or autonomous posting.
 //
 //  - LinkedIn post: an editable, copy-paste-ready draft.
 //  - Share buttons: open LinkedIn's share composer, an email draft, or copy the
@@ -200,7 +201,7 @@ export function DistributeRolePanel({ roleId, jobStatus = null, defaultOpen = fa
       >
         <div className="role-sec-title">
           <span className="marker">DX</span>
-          Distribute this role
+          Manual distribution support
         </div>
         <ChevronDown className="caret" size={12} />
       </button>
@@ -208,8 +209,8 @@ export function DistributeRolePanel({ roleId, jobStatus = null, defaultOpen = fa
       {open ? (
         <div className="src-panel-body">
           <p className="src-help">
-            Copy-paste and one-click helpers to post this role out to LinkedIn and the job boards.
-            Everything points at your public job page — nothing is posted or automated for you.
+            Fallback share helpers for teams without an approved publishing connector. Your public
+            page and careers feed stay live; LinkedIn and email require a person to review and send.
           </p>
 
           {loading ? (

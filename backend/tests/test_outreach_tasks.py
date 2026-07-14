@@ -13,9 +13,18 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+from celery.exceptions import Retry
+
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.outreach_campaign import (
+    CAMPAIGN_STATUS_FAILED,
+    CAMPAIGN_STATUS_GENERATING,
+    CAMPAIGN_STATUS_SENDING,
     MESSAGE_STATUS_APPROVED,
+    MESSAGE_STATUS_CLICKED,
     MESSAGE_STATUS_QUEUED,
     MESSAGE_STATUS_DRAFT,
     MESSAGE_STATUS_FAILED,
@@ -26,14 +35,7 @@ from app.models.outreach_campaign import (
     OutreachCampaign,
     OutreachMessage,
 )
-from app.models.prospect import (
-    PROSPECT_STATUS_ARCHIVED,
-    PROSPECT_STATUS_CONTACTED,
-    PROSPECT_STATUS_CONVERTED,
-    PROSPECT_STATUS_INTERESTED,
-    PROSPECT_STATUS_NEW,
-    Prospect,
-)
+from app.models.role import Role
 from app.models.user import User
 from app.services.email_suppression_service import suppress
 from app.services.resend_webhook_service import apply_resend_event
@@ -56,14 +58,36 @@ def _org_and_user(db):
     return org, user
 
 
-def _campaign(db, org_id, user_id=None, job_page_token=None, status="ready"):
+_AUTO_ROLE = object()
+
+
+def _campaign(
+    db,
+    org_id,
+    user_id=None,
+    job_page_token=None,
+    destination_url=None,
+    status="ready",
+    role_id=_AUTO_ROLE,
+):
+    if role_id is _AUTO_ROLE:
+        role = Role(
+            organization_id=org_id,
+            name=f"Outreach role {id(db)}",
+            source="manual",
+        )
+        db.add(role)
+        db.flush()
+        role_id = role.id
     c = OutreachCampaign(
         organization_id=org_id,
+        role_id=role_id,
         name="Wave",
         brief="Reaching out about the Backend role.",
         status=status,
         created_by_user_id=user_id,
         job_page_token=job_page_token,
+        destination_url=destination_url,
     )
     db.add(c)
     db.commit()
@@ -151,6 +175,121 @@ def test_generate_failure_isolated(db):
     assert c.status == "ready"  # campaign still reaches ready
 
 
+def test_generate_all_failed_retries_then_becomes_terminal(db):
+    org, user = _org_and_user(db)
+    c = _campaign(db, org.id, user.id, status=CAMPAIGN_STATUS_GENERATING)
+    m = _msg(db, c, org.id, "always-fails@example.com", status=MESSAGE_STATUS_PENDING)
+
+    from app.tasks import outreach_tasks
+
+    class _Failed:
+        ok = False
+        value = None
+        error_reason = "model unavailable"
+
+    with patch(
+        "app.services.claude_client_resolver.get_metered_client",
+        return_value=MagicMock(),
+    ), patch(
+        "app.llm.structured.generate_structured",
+        return_value=_Failed(),
+    ) as generate:
+        for expected_attempt in (1, 2):
+            with pytest.raises(Retry):
+                outreach_tasks.generate_campaign_drafts(c.id)
+            db.refresh(c)
+            db.refresh(m)
+            assert c.status == CAMPAIGN_STATUS_GENERATING
+            assert c.draft_generation_attempts == expected_attempt
+            assert m.status == MESSAGE_STATUS_PENDING
+
+        result = outreach_tasks.generate_campaign_drafts(c.id)
+
+    db.refresh(c)
+    db.refresh(m)
+    assert result["ok"] is False
+    assert result["error"] == "draft_generation_failed"
+    assert result["attempts"] == 3
+    assert c.status == CAMPAIGN_STATUS_FAILED
+    assert c.draft_generation_attempts == 3
+    assert m.status == MESSAGE_STATUS_FAILED
+    assert generate.call_count == 3
+
+
+def test_generate_null_role_fails_before_metered_client(db):
+    org, user = _org_and_user(db)
+    campaign = _campaign(
+        db,
+        org.id,
+        user.id,
+        status=CAMPAIGN_STATUS_GENERATING,
+        role_id=None,
+    )
+    message = _msg(
+        db,
+        campaign,
+        org.id,
+        "missing-role@example.com",
+        status=MESSAGE_STATUS_PENDING,
+    )
+
+    from app.tasks import outreach_tasks
+
+    with patch(
+        "app.services.claude_client_resolver.get_metered_client"
+    ) as metered_client:
+        result = outreach_tasks.generate_campaign_drafts(campaign.id)
+
+    assert result["error"] == "invalid_campaign_role"
+    metered_client.assert_not_called()
+    db.refresh(campaign)
+    db.refresh(message)
+    assert campaign.status == CAMPAIGN_STATUS_FAILED
+    assert message.status == MESSAGE_STATUS_FAILED
+
+
+def test_generate_cross_org_role_fails_before_metered_client(db):
+    org, user = _org_and_user(db)
+    other_org = Organization(name="Other", slug=f"other-{id(db)}")
+    db.add(other_org)
+    db.flush()
+    other_role = Role(
+        organization_id=other_org.id,
+        name="Other org role",
+        source="manual",
+    )
+    db.add(other_role)
+    db.flush()
+    campaign = _campaign(
+        db,
+        org.id,
+        user.id,
+        status=CAMPAIGN_STATUS_GENERATING,
+        role_id=other_role.id,
+    )
+    message = _msg(
+        db,
+        campaign,
+        org.id,
+        "wrong-org-role@example.com",
+        status=MESSAGE_STATUS_PENDING,
+    )
+
+    from app.tasks import outreach_tasks
+
+    with patch(
+        "app.services.claude_client_resolver.get_metered_client"
+    ) as metered_client:
+        result = outreach_tasks.generate_campaign_drafts(campaign.id)
+
+    assert result["error"] == "invalid_campaign_role"
+    metered_client.assert_not_called()
+    db.refresh(campaign)
+    db.refresh(message)
+    assert campaign.status == CAMPAIGN_STATUS_FAILED
+    assert message.status == MESSAGE_STATUS_FAILED
+
+
 # ---------------------------------------------------------------------------
 # Send task
 # ---------------------------------------------------------------------------
@@ -158,6 +297,10 @@ def test_generate_failure_isolated(db):
 
 def _run_send(db, campaign_id, send_result=None):
     from app.tasks import outreach_tasks
+
+    campaign = db.get(OutreachCampaign, int(campaign_id))
+    campaign.status = CAMPAIGN_STATUS_SENDING
+    db.commit()
 
     fake_email = MagicMock()
     fake_email.send_outreach_email.return_value = send_result or {
@@ -169,6 +312,31 @@ def _run_send(db, campaign_id, send_result=None):
     ), patch.object(outreach_tasks.time, "sleep", return_value=None):
         outreach_tasks.send_campaign_messages(campaign_id)
     return fake_email
+
+
+def test_send_worker_requires_sending_campaign(db):
+    org, user = _org_and_user(db)
+    campaign = _campaign(db, org.id, user.id, status="ready")
+    message = _msg(
+        db,
+        campaign,
+        org.id,
+        "not-claimed@example.com",
+        status=MESSAGE_STATUS_QUEUED,
+        body="Body {{cta_url}}",
+    )
+
+    from app.tasks import outreach_tasks
+
+    with patch(
+        "app.components.notifications.email_client.EmailService"
+    ) as email_service:
+        result = outreach_tasks.send_campaign_messages(campaign.id)
+
+    assert result["error"] == "invalid_campaign_status"
+    email_service.assert_not_called()
+    db.refresh(message)
+    assert message.status == MESSAGE_STATUS_QUEUED
 
 
 def test_send_only_approved_with_footer_and_headers(db):
@@ -220,72 +388,63 @@ def test_send_rechecks_suppression(db):
     assert m.status == MESSAGE_STATUS_SUPPRESSED
 
 
-def test_successful_send_marks_only_new_linked_prospects_contacted(db):
+def test_successful_send_preserves_source_application_provenance(db):
     org, user = _org_and_user(db)
     c = _campaign(db, org.id, user.id)
-    expected = {
-        PROSPECT_STATUS_NEW: PROSPECT_STATUS_CONTACTED,
-        PROSPECT_STATUS_INTERESTED: PROSPECT_STATUS_INTERESTED,
-        PROSPECT_STATUS_CONVERTED: PROSPECT_STATUS_CONVERTED,
-        PROSPECT_STATUS_ARCHIVED: PROSPECT_STATUS_ARCHIVED,
-    }
-    prospects = []
-    for index, initial_status in enumerate(expected):
-        prospect = Prospect(
-            organization_id=org.id,
-            full_name=f"Prospect {index}",
-            email=f"prospect-{index}@example.com",
-            status=initial_status,
-        )
-        db.add(prospect)
-        db.flush()
-        _msg(
-            db,
-            c,
-            org.id,
-            prospect.email,
-            status=MESSAGE_STATUS_QUEUED,
-            body="B {{cta_url}}",
-            prospect_id=prospect.id,
-        )
-        prospects.append((prospect, initial_status))
+    candidate = Candidate(
+        organization_id=org.id,
+        full_name="Sourced Person",
+        email="sourced-person@example.com",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=c.role_id,
+        application_outcome="open",
+        pipeline_stage="sourced",
+        source_strategy="agentic_sourcing",
+    )
+    db.add(application)
+    db.flush()
+    message = _msg(
+        db,
+        c,
+        org.id,
+        candidate.email,
+        status=MESSAGE_STATUS_QUEUED,
+        body="B {{cta_url}}",
+        candidate_id=candidate.id,
+        source_application_id=application.id,
+    )
 
-    # Multiple successful rows need distinct provider ids in production. For
-    # this lifecycle test, omit the optional id so the unique correlation
-    # constraint does not distract from the state transition under test.
     fake_email = _run_send(db, c.id, send_result={"success": True})
 
-    assert fake_email.send_outreach_email.call_count == len(prospects)
-    for prospect, initial_status in prospects:
-        db.refresh(prospect)
-        assert prospect.status == expected[initial_status]
+    assert fake_email.send_outreach_email.call_count == 1
+    db.refresh(message)
+    db.refresh(application)
+    assert message.status == MESSAGE_STATUS_SENT
+    assert message.source_application_id == application.id
+    assert application.pipeline_stage == "sourced"
+    assert application.application_outcome == "open"
+    assert application.source_strategy == "agentic_sourcing"
 
 
 def test_send_failure_isolated(db):
     org, user = _org_and_user(db)
     c = _campaign(db, org.id, user.id)
-    prospect = Prospect(
-        organization_id=org.id,
-        full_name="Failed send",
-        email="fail@example.com",
-        status=PROSPECT_STATUS_NEW,
-    )
-    db.add(prospect)
-    db.commit()
-    db.refresh(prospect)
     m = _msg(
         db, c, org.id, "fail@example.com",
-        status=MESSAGE_STATUS_QUEUED, body="B {{cta_url}}", prospect_id=prospect.id,
+        status=MESSAGE_STATUS_QUEUED, body="B {{cta_url}}",
     )
     fake_email = _run_send(
         db, c.id, send_result={"success": False, "error": "resend down"}
     )
     assert fake_email.send_outreach_email.call_count == 1
     db.refresh(m)
-    db.refresh(prospect)
     assert m.status == MESSAGE_STATUS_FAILED
     assert "resend down" in (m.error or "")
-    assert prospect.status == PROSPECT_STATUS_NEW
 
 
 def test_email_client_sets_list_unsubscribe_header_and_reply_to():
@@ -296,7 +455,7 @@ def test_email_client_sets_list_unsubscribe_header_and_reply_to():
 
     captured = {}
 
-    def _fake_send(payload, *, recipient):
+    def _fake_send(payload, *, recipient, idempotency_key=None):
         captured["payload"] = payload
         return {"id": "re_hdr_1"}
 
@@ -354,14 +513,11 @@ def test_webhook_unknown_id_ignored(db):
 # ---------------------------------------------------------------------------
 
 
-def test_interest_ratchets_and_redirects_thanks(client, db):
+def test_interest_get_tracks_click_only_and_redirects_thanks(client, db):
     # Build a campaign + message directly, no job page → redirect to thanks.
     org, user = _org_and_user(db)
     c = _campaign(db, org.id, user.id, job_page_token=None)
-    prospect = Prospect(organization_id=org.id, full_name="P", email="p@example.com")
-    db.add(prospect)
-    db.flush()
-    m = _msg(db, c, org.id, "p@example.com", status=MESSAGE_STATUS_SENT, prospect_id=prospect.id)
+    m = _msg(db, c, org.id, "p@example.com", status=MESSAGE_STATUS_SENT)
     token = m.interest_token
 
     resp = client.get(
@@ -371,10 +527,9 @@ def test_interest_ratchets_and_redirects_thanks(client, db):
     assert "/outreach/thanks" in resp.headers["location"]
 
     db.refresh(m)
-    db.refresh(prospect)
-    assert m.status == MESSAGE_STATUS_INTERESTED
-    assert m.interested_at is not None
-    assert prospect.status == "interested"
+    assert m.status == MESSAGE_STATUS_CLICKED
+    assert m.clicked_at is not None
+    assert m.interested_at is None
 
 
 def test_interest_redirects_to_job_page(client, db):
@@ -386,6 +541,21 @@ def test_interest_redirects_to_job_page(client, db):
     )
     assert resp.status_code == 302
     assert "/job/jobtok123" in resp.headers["location"]
+
+
+def test_interest_redirects_to_validated_external_application_url(client, db):
+    org, user = _org_and_user(db)
+    destination = "https://jobs.example.com/apply/engineer"
+    c = _campaign(db, org.id, user.id, destination_url=destination)
+    m = _msg(db, c, org.id, "external@example.com", status=MESSAGE_STATUS_SENT)
+
+    resp = client.get(
+        f"/api/v1/public/outreach/interest/{m.interest_token}",
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == destination
 
 
 def test_interest_invalid_token_404(client):

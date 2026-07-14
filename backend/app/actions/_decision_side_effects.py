@@ -79,6 +79,7 @@ def apply_decision_side_effects(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     reject_notify: bool = True,
+    ats_writeback_already_confirmed: bool = False,
 ) -> None:
     """Run all best-effort side effects for a resolved decision.
 
@@ -101,8 +102,11 @@ def apply_decision_side_effects(
         override_action=override_action,
     )
 
-    # 1. Workable stage move (advance) or disqualify (reject).
-    if app is not None:
+    # 1. Workable/Bullhorn stage move (advance) or disqualify (reject). A
+    # durable auto-advance worker has already confirmed this exact provider
+    # move before resolving local state, so it explicitly skips this step and
+    # retains only the best-effort note/graph effects below.
+    if app is not None and not ats_writeback_already_confirmed:
         if verdict in ("advanced", "skip_advanced"):
             try:
                 try_workable_advance(

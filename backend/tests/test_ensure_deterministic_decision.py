@@ -311,12 +311,11 @@ def test_role_pipeline_counts_not_yet_decided(db):
     )
     # only a_undecided counts: a_decided has a card; a_interviewing is post-handover
     assert counts["not_yet_decided"] == 1
-    # a_interviewing displays as 'advanced' (Workable hand-off), NOT in its
-    # normal bucket, even though its Tali pipeline_stage is still 'applied'.
-    assert counts["advanced"] == 1
-    # Post-#653 the funnel buckets by the REAL cv_match_score, so these two
-    # scored candidates sit in 'scored', leaving 'applied' empty.
-    assert counts["scored"] == 2  # a_undecided + a_decided
+    # External hiring stages no longer overwrite Tali's evaluation funnel.
+    assert counts["advanced"] == 0
+    # All three still sit in Tali's scored bucket; the Workable interview is
+    # visible on the independent hiring-stage axis.
+    assert counts["scored"] == 3
     assert counts["applied"] == 0
     assert a_undecided.id is not None and a_interviewing.id is not None
 

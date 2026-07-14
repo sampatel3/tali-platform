@@ -2,8 +2,8 @@ import React from 'react';
 
 // Public, no-auth thanks page shown after a recipient clicks the outreach CTA
 // when the campaign has no job page to redirect to. No nav chrome — a standalone
-// confirmation surface, purple tokens only. The interest is already recorded by
-// the backend interest endpoint before the redirect lands here.
+// informational surface, purple tokens only. A GET is tracked as a click, not
+// candidate interest, because mail-security scanners also follow links.
 export default function OutreachThanksPage() {
   const wrapStyle = {
     maxWidth: 480,
@@ -16,10 +16,10 @@ export default function OutreachThanksPage() {
   return (
     <div style={wrapStyle} data-testid="outreach-thanks">
       <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--purple, #6b46c1)' }}>
-        Thanks — we&apos;ll be in touch.
+        Thanks for taking a look.
       </h1>
       <p style={{ color: 'var(--text-muted, #6b6b83)', fontSize: 14, marginTop: 12 }}>
-        Your interest has been noted. The hiring team will reach out with next steps.
+        This role does not currently have an online application link. No application was submitted.
       </p>
     </div>
   );

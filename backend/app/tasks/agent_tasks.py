@@ -1257,6 +1257,8 @@ def _cycle_would_be_noop(db, *, role) -> bool:
     fails we fall back to running the cycle (safe default).
     """
     try:
+        from datetime import datetime, timedelta, timezone
+
         from ..agent_runtime.cohort_tools import survey_role_state
 
         survey = survey_role_state(
@@ -1276,12 +1278,48 @@ def _cycle_would_be_noop(db, *, role) -> bool:
         if any(int(counts.get(s) or 0) > 0 for s in actionable_states):
             return False
 
-        # Anything to ask or answer about the role? survey_role_state
-        # emits the list under ``open_recruiter_questions`` — reading the
-        # wrong key here treated roles with unresolved recruiter questions
-        # as no-ops and skipped their cycle.
-        if survey.get("open_recruiter_questions") or survey.get("intent_gaps"):
+        # Sourcing is an autonomous lane, but keep empty-pool searches on a
+        # daily cadence so a role with no matches doesn't burn a model cycle on
+        # every cohort tick. An existing sourced backlog is immediately
+        # actionable unless a campaign is already being prepared or awaiting
+        # the one outbound HITL.
+        sourcing = survey.get("sourcing") or {}
+        active_campaigns = sourcing.get("active_agent_campaigns") or {}
+        campaign_in_flight = any(
+            int(active_campaigns.get(status) or 0) > 0
+            for status in ("generating", "ready", "sending")
+        )
+        if int(counts.get("sourced_uncontacted") or 0) > 0 and not campaign_in_flight:
             return False
+        if not campaign_in_flight:
+            from ..models.agent_run import AgentRun
+
+            recent_runs = (
+                db.query(AgentRun)
+                .filter(
+                    AgentRun.role_id == int(role.id),
+                    AgentRun.status == "succeeded",
+                    AgentRun.started_at
+                    >= datetime.now(timezone.utc) - timedelta(hours=24),
+                )
+                .order_by(AgentRun.started_at.desc())
+                .limit(20)
+                .all()
+            )
+            sourced_recently = any(
+                any(
+                    isinstance(item, dict)
+                    and item.get("name") == "rediscover_candidates"
+                    for item in (run.tools_called or [])
+                )
+                for run in recent_runs
+            )
+            if not sourced_recently:
+                return False
+
+        # Intent gaps and open setup questions are not autonomous work. They
+        # are surfaced by deterministic product checks and should never wake a
+        # paid model cycle merely to ask or acknowledge a human question.
 
         # Backlog work the agent should kick off? auto_enqueue_scoring
         # already handled the actual enqueue above; a non-empty

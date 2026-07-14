@@ -22,6 +22,7 @@ from ..actions import (
     ask_recruiter,
     create_application,
     post_workable_note,
+    prepare_sourced_outreach,
     queue_decision,
     reject_application,
     resend_assessment_invite,
@@ -371,6 +372,55 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "rediscover_candidates",
+        "description": (
+            "Search the organization's consented internal talent pool across "
+            "PREVIOUS roles for people not yet attached to this role. Use this "
+            "for autonomous sourcing; nl_search_candidates only searches the "
+            "current role. Results are billed to the running role and include "
+            "candidate_id values for prepare_sourced_outreach. Prior-role "
+            "scores are context only, never a target-role fit verdict. LinkedIn "
+            "RSC is one-click export, not a Taali-controlled search API; RSC+ "
+            "can delegate to LinkedIn Hiring Assistant, but that LinkedIn-owned "
+            "agent is not callable by Taali. Never copy/paste or scrape."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Role-grounded search using title, must-haves and location.",
+                },
+                "rerank": {"type": "boolean", "default": True},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "prepare_sourced_outreach",
+        "description": (
+            "Autonomously add up to 25 rediscovered people as unscored Sourced "
+            "leads, build the eligible audience, and enqueue personalized "
+            "draft generation under the role budget. Pass candidate_ids from "
+            "rediscover_candidates, or an empty list to prepare already-sourced "
+            "uncontacted leads. Idempotent and capped to one call per cycle. "
+            "This tool NEVER sends: a ready campaign waits for one authenticated "
+            "human approve-and-send HITL."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "maxItems": 25,
+                    "default": [],
+                },
+            },
         },
     },
     {
@@ -826,6 +876,48 @@ def _tool_nl_search_candidates(db: Session, *, agent_run: AgentRun, role: Role, 
         rerank=bool(args.get("rerank", True)),
         limit=int(args.get("limit") or 25),
     )
+
+
+def _tool_rediscover_candidates(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    result = mcp_handlers.rediscover_candidates(
+        db,
+        _read_ctx(role),
+        query=str(args.get("query") or ""),
+        target_role_id=int(role.id),
+        rerank=bool(args.get("rerank", True)),
+        limit=int(args.get("limit") or 10),
+    )
+    # Persist the exact discovery set on the durable AgentRun snapshot. The
+    # mutation tool validates against it, so guessing a valid in-org integer is
+    # not enough to source a person.
+    snapshot = dict(agent_run.agent_state_snapshot or {})
+    snapshot["sourcing_discovery"] = {
+        "provider": str(result.get("provider") or "internal_talent_pool"),
+        "candidate_ids": [
+            int(value) for value in (result.get("candidate_ids") or [])
+        ],
+        "query": str(args.get("query") or ""),
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+    }
+    agent_run.agent_state_snapshot = snapshot
+    db.add(agent_run)
+    db.flush()
+    return result
+
+
+def _tool_prepare_sourced_outreach(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    result = prepare_sourced_outreach.run(
+        db,
+        Actor.agent(int(agent_run.id)),
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        candidate_ids=[int(value) for value in (args.get("candidate_ids") or [])],
+    )
+    return result.as_dict()
 
 
 def _tool_refresh_candidate_graph(
@@ -1766,6 +1858,90 @@ def _auto_execute_decision(
     reason = f"Auto-approved per role.{metadata['auto_toggle']} (decision #{decision.id})"
 
     if decision_type == "advance_to_interview":
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(decision.application_id),
+                CandidateApplication.organization_id == int(role.organization_id),
+            )
+            .first()
+        )
+        externally_linked = bool(
+            app is not None
+            and (
+                str(getattr(app, "workable_candidate_id", None) or "").strip()
+                or str(
+                    getattr(app, "bullhorn_job_submission_id", None) or ""
+                ).strip()
+            )
+        )
+        if externally_linked:
+            from ..services.workable_actions_service import (
+                resolve_workable_interview_stage,
+            )
+            from ..services.workable_op_runner import OP_MOVE_STAGE, enqueue_workable_op
+
+            assert app is not None
+            org = (
+                db.query(Organization)
+                .filter(Organization.id == int(role.organization_id))
+                .first()
+            )
+            target_stage = "advanced"
+            target_stage_error = None
+            # Durable application linkage owns provider routing. Workable keeps
+            # precedence for the deliberate dual-linked migration edge; a
+            # Bullhorn-only application carries the provider-neutral
+            # ``advanced`` intent for reverse mapping in its handler.
+            if str(getattr(app, "workable_candidate_id", None) or "").strip():
+                target_stage, target_stage_error = resolve_workable_interview_stage(
+                    org, role
+                )
+
+            # No local stage/decision resolution occurs here. ``processing`` is
+            # the durable in-flight receipt; the replay-safe ATS move handler
+            # completes both only after Workable/Bullhorn confirms its write.
+            decision.status = "processing"
+            dispatch_evidence = dict(decision.evidence or {})
+            dispatch_evidence["auto_advance_dispatch"] = {
+                "status": "dispatching",
+                "provider": (
+                    "workable"
+                    if str(getattr(app, "workable_candidate_id", None) or "").strip()
+                    else "bullhorn"
+                ),
+            }
+            decision.evidence = dispatch_evidence
+            db.add(decision)
+            db.flush()
+            job_run_id = enqueue_workable_op(
+                organization_id=int(role.organization_id),
+                op_type=OP_MOVE_STAGE,
+                payload={
+                    "application_id": int(app.id),
+                    "auto_advance_decision_id": int(decision.id),
+                    "role_id": int(role.id),
+                    "target_stage": str(target_stage or ""),
+                    "target_stage_error": target_stage_error,
+                    "target_intent": "advanced",
+                    "reason": reason,
+                    "actor_type": "system",
+                    "source": "agent",
+                    "idempotency_key": f"approve_decision:{decision.id}",
+                },
+            )
+            dispatch_evidence = dict(decision.evidence or {})
+            dispatch_state = dict(
+                dispatch_evidence.get("auto_advance_dispatch") or {}
+            )
+            dispatch_state.update(
+                {"status": "queued", "job_run_id": int(job_run_id)}
+            )
+            dispatch_evidence["auto_advance_dispatch"] = dispatch_state
+            decision.evidence = dispatch_evidence
+            db.add(decision)
+            return True
+
         advance_stage.run(
             db,
             actor,
@@ -2433,6 +2609,8 @@ QUEUE_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
 GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "nl_search_candidates",
+        "rediscover_candidates",
+        "prepare_sourced_outreach",
         "graph_search_candidates",
         "get_cohort_signals",
         "score_cv",
@@ -2452,7 +2630,12 @@ GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
 )
 
 DEFAULT_AGENT_ACTION_ALLOWLIST: frozenset[str] = GOVERNED_ACTION_TOOL_NAMES.difference(
-    {"create_application", "post_workable_note", "refresh_candidate_graph"}
+    {
+        "ask_recruiter",
+        "create_application",
+        "post_workable_note",
+        "refresh_candidate_graph",
+    }
 )
 
 _HIGH_RISK_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
@@ -2463,6 +2646,7 @@ _REJECT_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
 )
 MAX_HIGH_RISK_DECISIONS_PER_CYCLE = 1
 MAX_REJECT_DECISIONS_PER_CYCLE = 5
+MAX_SOURCING_PREPARATIONS_PER_CYCLE = 1
 
 
 def action_allowlist_for_role(role: Role) -> frozenset[str]:
@@ -2516,6 +2700,38 @@ def _governance_block_reason(
     if name in GOVERNED_ACTION_TOOL_NAMES and name not in action_allowlist_for_role(role):
         return f"tool '{name}' is not allowed by role.agent_action_allowlist"
 
+    # A role may explicitly re-enable this legacy tool, but even then the model
+    # can open only deterministic setup/authorization blockers. Candidate ties,
+    # thin intent and threshold tuning stay agent-driven or use decision HITL.
+    if name == "ask_recruiter" and str(arguments.get("kind") or "") not in {
+        "missing_job_spec",
+        "monthly_budget_missing",
+        "task_assignment_missing",
+    }:
+        return "routine recruiter questions are disabled; use agent judgment or a governed HITL"
+
+    if name == "prepare_sourced_outreach":
+        requested = {
+            int(value)
+            for value in (arguments.get("candidate_ids") or [])
+            if str(value).strip()
+        }
+        discovery = (agent_run.agent_state_snapshot or {}).get("sourcing_discovery")
+        verified = {
+            int(value)
+            for value in (
+                discovery.get("candidate_ids", [])
+                if isinstance(discovery, dict)
+                else []
+            )
+        }
+        unverified = requested - verified
+        if unverified:
+            return (
+                "candidate_ids must come from rediscover_candidates in this "
+                f"agent run; unverified ids={sorted(unverified)}"
+            )
+
     if name in QUEUE_DECISION_TOOL_NAMES:
         decision_key = _governed_action_key(name, arguments)
         prior_keys = getattr(agent_run, "__governed_decision_keys__", set())
@@ -2541,6 +2757,12 @@ def _governance_block_reason(
             and not is_exact_repeat
         ):
             return "per-cycle reject action cap reached (5)"
+    if (
+        name == "prepare_sourced_outreach"
+        and int(getattr(agent_run, "__sourcing_preparations__", 0) or 0)
+        >= MAX_SOURCING_PREPARATIONS_PER_CYCLE
+    ):
+        return "per-cycle sourcing preparation cap reached (1)"
     return None
 
 
@@ -2551,6 +2773,8 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "search_applications": _tool_search_applications,
     "compare_applications": _tool_compare_applications,
     "nl_search_candidates": _tool_nl_search_candidates,
+    "rediscover_candidates": _tool_rediscover_candidates,
+    "prepare_sourced_outreach": _tool_prepare_sourced_outreach,
     "graph_search_candidates": _tool_graph_search_candidates,
     "refresh_candidate_graph": _tool_refresh_candidate_graph,
     "get_cohort_signals": _tool_get_cohort_signals,
@@ -2597,6 +2821,10 @@ def dispatch(
 
     before = int(agent_run.decisions_emitted or 0)
     result = handler(db, agent_run=agent_run, role=role, args=args)
+    if name == "prepare_sourced_outreach":
+        agent_run.__sourcing_preparations__ = (  # type: ignore[attr-defined]
+            int(getattr(agent_run, "__sourcing_preparations__", 0) or 0) + 1
+        )
     new_decision = int(agent_run.decisions_emitted or 0) > before
     result_status = str(result.get("status") or "") if isinstance(result, dict) else ""
     direct_candidate_contact = (

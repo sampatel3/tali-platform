@@ -137,10 +137,9 @@
 
 .fb-grid {
   display: grid;
-  /* One column per PIPELINE_FUNNEL_STAGES entry (Sourced · Applied · Scored ·
-     Invited · Advanced · Rejected). `completed` is folded into Invited, and
-     `sourced` (Phase 3a prospects) leads the funnel — 6 stages. */
-  grid-template-columns: repeat(6, 1fr);
+  /* Sourced is conditional when its count is zero; the component publishes the
+     visible count while keeping the canonical stage list unchanged. */
+  grid-template-columns: repeat(var(--funnel-stage-count, 6), 1fr);
   gap: 4px;
 }
 

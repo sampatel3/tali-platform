@@ -570,13 +570,15 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
   );
 };
 
-// A sourced lead's ingestion channel, phrased for the recruiter. Prospects
-// added inside Taali carry source 'sourced'; Workable-originated leads carry
-// 'workable'. It's the honest "how did this lead enter" signal we have.
+// A sourced lead's ingestion channel, phrased without presenting the paused/off
+// manual-support rail as the normal path. Taali-origin rows do not currently
+// expose whether they came from the autonomous talent-pool provider or the
+// exceptional fallback, so keep that label provider-neutral.
 const sourcedChannelLabel = (app) => {
   const s = String(app?.source || '').trim().toLowerCase();
   if (s === 'workable') return 'via Workable';
-  return 'added manually';
+  if (s === 'bullhorn') return 'via Bullhorn';
+  return 'via Taali sourcing';
 };
 
 // Sourced tracker — the Home "Sourced" view. Prospects added to a role BEFORE
@@ -598,7 +600,7 @@ const SourcedPanel = ({ candidates, loading, roleNameById }) => {
     return (
       <div className="home-empty">
         <Inbox size={18} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
-        <div>No sourced candidates. Prospects added before they apply — by you or the agent — show up here, awaiting engagement. They aren&apos;t scored and never enter the decision queue.</div>
+        <div>No sourced candidates. Agent-sourced prospects show up here before they apply, awaiting engagement. Manual additions are exceptional support while a role agent is paused or off. They aren&apos;t scored and never enter the decision queue.</div>
       </div>
     );
   }

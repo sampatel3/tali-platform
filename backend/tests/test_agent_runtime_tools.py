@@ -1283,6 +1283,71 @@ def test_auto_promote_role_still_auto_executes_advance(db):
     assert result.get("human_confirm_required") is False
 
 
+def test_external_auto_advance_is_durable_before_local_resolution(db):
+    """A linked Workable application remains local/pending-in-flight until the
+    replay-safe provider op confirms the move."""
+    org = _make_org(db)
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "acme"
+    org.workable_config = {
+        "workable_writeback": True,
+        "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_actor_member_id": "member-1",
+        "interview_stage_name": "interview",
+    }
+    role = _make_role(db, org)
+    role.auto_advance = True
+    role.workable_job_id = "job-1"
+    role.workable_job_data = {"state": "published"}
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="External Strong",
+        email="external-strong@x.test",
+        taali=91.0,
+    )
+    app.workable_candidate_id = "candidate-1"
+    run = _make_agent_run(db, role)
+    run.__engine_verdicts__ = {int(app.id): "advance_to_interview"}
+    db.flush()
+
+    with patch(
+        "app.services.workable_op_runner.enqueue_workable_op", return_value=731
+    ) as enqueue, patch.object(tool_registry.advance_stage, "run") as local_advance:
+        result = tool_registry.dispatch(
+            "queue_advance_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "Strong deterministic advance.",
+                "evidence": {"taali_score": 91},
+                "confidence": 0.96,
+            },
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    local_advance.assert_not_called()
+    db.refresh(app)
+    decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
+    assert app.pipeline_stage == "review"
+    assert decision.status == "processing"
+    assert decision.human_disposition is None
+    assert decision.evidence["auto_advance_dispatch"] == {
+        "status": "queued",
+        "provider": "workable",
+        "job_run_id": 731,
+    }
+    kwargs = enqueue.call_args.kwargs
+    assert kwargs["op_type"] == "move_stage"
+    assert kwargs["payload"]["application_id"] == app.id
+    assert kwargs["payload"]["auto_advance_decision_id"] == decision.id
+    assert kwargs["payload"]["target_stage"] == "interview"
+    assert result["status"] == "processing"
+
+
 def test_auto_execute_decision_refuses_irreversible_reject(db):
     """Defense-in-depth: even if a future caller routes a reject into
     ``_auto_execute_decision`` directly, it refuses rather than firing the

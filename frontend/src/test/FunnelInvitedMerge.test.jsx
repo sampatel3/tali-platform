@@ -48,4 +48,24 @@ describe('funnel: Invited subsumes Completed', () => {
     expect(queryByText(/delivered/)).toBeNull();
     expect(queryByText(/opened/)).toBeNull();
   });
+
+  it('hides a zero Sourced summary tile and reveals it when prospects exist', () => {
+    const { queryByText, getByText, rerender } = render(
+      <FunnelBoard
+        variant="flat"
+        stageCounts={{ sourced: 0, applied: 4 }}
+        decisionsByType={{}}
+      />,
+    );
+    expect(queryByText('Sourced')).toBeNull();
+
+    rerender(
+      <FunnelBoard
+        variant="flat"
+        stageCounts={{ sourced: 2, applied: 4 }}
+        decisionsByType={{}}
+      />,
+    );
+    expect(getByText('Sourced')).toBeTruthy();
+  });
 });

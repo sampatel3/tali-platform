@@ -1,7 +1,7 @@
-"""Outreach campaigns — the send/track layer above prospects + suppression.
+"""Outreach campaigns — the send/track layer above sourced applications.
 
 A campaign is a single-touch outbound wave for one role: the recruiter builds an
-audience (from sourced prospects and/or past applications), Claude drafts one
+audience (from sourced or past applications), Claude drafts one
 message per recipient, the recruiter approves the individual drafts, and only
 then are they sent + tracked. No sequences, no reply detection (v1).
 
@@ -23,6 +23,7 @@ from __future__ import annotations
 import secrets
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
     ForeignKey,
@@ -38,13 +39,15 @@ from sqlalchemy.sql import func
 from ..platform.database import Base
 
 
-# Campaign lifecycle. draft → generating → ready → sending → sent; archived is
-# terminal from any state.
+# Campaign lifecycle. draft → generating → ready → sending → sent.
+# ``failed`` is the bounded draft-generation terminal state; ``archived`` is a
+# user-owned terminal state.
 CAMPAIGN_STATUS_DRAFT = "draft"
 CAMPAIGN_STATUS_GENERATING = "generating"
 CAMPAIGN_STATUS_READY = "ready"
 CAMPAIGN_STATUS_SENDING = "sending"
 CAMPAIGN_STATUS_SENT = "sent"
+CAMPAIGN_STATUS_FAILED = "failed"
 CAMPAIGN_STATUS_ARCHIVED = "archived"
 
 CAMPAIGN_STATUSES = (
@@ -53,6 +56,7 @@ CAMPAIGN_STATUSES = (
     CAMPAIGN_STATUS_READY,
     CAMPAIGN_STATUS_SENDING,
     CAMPAIGN_STATUS_SENT,
+    CAMPAIGN_STATUS_FAILED,
     CAMPAIGN_STATUS_ARCHIVED,
 )
 
@@ -126,13 +130,39 @@ class OutreachCampaign(Base):
 
     name = Column(String, nullable=False)
     status = Column(String, nullable=False, server_default=CAMPAIGN_STATUS_DRAFT)
+    # Durable retry budget for autonomous draft generation. The worker bumps it
+    # once per whole-campaign attempt and stops after its bounded maximum, so an
+    # all-failed campaign cannot sit in ``ready`` and block the role forever.
+    draft_generation_attempts = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # Monotonic compare-and-set fence for every mutation that can change a
+    # ready campaign's reviewed outbound snapshot. PostgreSQL also takes a row
+    # lock; this revision preserves the same safety boundary on SQLite and
+    # protects against stale workers or requests on every database.
+    review_revision = Column(Integer, nullable=False, default=0, server_default="0")
     # Recruiter-editable pitch context fed to the drafter.
     brief = Column(Text, nullable=True)
     # CTA target — the role's published JobPage token, resolved at creation if
     # present. When set, the interest click 302s to the public job page.
     job_page_token = Column(String, nullable=True)
+    # Provider-neutral application destination captured with the campaign.
+    # Native campaigns keep using ``job_page_token``; external ATS campaigns
+    # use a validated HTTPS application URL rather than a generic thanks page.
+    destination_url = Column(String, nullable=True)
+    destination_provider = Column(String, nullable=True)
 
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Provenance for the agent-first workflow. Manual campaigns remain fully
+    # supported, but autonomous preparation is the default path and must be
+    # auditable independently from the human outbound approval.
+    origin = Column(String, nullable=False, default="manual", server_default="manual")
+    prepared_by_agent_run_id = Column(
+        BigInteger, ForeignKey("agent_runs.id"), nullable=True, index=True
+    )
+    idempotency_key = Column(String, nullable=True, unique=True, index=True)
+    approved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
     # Denormalized rollup: {audience, drafted, approved, sent, delivered,
     # opened, clicked, interested, bounced, failed}. Recomputed opportunistically.
     counts = Column(JSON, nullable=True)
@@ -169,9 +199,9 @@ class OutreachMessage(Base):
     organization_id = Column(
         Integer, ForeignKey("organizations.id"), index=True, nullable=False
     )
-    # Where the recipient came from — a sourced prospect, a past candidate, or
-    # both (a prospect linked to a candidate). At most one is the primary path.
-    prospect_id = Column(Integer, ForeignKey("prospects.id"), nullable=True)
+    # Candidate/application provenance for the recipient. The physical legacy
+    # ``prospect_id`` database column is intentionally left in place but is no
+    # longer mapped or written by the live application.
     candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=True)
     # The past application that put a pool candidate in the audience — carried
     # for attribution (never mutated).
@@ -212,5 +242,4 @@ class OutreachMessage(Base):
     )
 
     campaign = relationship("OutreachCampaign", back_populates="messages")
-    prospect = relationship("Prospect")
     candidate = relationship("Candidate")

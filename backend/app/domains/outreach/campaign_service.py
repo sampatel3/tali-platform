@@ -14,6 +14,8 @@ Hard cap 200 recipients per campaign.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -29,32 +31,22 @@ from ...models.outreach_campaign import (
     OutreachCampaign,
     OutreachMessage,
 )
-from ...models.prospect import Prospect
 from ...services.email_suppression_service import normalize_email, suppressed_set
+from .campaign_concurrency_service import (
+    claim_ready_revision,
+    get_owned_campaign,
+)
+from .campaign_destination_service import (
+    default_brief,
+    resolve_campaign_destination,
+    resolve_job_page_token,
+)
 
 AUDIENCE_CAP = 200
 
 # Per-message draft cost (USD) shown in the generate cost-confirm. Mirrors the
 # SOURCING_OUTREACH_DRAFT estimate: one cheap Haiku call per recipient.
 COST_PER_DRAFT_USD = 0.006
-
-
-def get_owned_campaign(
-    db: Session, campaign_id: int, org_id: int
-) -> OutreachCampaign:
-    from fastapi import HTTPException
-
-    campaign = (
-        db.query(OutreachCampaign)
-        .filter(
-            OutreachCampaign.id == campaign_id,
-            OutreachCampaign.organization_id == org_id,
-        )
-        .first()
-    )
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    return campaign
 
 
 # --------------------------------------------------------------------------- #
@@ -88,9 +80,10 @@ def _open_application_emails(db: Session, org_id: int) -> set[str]:
 def _open_application_candidate_ids(db: Session, org_id: int) -> set[int]:
     """Candidate ids with an ACTIVE-PIPELINE open application in this org.
 
-    Catches linked prospects whose candidate applied under a different (or
-    missing) email. Mirrors ``_open_application_emails``: ``sourced`` rows are
-    NOT a block — only open applications past the sourced stage are in-process."""
+    Catches selected sourced applications whose candidate is already active on
+    another role, even when the application email snapshot differs. Mirrors
+    ``_open_application_emails``: ``sourced`` rows are NOT a block — only open
+    applications past the sourced stage are in-process."""
     rows = (
         db.query(CandidateApplication.candidate_id)
         .filter(
@@ -102,34 +95,6 @@ def _open_application_candidate_ids(db: Session, org_id: int) -> set[int]:
         .all()
     )
     return {int(cid) for (cid,) in rows}
-
-
-def _resolve_prospect_recipients(
-    db: Session, org_id: int, prospect_ids: list[int]
-) -> list[dict[str, Any]]:
-    if not prospect_ids:
-        return []
-    rows = (
-        db.query(Prospect)
-        .filter(
-            Prospect.id.in_(set(prospect_ids)),
-            Prospect.organization_id == org_id,
-        )
-        .all()
-    )
-    out: list[dict[str, Any]] = []
-    for p in rows:
-        out.append(
-            {
-                "prospect_id": p.id,
-                "candidate_id": p.candidate_id,
-                "source_application_id": None,
-                "recipient_name": p.full_name,
-                "email": normalize_email(p.email),
-                "ref": {"id": p.id, "kind": "prospect"},
-            }
-        )
-    return out
 
 
 def _resolve_application_recipients(
@@ -155,7 +120,6 @@ def _resolve_application_recipients(
         email = normalize_email(cand.email) if cand and cand.email else ""
         out.append(
             {
-                "prospect_id": None,
                 "candidate_id": cand.id if cand else None,
                 "source_application_id": app.id,
                 "recipient_name": (cand.full_name if cand else None),
@@ -179,7 +143,6 @@ def resolve_audience(
     db: Session,
     *,
     campaign: OutreachCampaign,
-    prospect_ids: list[int],
     application_ids: list[int],
 ) -> dict[str, Any]:
     """Resolve recipients, apply the exclusion rails, create pending messages.
@@ -191,8 +154,7 @@ def resolve_audience(
     from fastapi import HTTPException
 
     org_id = campaign.organization_id
-    candidates = _resolve_prospect_recipients(db, org_id, prospect_ids)
-    candidates += _resolve_application_recipients(
+    candidates = _resolve_application_recipients(
         db,
         org_id,
         application_ids,
@@ -244,7 +206,6 @@ def resolve_audience(
             OutreachMessage(
                 campaign_id=campaign.id,
                 organization_id=org_id,
-                prospect_id=c["prospect_id"],
                 candidate_id=c["candidate_id"],
                 source_application_id=c["source_application_id"],
                 recipient_name=c["recipient_name"],
@@ -295,6 +256,7 @@ def compute_counts(db: Session, campaign_id: int) -> dict[str, int]:
     return {
         "audience": audience,
         "drafted": drafted,
+        "sendable": by_status.get("draft", 0) + by_status.get("approved", 0),
         "approved": by_status.get("approved", 0),
         "sent": by_status.get("sent", 0)
         + by_status.get("delivered", 0)
@@ -326,7 +288,6 @@ def serialize_message(m: OutreachMessage) -> dict[str, Any]:
     return {
         "id": m.id,
         "campaign_id": m.campaign_id,
-        "prospect_id": m.prospect_id,
         "candidate_id": m.candidate_id,
         "source_application_id": m.source_application_id,
         "recipient_name": m.recipient_name,
@@ -357,6 +318,17 @@ def serialize_campaign(
         "status": campaign.status,
         "brief": campaign.brief,
         "job_page_token": campaign.job_page_token,
+        "destination_url": getattr(campaign, "destination_url", None),
+        "destination_provider": getattr(campaign, "destination_provider", None),
+        "origin": getattr(campaign, "origin", "manual") or "manual",
+        "prepared_by_agent_run_id": getattr(campaign, "prepared_by_agent_run_id", None),
+        "approved_by_user_id": getattr(campaign, "approved_by_user_id", None),
+        "approved_at": (
+            campaign.approved_at.isoformat()
+            if getattr(campaign, "approved_at", None)
+            else None
+        ),
+        "review_revision": int(getattr(campaign, "review_revision", 0) or 0),
         "counts": counts if counts is not None else (campaign.counts or {}),
         "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
         "updated_at": campaign.updated_at.isoformat() if campaign.updated_at else None,
@@ -392,7 +364,7 @@ def approved_count(db: Session, campaign_id: int) -> int:
 
 def approve_and_send_estimate(
     db: Session, campaign_id: int, org_id: int
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """What one campaign-level "approve & send all" would actually do.
 
     ``sendable`` = every message still in ``draft`` or ``approved`` — the set
@@ -404,18 +376,54 @@ def approve_and_send_estimate(
     from ...services.email_suppression_service import suppressed_set
 
     rows = (
-        db.query(OutreachMessage.email)
+        db.query(OutreachMessage)
         .filter(
             OutreachMessage.campaign_id == campaign_id,
             OutreachMessage.status.in_(
                 [MESSAGE_STATUS_DRAFT, MESSAGE_STATUS_APPROVED]
             ),
         )
+        .order_by(OutreachMessage.id.asc())
         .all()
     )
-    sendable_emails = [e for (e,) in rows if e]
+    sendable_emails = [row.email for row in rows if row.email]
     suppressed = suppressed_set(db, emails=sendable_emails, organization_id=org_id)
-    suppressed_excluded = sum(1 for e in sendable_emails if e in suppressed)
+    suppressed_excluded = sum(1 for email in sendable_emails if email in suppressed)
+    review_revision = int(
+        db.query(OutreachCampaign.review_revision)
+        .filter(
+            OutreachCampaign.id == campaign_id,
+            OutreachCampaign.organization_id == org_id,
+        )
+        .scalar()
+        or 0
+    )
+
+    # Bind the consequential approval to the exact recipient + rendered draft
+    # snapshot the UI reviewed. A count alone cannot detect two recipients
+    # swapping or a message body changing while the number stays constant.
+    review_snapshot = [
+        {
+            "id": int(row.id),
+            "email": row.email,
+            "subject": row.subject or "",
+            "body": row.body or "",
+            "status": row.status,
+            "suppressed": bool(row.email in suppressed),
+        }
+        for row in rows
+    ]
+    review_token = hashlib.sha256(
+        json.dumps(
+            {
+                "review_revision": review_revision,
+                "messages": review_snapshot,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
     from sqlalchemy import func as sa_func
 
@@ -437,43 +445,9 @@ def approve_and_send_estimate(
         "suppressed_excluded": suppressed_excluded,
         "rejected_excluded": _count(MESSAGE_STATUS_PENDING),
         "failed_excluded": _count(MESSAGE_STATUS_FAILED),
+        "review_token": review_token,
+        "review_revision": review_revision,
     }
-
-
-def resolve_job_page_token(db: Session, role_id: Optional[int]) -> Optional[str]:
-    """The role's published open JobPage token (CTA target), if any.
-
-    Path: Role → its RoleBrief(s) → JobPage. Returns the token of an open page;
-    None when the role is unset, has no brief, or the brief isn't published."""
-    if role_id is None:
-        return None
-    from ...models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
-    from ...models.role_brief import RoleBrief
-
-    page = (
-        db.query(JobPage)
-        .join(RoleBrief, RoleBrief.id == JobPage.brief_id)
-        .filter(
-            RoleBrief.role_id == role_id,
-            JobPage.status == JOB_PAGE_STATUS_OPEN,
-        )
-        .order_by(JobPage.id.desc())
-        .first()
-    )
-    return page.token if page is not None else None
-
-
-def default_brief(role_name: Optional[str], job_spec_text: Optional[str]) -> str:
-    """Deterministic starter brief from the role title + a JD summary snippet.
-
-    Editable later by the recruiter. Kept deterministic (no LLM) so campaign
-    creation is instant and free."""
-    title = (role_name or "the role").strip() or "the role"
-    lines = [f"Reaching out about our {title} opening."]
-    summary = (job_spec_text or "").strip()
-    if summary:
-        lines.append(summary[:600])
-    return "\n\n".join(lines)
 
 
 def is_archived(campaign: OutreachCampaign) -> bool:
