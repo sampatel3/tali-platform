@@ -50,7 +50,9 @@ def _make_role(db, org_id, name="Backend"):
     return role
 
 
-def _make_candidate_with_app(db, org_id, email, outcome="rejected", name="C", role=None):
+def _make_candidate_with_app(
+    db, org_id, email, outcome="rejected", name="C", role=None, pipeline_stage="applied"
+):
     if role is None:
         role = _make_role(db, org_id, name=f"Role-{email}")
     cand = Candidate(organization_id=org_id, email=email, full_name=name)
@@ -61,6 +63,7 @@ def _make_candidate_with_app(db, org_id, email, outcome="rejected", name="C", ro
         organization_id=org_id,
         role_id=role.id,
         application_outcome=outcome,
+        pipeline_stage=pipeline_stage,
     )
     db.add(app)
     db.commit()
@@ -664,3 +667,112 @@ def test_audience_excludes_linked_prospect_with_open_application(client, db):
     body = r.json()
     assert body["added"] == 0
     assert body["skipped"][0]["reason"] == "open_application"
+
+
+def test_audience_allows_sourced_but_excludes_applied(client, db):
+    """Sourced leads are the point of outreach: a candidate whose only open
+    application is at ``pipeline_stage='sourced'`` is a VALID target, while an
+    open application at a real evaluation stage (``applied``) is still excluded."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+
+    # Sourced lead: open outcome, pre-application stage → reachable.
+    _sourced_cand, sourced_app = _make_candidate_with_app(
+        db, org_id, "lead@example.com", outcome="open", pipeline_stage="sourced"
+    )
+    # Real applicant: open outcome, applied stage → in-process, excluded.
+    _applied_cand, applied_app = _make_candidate_with_app(
+        db, org_id, "applicant@example.com", outcome="open", pipeline_stage="applied"
+    )
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [sourced_app.id, applied_app.id]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["added"] == 1  # only the sourced lead
+    assert any(
+        s.get("reason") == "open_application" and s.get("email") == "applicant@example.com"
+        for s in body["skipped"]
+    )
+
+    rows = db.query(OutreachMessage).filter(OutreachMessage.campaign_id == cid).all()
+    assert {r.email for r in rows} == {"lead@example.com"}
+    sourced_row = rows[0]
+    assert sourced_row.source_application_id == sourced_app.id
+
+
+def test_audience_excludes_candidate_with_both_sourced_and_applied_open(client, db):
+    """If a candidate holds BOTH a sourced and a real open application, the real
+    one wins: they are in-process and must not be an outbound target."""
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+
+    role_a = _make_role(db, org_id, name="Role-A")
+    role_b = _make_role(db, org_id, name="Role-B")
+    cand = Candidate(organization_id=org_id, email="both@example.com", full_name="Both")
+    db.add(cand)
+    db.flush()
+    sourced_app = CandidateApplication(
+        candidate_id=cand.id, organization_id=org_id, role_id=role_a.id,
+        application_outcome="open", pipeline_stage="sourced",
+    )
+    applied_app = CandidateApplication(
+        candidate_id=cand.id, organization_id=org_id, role_id=role_b.id,
+        application_outcome="open", pipeline_stage="applied",
+    )
+    db.add_all([sourced_app, applied_app])
+    db.commit()
+    db.refresh(sourced_app)
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [sourced_app.id]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["added"] == 0
+    assert body["skipped"][0]["reason"] == "open_application"
+
+
+def test_role_campaign_rejects_application_from_another_role(client, db):
+    """Application ids cannot cross the campaign's role boundary.
+
+    Otherwise a caller could charge Role A's budget while drafting outreach
+    grounded in Role A for a sourced lead that actually belongs to Role B.
+    """
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    role_a = _make_role(db, org_id, name="Role-A")
+    role_b = _make_role(db, org_id, name="Role-B")
+    _cand, sourced_app = _make_candidate_with_app(
+        db,
+        org_id,
+        "other-role@example.com",
+        outcome="open",
+        pipeline_stage="sourced",
+        role=role_b,
+    )
+    cid = _create_campaign(client, headers, role_id=role_a.id).json()["id"]
+
+    resp = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/audience",
+        json={"application_ids": [sourced_app.id]},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["added"] == 0
+    assert resp.json()["skipped"] == [
+        {
+            "id": sourced_app.id,
+            "email": "other-role@example.com",
+            "reason": "wrong_role",
+        }
+    ]
+    assert db.query(OutreachMessage).filter(OutreachMessage.campaign_id == cid).count() == 0

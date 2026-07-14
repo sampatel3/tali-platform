@@ -7,6 +7,7 @@ import {
   Link2,
   MessageSquare,
   RefreshCw,
+  Send,
   Sparkles,
 } from 'lucide-react';
 
@@ -48,6 +49,8 @@ import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
+import { ReachOutDialog } from './ReachOutDialog';
+import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
 import { AtsTypeTag, atsTypeColumnLabel, roleAtsType } from './atsType';
 import { getErrorMessage, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
@@ -456,11 +459,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [, setRefreshTick] = useState(0);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [activeView, setActiveView] = useRoleView();
-  // HANDOFF v2 §4 / canvas jobs-detail-candidates — primary stage filter
-  // for the Candidates tab. The segmented row above the table toggles
-  // this; the embedded directory re-mounts via key so its internal
-  // `stageFilters` re-seeds from the new initial value.
   const [tableStageFilter, setTableStageFilter] = useState('all');
+  // Only the Sourced lens supports selection; sending outreach is its HITL.
+  const [selectedSourcedAppIds, setSelectedSourcedAppIds] = useState(() => new Set());
+  const [reachOutOpen, setReachOutOpen] = useState(false);
+  const [focusCampaignId, setFocusCampaignId] = useState(null);
   // Candidates-table sort: which column (`tableSortField`) and direction
   // (`tableSortBy`, default desc → strongest score / most-recent first).
   const [tableSortBy, setTableSortBy] = useState('desc');
@@ -480,6 +483,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   useEffect(() => {
     setTableVisibleCount(TABLE_PAGE_SIZE);
   }, [tableStageFilter, tableSortField, tableSortBy]);
+  useEffect(() => {
+    if (tableStageFilter !== 'sourced') setSelectedSourcedAppIds(new Set());
+  }, [tableStageFilter]);
   const [jobSpecError, setJobSpecError] = useState('');
   // The legacy slide-out <AgentSettingsPanel> drawer state has been
   // retired — the canvas-spec Agent settings tab on this page owns
@@ -2181,20 +2187,28 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 ))}
               </div>
               <div className="ctable-toolbar-grow" />
+              {tableStageFilter === 'sourced' && selectedSourcedAppIds.size > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-purple btn-sm"
+                  onClick={() => setReachOutOpen(true)}
+                  title="Draft and send an approval-gated outreach campaign to the selected sourced candidates"
+                >
+                  <Send size={12} />Reach out ({selectedSourcedAppIds.size})
+                </button>
+              ) : null}
               {role?.role_kind === 'sister' && sisterScoringStatus?.status === 'running' ? (
                 <span className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
                   <Spinner size={12} /> Related-role scores {sisterScoringStatus.progress_percent || 0}% complete
                 </span>
               ) : null}
             </div>
-            {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
-                ctable with Candidate / Score / Stage / Workable / Status /
-                Agent / View →. Filtered by tableStageFilter, sorted client-side
-                by tableSortBy. The full CandidatesDirectoryPage was too
-                heavy here — it carried bulk-action chrome, pagination,
-                NL-search, and filter chips that don't belong on the
-                role detail page. The standalone /candidates route still
-                uses the directory. */}
+            {tableStageFilter === 'sourced' && numericRoleId ? (
+              <CampaignsMonitorPanel
+                roleId={numericRoleId} focusCampaignId={focusCampaignId}
+                defaultOpen={focusCampaignId != null}
+              />
+            ) : null}
             {(() => {
               const sorted = sortedTableApplications;
               if (sorted.length === 0) {
@@ -2206,14 +2220,37 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </div>
                 );
               }
-              // Window: only render the first tableVisibleCount rows.
               const visible = sorted.slice(0, tableVisibleCount);
               const hiddenCount = sorted.length - visible.length;
+              const sourcingSelection = tableStageFilter === 'sourced';
+              const visibleIds = sourcingSelection ? visible.map((a) => a.id) : [];
+              const allSelected = visibleIds.length > 0
+                && visibleIds.every((id) => selectedSourcedAppIds.has(id));
+              const someSelected = visibleIds.some((id) => selectedSourcedAppIds.has(id));
+              const toggleAllSourced = (checked) => {
+                const next = new Set(selectedSourcedAppIds);
+                visibleIds.forEach((id) => {
+                  if (checked) next.add(id);
+                  else next.delete(id);
+                });
+                setSelectedSourcedAppIds(next);
+              };
               return (
                 <div className="ctable-wrap">
                   <table className="ctable">
                     <thead>
                       <tr>
+                        {sourcingSelection ? (
+                          <th aria-label="Select" style={{ width: 28 }}>
+                            <input
+                              type="checkbox"
+                              aria-label="Select all visible sourced candidates"
+                              checked={allSelected}
+                              ref={(element) => { if (element) element.indeterminate = !allSelected && someSelected; }}
+                              onChange={(event) => toggleAllSourced(event.target.checked)}
+                            />
+                          </th>
+                        ) : null}
                         <th>Candidate</th>
                         <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
                           <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">{role?.role_kind === 'sister' ? 'Related-role score' : 'Score'}{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
@@ -2250,6 +2287,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         // score-band guess dressed up as a recommendation.
                         const agentLabel = pendingDecision ? formatDecisionLabel(pendingDecision.recommendation) : null;
                         const isAgentRow = Boolean(pendingDecision);
+                        const isSelected = selectedSourcedAppIds.has(application.id);
                         const isTriageRow = (
                           triageApplication
                           && Number(triageApplication.id) === Number(application.id)
@@ -2263,6 +2301,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               onMouseLeave={() => hoverPrefetchRef.current.cancel()}
                               style={{ cursor: 'pointer' }}
                             >
+                              {sourcingSelection ? (
+                                <td onClick={(event) => event.stopPropagation()} style={{ width: 28 }}>
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`Select ${buildApplicationTitle(application)}`}
+                                    checked={isSelected}
+                                    onChange={() => {
+                                      const next = new Set(selectedSourcedAppIds);
+                                      if (next.has(application.id)) next.delete(application.id);
+                                      else next.add(application.id);
+                                      setSelectedSourcedAppIds(next);
+                                    }}
+                                  />
+                                </td>
+                              ) : null}
                               <td>
                                 <div className="name">{buildApplicationTitle(application)}</div>
                                 <div className="sub">
@@ -2316,7 +2369,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={role?.role_kind === 'sister' ? 8 : 7} className="ctable-triage-cell">
+                                <td colSpan={(role?.role_kind === 'sister' ? 8 : 7) + (sourcingSelection ? 1 : 0)} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} agentRunning={agentRunning} />
                                 </td>
                               </tr>
@@ -2369,6 +2422,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           onCreated={(createdRole) => {
             setSisterDialogOpen(false);
             if (createdRole?.id) navigate(`/jobs/${createdRole.id}`);
+          }}
+        />
+
+        <ReachOutDialog
+          open={reachOutOpen}
+          roleId={numericRoleId}
+          roleTitle={role?.name || ''}
+          applications={sortedTableApplications.filter((application) => selectedSourcedAppIds.has(application.id))}
+          onClose={() => setReachOutOpen(false)}
+          onCompleted={() => setSelectedSourcedAppIds(new Set())}
+          onSent={(campaignId) => {
+            setReachOutOpen(false);
+            setSelectedSourcedAppIds(new Set());
+            setFocusCampaignId(campaignId ?? null);
+            setTableStageFilter('sourced');
           }}
         />
 

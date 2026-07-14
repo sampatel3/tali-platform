@@ -6,7 +6,8 @@ place. No LLM calls, no sends — those live in ``outreach_tasks``.
 
 Audience exclusion rails (hard — encode, don't debate):
 - suppressed emails (global OR org-scoped) are never added,
-- candidates with any ``open`` application are in-process, not outbound targets,
+- candidates with an open application PAST the ``sourced`` stage are in-process,
+  not outbound targets (``sourced`` leads ARE reachable — that's the point),
 - duplicate emails within the campaign are collapsed,
 - rows with no usable email are skipped.
 Hard cap 200 recipients per campaign.
@@ -62,16 +63,21 @@ def get_owned_campaign(
 
 
 def _open_application_emails(db: Session, org_id: int) -> set[str]:
-    """Normalized emails of candidates with ANY open application in this org.
+    """Normalized emails of candidates with an ACTIVE-PIPELINE open application.
 
-    In-process people are not outbound targets. One query joins the open
-    applications to their candidates' emails."""
+    In-process people are not outbound targets. ``sourced`` applications are
+    excluded from this rail: a sourced row is a pre-application lead (outcome is
+    ``open`` only because nothing has happened yet) and is the whole point of
+    outreach. A candidate is blocked only if they hold an open application in a
+    real evaluation stage (``applied`` and beyond). One query joins the open
+    non-sourced applications to their candidates' emails."""
     rows = (
         db.query(Candidate.email)
         .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
         .filter(
             CandidateApplication.organization_id == org_id,
             CandidateApplication.application_outcome == "open",
+            CandidateApplication.pipeline_stage != "sourced",
             Candidate.email.isnot(None),
         )
         .all()
@@ -80,13 +86,17 @@ def _open_application_emails(db: Session, org_id: int) -> set[str]:
 
 
 def _open_application_candidate_ids(db: Session, org_id: int) -> set[int]:
-    """Candidate ids with ANY open application in this org — catches linked
-    prospects whose candidate applied under a different (or missing) email."""
+    """Candidate ids with an ACTIVE-PIPELINE open application in this org.
+
+    Catches linked prospects whose candidate applied under a different (or
+    missing) email. Mirrors ``_open_application_emails``: ``sourced`` rows are
+    NOT a block — only open applications past the sourced stage are in-process."""
     rows = (
         db.query(CandidateApplication.candidate_id)
         .filter(
             CandidateApplication.organization_id == org_id,
             CandidateApplication.application_outcome == "open",
+            CandidateApplication.pipeline_stage != "sourced",
             CandidateApplication.candidate_id.isnot(None),
         )
         .all()
@@ -123,7 +133,11 @@ def _resolve_prospect_recipients(
 
 
 def _resolve_application_recipients(
-    db: Session, org_id: int, application_ids: list[int]
+    db: Session,
+    org_id: int,
+    application_ids: list[int],
+    *,
+    campaign_role_id: Optional[int],
 ) -> list[dict[str, Any]]:
     if not application_ids:
         return []
@@ -147,6 +161,15 @@ def _resolve_application_recipients(
                 "recipient_name": (cand.full_name if cand else None),
                 "email": email,
                 "ref": {"id": app.id, "kind": "application"},
+                # A role-scoped campaign must never spend that role's budget
+                # drafting against another role's application. Keep the row in
+                # the result so the caller can report the exclusion honestly.
+                "blocked_reason": (
+                    "wrong_role"
+                    if campaign_role_id is not None
+                    and int(app.role_id) != int(campaign_role_id)
+                    else None
+                ),
             }
         )
     return out
@@ -169,7 +192,12 @@ def resolve_audience(
 
     org_id = campaign.organization_id
     candidates = _resolve_prospect_recipients(db, org_id, prospect_ids)
-    candidates += _resolve_application_recipients(db, org_id, application_ids)
+    candidates += _resolve_application_recipients(
+        db,
+        org_id,
+        application_ids,
+        campaign_role_id=campaign.role_id,
+    )
 
     # Bulk suppression check (no N+1) + open-application set.
     all_emails = [c["email"] for c in candidates if c["email"]]
@@ -194,6 +222,9 @@ def resolve_audience(
     for c in candidates:
         email = c["email"]
         ref_id = c["ref"]["id"]
+        if c.get("blocked_reason"):
+            skipped.append({"id": ref_id, "email": email or None, "reason": c["blocked_reason"]})
+            continue
         if not email:
             skipped.append({"id": ref_id, "reason": "missing_email"})
             continue
