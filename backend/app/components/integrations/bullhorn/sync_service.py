@@ -37,6 +37,7 @@ from ....models.organization import Organization
 from ....models.role import Role
 from ....services.document_service import sanitize_json_for_storage
 from . import sync_candidates, sync_events, sync_jobs
+from .errors import BullhornAuthError, BullhornRateLimitError
 from .service import BullhornService
 
 logger = logging.getLogger("taali.bullhorn.sync")
@@ -59,6 +60,10 @@ JOB_SUBMISSION_FIELDS = "id,status,isDeleted,dateAdded,dateLastModified,jobOrder
 
 class BullhornSyncCancelled(Exception):
     """Raised at a checkpoint when the runner requested cancellation."""
+
+
+class BullhornSyncIncomplete(Exception):
+    """One or more remote entities failed; the same full run must retry."""
 
 
 class BullhornSyncService:
@@ -90,6 +95,7 @@ class BullhornSyncService:
 
     def _persist_progress(self, db: Session, org: Organization, progress: dict) -> None:
         """Write the progress JSON to the org row and commit so the UI can poll."""
+        progress["updated_at"] = self._now().isoformat()
         org.bullhorn_sync_progress = sanitize_json_for_storage(progress)
         db.add(org)
         db.commit()
@@ -118,24 +124,61 @@ class BullhornSyncService:
         cancellation was requested at a checkpoint.
         """
         now = self._now()
+        queued = (
+            org.bullhorn_sync_progress
+            if isinstance(org.bullhorn_sync_progress, dict)
+            else {}
+        )
+        tracking = {
+            key: queued[key]
+            for key in (
+                "run_id",
+                "trigger",
+                "queued_at",
+                "dispatch_attempts",
+                "run_attempts",
+                "last_dispatched_at",
+            )
+            if queued.get(key) is not None
+        }
         progress: dict = {
+            **tracking,
             "phase": "job_orders",
             "mode": mode,
             "started_at": now.isoformat(),
             "finished_at": None,
             "jobs_total": 0,
             "jobs_processed": 0,
+            "roles_closed": 0,
             "candidates_seen": 0,
             "candidates_upserted": 0,
             "applications_upserted": 0,
             "notes_imported": 0,
             "history_events": 0,
             "errors": [],
-            "cancel_requested": False,
+            "cancel_requested": bool(queued.get("cancel_requested", False)),
         }
         self._persist_progress(db, org, progress)
 
-        job_orders = self.client.search_job_orders(fields=JOB_ORDER_FIELDS, query="isOpen:true")
+        if self._is_cancel_requested(db, org):
+            raise BullhornSyncCancelled()
+
+        # A full sync is also the durable missed-close repair. Fetch a complete,
+        # stable open-id set before changing any local lifecycle state; partial
+        # pagination raises and leaves all active roles untouched.
+        job_orders = self.client.search_open_job_orders_complete(fields=JOB_ORDER_FIELDS)
+        _open_ids, repair = sync_jobs.repair_roles_from_complete_open_snapshot(
+            db,
+            org,
+            job_orders,
+            closed_at=now,
+        )
+        progress["roles_closed"] = repair["roles_closed"]
+        progress["job_order_repair"] = {
+            "checked_at": now.isoformat(),
+            "source": "full_sync",
+            **repair,
+        }
         progress["jobs_total"] = len(job_orders)
         progress["phase"] = "candidates"
         self._persist_progress(db, org, progress)
@@ -143,15 +186,24 @@ class BullhornSyncService:
         for job_order in job_orders:
             if self._is_cancel_requested(db, org):
                 raise BullhornSyncCancelled()
+            if not isinstance(job_order, dict):
+                progress["errors"].append("JobOrder unknown: invalid_payload")
+                progress["jobs_processed"] += 1
+                self._persist_progress(db, org, progress)
+                continue
             try:
                 self._sync_one_job_order(db, org, job_order, progress, now)
             except BullhornSyncCancelled:
                 raise
+            except (BullhornAuthError, BullhornRateLimitError):
+                raise
             except Exception as exc:  # pragma: no cover — isolate a bad job order
-                logger.exception(
-                    "Bullhorn JobOrder sync failed org_id=%s job_order_id=%s",
+                db.rollback()
+                logger.error(
+                    "Bullhorn JobOrder sync failed org_id=%s job_order_id=%s error_type=%s",
                     org.id,
                     job_order.get("id"),
+                    type(exc).__name__,
                 )
                 progress["errors"].append(
                     f"JobOrder {job_order.get('id')}: {type(exc).__name__}"
@@ -159,29 +211,38 @@ class BullhornSyncService:
             progress["jobs_processed"] += 1
             self._persist_progress(db, org, progress)
 
-        progress["phase"] = "completed"
+        progress["phase"] = "failed" if progress["errors"] else "completed"
         progress["finished_at"] = self._now().isoformat()
         progress["db_snapshot"] = self._db_snapshot(db, org)
         self._persist_progress(db, org, progress)
+        if progress["errors"]:
+            raise BullhornSyncIncomplete(
+                f"Bullhorn full sync had {len(progress['errors'])} failed entities"
+            )
         return progress
 
     def _sync_one_job_order(
         self, db: Session, org: Organization, job_order: dict, progress: dict, now: datetime
     ) -> None:
+        job_order_id = str(job_order.get("id") or "").strip()
+        if not job_order_id.isdigit():
+            raise ValueError("JobOrder id is missing")
         role, _created = sync_jobs.upsert_role_from_job_order(db, org, job_order)
         if role is None:
-            return
+            raise ValueError("JobOrder could not be materialized")
         db.commit()  # commit the role before walking its submissions
 
-        job_order_id = str(job_order.get("id") or "").strip()
         submissions = self.client.query_job_submissions(
             fields=JOB_SUBMISSION_FIELDS,
-            where=f"jobOrder.id={int(job_order_id)} AND isDeleted=false" if job_order_id.isdigit() else "",
+            where=f"jobOrder.id={int(job_order_id)} AND isDeleted=false",
         )
         for submission in submissions:
             if self._is_cancel_requested(db, org):
                 raise BullhornSyncCancelled()
             if not isinstance(submission, dict):
+                progress["errors"].append(
+                    "JobSubmission unknown: invalid_payload"
+                )
                 continue
             if submission.get("isDeleted"):
                 continue
@@ -190,10 +251,16 @@ class BullhornSyncService:
             # a submission for another order must not attach to this role.
             sub_order_id = str((submission.get("jobOrder") or {}).get("id") or "").strip()
             if sub_order_id and job_order_id and sub_order_id != job_order_id:
+                progress["errors"].append(
+                    f"JobSubmission {submission.get('id')}: scope_mismatch"
+                )
                 continue
-            candidate_payload = self._resolve_candidate_payload(submission)
-            progress["candidates_seen"] += 1
             try:
+                submission_id = str(submission.get("id") or "").strip()
+                if not submission_id.isdigit():
+                    raise ValueError("JobSubmission id is missing")
+                candidate_payload = self._resolve_candidate_payload(submission)
+                progress["candidates_seen"] += 1
                 counters = sync_candidates.sync_submission(
                     db=db,
                     org=org,
@@ -205,34 +272,46 @@ class BullhornSyncService:
                 )
                 progress["candidates_upserted"] += counters.get("candidate_upserted", 0)
                 progress["applications_upserted"] += counters.get("application_upserted", 0)
+                if not counters.get("application_upserted"):
+                    raise RuntimeError("JobSubmission application was not materialized")
 
                 app = self._application_for_submission(db, org, submission)
-                if app is not None:
-                    progress["history_events"] += sync_events.import_submission_history(
-                        db=db, app=app, submission_id=str(submission.get("id")), client=self.client
+                if app is None:
+                    raise RuntimeError("JobSubmission application lookup failed")
+                progress["history_events"] += sync_events.import_submission_history(
+                    db=db,
+                    app=app,
+                    submission_id=submission_id,
+                    client=self.client,
+                )
+                bullhorn_candidate_id = str(
+                    (submission.get("candidate") or {}).get("id")
+                    or candidate_payload.get("id")
+                    or ""
+                ).strip()
+                if bullhorn_candidate_id:
+                    progress["notes_imported"] += sync_events.import_notes(
+                        db=db,
+                        app=app,
+                        bullhorn_candidate_id=bullhorn_candidate_id,
+                        client=self.client,
+                        now=now,
                     )
-                    bullhorn_candidate_id = str(
-                        (submission.get("candidate") or {}).get("id")
-                        or candidate_payload.get("id")
-                        or ""
-                    ).strip()
-                    if bullhorn_candidate_id:
-                        progress["notes_imported"] += sync_events.import_notes(
-                            db=db,
-                            app=app,
-                            bullhorn_candidate_id=bullhorn_candidate_id,
-                            client=self.client,
-                            now=now,
-                        )
                 db.commit()
             except BullhornSyncCancelled:
                 raise
-            except Exception:  # pragma: no cover — isolate a bad submission
+            except (BullhornAuthError, BullhornRateLimitError):
+                raise
+            except Exception as exc:  # pragma: no cover — isolate a bad submission
                 db.rollback()
-                logger.exception(
-                    "Bullhorn submission sync failed org_id=%s submission_id=%s",
+                logger.error(
+                    "Bullhorn submission sync failed org_id=%s submission_id=%s error_type=%s",
                     org.id,
                     submission.get("id"),
+                    type(exc).__name__,
+                )
+                progress["errors"].append(
+                    f"JobSubmission {submission.get('id')}: {type(exc).__name__}"
                 )
 
     def _resolve_candidate_payload(self, submission: dict) -> dict:
@@ -248,18 +327,14 @@ class BullhornSyncService:
             return nested
         cand_id = str((nested or {}).get("id") or "").strip()
         if not cand_id.isdigit():
-            return nested if isinstance(nested, dict) else {}
-        try:
-            rows = self.client.search_candidates(
-                fields=sync_candidates.CANDIDATE_FIELDS, query=f"id:{cand_id}"
-            )
-        except Exception:  # pragma: no cover
-            logger.exception("Bullhorn candidate fetch failed id=%s", cand_id)
-            return nested if isinstance(nested, dict) else {}
+            raise ValueError("JobSubmission candidate id is missing")
+        rows = self.client.search_candidates(
+            fields=sync_candidates.CANDIDATE_FIELDS, query=f"id:{cand_id}"
+        )
         matched = [r for r in rows if str(r.get("id")) == cand_id]
         if matched:
             return matched[0]
-        return nested if isinstance(nested, dict) else {}
+        raise LookupError(f"Bullhorn Candidate {cand_id} was not returned")
 
     def _application_for_submission(
         self, db: Session, org: Organization, submission: dict

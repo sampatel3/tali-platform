@@ -15,7 +15,11 @@ import pytest
 from app.actions import approve_decision as approve_decision_action
 from app.actions.types import ACTOR_RECRUITER, Actor
 from app.models.agent_decision import AgentDecision
-from app.models.background_job_run import JOB_KIND_DECISION_BATCH, BackgroundJobRun
+from app.models.background_job_run import (
+    JOB_KIND_DECISION_BATCH,
+    JOB_KIND_WORKABLE_OP,
+    BackgroundJobRun,
+)
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -105,6 +109,119 @@ def _add_decision(db, org, role, *, status="processing", decision_type="skip_ass
     return app, decision
 
 
+def _tracked_run_id(org_id: int, op_type: str) -> int:
+    kind = JOB_KIND_DECISION_BATCH if op_type == "approve_decisions" else JOB_KIND_WORKABLE_OP
+    run_id = background_job_runs.create_run(
+        kind=kind,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org_id),
+        organization_id=int(org_id),
+        counters={"op_type": op_type},
+        status="queued",
+    )
+    assert run_id is not None
+    return int(run_id)
+
+
+def test_mixed_provider_decision_batch_acquires_both_mutexes(db, monkeypatch):
+    from app.components.integrations.bullhorn.sync_runner import (
+        BULLHORN_ORG_MUTEX_NAMESPACE,
+    )
+    from app.platform.config import settings
+    from app.tasks import assessment_tasks
+    from app.tasks.assessment_tasks import _WORKABLE_ORG_MUTEX_KEY_PREFIX
+
+    org, role, user = _seed(db, workable_connected=True)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    workable_app, workable_decision = _add_decision(
+        db, org, role, workable_linked=True
+    )
+    bullhorn_app, bullhorn_decision = _add_decision(db, org, role)
+    bullhorn_app.source = "bullhorn"
+    bullhorn_app.bullhorn_job_submission_id = "submission-mixed"
+    db.commit()
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+
+    acquired: list[str] = []
+
+    def _acquire(_org_id, *, namespace, **_kwargs):
+        acquired.append(namespace)
+        return (object(), f"{namespace}:{org.id}", None)
+
+    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", _acquire)
+    monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *_: None)
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        return_value={"succeeded": 2, "failed": 0},
+    ):
+        result = run_workable_op_task.run(
+            job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
+            organization_id=int(org.id),
+            op_type="approve_decisions",
+            payload={
+                "decision_ids": [
+                    int(workable_decision.id),
+                    int(bullhorn_decision.id),
+                ],
+                "user_id": int(user.id),
+            },
+        )
+
+    assert set(acquired) == {
+        _WORKABLE_ORG_MUTEX_KEY_PREFIX,
+        BULLHORN_ORG_MUTEX_NAMESPACE,
+    }
+    assert acquired == sorted(acquired)
+    assert result["status"] == "completed"
+
+
+def test_bullhorn_op_fails_closed_when_redis_lock_state_is_unknown(db, monkeypatch):
+    from app.platform.config import settings
+    from app.tasks import assessment_tasks
+    from app.tasks import workable_tasks
+
+    org, role, user = _seed(db)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-lock"
+    app, _decision = _add_decision(db, org, role)
+    app.source = "bullhorn"
+    app.bullhorn_job_submission_id = "submission-lock"
+    db.commit()
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    monkeypatch.setattr(
+        assessment_tasks, "_acquire_workable_org_mutex", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+
+    with patch.object(workable_tasks.run_workable_op_task, "apply_async") as retry, patch(
+        "app.services.workable_op_runner.execute_op"
+    ) as execute:
+        result = run_workable_op_task.run(
+            job_run_id=_tracked_run_id(int(org.id), "manual_outcome"),
+            organization_id=int(org.id),
+            op_type="manual_outcome",
+            payload={
+                "application_id": int(app.id),
+                "target_outcome": "rejected",
+                "user_id": int(user.id),
+            },
+        )
+
+    assert result["status"] == "lock_wait_requeued"
+    retry.assert_called_once()
+    execute.assert_not_called()
+
+
 # --- strict-mode gating primitive ------------------------------------------
 
 
@@ -159,7 +276,7 @@ def test_batch_success_approves_and_records_job(db):
     job_id = background_job_runs.create_run(
         kind=JOB_KIND_DECISION_BATCH, scope_kind=SCOPE_KIND_ORG,
         scope_id=int(org.id), organization_id=int(org.id),
-        counters={"total": 1}, status="queued",
+        counters={"total": 1, "op_type": "approve_decisions"}, status="queued",
     )
     out = run_workable_op_task.run(
         job_run_id=job_id, organization_id=int(org.id), op_type="approve_decisions",
@@ -181,7 +298,8 @@ def test_batch_requeues_failed_decision_to_queue(db):
     db.commit()
     job_id = background_job_runs.create_run(
         kind=JOB_KIND_DECISION_BATCH, scope_kind=SCOPE_KIND_ORG,
-        scope_id=int(org.id), organization_id=int(org.id), counters={"total": 1},
+        scope_id=int(org.id), organization_id=int(org.id),
+        counters={"total": 1, "op_type": "approve_decisions"},
     )
     err = WorkableWritebackError(action="disqualify", code="not_writeable", message="no scope", retriable=False)
     with patch("app.actions.approve_decision.run", side_effect=err):
@@ -209,7 +327,8 @@ def test_batch_requeues_send_assessment_when_role_has_no_task(db):
     )
     db.commit()
     out = run_workable_op_task.run(
-        job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+        job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
+        organization_id=int(org.id), op_type="approve_decisions",
         payload={"decision_ids": [int(decision.id)], "user_id": int(user.id)},
     )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
@@ -228,7 +347,8 @@ def test_batch_skips_non_processing(db):
     db.commit()
     with patch("app.actions.approve_decision.run") as mock_run:
         out = run_workable_op_task.run(
-            job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+            job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
+            organization_id=int(org.id), op_type="approve_decisions",
             payload={"decision_ids": [int(decision.id)], "user_id": int(user.id)},
         )
     assert out["succeeded"] == 0
@@ -260,7 +380,8 @@ def test_batch_resolves_per_role_workable_stage(db):
 
     with patch("app.actions.approve_decision.run", side_effect=_fake_run):
         out = run_workable_op_task.run(
-            job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+            job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
+            organization_id=int(org.id), op_type="approve_decisions",
             payload={
                 "decision_ids": [int(da.id), int(db_dec.id), int(dc.id)],
                 "user_id": int(user.id),
@@ -363,7 +484,8 @@ def test_override_op_requeues_on_workable_failure(db):
     err = WorkableWritebackError(action="move", code="not_writeable", message="no scope", retriable=False)
     with patch("app.actions.override_decision.run", side_effect=err):
         out = run_workable_op_task.run(
-            job_run_id=None, organization_id=int(org.id), op_type="override_decision",
+            job_run_id=_tracked_run_id(int(org.id), "override_decision"),
+            organization_id=int(org.id), op_type="override_decision",
             payload={"decision_id": int(decision.id), "user_id": int(user.id), "override_action": "advance"},
         )
     assert out["status"] == "failed"
@@ -380,7 +502,8 @@ def test_move_stage_op_success_sets_stage(db):
         "app.services.workable_actions_service.move_candidate_in_workable", return_value=success
     ) as mk:
         out = run_workable_op_task.run(
-            job_run_id=None, organization_id=int(org.id), op_type="move_stage",
+            job_run_id=_tracked_run_id(int(org.id), "move_stage"),
+            organization_id=int(org.id), op_type="move_stage",
             payload={"application_id": int(app.id), "user_id": int(user.id),
                      "target_stage": "Technical Interview", "reason": None},
         )
@@ -413,7 +536,7 @@ def test_post_note_op_raises_retriable_on_failure(db):
 # ---------------------------------------------------------------------------
 
 
-def test_lock_contention_requeues_instead_of_failing(monkeypatch):
+def test_lock_contention_requeues_instead_of_failing(db, monkeypatch):
     """When the per-org mutex is held, the task re-enqueues a fresh copy with an
     incremented lock_attempt (its own large wait budget) rather than timing out
     and failing the batch."""
@@ -432,9 +555,11 @@ def test_lock_contention_requeues_instead_of_failing(monkeypatch):
         workable_tasks.run_workable_op_task, "apply_async", _fake_apply_async
     )
 
+    org, _role, _user = _seed(db)
+    db.commit()
     out = workable_tasks.run_workable_op_task.run(
-        job_run_id=None,
-        organization_id=1,
+        job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
+        organization_id=int(org.id),
         op_type="approve_decisions",
         payload={"decision_ids": [1, 2, 3]},
         lock_attempt=0,
@@ -522,6 +647,40 @@ def test_bulk_override_skip_assessment_advance_reclassifies_not_enqueues(db, mon
     assert result.accepted == 2
     assert enqueued == []  # no immediate-advance / Workable op
     assert sorted(reclassified) == sorted([d1.id, d2.id])
+
+
+def test_bulk_override_reports_tracking_failure_per_decision_and_continues(db, monkeypatch):
+    from app.domains.agentic import routes as agentic_routes
+    from app.services.workable_op_runner import AtsJobRunPersistenceError
+
+    org, role, user = _seed(db)
+    _, d1 = _add_decision(db, org, role, status="pending", decision_type="reject")
+    _, d2 = _add_decision(db, org, role, status="pending", decision_type="reject")
+    _, d3 = _add_decision(db, org, role, status="pending", decision_type="reject")
+    db.commit()
+    calls: list[int] = []
+
+    def _fake_enqueue(db_, actor, *, decision_id, **_kwargs):
+        calls.append(int(decision_id))
+        if int(decision_id) == int(d2.id):
+            raise AtsJobRunPersistenceError("override_decision")
+
+    monkeypatch.setattr(agentic_routes.override_decision_action, "enqueue", _fake_enqueue)
+
+    result = agentic_routes.bulk_override(
+        agentic_routes.BulkOverrideBody(
+            decision_ids=[d1.id, d2.id, d3.id],
+            override_action="reject",
+        ),
+        db=db,
+        current_user=user,
+    )
+
+    assert result.requested == 3
+    assert result.accepted == 2
+    assert calls == [d1.id, d2.id, d3.id]
+    assert [failure.decision_id for failure in result.failures] == [d2.id]
+    assert "No provider update was sent for this decision" in result.failures[0].error
 
 
 def test_bulk_override_rejects_unsupported_action(db):

@@ -735,6 +735,51 @@ def test_set_job_status_open_refuses_paused_agent(client, db):
     assert "paused" in response.text.lower()
 
 
+def test_set_job_status_cannot_reopen_closed_bullhorn_mirror(client, db):
+    headers, _ = auth_headers(client)
+    role_id = _publish(
+        client, headers, _make_requisition(client, headers, title="Closed BH Eng")
+    )["role_id"]
+    role = db.query(Role).filter(Role.id == role_id).one()
+    role.agentic_mode_enabled = True
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-closed"
+    role.bullhorn_job_data = {"isOpen": False, "status": "Closed"}
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/roles/{role_id}/job-status",
+        json={"status": "open"},
+        headers=headers,
+    )
+
+    assert response.status_code == 409, response.text
+    assert "linked Bullhorn job is closed" in response.json()["detail"]
+
+
+def test_set_job_status_uses_workable_precedence_for_dual_linked_role(client, db):
+    headers, _ = auth_headers(client)
+    role_id = _publish(
+        client, headers, _make_requisition(client, headers, title="Dual ATS Eng")
+    )["role_id"]
+    role = db.query(Role).filter(Role.id == role_id).one()
+    role.agentic_mode_enabled = True
+    role.workable_job_id = "workable-live"
+    role.workable_job_data = {"state": "published"}
+    role.bullhorn_job_order_id = "bullhorn-stale"
+    role.bullhorn_job_data = {"isOpen": False, "status": "Closed"}
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/roles/{role_id}/job-status",
+        json={"status": "open"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["job_status"] == "open"
+
+
 def test_set_job_status_open_rechecks_runtime_readiness(client, db):
     headers, _ = auth_headers(client)
     role_id = _publish(

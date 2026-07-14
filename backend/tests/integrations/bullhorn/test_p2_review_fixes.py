@@ -13,6 +13,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import pytest
+
 from app.components.integrations.bullhorn import event_handlers, sync_runner
 from app.components.integrations.bullhorn.provider import BullhornProvider
 from app.models.candidate import Candidate
@@ -118,6 +120,20 @@ def test_owning_runner_still_finalizes(db, monkeypatch):
 
     assert len(finalize_calls) == 1
     assert finalize_calls[0]["completed"] is True
+
+
+def test_unknown_redis_lock_state_fails_closed(monkeypatch):
+    """A Redis error is distinct from a held lock and must make the sync retry."""
+    from app.tasks import assessment_tasks
+
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: False,
+    )
+
+    with pytest.raises(sync_runner.BullhornMutexUnavailable):
+        sync_runner._acquire_mutex(42)
 
 
 # ---------------------------------------------------------------------------
@@ -249,13 +265,17 @@ def _seed_role(db, org) -> Role:
 
 def _patch_provider(monkeypatch, module, org, db, *, result):
     """Route Bullhorn resolution to a provider whose reject_application returns
-    ``result``. ``resolve_ats_provider`` is imported lazily inside the helper, so
-    patch it at its source module."""
+    ``result``. ``resolve_application_ats_provider`` is imported lazily inside
+    the helper, so patch it at its source module."""
     import app.components.integrations.resolver as resolver_mod
 
     provider = BullhornProvider(org, db)
     monkeypatch.setattr(provider, "reject_application", lambda **kw: result)
-    monkeypatch.setattr(resolver_mod, "resolve_ats_provider", lambda o, d: provider)
+    monkeypatch.setattr(
+        resolver_mod,
+        "resolve_application_ats_provider",
+        lambda o, d, application: provider,
+    )
 
 
 def test_try_bullhorn_reject_needs_mapping_not_handled(db, monkeypatch):
@@ -336,7 +356,11 @@ def test_try_bullhorn_reject_unexpected_exception_fails_closed(db, monkeypatch):
         raise RuntimeError("network exploded")
 
     monkeypatch.setattr(provider, "reject_application", _boom)
-    monkeypatch.setattr(resolver_mod, "resolve_ats_provider", lambda _o, _d: provider)
+    monkeypatch.setattr(
+        resolver_mod,
+        "resolve_application_ats_provider",
+        lambda _o, _d, _application: provider,
+    )
 
     handled = bar.try_bullhorn_reject(
         db,
@@ -350,6 +374,47 @@ def test_try_bullhorn_reject_unexpected_exception_fails_closed(db, monkeypatch):
     )
     assert handled is False
     assert app.application_outcome == "open"
+
+
+def test_recruiter_bullhorn_reject_unknown_failure_is_retryable_and_secret_safe(
+    db, monkeypatch, caplog
+):
+    import app.actions.reject_application as reject_action
+    import app.components.integrations.resolver as resolver_mod
+    from app.actions.types import Actor
+    from app.services.workable_actions_service import WorkableWritebackError
+
+    org = _bullhorn_org(db)
+    role = _seed_role(db, org)
+    app = _bullhorn_app(db, org, role)
+    db.commit()
+
+    provider = BullhornProvider(org, db)
+    secret = "redis://:REJECT_SECRET@host"
+
+    def _boom(**_kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(provider, "reject_application", _boom)
+    monkeypatch.setattr(
+        resolver_mod,
+        "resolve_application_ats_provider",
+        lambda _o, _d, _application: provider,
+    )
+
+    with pytest.raises(WorkableWritebackError) as raised:
+        reject_action._try_bullhorn_reject(
+            db,
+            app=app,
+            org=org,
+            actor=Actor.system(),
+            reason="below threshold",
+        )
+
+    assert raised.value.code == "unexpected"
+    assert raised.value.retriable is True
+    assert secret not in str(raised.value)
+    assert secret not in caplog.text
 
 
 def test_try_bullhorn_reject_success_is_handled(db, monkeypatch):

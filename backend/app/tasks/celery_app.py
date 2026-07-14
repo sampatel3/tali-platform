@@ -125,6 +125,28 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.sync_agent_mode_roles",
             "schedule": 300.0,
         },
+        # Workable/Bullhorn application creation is a transactional outbox:
+        # the normal kick fires only after the sync commit. Recover a broker
+        # outage, lost kick, or stale dispatcher lease without waiting for a
+        # later ATS re-sync or requiring a recruiter action.
+        "sweep-application-created-outbox-every-minute": {
+            "task": "app.tasks.application_ingest_tasks.sweep_application_created_outbox",
+            "schedule": 60.0,
+        },
+        # Broker acceptance is not a CV-parse result. Reconcile worker acks,
+        # re-kick lost queued tasks, and retry transient parse/provider failures
+        # from the durable application-created row.
+        "sweep-application-cv-parse-outbox-every-minute": {
+            "task": "app.tasks.application_ingest_tasks.sweep_application_cv_parse_outbox",
+            "schedule": 60.0,
+        },
+        # Related-role evaluations are their own durable scoring outbox. This
+        # recovers broker loss, worker death, transient provider failures, and
+        # rows held while the source role's agent is paused or turned off.
+        "recover-related-role-evaluations-every-minute": {
+            "task": "app.tasks.sister_role_tasks.recover_sister_role_evaluations",
+            "schedule": 60.0,
+        },
         # Nightly catch-all for non-starred, non-agent roles. 03:15 UTC
         # is off-peak for our user base and avoids colliding with the
         # daily Anthropic reconciliation at midnight.
@@ -146,6 +168,18 @@ celery_app.conf.update(
         "expire-stuck-decision-batches-every-5-minutes": {
             "task": "app.tasks.workable_tasks.expire_stuck_decision_batches",
             "schedule": 300.0,
+        },
+        # Overrides may include non-idempotent recruiter side effects, so their
+        # payloads are never replayed by the generic ATS-op recovery. A stale
+        # queued/running delivery instead fails visibly and returns only a still-
+        # processing decision to the Hub for explicit HITL retry.
+        "expire-stuck-override-ops-every-5-minutes": {
+            "task": "app.tasks.workable_tasks.expire_stuck_override_ops",
+            "schedule": 300.0,
+        },
+        "recover-dispatching-ats-ops-every-minute": {
+            "task": "app.tasks.workable_tasks.recover_dispatching_workable_ops",
+            "schedule": 60.0,
         },
         # A broker outage or worker SIGKILL must not leave a CvScoreJob in
         # pending/running forever (which blocks enqueue_score's duplicate
@@ -423,6 +457,13 @@ celery_app.conf.update(
         # config change, not a code change.
         "bullhorn-event-poll": {
             "task": "app.tasks.bullhorn_tasks.bullhorn_event_poll_sweep",
+            "schedule": float(settings.BULLHORN_EVENT_POLL_SECONDS),
+        },
+        # Durable outbox recovery for the connect-time FULL import. If the web
+        # process or broker fails after credentials commit but before the sync
+        # task starts, re-dispatch the same idempotent run on the next cadence.
+        "bullhorn-initial-sync-recovery": {
+            "task": "app.tasks.bullhorn_tasks.bullhorn_initial_sync_recovery_sweep",
             "schedule": float(settings.BULLHORN_EVENT_POLL_SECONDS),
         },
         # Bullhorn nightly reconciliation: the dateLastModified fallback sweep +

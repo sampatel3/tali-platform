@@ -12,8 +12,14 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from ..models.assessment import Assessment
-from ..models.role import Role, role_tasks
+from ..models.role import (
+    JOB_STATUS_OPEN,
+    ROLE_KIND_STANDARD,
+    Role,
+    role_tasks,
+)
 from ..models.task import Task
+from .ats_role_lifecycle import ats_job_lifecycle
 
 
 def lock_live_role(
@@ -40,14 +46,37 @@ def lock_live_role(
 
 
 def automatic_role_action_block_reason(role: Role | None) -> str | None:
-    """Why an agent/system action cannot run against ``role`` right now."""
+    """Why new autonomous work cannot run against ``role`` right now.
+
+    The local requisition and the linked ATS job are both execution
+    authorities.  A queued task may outlive either lifecycle transition, so
+    every paid model call and automatic side effect reuses this provider-neutral
+    predicate immediately before it starts.  ``job_status is None`` remains
+    permissive for legacy/manual roles that pre-date the managed requisition
+    lifecycle.
+    """
 
     if role is None:
         return "role is unavailable"
+    if getattr(role, "deleted_at", None) is not None:
+        return "role is deleted"
+    if (
+        getattr(role, "role_kind", None) or ROLE_KIND_STANDARD
+    ) != ROLE_KIND_STANDARD:
+        return "related role does not own autonomous actions"
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return "role agent is disabled"
     if getattr(role, "agent_paused_at", None) is not None:
         return "role agent is paused"
+
+    job_status = getattr(role, "job_status", None)
+    if job_status is not None and job_status != JOB_STATUS_OPEN:
+        return f"job is not open (status: {job_status})"
+
+    ats = ats_job_lifecycle(role)
+    if ats.external_job_id and ats.external_job_live is False:
+        provider = ats.provider or "ATS"
+        return f"linked {provider} job is not live"
     return None
 
 

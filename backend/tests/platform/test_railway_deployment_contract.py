@@ -46,6 +46,8 @@ def test_predeploy_pins_metering_and_runs_separate_migrations():
 
     assert "USAGE_METER_LIVE=true" in script
     assert "ATS_PUBLIC_APPLY_ENABLED=true" in script
+    assert "BULLHORN_ENABLED=true" in script
+    assert "MVP_DISABLE_WORKABLE=false" in script
     assert "--skip-deploys" in script
     assert 'payload.get("DATABASE_PUBLIC_URL")' in script
     assert '[sys.executable, "-m", "alembic", "upgrade", "head"]' in script
@@ -71,11 +73,13 @@ def test_web_wrapper_checks_workers_and_polls_readiness():
     assert "railway_validate_default_agent_capabilities" in script
 
 
-def test_status_wrapper_validates_native_apply_and_live_metering_everywhere():
+def test_status_wrapper_validates_agent_and_ats_contract_everywhere():
     script = (RAILWAY_DIR / "check_status.sh").read_text()
 
     assert '"USAGE_METER_LIVE" "true"' in script
     assert '"ATS_PUBLIC_APPLY_ENABLED" "true"' in script
+    assert '"BULLHORN_ENABLED" "true"' in script
+    assert '"MVP_DISABLE_WORKABLE" "false"' in script
 
 
 def test_default_agent_capability_gate_covers_assessment_providers():

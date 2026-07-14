@@ -117,6 +117,148 @@ def workable_writeback_enabled(org: "Organization | None") -> bool:
     return workable_can_write_candidates(org)  # legacy fallback (scope-derived)
 
 
+def resolve_workable_interview_stage(
+    org: "Organization | None", role: "Role | None"
+) -> tuple[str | None, str | None]:
+    """Resolve the safe Workable target for an autonomous interview hand-off.
+
+    An explicit workspace setting remains authoritative.  When it is absent,
+    use the role's cached pipeline only if it contains exactly one
+    ``kind=interview`` stage.  Workable supplies that semantic ``kind`` itself,
+    so selecting the sole match is deterministic; zero or multiple matches are
+    intentionally returned as an actionable ambiguity instead of guessing.
+
+    Returns ``(target_stage, error_detail)``.  ``target_stage`` prefers the
+    stage slug accepted by Workable's move endpoint, then its id/name for older
+    payload shapes.
+    """
+    config = (
+        org.workable_config
+        if org is not None and isinstance(org.workable_config, dict)
+        else {}
+    )
+    configured = sanitize_text_for_storage(
+        str(config.get("interview_stage_name") or "").strip()
+    )
+    if configured:
+        return configured, None
+
+    raw_stages = getattr(role, "workable_stages", None) if role is not None else None
+    stages = raw_stages if isinstance(raw_stages, list) else []
+    candidates = [
+        stage
+        for stage in stages
+        if isinstance(stage, dict)
+        and str(stage.get("kind") or "").strip().lower() == "interview"
+    ]
+    if len(candidates) != 1:
+        if not candidates:
+            return None, (
+                "No cached Workable stage has kind=interview. Refresh this "
+                "role's Workable stages or choose the interview hand-off stage "
+                "in Agent settings."
+            )
+        labels = [
+            str(
+                stage.get("name")
+                or stage.get("slug")
+                or stage.get("id")
+                or "unnamed stage"
+            ).strip()
+            for stage in candidates
+        ]
+        return None, (
+            "Multiple cached Workable stages have kind=interview "
+            f"({', '.join(labels)}). Choose the intended hand-off stage in "
+            "Agent settings."
+        )
+
+    stage = candidates[0]
+    target = sanitize_text_for_storage(
+        str(
+            stage.get("slug")
+            or stage.get("id")
+            or stage.get("name")
+            or ""
+        ).strip()
+    )
+    if not target:
+        return None, (
+            "The sole cached Workable interview stage has no slug, id, or "
+            "name. Refresh this role's Workable stages or choose the hand-off "
+            "stage in Agent settings."
+        )
+    return target, None
+
+
+def resolve_workable_invite_stage(
+    org: "Organization | None", role: "Role | None"
+) -> tuple[str | None, str | None]:
+    """Resolve the deterministic Workable assessment/invited target.
+
+    Workspace configuration is authoritative. Without it, the only safe
+    fallback is exactly one cached stage whose Workable semantic kind is
+    ``assessment``; zero or multiple matches require recruiter mapping.
+    """
+    config = (
+        org.workable_config
+        if org is not None and isinstance(org.workable_config, dict)
+        else {}
+    )
+    configured = sanitize_text_for_storage(
+        str(config.get("invite_stage_name") or "").strip()
+    )
+    if configured:
+        return configured, None
+
+    raw_stages = getattr(role, "workable_stages", None) if role is not None else None
+    stages = raw_stages if isinstance(raw_stages, list) else []
+    candidates = [
+        stage
+        for stage in stages
+        if isinstance(stage, dict)
+        and str(stage.get("kind") or "").strip().lower() == "assessment"
+    ]
+    if len(candidates) != 1:
+        if not candidates:
+            return None, (
+                "No cached Workable stage has kind=assessment. Refresh this "
+                "role's Workable stages or choose the assessment/invited stage "
+                "in Agent settings."
+            )
+        labels = [
+            str(
+                stage.get("name")
+                or stage.get("slug")
+                or stage.get("id")
+                or "unnamed stage"
+            ).strip()
+            for stage in candidates
+        ]
+        return None, (
+            "Multiple cached Workable stages have kind=assessment "
+            f"({', '.join(labels)}). Choose the intended assessment/invited "
+            "stage in Agent settings."
+        )
+
+    stage = candidates[0]
+    target = sanitize_text_for_storage(
+        str(
+            stage.get("slug")
+            or stage.get("id")
+            or stage.get("name")
+            or ""
+        ).strip()
+    )
+    if not target:
+        return None, (
+            "The sole cached Workable assessment stage has no slug, id, or "
+            "name. Refresh this role's stages or choose the target in Agent "
+            "settings."
+        )
+    return target, None
+
+
 def resolved_workable_action_config(org: Organization | None, role: Role | None = None) -> dict[str, Any]:
     # Per-role overrides for ``workable_disqualify_reason_id`` and
     # ``auto_reject_note_template`` were dropped in alembic 076 — both

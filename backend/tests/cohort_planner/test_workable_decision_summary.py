@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from app.actions import _workable_decision_summary as wds
 from app.actions.types import Actor
 from app.models.agent_decision import AgentDecision
@@ -267,6 +269,91 @@ def test_post_summary_records_failure_event_on_api_error(db, monkeypatch):
     assert ok is False
 
 
+def test_post_summary_routes_to_bullhorn_provider_with_same_share_note(db, monkeypatch):
+    """Bullhorn receives the same decision audit note and 30-day report link."""
+    org, role, candidate, app = make_world(db, pre_screen=82.0)
+    app.taali_score_cache_100 = 82.0
+    decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
+    user = _make_user(db, org)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-1"
+    candidate.bullhorn_candidate_id = "candidate-7"
+    app.bullhorn_job_submission_id = "submission-9"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "BULLHORN_ENABLED", True)
+    monkeypatch.setattr(platform_config.settings, "FRONTEND_URL", "https://taali.ai")
+
+    with patch(
+        "app.components.integrations.bullhorn.provider.BullhornProvider.post_note",
+        return_value={"success": True, "code": "ok", "config": {"ats": "bullhorn"}},
+    ) as post_note:
+        ok = wds.post_decision_summary_to_workable(
+            db,
+            Actor.recruiter(user),
+            app=app,
+            org=org,
+            decision=decision,
+            verdict="advanced",
+            reason="Strong systems fit",
+        )
+
+    assert ok is True
+    kwargs = post_note.call_args.kwargs
+    assert kwargs["candidate_id"] == "candidate-7"
+    assert "TAALI ▸ Advanced by recruiter" in kwargs["body"]
+    assert "https://taali.ai/share/shr_" in kwargs["body"]
+    assert (
+        db.query(ShareLink).filter(ShareLink.application_id == app.id).count()
+        == 1
+    )
+
+
+def test_bullhorn_advance_unknown_failure_retries_without_leaking_secret(
+    db, monkeypatch, caplog
+):
+    from app.components.integrations.bullhorn.provider import BullhornProvider
+    from app.services.workable_actions_service import WorkableWritebackError
+
+    org, role, candidate, app = make_world(db)
+    user = _make_user(db, org)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-1"
+    candidate.bullhorn_candidate_id = "candidate-7"
+    app.bullhorn_job_submission_id = "submission-9"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "BULLHORN_ENABLED", True)
+
+    secret = "redis://:ADVANCE_SECRET@host"
+    with patch.object(
+        BullhornProvider,
+        "move_application",
+        side_effect=RuntimeError(secret),
+    ):
+        with pytest.raises(WorkableWritebackError) as raised:
+            wds._try_bullhorn_advance(
+                db,
+                Actor.recruiter(user),
+                app=app,
+                org=org,
+                reason="Advance",
+            )
+
+    assert raised.value.code == "unexpected"
+    assert raised.value.retriable is True
+    assert secret not in str(raised.value)
+    assert secret not in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # try_workable_advance — best-effort move
 # ---------------------------------------------------------------------------
@@ -332,6 +419,47 @@ def test_try_advance_calls_move_with_recruiter_pick(db, monkeypatch):
     assert kwargs["candidate_id"] == "wc-123"
     assert kwargs["target_stage"] == "Phone screen"
     assert app.workable_stage == "Phone screen"
+
+
+def test_system_advance_uses_sole_cached_workable_interview_kind(db, monkeypatch):
+    org, role, _, app = make_world(db)
+    _enable_workable(db, org)
+    org.workable_config = {
+        **org.workable_config,
+        "interview_stage_name": "",
+    }
+    role.workable_stages = [
+        {"slug": "applied", "name": "Applied", "kind": "sourced"},
+        {
+            "slug": "final-interview",
+            "name": "Final interview",
+            "kind": "interview",
+        },
+    ]
+    app.workable_candidate_id = "wc-123"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
+
+    with patch(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        return_value={
+            "success": True,
+            "action": "move",
+            "code": "ok",
+            "config": {"actor_member_id": "member-1"},
+        },
+    ) as move:
+        ok = wds.try_workable_advance(
+            db,
+            Actor.system(),
+            app=app,
+            org=org,
+            role=role,
+            target_stage=None,
+        )
+
+    assert ok is True
+    assert move.call_args.kwargs["target_stage"] == "final-interview"
 
 
 def test_try_advance_skips_move_when_already_post_handover(db, monkeypatch):

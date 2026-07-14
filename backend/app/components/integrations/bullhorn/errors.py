@@ -15,25 +15,34 @@ tell apart, so they live in one module rather than inline:
 
 from __future__ import annotations
 
-import re
+import httpx
 
 
 # Bullhorn passes the access_token (on /login) and the BhRestToken (on every REST
 # call) in the URL QUERY STRING. httpx's exception string embeds the full request
 # URL — query string included — so ``str(HTTPStatusError)`` on a failed /login
 # carries a LIVE access token. Those exceptions are wrapped into BullhornAuthError
-# and handed to callers, whose canonical sync-error pattern stores ``str(exc)``
-# into a client-serialized status/summary field. Strip every query string out of
-# an exception's rendered form before it can reach a log line or the DB, so a
-# rotated/expired token can never be surfaced. Keeps the diagnostic (error type,
-# status, URL path) intact.
-_QUERY_STRING_RE = re.compile(r"\?[^\s'\"]*")
-
-
+# and handed to callers. Strip every query string out of
+# the request URL before it can reach a log line or the DB, so a rotated/expired
+# token can never be surfaced. Keeps only the diagnostic error type/status.
 def redact_exc(exc: BaseException) -> str:
-    """Render ``exc`` for a user-facing error message with any URL query string
-    (which may carry an access_token / BhRestToken) stripped."""
-    return _QUERY_STRING_RE.sub("?<redacted>", str(exc))
+    """Render an exception without retaining a token-bearing request URL.
+
+    httpx exceptions retain their full Request object, including Bullhorn's
+    access/session tokens and corp-token REST base. For those errors, expose
+    only the type and status. Other exception messages can also echo injected
+    callback/response values, so their type is the only safe generic detail.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code if exc.response is not None else None
+        return (
+            f"{type(exc).__name__} (status {status})"
+            if status is not None
+            else type(exc).__name__
+        )
+    if isinstance(exc, httpx.RequestError):
+        return type(exc).__name__
+    return type(exc).__name__
 
 
 class BullhornError(RuntimeError):

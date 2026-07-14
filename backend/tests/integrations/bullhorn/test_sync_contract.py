@@ -44,6 +44,7 @@ import pytest
 
 from app.components.integrations.bullhorn import (
     events,
+    reconcile,
     stage_map as sm,
     sync_candidates,
     write_back,
@@ -199,6 +200,80 @@ def test_class2_second_full_sync_after_reauth_is_idempotent(db):
     ).count() == 1
 
 
+def test_partial_full_sync_retries_same_durable_run_until_complete(db, monkeypatch):
+    """One candidate failure makes the whole walk retryable, never successful."""
+    from app.components.integrations.bullhorn import bootstrap, sync_runner
+    from app.platform import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
+    org = _org(
+        db,
+        bullhorn_connected=True,
+        bullhorn_client_id="cid",
+        bullhorn_refresh_token="ciphertext",
+        bullhorn_username="apiuser",
+    )
+    run_id = "durable-partial-full"
+    org.bullhorn_sync_progress = {
+        "phase": "queued",
+        "mode": "full",
+        "trigger": bootstrap.CONNECT_BOOTSTRAP_TRIGGER,
+        "run_id": run_id,
+        "dispatch_attempts": 1,
+        "run_attempts": 0,
+    }
+    db.commit()
+
+    state = FakeBullhornState()
+    bh = state.make_org("partial_full", status_list=["New Lead"])
+    _seed_open_submission(state, bh, status="New Lead")
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh)
+        real_search_candidates = client.search_candidates
+        failing = {"enabled": True}
+
+        def _candidate_read(*args, **kwargs):
+            if failing["enabled"]:
+                raise RuntimeError("provider payload must never be persisted")
+            return real_search_candidates(*args, **kwargs)
+
+        monkeypatch.setattr(client, "search_candidates", _candidate_read)
+        monkeypatch.setattr(sync_runner, "_build_service", lambda _org: client)
+
+        sync_runner.execute_bullhorn_sync_run(
+            org_id=org.id,
+            mode="full",
+            run_id=run_id,
+            trigger=bootstrap.CONNECT_BOOTSTRAP_TRIGGER,
+        )
+
+        db.expire_all()
+        failed = db.query(Organization).filter(Organization.id == org.id).one()
+        assert failed.bullhorn_last_sync_status == "failed"
+        assert failed.bullhorn_last_sync_summary["run_id"] == run_id
+        assert failed.bullhorn_sync_progress["phase"] == "queued"
+        assert failed.bullhorn_sync_progress["run_id"] == run_id
+        assert failed.bullhorn_sync_progress["dispatch_status"] == "retry_pending"
+        assert "provider payload" not in str(failed.bullhorn_last_sync_summary)
+
+        failing["enabled"] = False
+        sync_runner.execute_bullhorn_sync_run(
+            org_id=org.id,
+            mode="full",
+            run_id=run_id,
+            trigger=bootstrap.CONNECT_BOOTSTRAP_TRIGGER,
+        )
+
+    db.expire_all()
+    completed = db.query(Organization).filter(Organization.id == org.id).one()
+    assert completed.bullhorn_last_sync_status == "success"
+    assert completed.bullhorn_sync_progress is None
+    assert completed.bullhorn_last_sync_summary["run_id"] == run_id
+    assert completed.bullhorn_config["initial_full_sync_run_id"] == run_id
+    assert completed.bullhorn_config["initial_full_sync_status"] == "success"
+
+
 # ===========================================================================
 # Class 3 — event checkpoint replay: crash after GET, before processing
 # ===========================================================================
@@ -339,7 +414,10 @@ def test_class4_dead_subscription_recreated_and_gap_sweep_backfills(db, monkeypa
         state.orgs["c4"].subscriptions[sub_id].expired = True
         # A pending crash-checkpoint on the dead subscription must be dropped on
         # recreate (it belonged to the dead sub).
-        org.bullhorn_event_request_id = "stale-req"
+        # Bullhorn requestIds are numeric. Use a syntactically valid stale id so
+        # the fake reaches the expired-subscription check (rather than FastAPI's
+        # query validation returning an unrelated 422).
+        org.bullhorn_event_request_id = "999999"
         db.commit()
 
         # Point the runner's client at the live fake (bypass decrypt/discovery).
@@ -366,6 +444,58 @@ def test_class4_dead_subscription_recreated_and_gap_sweep_backfills(db, monkeypa
     assert state.orgs["c4"].subscriptions[sub_id].expired is False
     # The subscription was recreated for exactly our entity set.
     assert set(state.orgs["c4"].subscriptions[sub_id].entity_names) == set(SUBSCRIBED_ENTITIES)
+
+
+def test_class4_gap_sweep_repairs_close_missed_while_subscription_dead(
+    db,
+    monkeypatch,
+):
+    """The recreate sweep repairs a JobOrder close the dead queue never saw."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
+    state = FakeBullhornState()
+    bh = state.make_org("c4_missed_close", status_list=["New Lead"])
+    job = state.make_job_order(bh, title="Close during outage", is_open=True)
+    org = _org(
+        db,
+        bullhorn_connected=True,
+        bullhorn_client_id="cid",
+        bullhorn_refresh_token="rt",
+        bullhorn_username="apiuser",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh)
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=client,
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        role = db.query(Role).filter(Role.organization_id == org.id).one()
+        assert role.deleted_at is None
+
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        state.orgs["c4_missed_close"].subscriptions[sub_id].expired = True
+        job["isOpen"] = False  # no event: it happened while the queue was dead
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result["recreated"] is True
+    assert result["gap_sweep"]["roles_closed"] == 1
+    db.refresh(role)
+    assert role.deleted_at is not None
+    assert role.bullhorn_job_data["isOpen"] is False
+    db.refresh(org)
+    telemetry = org.bullhorn_last_sync_summary["job_order_repair"]
+    assert telemetry["roles_closed"] == 1
+    assert telemetry["remote_open_count"] == 0
 
 
 # ===========================================================================

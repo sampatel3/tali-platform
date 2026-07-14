@@ -14,7 +14,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
+import { organizations as organizationsApi } from '../../shared/api';
 import { MotionSkeleton, MotionSpinner, motionSafeScrollBehavior } from '../../shared/motion';
+import {
+  atsProviderLabel,
+  organizationAtsProvider,
+  roleAtsProvider,
+  roleExternalJobId,
+  roleExternalJobLive,
+  roleExternalJobState,
+} from '../jobs/atsType';
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
@@ -46,6 +55,29 @@ export const requisitionStatusLabel = (status) => {
     || normalized.replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
 };
 export const isPublishedRequisition = (status) => ['applied', 'published'].includes(String(status || '').toLowerCase());
+
+export const requisitionAtsProvider = (organization, linkedJob = null) => (
+  roleAtsProvider(linkedJob) || organizationAtsProvider(organization)
+);
+
+export const buildRequisitionAtsSpec = (jdMarkdown, refCode) => {
+  if (!refCode) return '';
+  const body = String(jdMarkdown || '').replace(/\s+$/, '');
+  const refLine = `_Taali ref: ${refCode} — please keep this line so this role links back to your Taali job._`;
+  return body ? `${body}\n\n---\n${refLine}\n` : `${refLine}\n`;
+};
+
+export const requisitionAtsBridgeModel = (provider, externalJobId = null) => {
+  const label = atsProviderLabel(provider);
+  const linked = externalJobId != null && String(externalJobId).trim() !== '';
+  return {
+    linked,
+    hint: linked
+      ? `This Taali role is already linked to ${label}. Keep using the existing ${label} job — do not create another one. Its provider-side lifecycle remains authoritative.`
+      : `Taali applications and the agent do not depend on ${label}. If you also want ${label} distribution, create it there with this spec and keep the ref line for automatic linking.`,
+    copyLabel: linked ? null : `Optional: copy for ${label}`,
+  };
+};
 
 // Prefer the backend's human-readable `detail` (e.g. the 409 "Brief already
 // applied to a role") over a generic fallback, so the error banner tells the
@@ -105,6 +137,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [selectedId, setSelectedId] = useState(null);
   const [brief, setBrief] = useState(null);
   const [template, setTemplate] = useState(null);
+  const [orgData, setOrgData] = useState(null);
   const [composer, setComposer] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [turnInFlight, setTurnInFlight] = useState(false);
@@ -118,8 +151,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // consultancy recruiter sends to their client to describe the role).
   const [clientLinking, setClientLinking] = useState(false);
   const [clientCopied, setClientCopied] = useState(false);
-  // Transient "Copied" tick on the "Copy spec for Workable" button.
-  const [workableCopied, setWorkableCopied] = useState(false);
+  // Transient "Copied" tick on the active ATS bridge-spec button.
+  const [atsSpecCopied, setAtsSpecCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   // True while the sidebar list is still loading its FIRST response, so we can
@@ -159,6 +192,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         if (!cancelled) setTemplate(null);
       }
     })();
+    organizationsApi.get()
+      .then((res) => { if (!cancelled) setOrgData(res?.data || null); })
+      .catch(() => { if (!cancelled) setOrgData(null); });
     return () => { cancelled = true; };
   }, []);
 
@@ -592,7 +628,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
               role_id: res.role_id,
               name: prev?.title ?? prev?.job?.name ?? null,
               job_status: res.job_status,
-              workable_job_id: prev?.job?.workable_job_id ?? null,
+              ats_provider: res?.ats_provider ?? prev?.job?.ats_provider ?? null,
+              external_job_id: res?.external_job_id ?? prev?.job?.external_job_id ?? null,
+              external_job_state: res?.external_job_state ?? prev?.job?.external_job_state ?? null,
+              external_job_live: res?.external_job_live ?? prev?.job?.external_job_live ?? null,
+              workable_job_id: res?.workable_job_id ?? prev?.job?.workable_job_id ?? null,
+              bullhorn_job_order_id: res?.bullhorn_job_order_id ?? prev?.job?.bullhorn_job_order_id ?? null,
             }
           : (prev?.job || null),
         job_page: res?.token
@@ -627,34 +668,36 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [jobPageUrl]);
 
-  // ---- Optional Workable bridge ----
-  // A native requisition is runnable without Workable. For teams that also use
-  // it, retain the ref code + rendered JD bridge so the import-side scan can
-  // link the external job. Built FE-side so optional Copy works on load without
-  // a re-publish. ``brief.job`` = { role_id, name, job_status, workable_job_id }.
+  // ---- Optional external ATS bridge ----
+  // A native requisition remains runnable on its own. When the workspace has an
+  // active ATS, retain the ref code + rendered JD bridge so that provider's
+  // import can adopt this exact Taali role instead of creating a duplicate.
   const refCode = brief?.ref_code || '';
   const linkedJob = brief?.job || null;
   const linkedJobOpen = String(linkedJob?.job_status || '').toLowerCase() === 'open';
-  const workableSpec = useMemo(() => {
-    if (!refCode) return '';
+  const activeAts = requisitionAtsProvider(orgData, linkedJob);
+  const activeAtsLabel = atsProviderLabel(activeAts);
+  const linkedExternalJobId = roleExternalJobId(linkedJob);
+  const linkedExternalJobState = roleExternalJobState(linkedJob);
+  const linkedExternalJobLive = roleExternalJobLive(linkedJob);
+  const atsBridge = requisitionAtsBridgeModel(activeAts, linkedExternalJobId);
+  const atsSpec = useMemo(() => {
     const jd = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
       ? brief.jd_override
       : renderJobSpec(template, brief);
-    const body = (jd || '').replace(/\s+$/, '');
-    const refLine = `_Taali ref: ${refCode} — please keep this line so this role links back to your Taali job._`;
-    return body ? `${body}\n\n---\n${refLine}\n` : `${refLine}\n`;
+    return buildRequisitionAtsSpec(jd, refCode);
   }, [refCode, brief, template]);
 
-  const copyWorkableSpec = useCallback(async () => {
-    if (!workableSpec) return;
+  const copyAtsSpec = useCallback(async () => {
+    if (!atsSpec) return;
     try {
-      await navigator.clipboard.writeText(workableSpec);
-      setWorkableCopied(true);
-      setTimeout(() => setWorkableCopied(false), 1800);
+      await navigator.clipboard.writeText(atsSpec);
+      setAtsSpecCopied(true);
+      setTimeout(() => setAtsSpecCopied(false), 1800);
     } catch {
       setError('Could not copy the spec — select and copy it manually.');
     }
-  }, [workableSpec]);
+  }, [atsSpec]);
 
   // The org's public careers board URL (string or null on the brief). When set,
   // we surface it alongside the published job-page link so the recruiter can
@@ -714,7 +757,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [clientLinkUrl]);
 
   // Reset the transient "Copied" ticks when switching requisitions.
-  useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); setWorkableCopied(false); }, [selectedId]);
+  useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); setAtsSpecCopied(false); }, [selectedId]);
 
   // NOTE: the hiring-manager link is minted ONLY when the recruiter clicks
   // "Share with hiring manager" (makeClientLink) — NOT auto-minted on open. That
@@ -1034,27 +1077,33 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         </div>
                       ) : null}
 
-                      {/* Optional Workable distribution bridge. The native Taali
-                          job + agent workflow is already ready after publish. */}
-                      <div className="rq-workable-row">
-                        <div className="rq-workable-head">
-                          <span className={`rq-job-status ${linkedJob?.workable_job_id ? 'is-open' : 'is-draft'}`}>
-                            {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Taali job ready · Workable optional'}
-                          </span>
-                          {refCode ? <code className="rq-ref-code" title="Job reference code">{refCode}</code> : null}
+                      {/* Optional active-ATS distribution bridge. The native
+                          Taali job + agent workflow is already ready. */}
+                      {activeAts ? (
+                        <div className="rq-workable-row">
+                          <div className="rq-workable-head">
+                            <span className={`rq-job-status ${linkedExternalJobId && linkedExternalJobLive !== false ? 'is-open' : 'is-draft'}`}>
+                              {linkedExternalJobId
+                                ? `Linked to ${activeAtsLabel} · ${linkedExternalJobLive === false ? (linkedExternalJobState || 'not live') : 'Open'}`
+                                : `Taali job ready · ${activeAtsLabel} optional`}
+                            </span>
+                            {refCode ? <code className="rq-ref-code" title="Job reference code">{refCode}</code> : null}
+                          </div>
+                          <p className="rq-workable-hint">
+                            {atsBridge.hint}
+                          </p>
+                          {atsBridge.copyLabel ? (
+                            <button
+                              type="button"
+                              className="rq-btn-sm is-ghost"
+                              onClick={copyAtsSpec}
+                              disabled={!atsSpec}
+                            >
+                              {atsSpecCopied ? <Check size={13} /> : <FileText size={13} />} {atsSpecCopied ? 'Copied' : atsBridge.copyLabel}
+                            </button>
+                          ) : null}
                         </div>
-                        <p className="rq-workable-hint">
-                          Taali applications and the agent do not depend on Workable. If you also want Workable distribution, create it there with this spec and keep the ref line for automatic linking.
-                        </p>
-                        <button
-                          type="button"
-                          className="rq-btn-sm is-ghost"
-                          onClick={copyWorkableSpec}
-                          disabled={!workableSpec}
-                        >
-                          {workableCopied ? <Check size={13} /> : <FileText size={13} />} {workableCopied ? 'Copied' : 'Optional: copy for Workable'}
-                        </button>
-                      </div>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="rq-publish-wrap">

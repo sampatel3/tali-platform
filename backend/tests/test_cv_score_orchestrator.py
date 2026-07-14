@@ -592,6 +592,95 @@ def test_score_worker_defers_autonomous_job_before_provider_spend(
     assert job.error_message == f"deferred_agent_{held_state}"
 
 
+@pytest.mark.parametrize("terminal_kind", ("local", "workable", "bullhorn"))
+def test_score_worker_defers_autonomous_job_for_terminal_job_lifecycle(
+    monkeypatch, session, terminal_kind,
+) -> None:
+    db, _org, role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.models.role import JOB_STATUS_CANCELLED, JOB_STATUS_OPEN
+    from app.tasks import scoring_tasks
+
+    role.job_status = JOB_STATUS_OPEN
+    if terminal_kind == "local":
+        role.job_status = JOB_STATUS_CANCELLED
+    elif terminal_kind == "workable":
+        role.source = "workable"
+        role.workable_job_id = f"WORK-{role.id}"
+        role.workable_job_data = {"state": "closed"}
+    else:
+        role.source = "bullhorn"
+        role.bullhorn_job_order_id = str(91_000 + int(role.id))
+        role.bullhorn_job_data = {"status": "Closed", "isOpen": False}
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+    db.add(job)
+    db.commit()
+
+    execute = MagicMock()
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    execute.assert_not_called()
+    assert result["status"] == "deferred_role_not_runnable"
+    assert "not open" in result["detail"] or "not live" in result["detail"]
+    db.refresh(job)
+    assert job.status == "stale"
+    assert job.error_message == "deferred_role_not_runnable"
+
+
+def test_score_worker_rechecks_authority_after_claim_commit(
+    monkeypatch, session,
+) -> None:
+    db, _org, role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.services import role_execution_guard
+    from app.tasks import scoring_tasks
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+    db.add(job)
+    db.commit()
+
+    authority_checks = MagicMock(
+        side_effect=[None, "linked bullhorn job is not live"]
+    )
+    execute = MagicMock()
+    monkeypatch.setattr(
+        role_execution_guard,
+        "automatic_role_action_block_reason",
+        authority_checks,
+    )
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    assert authority_checks.call_count == 2
+    execute.assert_not_called()
+    assert result["status"] == "deferred_role_not_runnable"
+    db.refresh(job)
+    assert job.status == "stale"
+
+
 def test_explicit_score_worker_runs_while_agent_is_paused(
     monkeypatch, session,
 ) -> None:

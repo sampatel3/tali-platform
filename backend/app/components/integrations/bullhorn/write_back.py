@@ -53,6 +53,7 @@ from ....services.workable_actions_service import (
     _STRICT_WORKABLE_WRITES,
 )
 from ....models.ats_stage_map import AtsStageMap
+from .errors import redact_exc
 from .stage_map import ATS_BULLHORN
 from .service import BullhornService
 
@@ -136,13 +137,8 @@ def _build_success_result(
 
 
 def _remote_status_for_reject(db: Session, org: Organization) -> str | None:
-    """The org's rejected-category Bullhorn status (``is_reject`` row), or None.
-
-    Orgs can map more than one status as ``is_reject``; break the tie by ``id``
-    ascending so the seeded (rejectedJobResponseStatus) row wins deterministically
-    rather than a row-order coin flip.
-    """
-    row = (
+    """Resolve reject only from Bullhorn's canonical status or one unique row."""
+    rows = (
         db.query(AtsStageMap)
         .filter(
             AtsStageMap.org_id == org.id,
@@ -150,9 +146,22 @@ def _remote_status_for_reject(db: Session, org: Organization) -> str | None:
             AtsStageMap.is_reject.is_(True),
         )
         .order_by(AtsStageMap.id.asc())
-        .first()
+        .all()
     )
-    return (row.remote_status or "").strip() if row and row.remote_status else None
+    configured = str(
+        (
+            org.bullhorn_config
+            if isinstance(org.bullhorn_config, dict)
+            else {}
+        ).get("rejectedJobResponseStatus")
+        or ""
+    ).strip()
+    if configured:
+        matches = [row for row in rows if str(row.remote_status or "").strip() == configured]
+        return configured if len(matches) == 1 else None
+    if len(rows) != 1:
+        return None
+    return str(rows[0].remote_status or "").strip() or None
 
 
 def _remote_status_for_advance(db: Session, org: Organization) -> str | None:
@@ -171,9 +180,9 @@ def _remote_status_for_advance(db: Session, org: Organization) -> str | None:
     resolve to the confirmed/placed one:
     * Exclude the org's configured confirmed/placed status when it is known
       (``bullhorn_config['confirmedJobResponseStatus']``).
-    * Break any remaining tie by ``id`` ascending — the seeder inserts the
-      interviewScheduled row before the confirmed row, so the interview status
-      (lower id) wins rather than a Postgres-row-order coin flip.
+    * Prefer Bullhorn's stored ``interviewScheduledJobResponseStatus`` when it
+      names one mapped row. Without that canonical setting, require exactly one
+      eligible row; multiple candidates are needs-mapping and never oldest-wins.
     """
     placed_status = _confirmed_placed_status(org)
     query = db.query(AtsStageMap).filter(
@@ -184,24 +193,77 @@ def _remote_status_for_advance(db: Session, org: Organization) -> str | None:
     )
     if placed_status:
         query = query.filter(AtsStageMap.remote_status != placed_status)
-    row = query.order_by(AtsStageMap.id.asc()).first()
-    return (row.remote_status or "").strip() if row and row.remote_status else None
+    rows = query.order_by(AtsStageMap.id.asc()).all()
+    configured = str(
+        (
+            org.bullhorn_config
+            if isinstance(org.bullhorn_config, dict)
+            else {}
+        ).get("interviewScheduledJobResponseStatus")
+        or ""
+    ).strip()
+    if configured:
+        matches = [row for row in rows if str(row.remote_status or "").strip() == configured]
+        return configured if len(matches) == 1 else None
+    if len(rows) != 1:
+        return None
+    return str(rows[0].remote_status or "").strip() or None
+
+
+def _remote_status_for_pipeline_stage(
+    db: Session, org: Organization, *, taali_stage: str
+) -> str | None:
+    """Resolve a non-reject Taali stage only when its mapping is unambiguous.
+
+    Unlike the specially-seeded advance mapping, arbitrary stages such as
+    ``invited`` have no Bullhorn categorization setting that establishes a
+    safe precedence.  Exactly one row is therefore required; zero or multiple
+    matches are both needs-mapping and no remote status is guessed.
+    """
+    rows = (
+        db.query(AtsStageMap)
+        .filter(
+            AtsStageMap.org_id == org.id,
+            AtsStageMap.ats == ATS_BULLHORN,
+            AtsStageMap.taali_stage == taali_stage,
+            AtsStageMap.is_reject.is_(False),
+        )
+        .order_by(AtsStageMap.id.asc())
+        .limit(2)
+        .all()
+    )
+    if len(rows) != 1:
+        return None
+    return (rows[0].remote_status or "").strip() or None
 
 
 def resolve_remote_status(db: Session, org: Organization, *, taali_intent: str) -> str | None:
     """Map a Taali write intent to the org's Bullhorn status string (or None).
 
-    ``taali_intent`` is a Taali stage/verb: ``"advanced"`` (advance) or
-    ``"rejected"`` (reject). ``None`` means UNMAPPED — the caller must surface
-    needs-mapping and NOT guess. Any other intent is treated as unmapped rather
-    than invented.
+    ``taali_intent`` is a Taali stage/verb such as ``"invited"``,
+    ``"advanced"`` (advance), or ``"rejected"`` (reject). ``None`` means
+    UNMAPPED — the caller must surface needs-mapping and NOT guess. Any other
+    intent is treated as unmapped rather than invented.
     """
     intent = (taali_intent or "").strip().lower()
     if intent in ("rejected", "reject"):
         return _remote_status_for_reject(db, org)
     if intent in (_ADVANCED_STAGE, "advance", "skip_advanced"):
         return _remote_status_for_advance(db, org)
+    if intent in {"applied", "invited", "in_assessment", "review"}:
+        return _remote_status_for_pipeline_stage(
+            db, org, taali_stage=intent
+        )
     return None
+
+
+def resolved_write_targets(db: Session, org: Organization) -> dict[str, str | None]:
+    """Exact provider write targets for UI/action preflight; null means HITL."""
+
+    return {
+        intent: resolve_remote_status(db, org, taali_intent=intent)
+        for intent in ("invited", "in_assessment", "review", "advanced", "rejected")
+    }
 
 
 # --- application lookup + local-write stamp ----------------------------------
@@ -280,16 +342,27 @@ def move_submission_status(
             job_submission_id=clean_submission_id, status=remote_status
         )
     except Exception as exc:  # noqa: BLE001 — normalize to the shared failure contract
+        logger.error(
+            "Bullhorn status write failed submission_id=%s error=%s",
+            clean_submission_id,
+            redact_exc(exc),
+        )
         return _build_failure_result(
             action="move",
             code="api_error",
-            message=sanitize_text_for_storage(str(exc)) or "Bullhorn status write failed",
+            message="Bullhorn status write failed; automatic retry scheduled",
             config=config,
         )
+    normalized_intent = str(taali_intent or "").strip().lower()
     normalized_stage = (
         "rejected"
-        if str(taali_intent or "").strip().lower() in {"reject", "rejected"}
-        else "advanced"
+        if normalized_intent in {"reject", "rejected"}
+        else (
+            normalized_intent
+            if normalized_intent
+            in {"applied", "invited", "in_assessment", "review", "advanced"}
+            else "advanced"
+        )
     )
     _stamp_local_write(
         _app_by_submission(db, org, clean_submission_id),
@@ -383,10 +456,15 @@ def post_note(
             action=action,
         )
     except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Bullhorn note post failed candidate_id=%s error=%s",
+            clean_candidate_id,
+            redact_exc(exc),
+        )
         return _build_failure_result(
             action="note",
             code="api_error",
-            message=sanitize_text_for_storage(str(exc)) or "Bullhorn note post failed",
+            message="Bullhorn note post failed; automatic retry scheduled",
             config=config,
         )
     return _build_success_result(

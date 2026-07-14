@@ -262,6 +262,19 @@ def score_application_job(
     from ..models.role import Role
     from ..platform.database import SessionLocal
     from ..services.cv_score_orchestrator import _execute_scoring, _latest_job
+    from ..services.role_execution_guard import (
+        automatic_role_action_block_reason,
+    )
+
+    def autonomous_hold(role: Role) -> tuple[str | None, str | None]:
+        detail = automatic_role_action_block_reason(role)
+        if detail is None:
+            return None, None
+        if detail == "role agent is paused":
+            return "deferred_agent_paused", detail
+        if detail == "role agent is disabled":
+            return "deferred_agent_off", detail
+        return "deferred_role_not_runnable", detail
 
     db = SessionLocal()
     try:
@@ -290,9 +303,9 @@ def score_application_job(
             return {"status": "skipped", "application_id": application_id, "job_status": job.status}
 
         # Autonomous authority is checked against a freshly locked Role in the
-        # same transaction that claims the job. Pause/Turn off therefore wins
-        # over any task that was still waiting in Redis; already-running work
-        # may finish, but no new provider call can start after the hold commits.
+        # same transaction that claims the job. Local and ATS terminal states,
+        # Pause, and Turn off therefore win over work still waiting in Redis;
+        # already-running provider work may finish normally.
         scoring_role = None
         if bool(getattr(job, "requires_active_agent", True)):
             scoring_role = (
@@ -313,15 +326,8 @@ def score_application_job(
                 job.finished_at = datetime.now(timezone.utc)
                 db.commit()
                 return {"status": "error", "application_id": application_id}
-            if (
-                not bool(scoring_role.agentic_mode_enabled)
-                or scoring_role.agent_paused_at is not None
-            ):
-                reason = (
-                    "deferred_agent_paused"
-                    if scoring_role.agent_paused_at is not None
-                    else "deferred_agent_off"
-                )
+            reason, authority_detail = autonomous_hold(scoring_role)
+            if reason is not None:
                 job.status = SCORE_JOB_STALE
                 job.error_message = reason
                 job.finished_at = datetime.now(timezone.utc)
@@ -330,6 +336,7 @@ def score_application_job(
                     "status": reason,
                     "application_id": application_id,
                     "role_id": int(scoring_role.id),
+                    "detail": authority_detail,
                 }
 
         # Cooperative cancel. batch_score_role checks the same Redis flag
@@ -435,6 +442,22 @@ def score_application_job(
             job.finished_at = datetime.now(timezone.utc)
             db.commit()
             return {"status": "error", "application_id": application_id}
+        if bool(getattr(job, "requires_active_agent", True)):
+            # Claiming the lease commits and releases the first Role lock. A
+            # close/cancel event can land in that narrow handoff, so reload and
+            # re-authorize once more at the actual provider boundary.
+            reason, authority_detail = autonomous_hold(scoring_role)
+            if reason is not None:
+                job.status = SCORE_JOB_STALE
+                job.error_message = reason
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {
+                    "status": reason,
+                    "application_id": application_id,
+                    "role_id": int(scoring_role.id),
+                    "detail": authority_detail,
+                }
         scoring_intent_fingerprint = role_intent_fingerprint(scoring_role, db=db)
         job.cache_key = f"role-intent:{scoring_intent_fingerprint}"
         if role_reconfiguration_is_active(scoring_role):

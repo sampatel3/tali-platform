@@ -6,11 +6,9 @@ through the whole integration lifecycle in a single flow:
 
     POST /connect            (real connect: discovery → OAuth → ping → entitlement
                               pre-flight → status fetch → stage-map seed → ENCRYPTED
-                              persist)
+                              persist → tracked automatic FULL sync)
       → assert creds are ciphertext at rest (org row read raw), stage map seeded
-    POST /sync               (real route → eager Celery → execute_bullhorn_sync_run,
-                              authed from the STORED encrypted creds)
-      → GET /sync/status polled to completion
+      → GET /sync/status polled to completion (no manual POST /sync)
       → assert imported Roles / Candidates / CandidateApplications, status mapped
     PUT /stage-map           (recruiter remaps a status)
     decision write-back      (op_runner.execute_op → BullhornProvider → write_back)
@@ -38,9 +36,12 @@ the real sync body in-process before returning.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.components.integrations.bullhorn.auth import BullhornAuth
 from app.components.integrations.bullhorn.stage_map import ATS_BULLHORN
 from app.domains.bullhorn_sync import routes as bh_routes
+from app.domains.bullhorn_sync import connect_lifecycle as bh_connect_lifecycle
 from app.models.ats_stage_map import AtsStageMap
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -63,6 +64,8 @@ from tests.fakes.bullhorn_state import FakeBullhornState
 def _enable(monkeypatch) -> None:
     """Flip the Bullhorn platform flag on (shared settings singleton — global)."""
     monkeypatch.setattr(bh_routes.settings, "BULLHORN_ENABLED", True)
+    monkeypatch.setattr(bh_connect_lifecycle, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(bh_connect_lifecycle, "_release_mutex", lambda _handle: None)
 
 
 def _point_auth_discovery_at_fake(monkeypatch, server) -> None:
@@ -123,8 +126,14 @@ def _seed_full_org(state: FakeBullhornState):
     )
     job = state.make_job_order(bh_org, title="Senior Engineer", is_open=True)
     cand = state.make_candidate(bh_org, name="Ada Lovelace", email="ada@example.com")
+    old_submission_at = state.now - (30 * 24 * 60 * 60 * 1000)
     sub = state.make_job_submission(
-        bh_org, candidate_id=cand["id"], job_order_id=job["id"], status="Interview Scheduled"
+        bh_org,
+        candidate_id=cand["id"],
+        job_order_id=job["id"],
+        status="Interview Scheduled",
+        dateAdded=old_submission_at,
+        dateLastModified=old_submission_at,
     )
     state.make_job_submission_history(bh_org, job_submission_id=sub["id"], status="New Lead")
     state.make_job_submission_history(
@@ -167,6 +176,11 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         connect_payload = resp.json()
         assert connect_payload["status"] == "connected"
         assert connect_payload["bullhorn_connected"] is True
+        # Connect itself launches the tracked FULL import. Celery is eager in
+        # this test, so it is already complete without a manual POST /sync.
+        assert connect_payload["initial_sync"]["mode"] == "full"
+        assert connect_payload["initial_sync"]["status"] == "success"
+        assert connect_payload["initial_sync"]["run_id"]
         # DEFAULT_CATEGORIZATION → interview + placed (advanced) + rejected (review).
         assert connect_payload["seeded_stage_rows"] == 3
         # SECURITY: the connect response never echoes the one-time password or the
@@ -204,18 +218,12 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
             "Client Rejected",
         }
 
-        # --- 2. SYNC (real route → eager Celery → real sync) ---------------
-        sync_resp = client.post("/api/v1/bullhorn/sync", headers=headers, json={"mode": "full"})
-        assert sync_resp.status_code == 200, sync_resp.text
-        assert sync_resp.json()["status"] == "started"
-
-        # --- 3. poll GET /sync/status to completion ------------------------
-        # Eager Celery ran the sync in-process during POST /sync, so the run is
-        # already finalized (progress cleared, last-sync stamped success). Poll a
-        # bounded number of times to model the real client contract.
+        # --- 2. poll the connect-triggered sync to completion ---------------
         status_body = _poll_sync_to_done(client, headers)
         assert status_body["sync_in_progress"] is False
         assert status_body["last_sync_status"] == "success"
+        assert status_body["initial_sync"]["run_id"] == connect_payload["initial_sync"]["run_id"]
+        assert status_body["initial_sync"]["status"] == "success"
         snap = status_body["db_snapshot"]
         assert snap["roles_active"] == 1
         assert snap["candidates_active"] == 1
@@ -236,6 +244,13 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         ).one()
         assert app.bullhorn_job_submission_id == str(sub["id"])
         assert app.source == "bullhorn"
+        # A 30-day-old submission proves bootstrap is a FULL walk, not the
+        # incremental layer's 24-hour first-run lookback.
+        expected_applied = datetime.fromtimestamp(
+            sub["dateAdded"] / 1000,
+            tz=timezone.utc,
+        )
+        assert app.workable_created_at.date() == expected_applied.date()
         # raw remote status preserved and mapped (Interview Scheduled → advanced).
         assert app.bullhorn_status == "Interview Scheduled"
         assert app.pipeline_stage == "advanced"

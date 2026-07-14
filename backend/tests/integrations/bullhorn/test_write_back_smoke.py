@@ -97,6 +97,117 @@ def _linked_app(db, org, *, submission_id, candidate_bh_id="900") -> CandidateAp
     return app
 
 
+def test_provider_exception_payload_is_never_returned_or_logged(db, caplog):
+    """Token-bearing provider errors collapse to stable retry-safe messages."""
+    org = _org(db)
+    _seed_map(
+        db,
+        org,
+        remote_status="Interview Scheduled",
+        taali_stage="advanced",
+        is_reject=False,
+    )
+    leaked = "BhRestToken=LIVE-SECRET&corpToken=PRIVATE"
+
+    class _ExplodingClient:
+        def update_job_submission_status(self, **_kwargs):
+            raise RuntimeError(leaked)
+
+        def create_note(self, **_kwargs):
+            raise RuntimeError(leaked)
+
+    client = _ExplodingClient()
+    moved = write_back.move_submission_status(
+        db,
+        org=org,
+        client=client,
+        submission_id="123",
+        taali_intent="advanced",
+    )
+    noted = write_back.post_note(
+        db,
+        org=org,
+        client=client,
+        candidate_id="456",
+        body="hello",
+    )
+
+    assert moved["code"] == "api_error"
+    assert noted["code"] == "api_error"
+    assert leaked not in str(moved)
+    assert leaked not in str(noted)
+    assert leaked not in "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_invited_intent_requires_exactly_one_explicit_stage_mapping(db):
+    org = _org(db)
+    assert write_back.resolve_remote_status(
+        db, org, taali_intent="invited"
+    ) is None
+
+    _seed_map(
+        db,
+        org,
+        remote_status="Assessment Sent",
+        taali_stage="invited",
+        is_reject=False,
+    )
+    assert write_back.resolve_remote_status(
+        db, org, taali_intent="invited"
+    ) == "Assessment Sent"
+
+    _seed_map(
+        db,
+        org,
+        remote_status="Coding Challenge",
+        taali_stage="invited",
+        is_reject=False,
+    )
+    assert write_back.resolve_remote_status(
+        db, org, taali_intent="invited"
+    ) is None
+
+
+def test_reject_and_advance_targets_are_never_selected_by_row_age(db):
+    org = _org(db)
+    for remote in ("Rejected A", "Rejected B"):
+        _seed_map(
+            db,
+            org,
+            remote_status=remote,
+            taali_stage="review",
+            is_reject=True,
+        )
+    for remote in ("Interview A", "Interview B"):
+        _seed_map(
+            db,
+            org,
+            remote_status=remote,
+            taali_stage="advanced",
+            is_reject=False,
+        )
+
+    assert write_back.resolve_remote_status(
+        db, org, taali_intent="rejected"
+    ) is None
+    assert write_back.resolve_remote_status(
+        db, org, taali_intent="advanced"
+    ) is None
+
+    org.bullhorn_config = {
+        "rejectedJobResponseStatus": "Rejected B",
+        "interviewScheduledJobResponseStatus": "Interview B",
+    }
+    db.flush()
+    assert write_back.resolve_remote_status(
+        db, org, taali_intent="rejected"
+    ) == "Rejected B"
+    assert write_back.resolve_remote_status(
+        db, org, taali_intent="advanced"
+    ) == "Interview B"
+
+
+
 # --- move / reject / note round-trip against the fake ------------------------
 
 
@@ -154,6 +265,99 @@ def test_move_reject_note_round_trip(db):
         ]
         assert len(notes) == 1
         assert notes[0]["personReference"]["id"] == cand["id"]
+
+
+def test_sequential_provider_writes_reuse_durably_rotated_refresh_token(
+    db, monkeypatch
+):
+    """A stage write consumes R1; a fresh provider for the note must use R2."""
+    from app.platform.config import settings
+    from app.platform.secrets import decrypt_text, encrypt_text
+
+    state = FakeBullhornState()
+    bh_org = state.make_org(
+        "rotate-write",
+        status_list=["New Lead", "Interview Scheduled"],
+    )
+    cand = state.make_candidate(
+        bh_org, name="Rotate Candidate", email="rotate@example.com"
+    )
+    job = state.make_job_order(bh_org, title="Eng", is_open=True)
+    sub = state.make_job_submission(
+        bh_org, candidate_id=cand["id"], job_order_id=job["id"], status="New Lead"
+    )
+
+    with live_bullhorn_server(state) as server:
+        boot: dict[str, str] = {}
+        bootstrap = BullhornAuth(
+            username=bh_org.username,
+            client_id=bh_org.client_id,
+            client_secret=bh_org.client_secret,
+            refresh_token=None,
+            password=bh_org.password,
+            discovery_url=server.discovery_url,
+            persist_tokens=lambda **values: boot.update(values),
+        )
+        bootstrap.authorize_with_password()
+        first_refresh = boot["refresh_token"]
+
+        org = _org(
+            db,
+            bullhorn_connected=True,
+            bullhorn_username=bh_org.username,
+            bullhorn_client_id=bh_org.client_id,
+            bullhorn_client_secret=encrypt_text(
+                bh_org.client_secret, settings.SECRET_KEY
+            ),
+            bullhorn_refresh_token=encrypt_text(
+                first_refresh, settings.SECRET_KEY
+            ),
+            bullhorn_rest_url=boot.get("rest_url"),
+        )
+        _seed_map(
+            db,
+            org,
+            remote_status="Interview Scheduled",
+            taali_stage="advanced",
+            is_reject=False,
+        )
+        app = _linked_app(
+            db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"])
+        )
+        app.role.bullhorn_job_order_id = str(job["id"])
+        db.commit()
+
+        def _discover(auth):
+            auth._oauth_url = f"{server.base_url}/oauth"  # noqa: SLF001
+            auth._cached_rest_url = (  # noqa: SLF001
+                f"{server.base_url}/rest-services/fake/"
+            )
+            return auth._oauth_url, auth._cached_rest_url  # noqa: SLF001
+
+        monkeypatch.setattr(BullhornAuth, "discover", _discover)
+
+        moved = BullhornProvider(org, db).move_application(
+            candidate_id=str(sub["id"]),
+            target_stage="advanced",
+            role=app.role,
+        )
+        assert moved["success"] is True
+        second_refresh = decrypt_text(
+            org.bullhorn_refresh_token, settings.SECRET_KEY
+        )
+        assert second_refresh and second_refresh != first_refresh
+
+        noted = BullhornProvider(org, db).post_note(
+            candidate_id=str(cand["id"]),
+            member_id="",
+            body="Sequential decision summary",
+            role=app.role,
+        )
+        assert noted["success"] is True
+        third_refresh = decrypt_text(
+            org.bullhorn_refresh_token, settings.SECRET_KEY
+        )
+        assert third_refresh and third_refresh != second_refresh
 
 
 def test_post_note_html_escapes_body(db):
@@ -438,6 +642,10 @@ def test_op_runner_routes_manual_outcome_and_note_to_bullhorn(db, monkeypatch):
 
     monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
     org = _connected_org(db)
+    org.workable_connected = True
+    org.workable_access_token = "workable-token"
+    org.workable_subdomain = "incumbent"
+    db.commit()
     state = FakeBullhornState()
     bh_org = state.make_org("op", status_list=["New Lead", "Interview Scheduled", "Client Rejected"])
     cand = state.make_candidate(bh_org, name="WB Candidate", email="wb@example.com")
@@ -466,6 +674,11 @@ def test_op_runner_routes_manual_outcome_and_note_to_bullhorn(db, monkeypatch):
         db.refresh(app)
         assert app.bullhorn_status == "Client Rejected"
         assert app.bullhorn_status_local_write_at is not None
+        assert app.integration_sync_state["outcome_writeback"]["status"] == "confirmed"
+        assert (
+            app.integration_sync_state["outcome_writeback"]["target_outcome"]
+            == "rejected"
+        )
         # The handler committed a bullhorn_rejected event.
         from app.models.candidate_application_event import CandidateApplicationEvent
 
@@ -484,13 +697,30 @@ def test_op_runner_routes_manual_outcome_and_note_to_bullhorn(db, monkeypatch):
             db,
             organization_id=org.id,
             op_type=runner.OP_POST_NOTE,
-            payload={"application_id": app.id, "body": "Solid interview."},
+            payload={
+                "application_id": app.id,
+                "body": "Solid interview.",
+                "actor_type": "agent",
+                "source": "agent",
+            },
         )
         assert res_note["status"] == "ok"
-        assert any(
-            r.get("comments") == "Solid interview."
+        notes = [
+            r
             for r in state.orgs["op"].entities.get("Note", {}).values()
+            if r.get("comments") == "Solid interview."
+        ]
+        assert len(notes) == 1
+        assert notes[0]["jobOrder"]["id"] == int(app.role.bullhorn_job_order_id)
+        note_event = (
+            db.query(CandidateApplicationEvent)
+            .filter(
+                CandidateApplicationEvent.application_id == app.id,
+                CandidateApplicationEvent.event_type == "bullhorn_note_posted",
+            )
+            .one()
         )
+        assert note_event.actor_type == "agent"
 
 
 def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monkeypatch):
@@ -523,6 +753,31 @@ def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monk
             )
         assert exc.value.code == "needs_mapping"
         assert exc.value.retriable is False
+        runner.surface_op_failure(
+            db,
+            organization_id=org.id,
+            op_type=runner.OP_MANUAL_OUTCOME,
+            payload={"application_id": app.id, "target_outcome": "rejected"},
+            error=exc.value,
+        )
+
+    from app.models.candidate_application_event import CandidateApplicationEvent
+
+    surfaced = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type == "bullhorn_writeback_failed",
+        )
+        .one()
+    )
+    assert "Bullhorn didn't accept" in surfaced.reason
+    assert surfaced.event_metadata["code"] == "needs_mapping"
+    db.refresh(app)
+    receipt = app.integration_sync_state["outcome_writeback"]
+    assert receipt["status"] == "failed"
+    assert receipt["target_outcome"] == "rejected"
+    assert receipt["error_code"] == "needs_mapping"
 
 
 # --- automated-reject paths write back to Bullhorn (drift fix B2) -------------

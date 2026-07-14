@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
-import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
@@ -51,7 +50,15 @@ import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
 import { ReachOutDialog } from './ReachOutDialog';
 import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
-import { AtsTypeTag, atsTypeColumnLabel, roleAtsType } from './atsType';
+import {
+  agentIntakeLifecycleCopy,
+  applicationAtsStage,
+  atsProviderLabel,
+  AtsTypeTag,
+  atsTypeColumnLabel,
+  roleAtsProvider,
+  roleAtsType,
+} from './atsType';
 import { getErrorMessage, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
   formatCount,
@@ -62,6 +69,7 @@ import {
 } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
+import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -88,35 +96,6 @@ const matchesPipelineStage = (application, stageKey) => {
     ? bucket === 'invited' || bucket === 'completed'
     : bucket === stageKey;
 };
-
-// Hover-intent CV prefetch. A recruiter sweeping the cursor down a long table
-// would otherwise fire a presigned-S3 PDF download per row crossed — a burst
-// of parallel multi-MB requests they never asked for, competing with the
-// page's own traffic on the UAE link. Gate it: only prefetch when the pointer
-// rests on a row for HOVER_INTENT_MS, and cap concurrent hover prefetches so a
-// held-down scroll can't queue dozens at once.
-const HOVER_INTENT_MS = 200;
-const HOVER_PREFETCH_MAX = 3;
-let hoverPrefetchActive = 0;
-const makeHoverPrefetch = () => {
-  let timer = null;
-  const start = (applicationId) => {
-    if (timer) window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      timer = null;
-      if (hoverPrefetchActive >= HOVER_PREFETCH_MAX) return;
-      hoverPrefetchActive += 1;
-      Promise.resolve(prefetchDocumentBlob({ applicationId, docType: 'cv' }))
-        .catch(() => {})
-        .finally(() => { hoverPrefetchActive = Math.max(0, hoverPrefetchActive - 1); });
-    }, HOVER_INTENT_MS);
-  };
-  const cancel = () => {
-    if (timer) { window.clearTimeout(timer); timer = null; }
-  };
-  return { start, cancel };
-};
-
 const normalizeThreshold = (value) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '';
@@ -517,7 +496,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // One hover-intent controller for the whole page (rows + kanban cards share
   // it, so moving between them cancels the prior pending prefetch).
   const hoverPrefetchRef = useRef(null);
-  if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeHoverPrefetch();
+  if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeCandidateCvHoverPrefetch();
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1555,6 +1534,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       });
   };
 
+  const externalProvider = roleAtsProvider(role);
+  const externalProviderLabel = atsProviderLabel(externalProvider);
+  const intakeLifecycleCopy = agentIntakeLifecycleCopy(role);
+  const manualPauseLifecycleCopy = externalProvider
+    ? `A manual Pause also stops Taali processing until you Resume; it does not change the ${externalProviderLabel} posting.`
+    : 'A manual Pause uses the same native-intake hold and waits for you to Resume.';
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
@@ -1611,12 +1597,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 Ask agent
               </button>
             ) : null}
-            {role?.role_kind !== 'sister' && roleAtsType(role) === 'workable' ? (
+            {role?.role_kind !== 'sister' && externalProvider ? (
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
                 onClick={() => setSisterDialogOpen(true)}
-                title="Create a separate scoring role over this Workable candidate pool"
+                title={`Create a separate scoring role over this ${externalProviderLabel} candidate pool`}
               >
                 <GitFork size={12} />
                 Create related role
@@ -1644,7 +1630,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
             <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
             {role?.role_kind === 'sister' ? (
-              <div className="f"><span className="k">Workable owner</span><span className="v purple">{role?.ats_owner_role_name || 'Original role'}</span></div>
+              <div className="f"><span className="k">{externalProviderLabel} owner</span><span className="v purple">{role?.ats_owner_role_name || 'Original role'}</span></div>
             ) : (
               (() => {
                 const activeTasks = roleTasks.filter((task) => task?.is_active !== false);
@@ -1682,7 +1668,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           <div className="flex items-center gap-2">
             <Link2 size={15} className="text-[var(--taali-purple)]" />
             <span>
-              This is a scoring view coupled to <strong>{role.ats_owner_role_name || 'the original Workable role'}</strong>.
+              This is a scoring view coupled to <strong>{role.ats_owner_role_name || `the original ${externalProviderLabel} role`}</strong>.
               Stages and candidate actions write back through that original application.
             </span>
           </div>
@@ -2064,9 +2050,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       <div>
                         <span className="role-spec-source-label">
                           {role?.job_spec_manually_edited_at
-                            ? `Taali override${role?.source === 'workable' ? ' · Workable connected' : ''}`
-                            : role?.source === 'workable'
-                              ? 'Workable source description'
+                            ? `Taali override${externalProvider ? ` · ${externalProviderLabel} connected` : ''}`
+                            : externalProvider
+                              ? `${externalProviderLabel} source description`
                               : 'Source description'}
                         </span>
                         {parsedJobSpec.meta.applyUrl ? (
@@ -2342,7 +2328,27 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
-                              <td>{roleAtsType(role) === 'full_ats' ? (<span className="stage-pill" title="Stage in the Taali pipeline">{stageLabel}</span>) : application?.workable_disqualified ? (<span className="stage-pill is-disqualified" title={application?.workable_stage ? `Disqualified in Workable (was: ${formatStatusLabel(application.workable_stage)})` : 'Disqualified in Workable'}>Disqualified</span>) : application?.workable_stage ? (<span className="stage-pill" title="Current stage in Workable">{formatStatusLabel(application.workable_stage)}</span>) : (<span className="ctable-em">—</span>)}</td>
+                              <td>{(() => {
+                                if (roleAtsType(role) === 'full_ats') {
+                                  return <span className="stage-pill" title="Stage in the Taali pipeline">{stageLabel}</span>;
+                                }
+                                const externalStage = applicationAtsStage(application, role);
+                                if (externalProvider === 'workable' && application?.workable_disqualified) {
+                                  return (
+                                    <span
+                                      className="stage-pill is-disqualified"
+                                      title={externalStage ? `Disqualified in Workable (was: ${formatStatusLabel(externalStage)})` : 'Disqualified in Workable'}
+                                    >
+                                      Disqualified
+                                    </span>
+                                  );
+                                }
+                                return externalStage ? (
+                                  <span className="stage-pill" title={`Current stage in ${externalProviderLabel}`}>
+                                    {formatStatusLabel(externalStage)}
+                                  </span>
+                                ) : <span className="ctable-em">—</span>;
+                              })()}</td>
                               <td>
                                 {agentLabel ? (
                                   <span className="ai-action">
@@ -2457,8 +2463,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               <strong>Effective automation</strong>
               <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
                 <li>
-                  {role?.workable_job_id
-                    ? 'Workable remains the intake source; its current publish state is unchanged.'
+                  {externalProvider
+                    ? `${externalProviderLabel} remains the intake source; its current publish state is unchanged.`
                     : 'The native job page opens for applications after activation succeeds.'}
                 </li>
                 <li>Applications that reach this role are parsed, screened, scored, and monitored while the agent is on.</li>
@@ -2493,7 +2499,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   Monthly AI-usage cap: ${Math.round(Number(activationPreflight?.monthlyBudgetCents || 0) / 100)}
                 </div>
                 <div className="mc-agent-warn-body">
-                  Pause or Turn off stops autonomous processing and AI spend. The native job page remains viewable, but applications close until Resume or Turn on; Workable intake follows its provider-side publish state.
+                  Pause or Turn off stops autonomous processing and AI spend. {intakeLifecycleCopy}
                 </div>
               </div>
             </div>
@@ -2608,7 +2614,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           open={turnOffOpen}
           onClose={() => setTurnOffOpen(false)}
           title="Turn off the agent for this role?"
-          description="The agent stops autonomous processing and AI spend and won't resume on its own. The native job page remains viewable, but applications close until the next Turn on; Workable intake follows its provider-side publish state. Pause has the same native-intake hold and waits for you to Resume."
+          description={`The agent stops autonomous processing and AI spend and won't resume on its own. ${intakeLifecycleCopy} ${manualPauseLifecycleCopy}`}
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setTurnOffOpen(false)}>Cancel</Button>

@@ -22,8 +22,11 @@ from app.models.ats_stage_map import AtsStageMap
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
+from app.models.job_page import JobPage
 from app.models.organization import Organization
-from app.models.role import JOB_STATUS_OPEN, Role
+from app.models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+from app.models.role_brief import RoleBrief
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 
 
 def _org(db) -> Organization:
@@ -138,6 +141,164 @@ def test_new_bullhorn_application_paid_dispatch_requires_running_agent(
     assert role.starred_for_auto_sync is True
 
 
+def test_new_bullhorn_application_does_not_dispatch_related_role_before_commit(
+    db, monkeypatch
+):
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Platform Engineer",
+        source="bullhorn",
+        bullhorn_job_order_id="9001",
+        bullhorn_job_data={"id": 9001, "isOpen": True},
+        job_status=JOB_STATUS_OPEN,
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.flush()
+    related = Role(
+        organization_id=org.id,
+        name="Platform Engineer · Data",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=role.id,
+        job_spec_text=(
+            "A complete related role specification for reliable Python data "
+            "platforms, distributed systems, and production observability."
+        ),
+    )
+    db.add(related)
+    db.flush()
+
+    monkeypatch.setattr(sync_candidates, "on_application_created", lambda *args, **kwargs: None)
+
+    def _store_cv(**kwargs):
+        kwargs["app"].cv_text = (
+            "Python platform engineer with distributed systems and data reliability experience."
+        )
+        kwargs["candidate"].cv_text = kwargs["app"].cv_text
+
+    monkeypatch.setattr(sync_candidates, "_fetch_and_store_cv", _store_cv)
+    dispatched: list[tuple[list[int], str]] = []
+
+    from app.tasks import sister_role_tasks
+
+    monkeypatch.setattr(
+        sister_role_tasks.score_sister_evaluation,
+        "apply_async",
+        lambda *, args, queue: dispatched.append((args, queue)),
+    )
+
+    sync_candidates.sync_submission(
+        db=db,
+        org=org,
+        role=role,
+        submission={
+            "id": "7001",
+            "candidate": {"id": "8001"},
+            "jobOrder": {"id": "9001"},
+            "status": "New Lead",
+        },
+        candidate_payload={
+            "id": "8001",
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "email": "ada-related@example.com",
+        },
+        client=_StubClient(),
+        now=_now(),
+    )
+
+    # Importers only persist the application + transactional ingest outbox.
+    # Related-role rows and task publication happen from the post-commit
+    # dispatcher, so a fast worker can never race an uncommitted evaluation.
+    assert (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == related.id)
+        .count()
+        == 0
+    )
+    assert dispatched == []
+
+
+def test_bullhorn_resync_preserves_pending_outcome_writeback_receipt(db, monkeypatch):
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Platform Engineer",
+        source="bullhorn",
+        bullhorn_job_order_id="9001",
+        bullhorn_job_data={"id": 9001, "isOpen": True},
+        job_status=JOB_STATUS_OPEN,
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.flush()
+    monkeypatch.setattr(
+        sync_candidates, "on_application_created", lambda *args, **kwargs: None
+    )
+    submission = {
+        "id": "7001",
+        "candidate": {"id": "8001"},
+        "jobOrder": {"id": "9001"},
+        "status": "New Lead",
+    }
+    candidate_payload = {
+        "id": "8001",
+        "firstName": "Ada",
+        "lastName": "Lovelace",
+        "email": "ada-writeback@example.com",
+    }
+
+    first = sync_candidates.sync_submission(
+        db=db,
+        org=org,
+        role=role,
+        submission=submission,
+        candidate_payload=candidate_payload,
+        client=_StubClient(),
+        now=_now(),
+    )
+    assert first["application_upserted"] == 1
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.bullhorn_job_submission_id == "7001")
+        .one()
+    )
+    app.integration_sync_state = {
+        "last_sync_at": _now().isoformat(),
+        "sync_status": "success",
+        "source": "bullhorn",
+        "outcome_writeback": {
+            "provider": "bullhorn",
+            "status": "queued",
+            "target_outcome": "rejected",
+            "requested_at": _now().isoformat(),
+        },
+    }
+    db.commit()
+
+    second = sync_candidates.sync_submission(
+        db=db,
+        org=org,
+        role=role,
+        submission=submission,
+        candidate_payload=candidate_payload,
+        client=_StubClient(),
+        now=_now(),
+    )
+
+    assert second["application_upserted"] == 1
+    synced = db.get(CandidateApplication, int(app.id))
+    assert synced.integration_sync_state["outcome_writeback"]["status"] == "queued"
+    assert (
+        synced.integration_sync_state["outcome_writeback"]["target_outcome"]
+        == "rejected"
+    )
+
+
 # --- stage_map --------------------------------------------------------------
 
 
@@ -241,6 +402,109 @@ class TestUpsertRoleFromJobOrder:
         assert "Dubai" in role.job_spec_text
         # no raw HTML leaked
         assert "<p>" not in role.job_spec_text
+
+    @pytest.mark.parametrize("initial_job_status", [JOB_STATUS_DRAFT, JOB_STATUS_OPEN])
+    def test_adopts_stamped_requisition_role_without_losing_page_or_settings(
+        self, db, monkeypatch, initial_job_status
+    ):
+        org = _org(db)
+        role = Role(
+            organization_id=org.id,
+            name="Existing requisition role",
+            source="requisition",
+            job_status=initial_job_status,
+            job_spec_text="Taali-owned requisition specification",
+            monthly_usd_budget_cents=12_345,
+            auto_send_assessment=False,
+            auto_advance=True,
+            agent_action_allowlist=["send_assessment", "advance_stage"],
+        )
+        db.add(role)
+        db.flush()
+        brief = RoleBrief(
+            organization_id=org.id,
+            role_id=role.id,
+            ref_code="TAL-7K2QF",
+        )
+        db.add(brief)
+        db.flush()
+        page = JobPage(
+            organization_id=org.id,
+            brief_id=brief.id,
+            token="bullhorn-adoption-page",
+            status="open",
+        )
+        db.add(page)
+        db.flush()
+        role_id = role.id
+        page_id = page.id
+
+        # Keep this test scoped to adoption; attachment/criteria behavior already
+        # has dedicated importer tests.
+        monkeypatch.setattr(sync_jobs, "_store_job_spec_attachment", lambda _role: None)
+        monkeypatch.setattr(sync_jobs, "_sync_role_criteria", lambda *_args, **_kwargs: None)
+
+        adopted, created = sync_jobs.upsert_role_from_job_order(
+            db,
+            org,
+            {
+                "id": 8801,
+                "title": "Bullhorn Platform Engineer",
+                "isOpen": True,
+                "publicDescription": "<p>Build systems.</p><p>Taali ref: TAL-7K2QF</p>",
+            },
+        )
+        db.flush()
+
+        assert created is False
+        assert adopted is not None and adopted.id == role_id
+        assert adopted.source == "bullhorn"
+        assert adopted.bullhorn_job_order_id == "8801"
+        assert adopted.job_status == JOB_STATUS_OPEN
+        assert adopted.monthly_usd_budget_cents == 12_345
+        assert adopted.auto_send_assessment is False
+        assert adopted.auto_advance is True
+        assert adopted.agent_action_allowlist == ["send_assessment", "advance_stage"]
+        assert db.query(Role).filter(Role.organization_id == org.id).count() == 1
+        persisted_page = db.query(JobPage).filter(JobPage.id == page_id).one()
+        assert persisted_page.brief_id == brief.id
+        assert persisted_page.brief.role_id == role_id
+
+    def test_stamped_job_does_not_hijack_workable_linked_requisition(self, db):
+        org = _org(db)
+        role = Role(
+            organization_id=org.id,
+            name="Workable-owned requisition",
+            source="workable",
+            job_status=JOB_STATUS_OPEN,
+            workable_job_id="WORK-7",
+        )
+        db.add(role)
+        db.flush()
+        db.add(
+            RoleBrief(
+                organization_id=org.id,
+                role_id=role.id,
+                ref_code="TAL-8M3RF",
+            )
+        )
+        db.flush()
+
+        imported, created = sync_jobs.upsert_role_from_job_order(
+            db,
+            org,
+            {
+                "id": 8802,
+                "title": "Duplicate external job",
+                "isOpen": True,
+                "description": "Taali ref: TAL-8M3RF",
+            },
+        )
+
+        assert created is True
+        assert imported is not None and imported.id != role.id
+        assert role.bullhorn_job_order_id is None
+        assert role.workable_job_id == "WORK-7"
 
     def test_resync_updates_same_role_no_duplicate(self, db):
         org = _org(db)

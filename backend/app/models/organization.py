@@ -8,14 +8,17 @@ from ..platform.database import Base
 #                      new orgs (matches the MVP_DISABLE_WORKABLE code default).
 #   workable_primary — Workable owns the funnel; Taali reads + writes back. The
 #                      current live tenant (deeplight-ai) runs in this mode.
+#   bullhorn_primary — Bullhorn owns the funnel; Taali reads + writes back.
 #   taali_primary    — Taali owns the funnel but mirrors writes back to Workable;
 #                      the transitional mode during a per-org cutover off Workable.
 SYNC_MODE_STANDALONE = "standalone"
 SYNC_MODE_WORKABLE_PRIMARY = "workable_primary"
+SYNC_MODE_BULLHORN_PRIMARY = "bullhorn_primary"
 SYNC_MODE_TAALI_PRIMARY = "taali_primary"
 SYNC_MODES = (
     SYNC_MODE_STANDALONE,
     SYNC_MODE_WORKABLE_PRIMARY,
+    SYNC_MODE_BULLHORN_PRIMARY,
     SYNC_MODE_TAALI_PRIMARY,
 )
 
@@ -57,6 +60,12 @@ class Organization(Base):
     bullhorn_client_id = Column(String, nullable=True)
     bullhorn_client_secret = Column(Text, nullable=True)
     bullhorn_refresh_token = Column(Text, nullable=True)
+    # Monotonic credential-lineage fence. Token-rotation hooks update the row
+    # only when this value still matches the client that obtained the token;
+    # reconnect increments it in the same transaction as the new credentials.
+    bullhorn_credential_generation = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     bullhorn_rest_url = Column(String, nullable=True)
     bullhorn_connected = Column(Boolean, default=False)
     bullhorn_last_sync_at = Column(DateTime(timezone=True), nullable=True)

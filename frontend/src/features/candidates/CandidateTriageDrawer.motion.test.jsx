@@ -105,6 +105,125 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(screen.getByRole('button', { name: /Send invite/i })).toHaveClass('taali-btn-primary');
   });
 
+  it('shows Bullhorn remote labels but submits the selected Taali intent', async () => {
+    const onMoveToAtsStage = vi.fn();
+    const bullhornApplication = {
+      ...application,
+      source: 'bullhorn',
+      external_refs: { bullhorn_job_submission_id: 'BH-S-41' },
+      external_stage_raw: 'Interview Scheduled',
+      external_stage_normalized: 'advanced',
+    };
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={bullhornApplication}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="bullhorn"
+          atsStages={[
+            { slug: 'review', name: 'Client Review', kind: 'review' },
+            { slug: 'advanced', name: 'Interview Scheduled', kind: 'advanced' },
+          ]}
+          onMoveToAtsStage={onMoveToAtsStage}
+        />
+      </MotionSystemProvider>,
+    );
+
+    expect(screen.getByText('Bullhorn')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Interview Scheduled Current stage/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /Interview Scheduled.*Bullhorn.*rejecting will update them there/i,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Client Review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Bullhorn: Client Review' }));
+
+    expect(onMoveToAtsStage).toHaveBeenCalledWith(
+      bullhornApplication,
+      'review',
+      'Client Review',
+    );
+  });
+
+  it('does not claim a native applicant was imported or updated in the role ATS', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{
+            ...application,
+            source: 'manual',
+            application_outcome: 'rejected',
+            workable_candidate_id: null,
+            external_refs: null,
+          }}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="bullhorn"
+        />
+      </MotionSystemProvider>,
+    );
+
+    expect(screen.getByText('Added in Taali')).toBeInTheDocument();
+    expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['queued', /Bullhorn rejection queued/i, false],
+    ['failed', /Bullhorn rejection sync failed/i, false],
+    ['confirmed', /rejected in Bullhorn/i, true],
+  ])('renders the durable Bullhorn rejection receipt: %s', (status, expected, confirmed) => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{
+            ...application,
+            source: 'bullhorn',
+            application_outcome: 'rejected',
+            external_refs: { bullhorn_job_submission_id: 'BH-S-41' },
+            integration_sync_state: {
+              outcome_writeback: {
+                provider: 'bullhorn',
+                target_outcome: 'rejected',
+                status,
+              },
+            },
+          }}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="bullhorn"
+        />
+      </MotionSystemProvider>,
+    );
+
+    expect(screen.getByText(expected)).toBeInTheDocument();
+    if (!confirmed) {
+      expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
+    }
+  });
+
+  it('does not invent hired or withdrawn ATS writeback', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{
+            ...application,
+            source: 'bullhorn',
+            application_outcome: 'hired',
+            external_refs: { bullhorn_job_submission_id: 'BH-S-41' },
+          }}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="bullhorn"
+        />
+      </MotionSystemProvider>,
+    );
+
+    expect(screen.queryByText(/moved to hired in Bullhorn/i)).not.toBeInTheDocument();
+  });
+
   it('uses instant native scrolling under reduced motion', () => {
     window.matchMedia = vi.fn().mockImplementation((query) => ({
       matches: String(query).includes('prefers-reduced-motion'),

@@ -28,18 +28,55 @@ from ..components.integrations.bullhorn.incremental_runner import (
     execute_bullhorn_event_poll,
     execute_bullhorn_reconcile,
 )
-from ..components.integrations.bullhorn.sync_runner import execute_bullhorn_sync_run
+from ..components.integrations.bullhorn.sync_runner import (
+    BullhornMutexUnavailable,
+    execute_bullhorn_sync_run,
+)
 from ..platform.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.tasks.bullhorn_tasks.run_bullhorn_sync_run")
-def run_bullhorn_sync_run_task(org_id: int, mode: str = "full") -> dict:
+@celery_app.task(
+    bind=True,
+    name="app.tasks.bullhorn_tasks.run_bullhorn_sync_run",
+    max_retries=12,
+)
+def run_bullhorn_sync_run_task(
+    self,
+    org_id: int,
+    mode: str = "full",
+    run_id: str | None = None,
+    trigger: str | None = None,
+) -> dict:
     """Run one Bullhorn full sync for an org in a background worker context."""
-    logger.info("Executing Bullhorn sync task org_id=%s mode=%s", org_id, mode)
-    execute_bullhorn_sync_run(org_id=org_id, mode=mode)
-    return {"status": "ok", "org_id": org_id, "mode": mode}
+    logger.info(
+        "Executing Bullhorn sync task org_id=%s mode=%s run_id=%s",
+        org_id,
+        mode,
+        run_id,
+    )
+    try:
+        execute_bullhorn_sync_run(
+            org_id=org_id,
+            mode=mode,
+            run_id=run_id,
+            trigger=trigger,
+        )
+    except BullhornMutexUnavailable as exc:
+        raise self.retry(exc=exc, countdown=60)
+    return {"status": "ok", "org_id": org_id, "mode": mode, "run_id": run_id}
+
+
+@celery_app.task(name="app.tasks.bullhorn_tasks.bullhorn_initial_sync_recovery_sweep")
+def bullhorn_initial_sync_recovery_sweep() -> dict:
+    """Recover connect-time full syncs lost between DB commit and execution."""
+    if not settings.BULLHORN_ENABLED:
+        return {"status": "skipped", "reason": "disabled"}
+
+    from ..components.integrations.bullhorn.bootstrap import recover_due_initial_syncs
+
+    return recover_due_initial_syncs()
 
 
 def _connected_org_ids() -> list[int]:
@@ -63,8 +100,11 @@ def _connected_org_ids() -> list[int]:
             .all()
         )
         return [int(r[0]) for r in rows]
-    except Exception:  # pragma: no cover — never let a sweep die on the org query
-        logger.exception("Bullhorn: failed to list connected orgs")
+    except Exception as exc:  # pragma: no cover — never let a sweep die on the org query
+        logger.error(
+            "Bullhorn: failed to list connected orgs error_type=%s",
+            type(exc).__name__,
+        )
         return []
     finally:
         db.close()
@@ -99,9 +139,13 @@ def bullhorn_event_poll_sweep() -> dict:
                 failed += 1
             else:
                 skipped += 1
-        except Exception:  # pragma: no cover — isolate a bad org
+        except Exception as exc:  # pragma: no cover — isolate a bad org
             failed += 1
-            logger.exception("Bullhorn event poll task failed org_id=%s", org_id)
+            logger.error(
+                "Bullhorn event poll task failed org_id=%s error_type=%s",
+                org_id,
+                type(exc).__name__,
+            )
     return {"status": "ok", "polled": polled, "skipped": skipped, "failed": failed}
 
 
@@ -133,7 +177,11 @@ def bullhorn_reconcile_sweep() -> dict:
                 failed += 1
             else:
                 skipped += 1
-        except Exception:  # pragma: no cover — isolate a bad org
+        except Exception as exc:  # pragma: no cover — isolate a bad org
             failed += 1
-            logger.exception("Bullhorn reconcile task failed org_id=%s", org_id)
+            logger.error(
+                "Bullhorn reconcile task failed org_id=%s error_type=%s",
+                org_id,
+                type(exc).__name__,
+            )
     return {"status": "ok", "reconciled": reconciled, "skipped": skipped, "failed": failed}

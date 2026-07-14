@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 # /search hard page cap we page defensively against (real Bullhorn caps at 500).
 SEARCH_PAGE_CAP = 500
+# A destructive reconciliation must never turn a pagination runaway into a
+# partial "complete" snapshot.  Crossing this guard raises; callers retain all
+# local rows and retry on a later run.
+COMPLETE_SNAPSHOT_ROW_GUARD = 100_000
 # Entities we page for reads. Named constants avoid stringly-typed drift.
 _ENTITY_JOB_ORDER = "JobOrder"
 _ENTITY_CANDIDATE = "Candidate"
@@ -141,7 +145,9 @@ class BullhornService:
                         self._sleep(wait)
                         attempt += 1
                         continue
-                    raise BullhornRateLimitError("Bullhorn API rate limited (429)") from exc
+                    raise BullhornRateLimitError(
+                        "Bullhorn API rate limited (429)"
+                    ) from None
                 if status == 401 and not reauthed:
                     # Session expired — refresh (rotation invariant) + re-login
                     # exactly once, then retry this call. A second 401 falls
@@ -153,16 +159,19 @@ class BullhornService:
                 if status == 401:
                     raise BullhornAuthError(
                         f"Bullhorn still 401 after reauth on {method} {path}"
-                    ) from exc
-                body = None
-                if exc.response is not None and exc.response.content:
-                    try:
-                        body = exc.response.text[:500]
-                    except Exception:
-                        body = None
+                    ) from None
                 raise BullhornApiError(
-                    f"Bullhorn API error on {method} {path}", status_code=status, body=body
-                ) from exc
+                    f"Bullhorn API error on {method} {path}",
+                    status_code=status,
+                ) from None
+            except Exception as exc:  # noqa: BLE001 - normalize tokenized URLs
+                # Connection/timeout/decoder errors also retain the full
+                # httpx Request URL. Never let that raw exception reach a
+                # exception traceback.
+                raise BullhornApiError(
+                    f"Bullhorn request failed on {method} {path}: "
+                    f"{type(exc).__name__}"
+                ) from None
 
     # --- verb discipline ----------------------------------------------------
 
@@ -193,25 +202,90 @@ class BullhornService:
         return self._paged("query", entity, fields=fields, selector=where, count=count)
 
     def _paged(
-        self, kind: str, entity: str, *, fields: str, selector: str, count: int
+        self,
+        kind: str,
+        entity: str,
+        *,
+        fields: str,
+        selector: str,
+        count: int,
+        require_complete: bool = False,
     ) -> list[dict]:
         if not fields:
             # fields= is MANDATORY: omitting it returns only ids. A caller
             # reaching here without fields is a bug, not a silent id-only read.
             raise ValueError(f"fields= is mandatory for {kind}/{entity}")
         page = min(int(count), SEARCH_PAGE_CAP)
+        if page <= 0:
+            raise ValueError("count must be positive")
         selector_key = "query" if kind == "search" else "where"
         out: list[dict] = []
         start = 0
+        expected_total: int | None = None
         while True:
             params = {"fields": fields, "start": start, "count": page}
             if selector:
                 params[selector_key] = selector
             payload = self._request("GET", f"{kind}/{entity}", params=params)
+            if require_complete and not isinstance(payload, dict):
+                raise BullhornApiError(
+                    f"Bullhorn complete snapshot returned malformed {kind}/{entity} payload"
+                )
             data = payload.get("data") if isinstance(payload, dict) else None
+            if require_complete and not isinstance(data, list):
+                raise BullhornApiError(
+                    f"Bullhorn complete snapshot returned malformed {kind}/{entity} data"
+                )
+            if require_complete and any(not isinstance(row, dict) for row in data):
+                raise BullhornApiError(
+                    f"Bullhorn complete snapshot returned malformed {kind}/{entity} row"
+                )
             rows = [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
             out.extend(rows)
             total = payload.get("total") if isinstance(payload, dict) else None
+
+            if require_complete:
+                # A remote total is the proof that an empty/short final page is
+                # genuinely complete.  A missing, changing, or impossible total
+                # aborts before reconciliation is allowed to close local roles.
+                if type(total) is not int or total < 0:  # bool is not a valid total
+                    raise BullhornApiError(
+                        f"Bullhorn complete snapshot omitted a valid total for {kind}/{entity}"
+                    )
+                if expected_total is None:
+                    expected_total = total
+                    if expected_total > COMPLETE_SNAPSHOT_ROW_GUARD:
+                        raise BullhornApiError(
+                            f"Bullhorn complete snapshot exceeds the {kind}/{entity} safety guard"
+                        )
+                elif total != expected_total:
+                    raise BullhornApiError(
+                        f"Bullhorn complete snapshot total changed during {kind}/{entity} pagination"
+                    )
+                payload_start = payload.get("start")
+                if payload_start is not None and (
+                    type(payload_start) is not int or payload_start != start
+                ):
+                    raise BullhornApiError(
+                        f"Bullhorn complete snapshot returned an unexpected {kind}/{entity} page"
+                    )
+                if len(rows) > page:
+                    raise BullhornApiError(
+                        f"Bullhorn complete snapshot exceeded the {kind}/{entity} page size"
+                    )
+                next_start = start + len(rows)
+                if next_start == expected_total:
+                    break
+                if not rows or next_start > expected_total:
+                    raise BullhornApiError(
+                        f"Bullhorn complete snapshot was partial for {kind}/{entity}"
+                    )
+                # Some Bullhorn clusters return a smaller server-capped page
+                # than requested. Advance by rows actually received and keep
+                # paging until the stable total has been read exactly.
+                start = next_start
+                continue
+
             if len(rows) < page:
                 break
             if isinstance(total, int) and start + len(rows) >= total:
@@ -226,6 +300,26 @@ class BullhornService:
 
     def search_job_orders(self, *, fields: str, query: str = "isOpen:true") -> list[dict]:
         return self._search(_ENTITY_JOB_ORDER, fields=fields, query=query)
+
+    def search_open_job_orders_complete(self, *, fields: str) -> list[dict]:
+        """Return a proven-complete, paginated snapshot of every open JobOrder.
+
+        This is the only read safe to feed into missing-ID closure repair.  It
+        requires both identity and lifecycle fields, a stable remote ``total``,
+        and exact pagination to that total; any uncertainty raises so callers
+        make no destructive local changes.
+        """
+        requested_fields = {field.strip() for field in fields.split(",")}
+        if not {"id", "isOpen"}.issubset(requested_fields):
+            raise ValueError("complete open JobOrder snapshots require id,isOpen fields")
+        return self._paged(
+            "search",
+            _ENTITY_JOB_ORDER,
+            fields=fields,
+            selector="isOpen:true",
+            count=SEARCH_PAGE_CAP,
+            require_complete=True,
+        )
 
     def search_candidates(self, *, fields: str, query: str = "") -> list[dict]:
         return self._search(_ENTITY_CANDIDATE, fields=fields, query=query)

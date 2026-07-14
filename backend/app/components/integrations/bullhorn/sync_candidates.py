@@ -240,11 +240,12 @@ def _apply_stage_mapping(
                 reason=f"Bullhorn status mapped as reject: {remote_status}",
                 metadata={"bullhorn_status": remote_status},
             )
-    except Exception:  # pragma: no cover — never block the candidate sync
-        logger.exception(
-            "Bullhorn stage mapping transition failed app_id=%s status=%r",
+    except Exception as exc:  # pragma: no cover — never block the candidate sync
+        logger.error(
+            "Bullhorn stage mapping transition failed app_id=%s status=%r error_type=%s",
             app.id,
             remote_status,
+            type(exc).__name__,
         )
 
 
@@ -307,8 +308,12 @@ def _fetch_and_store_cv(
         attachments = client.list_file_attachments(
             candidate_id=bullhorn_candidate_id, fields=FILE_ATTACHMENT_FIELDS
         )
-    except Exception:  # pragma: no cover — never block on a CV listing failure
-        logger.exception("Bullhorn fileAttachments listing failed candidate=%s", bullhorn_candidate_id)
+    except Exception as exc:  # pragma: no cover — never block on a CV listing failure
+        logger.error(
+            "Bullhorn fileAttachments listing failed candidate=%s error_type=%s",
+            bullhorn_candidate_id,
+            type(exc).__name__,
+        )
         return
 
     # Loose match: a "Resume"-typed attachment first, else any attachment with a
@@ -331,8 +336,13 @@ def _fetch_and_store_cv(
     filename = str(resume_meta.get("name") or f"resume-{file_id}")
     try:
         content = client.get_file_raw(candidate_id=bullhorn_candidate_id, file_id=file_id)
-    except Exception:  # pragma: no cover
-        logger.exception("Bullhorn CV download failed candidate=%s file=%s", bullhorn_candidate_id, file_id)
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "Bullhorn CV download failed candidate=%s file=%s error_type=%s",
+            bullhorn_candidate_id,
+            file_id,
+            type(exc).__name__,
+        )
         return
 
     stored = _store_resume(
@@ -348,8 +358,12 @@ def _fetch_and_store_cv(
         text = client.convert_resume_to_text(
             filename=filename, content=content, content_type=content_type
         )
-    except Exception:  # pragma: no cover
-        logger.exception("Bullhorn convertToText failed candidate=%s", bullhorn_candidate_id)
+    except Exception as exc:  # pragma: no cover
+        logger.error(
+            "Bullhorn convertToText failed candidate=%s error_type=%s",
+            bullhorn_candidate_id,
+            type(exc).__name__,
+        )
         return
     text = sanitize_text_for_storage(text or "")
     if text.strip():
@@ -456,8 +470,17 @@ def sync_submission(
             "bullhorn_job_submission_id": submission_id,
         }
     )
-    app.integration_sync_state = sanitize_json_for_storage(
-        {"last_sync_at": now.isoformat(), "sync_status": "success", "source": "bullhorn"}
+    from ....services.ats_writeback_state import (
+        replace_sync_state_preserving_writeback,
+    )
+
+    replace_sync_state_preserving_writeback(
+        app,
+        {
+            "last_sync_at": now.isoformat(),
+            "sync_status": "success",
+            "source": "bullhorn",
+        },
     )
     app.last_synced_at = now
 
@@ -497,6 +520,9 @@ def sync_submission(
         allow_paid_work=paid_work_allowed,
         parse_origin=CV_PARSE_ORIGIN_ATS_INGEST,
     )
+
+    # Related-role fan-out is part of the provider-neutral application ingest
+    # outbox above, so it cannot race this transaction and recovers lost kicks.
 
     db.flush()
     counters["application_upserted"] += 1

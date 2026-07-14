@@ -256,7 +256,9 @@ def test_ats_writeback_failure_keeps_knockout_open_and_cards(client, db, monkeyp
     from app.components.integrations import resolver
 
     monkeypatch.setattr(
-        resolver, "resolve_ats_provider", lambda _org, _db: _FailingWorkable()
+        resolver,
+        "resolve_application_ats_provider",
+        lambda _org, _db, _application: _FailingWorkable(),
     )
 
     response = _apply(
@@ -347,7 +349,9 @@ def test_ats_writeback_success_precedes_local_knockout_reject(client, db, monkey
     from app.components.integrations import resolver
 
     monkeypatch.setattr(
-        resolver, "resolve_ats_provider", lambda _org, _db: _SuccessfulWorkable()
+        resolver,
+        "resolve_application_ats_provider",
+        lambda _org, _db, _application: _SuccessfulWorkable(),
     )
 
     response = _apply(

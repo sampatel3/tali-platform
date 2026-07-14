@@ -299,6 +299,61 @@ def test_workable_adopted_requisition_stops_native_intake_when_ats_job_closes(
     assert db.query(CandidateApplication).count() == 0
 
 
+def test_bullhorn_adopted_requisition_stops_native_intake_when_job_order_closes(
+    client, db
+):
+    _org, role, page = _published_page(
+        db,
+        slug="closed-bullhorn-mirror",
+        source="bullhorn",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    role.bullhorn_job_order_id = "9001"
+    role.bullhorn_job_data = {
+        "id": 9001,
+        "status": "Accepting Candidates",
+        "isOpen": False,
+    }
+    db.commit()
+
+    payload = client.get(f"/api/v1/public/job/{page.token}").json()
+    blocked = client.post(
+        _url(page),
+        data={"full_name": "Late Bullhorn Applicant", "email": "late-bh@x.test"},
+        files={"resume": ("cv.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert payload["accepts_applications"] is False
+    assert blocked.status_code == 404
+    assert db.query(CandidateApplication).count() == 0
+
+
+def test_soft_deleted_bullhorn_role_stops_native_intake(client, db):
+    _org, role, page = _published_page(
+        db,
+        slug="deleted-bullhorn-mirror",
+        source="bullhorn",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    role.bullhorn_job_order_id = "9002"
+    role.bullhorn_job_data = {"id": 9002, "status": "Open", "isOpen": True}
+    role.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    payload = client.get(f"/api/v1/public/job/{page.token}").json()
+    blocked = client.post(
+        _url(page),
+        data={"full_name": "Deleted Role Applicant", "email": "deleted@x.test"},
+        files={"resume": ("cv.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert payload["accepts_applications"] is False
+    assert blocked.status_code == 404
+    assert db.query(CandidateApplication).count() == 0
+
+
 def test_apply_requires_contact(client, db):
     org, role, page = _published_page(db, slug="contact")
     db.commit()

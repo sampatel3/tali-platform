@@ -35,6 +35,7 @@ from ...domains.assessments_runtime.pipeline_service import (
 )
 from ...domains.assessments_runtime.role_support import is_resolved
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
+from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
@@ -838,6 +839,15 @@ def approve(
     except HTTPException:
         db.rollback()
         raise
+    except AtsJobRunPersistenceError:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ATS operation was not queued because durable tracking is "
+                "temporarily unavailable. No provider update was sent; try again."
+            ),
+        )
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"approve failed: {exc}")
@@ -901,6 +911,15 @@ def override(
     except HTTPException:
         db.rollback()
         raise
+    except AtsJobRunPersistenceError:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ATS operation was not queued because durable tracking is "
+                "temporarily unavailable. No provider update was sent; try again."
+            ),
+        )
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"override failed: {exc}")
@@ -1203,14 +1222,23 @@ def bulk_approve(
     """
     requested = list(dict.fromkeys(int(x) for x in body.decision_ids))  # de-dupe, preserve order
     note = (body.note or "").strip() or None
-    result = approve_decision_action.enqueue_batch(
-        db,
-        Actor.recruiter(current_user),
-        organization_id=current_user.organization_id,
-        decision_ids=requested,
-        note=note,
-        workable_target_stages=body.workable_target_stages or None,
-    )
+    try:
+        result = approve_decision_action.enqueue_batch(
+            db,
+            Actor.recruiter(current_user),
+            organization_id=current_user.organization_id,
+            decision_ids=requested,
+            note=note,
+            workable_target_stages=body.workable_target_stages or None,
+        )
+    except AtsJobRunPersistenceError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ATS operation was not queued because durable tracking is "
+                "temporarily unavailable. No provider update was sent; try again."
+            ),
+        )
     failures = [
         BulkApproveFailure(decision_id=f["decision_id"], error=f["error"])
         for f in result["failures"]
@@ -1289,6 +1317,20 @@ def bulk_override(
                     workable_target_stage=stage,
                 )
             accepted.append(decision_id)
+        except AtsJobRunPersistenceError as exc:
+            # Earlier rows may already have their own durable jobs and be
+            # running. Keep this as an accurate per-decision partial failure
+            # instead of aborting with a false global "nothing was sent".
+            failures.append(
+                BulkApproveFailure(
+                    decision_id=decision_id,
+                    error=(
+                        "Not queued: durable ATS tracking is temporarily "
+                        f"unavailable ({exc.op_type}). No provider update was "
+                        "sent for this decision."
+                    ),
+                )
+            )
         except HTTPException as exc:
             failures.append(
                 BulkApproveFailure(

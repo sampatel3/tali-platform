@@ -243,10 +243,10 @@ def _try_bullhorn_reject(
     the Workable disqualify.
     """
     from ..components.integrations.bullhorn.provider import BullhornProvider
-    from ..components.integrations.resolver import resolve_ats_provider
+    from ..components.integrations.resolver import resolve_application_ats_provider
     from ..services.workable_actions_service import WorkableWritebackError
 
-    provider = resolve_ats_provider(org, db)
+    provider = resolve_application_ats_provider(org, db, app)
     if not isinstance(provider, BullhornProvider):
         return False
     if not (getattr(app, "bullhorn_job_submission_id", "") or "").strip():
@@ -257,9 +257,22 @@ def _try_bullhorn_reject(
         result = provider.reject_application(app=app, role=getattr(app, "role", None), reason=reason)
     except WorkableWritebackError:
         raise  # strict (batch) path — propagate so the batch re-queues.
-    except Exception:  # pragma: no cover — defensive
-        logger.exception("bullhorn reject raised unexpectedly (application_id=%s)", app.id)
-        return True
+    except Exception as exc:  # pragma: no cover — defensive/provider boundary
+        error_type = type(exc).__name__
+        logger.error(
+            "bullhorn reject raised unexpectedly application_id=%s error_type=%s",
+            app.id,
+            error_type,
+        )
+        # Recruiter-approved rejects run under the shared strict operation
+        # shell.  Preserve its retry/requeue contract for unknown provider
+        # failures instead of committing a Taali-only reject as success.
+        raise WorkableWritebackError(
+            action="reject",
+            code="unexpected",
+            message=f"Unexpected Bullhorn reject failure ({error_type})",
+            retriable=True,
+        ) from None
     if result.get("success"):
         append_application_event(
             db,

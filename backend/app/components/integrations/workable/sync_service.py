@@ -474,10 +474,16 @@ def _adopt_requisition_role(
     )
     if role is None:
         return None
-    # Only adopt an inactive requisition job not already tied to a Workable job.
-    # A role that's already linked (or marked filled / cancelled) is left alone so
-    # a re-imported or edited spec can never hijack it.
-    if role.workable_job_id or role.job_status not in (None, JOB_STATUS_DRAFT):
+    # Adopt only an unlinked requisition job. ``open`` is valid here: the normal
+    # one-click flow opens the native page as soon as the recruiter turns the
+    # agent on, and optional ATS distribution may be connected afterwards. A
+    # provider link or terminal local state is never eligible, so a re-imported
+    # spec cannot hijack an existing/filled role.
+    if (
+        role.workable_job_id
+        or getattr(role, "bullhorn_job_order_id", None)
+        or role.job_status not in (None, JOB_STATUS_DRAFT, JOB_STATUS_OPEN)
+    ):
         return None
     role.workable_job_id = job_id
     role.job_status = JOB_STATUS_OPEN
@@ -2486,48 +2492,8 @@ class WorkableSyncService:
             # Preserve local source-of-truth stage for existing applications.
             app.status = sanitize_text_for_storage(app.status)
         db.flush()
-        # Sister roles share this canonical application roster. When a new CV
-        # arrives (or its text changes), create/refresh only the alternate
-        # evaluation rows; never clone ATS state. A short countdown lets the
-        # surrounding Workable sync transaction commit before workers read it.
-        if created_application or mode == "full":
-            try:
-                # ``role`` is reused across the whole candidate loop, so its
-                # relationship lazy-loads once rather than adding a sister-role
-                # lookup per candidate on large Workable imports.
-                live_sisters = [
-                    sister for sister in (role.sister_roles or [])
-                    if sister.deleted_at is None
-                ]
-                if live_sisters and role_allows_new_paid_ats_work(role):
-                    from ....services.sister_role_service import (
-                        ensure_application_sister_evaluations,
-                    )
-                    from ....models.sister_role_evaluation import SISTER_EVAL_ERROR, SisterRoleEvaluation
-                    from ....tasks.sister_role_tasks import score_sister_evaluation
-
-                    sister_evaluation_ids = ensure_application_sister_evaluations(
-                        db, app, sister_roles=live_sisters,
-                    )
-                    for sister_evaluation_id in sister_evaluation_ids:
-                        try:
-                            score_sister_evaluation.apply_async(
-                                args=[sister_evaluation_id], queue="scoring", countdown=5,
-                            )
-                        except Exception:  # pragma: no cover - broker failure path
-                            logger.exception(
-                                "Failed to dispatch sister-role evaluation id=%s",
-                                sister_evaluation_id,
-                            )
-                            evaluation = db.get(SisterRoleEvaluation, sister_evaluation_id)
-                            if evaluation is not None:
-                                evaluation.status = SISTER_EVAL_ERROR
-                                evaluation.error_message = (
-                                    "Scoring worker unavailable; retry the roster"
-                                )
-            except Exception:  # pragma: no cover - sync must remain resilient
-                logger.exception(
-                    "Failed to queue sister-role evaluation application_id=%s", app.id
-                )
+        # Related-role fan-out is part of the transactional application-created
+        # outbox above. It runs only after this outer sync transaction commits,
+        # and pending evaluation rows make a lost broker kick recoverable.
         counters["application_upserted"] += 1
         return counters

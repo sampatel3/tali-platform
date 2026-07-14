@@ -53,7 +53,9 @@ for service in \
     --environment "$ENV_NAME" \
     --skip-deploys \
     USAGE_METER_LIVE=true \
-    ATS_PUBLIC_APPLY_ENABLED=true >/dev/null
+    ATS_PUBLIC_APPLY_ENABLED=true \
+    BULLHORN_ENABLED=true \
+    MVP_DISABLE_WORKABLE=false >/dev/null
 done
 for service in \
   "$WEB_SERVICE" \
@@ -63,6 +65,10 @@ for service in \
     "$ENV_NAME" "$service" "USAGE_METER_LIVE" "true"
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "ATS_PUBLIC_APPLY_ENABLED" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "BULLHORN_ENABLED" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "MVP_DISABLE_WORKABLE" "false"
 done
 
 # Fetch the resolved public database URL without printing any Railway variables.

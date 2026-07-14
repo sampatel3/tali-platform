@@ -459,18 +459,17 @@ def set_job_status_endpoint(
         .first()
     )
     if data.status == JOB_STATUS_OPEN and is_requisition_role:
-        from ...services.workable_actions_service import (
-            WORKABLE_NON_LIVE_JOB_STATES,
-            workable_job_state,
-        )
+        from ...services.ats_role_lifecycle import ats_job_lifecycle
 
-        external_state = workable_job_state(role)
-        if role.workable_job_id and external_state in WORKABLE_NON_LIVE_JOB_STATES:
+        external_job = ats_job_lifecycle(role)
+        if external_job.external_job_id and external_job.external_job_live is False:
+            provider_label = str(external_job.provider or "ATS").title()
+            external_state = external_job.external_job_state or "closed/deleted"
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This native mirror cannot reopen while its linked Workable "
-                    f"job is {external_state}. Reopen the job in Workable first."
+                    f"This native mirror cannot reopen while its linked {provider_label} "
+                    f"job is {external_state}. Reopen the job in {provider_label} first."
                 ),
             )
         if not bool(role.agentic_mode_enabled):
@@ -896,6 +895,16 @@ def update_role(
                     "auto_resend_assessment"
                 ],
                 auto_advance=activation_policy["auto_advance"],
+                auto_reject=(
+                    bool(updates["auto_reject"])
+                    if updates.get("auto_reject") is not None
+                    else None
+                ),
+                auto_reject_pre_screen=(
+                    bool(updates["auto_reject_pre_screen"])
+                    if updates.get("auto_reject_pre_screen") is not None
+                    else None
+                ),
             )
             if not readiness.get("ready"):
                 db.rollback()
@@ -1825,27 +1834,13 @@ def upload_role_job_spec(
 
         try:
             score_sister_role.apply_async(args=[role.id], queue="scoring")
-        except Exception:  # pragma: no cover - persisted spec remains retryable
-            from ...models.sister_role_evaluation import (
-                SISTER_EVAL_ERROR,
-                SISTER_EVAL_PENDING,
-                SisterRoleEvaluation,
+        except Exception as exc:  # Beat recovers the committed pending rows.
+            logger.error(
+                "Related-role spec scoring kick unavailable role_id=%s "
+                "error_code=queue_unavailable error_type=%s",
+                role.id,
+                type(exc).__name__,
             )
-
-            logger.exception("Failed to dispatch sister scoring role_id=%s", role.id)
-            db.query(SisterRoleEvaluation).filter(
-                SisterRoleEvaluation.role_id == role.id,
-                SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
-            ).update(
-                {
-                    SisterRoleEvaluation.status: SISTER_EVAL_ERROR,
-                    SisterRoleEvaluation.error_message: (
-                        "Scoring worker unavailable; retry the roster"
-                    ),
-                },
-                synchronize_session=False,
-            )
-            db.commit()
     else:
         on_role_jd_attached(role)
         _maybe_autogenerate_assessment_task(role)

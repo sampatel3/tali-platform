@@ -31,12 +31,20 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import {
+  BullhornLogo,
   SyncPulse,
   WorkableLogo,
   formatRelativeDateTime,
   resolveSyncHealth,
 } from '../../shared/ui/RecruiterDesignPrimitives';
-import { AtsTypeTag } from './atsType';
+import {
+  atsProviderLabel,
+  AtsTypeTag,
+  organizationAtsProvider,
+  roleAtsProvider,
+  roleExternalJobLive,
+  roleExternalJobState,
+} from './atsType';
 import {
   AnimatePresence,
   AgentLoop,
@@ -66,7 +74,8 @@ const StageCount = ({ value }) => <MotionNumber value={value} format={formatCoun
 // an otherwise active posting. Motion owns the reveal opacity, so the inactive
 // lifecycle target must be explicit here.
 const ROLE_CARD_DIMMED_OPACITY = 0.55;
-const NON_LIVE_WORKABLE_STATES = new Set(['draft', 'archived', 'closed']);
+const LIVE_EXTERNAL_STATES = new Set(['published', 'open', 'accepting candidates', 'accepting_candidates']);
+const NON_LIVE_EXTERNAL_STATES = new Set(['draft', 'archived', 'closed', 'filled', 'cancelled', 'inactive']);
 const roleCardFadeVariants = Object.freeze({
   hidden: fadeVariants.hidden,
   visible: ({ index = 0, stagger = false } = {}) => ({
@@ -101,7 +110,8 @@ const SOURCE_FILTERS = [
   { key: 'all', label: 'All roles' },
   { key: 'live', label: 'Live' },
   { key: 'workable', label: 'From Workable' },
-  { key: 'manual', label: 'Created in Taali' },
+  { key: 'bullhorn', label: 'From Bullhorn' },
+  { key: 'full_ats', label: 'Created in Taali' },
   { key: 'active', label: 'With open candidates' },
   { key: 'draft', label: 'Draft' },
 ];
@@ -136,26 +146,22 @@ const isRoleDraft = (role) => {
   if (hasNativeLifecycle(role)) return roleJobStatus(role) === 'draft';
   // Compatibility fallback for old manual roles created before job_status was
   // persisted. Once a canonical lifecycle exists, it is always authoritative.
-  return String(role?.source || '').toLowerCase() !== 'workable'
-    && !role?.workable_job_id
+  return roleAtsProvider(role) == null
     && !role?.job_spec_present
     && Number(role?.applications_count || 0) === 0;
 };
-
-const workableState = (role) => String(role?.workable_job_state || '').trim().toLowerCase();
-const isWorkableBackedRole = (role) => (
-  String(role?.source || '').toLowerCase() === 'workable'
-  || Boolean(role?.workable_job_id)
-  || role?.role_kind === 'sister'
-);
 
 // A Workable-backed role follows the provider's authoritative publish state.
 // A native role is Live only while its intake lifecycle is open; when the API
 // supplies `is_published`, that readiness signal prevents a preview page or a
 // paused/off agent from being presented as accepting applications.
 const isRoleLive = (role) => {
-  if (role?.workable_job_live != null) return role.workable_job_live === true;
-  if (isWorkableBackedRole(role)) return workableState(role) === 'published';
+  const provider = roleAtsProvider(role);
+  if (provider) {
+    const live = roleExternalJobLive(role);
+    if (live != null) return live;
+    return LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
+  }
   if (!hasNativeLifecycle(role)) return false;
   if (roleJobStatus(role) !== 'open') return false;
   return role?.is_published == null ? true : role.is_published === true;
@@ -165,15 +171,19 @@ const isRoleLive = (role) => {
 // agent is on, paused, or off. Explicit ATS state remains authoritative for
 // Workable and sister roles; native roles follow their persisted job status.
 const isRoleDimmed = (role) => {
-  if (role?.workable_job_live != null) return role.workable_job_live === false;
-  if (isWorkableBackedRole(role) && NON_LIVE_WORKABLE_STATES.has(workableState(role))) return true;
+  const provider = roleAtsProvider(role);
+  if (provider) {
+    const live = roleExternalJobLive(role);
+    if (live != null) return !live;
+    return NON_LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
+  }
   return hasNativeLifecycle(role) ? roleJobStatus(role) !== 'open' : false;
 };
 
 const filterRoleBySource = (role, sourceFilter) => {
   if (sourceFilter === 'live') return isRoleLive(role);
-  if (sourceFilter === 'workable') return String(role?.source || '').toLowerCase() === 'workable';
-  if (sourceFilter === 'manual') return String(role?.source || '').toLowerCase() !== 'workable';
+  if (sourceFilter === 'workable' || sourceFilter === 'bullhorn') return roleAtsProvider(role) === sourceFilter;
+  if (sourceFilter === 'full_ats') return roleAtsProvider(role) == null;
   if (sourceFilter === 'active') return Number(role?.active_candidates_count || 0) > 0;
   if (sourceFilter === 'draft') return isRoleDraft(role);
   return true;
@@ -182,8 +192,10 @@ const filterRoleBySource = (role, sourceFilter) => {
 const buildSourceCounts = (roles) => roles.reduce((acc, role) => {
   acc.all += 1;
   if (isRoleLive(role)) acc.live += 1;
-  if (String(role?.source || '').toLowerCase() === 'workable') acc.workable += 1;
-  if (String(role?.source || '').toLowerCase() !== 'workable') acc.manual += 1;
+  const provider = roleAtsProvider(role);
+  if (provider === 'workable') acc.workable += 1;
+  else if (provider === 'bullhorn') acc.bullhorn += 1;
+  else acc.full_ats += 1;
   if (Number(role?.active_candidates_count || 0) > 0) acc.active += 1;
   if (isRoleDraft(role)) acc.draft += 1;
   return acc;
@@ -191,7 +203,8 @@ const buildSourceCounts = (roles) => roles.reduce((acc, role) => {
   all: 0,
   live: 0,
   workable: 0,
-  manual: 0,
+  bullhorn: 0,
+  full_ats: 0,
   active: 0,
   draft: 0,
 });
@@ -209,8 +222,17 @@ const extractRunId = (value) => {
   return null;
 };
 
-const mergeSyncStatusIntoOrg = (org, payload = {}) => {
+const mergeSyncStatusIntoOrg = (org, payload = {}, provider = 'workable') => {
   if (!org) return org;
+  if (provider === 'bullhorn') {
+    return {
+      ...org,
+      bullhorn_last_sync_at: payload.last_sync_at ?? payload.bullhorn_last_sync_at ?? org.bullhorn_last_sync_at,
+      bullhorn_last_sync_status: payload.last_sync_status ?? payload.bullhorn_last_sync_status ?? org.bullhorn_last_sync_status,
+      bullhorn_last_sync_summary: payload.last_sync_summary ?? payload.bullhorn_last_sync_summary ?? org.bullhorn_last_sync_summary,
+      bullhorn_sync_progress: payload.sync_progress ?? payload.bullhorn_sync_progress ?? org.bullhorn_sync_progress,
+    };
+  }
   return {
     ...org,
     workable_last_sync_at: payload.workable_last_sync_at ?? org.workable_last_sync_at,
@@ -290,7 +312,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
   const orgStatusResult = useAgentStatusOrg(!isShowcase);
-  const { workableSyncJob, trackWorkableSync } = useJobStatus() ?? {};
+  const {
+    workableSyncJob,
+    bullhornSyncJob,
+    trackWorkableSync,
+    trackBullhornSync,
+  } = useJobStatus() ?? {};
 
   const [roles, setRoles] = useState([]);
   // True while the first page is shown and the full role list is still
@@ -395,26 +422,34 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     }
   }, [isShowcase, orgStatusResult.payload]);
 
-  // JobStatusContext is the single Workable status owner. Entering Jobs asks
-  // it to discover once; it keeps polling only while a sync is actually live.
-  useEffect(() => {
-    if (!isShowcase && orgData?.workable_connected) trackWorkableSync?.();
-  }, [isShowcase, orgData?.workable_connected, trackWorkableSync]);
+  const activeAts = organizationAtsProvider(orgData);
+  const atsSyncJob = activeAts === 'bullhorn' ? bullhornSyncJob : workableSyncJob;
+  const trackAtsSync = activeAts === 'bullhorn' ? trackBullhornSync : trackWorkableSync;
 
-  const workableWasActiveRef = useRef(false);
+  // JobStatusContext is the single ATS sync-status owner. Entering Jobs asks it
+  // to discover once; it keeps polling only while a sync is actually live.
   useEffect(() => {
-    if (!workableSyncJob) return;
+    if (!isShowcase && activeAts) trackAtsSync?.();
+  }, [activeAts, isShowcase, trackAtsSync]);
+
+  const atsWasActiveRef = useRef(false);
+  useEffect(() => {
+    if (!atsSyncJob || !activeAts) return;
     const status = String(
-      workableSyncJob.workable_last_sync_status || workableSyncJob.status || '',
+      atsSyncJob.workable_last_sync_status
+      || atsSyncJob.bullhorn_last_sync_status
+      || atsSyncJob.last_sync_status
+      || atsSyncJob.status
+      || '',
     ).toLowerCase();
-    const inProgress = Boolean(workableSyncJob.sync_in_progress)
+    const inProgress = Boolean(atsSyncJob.sync_in_progress)
       || status === 'running'
       || status === 'cancelling';
-    setOrgData((current) => mergeSyncStatusIntoOrg(current, workableSyncJob));
+    setOrgData((current) => mergeSyncStatusIntoOrg(current, atsSyncJob, activeAts));
     setSyncing(inProgress);
-    if (workableWasActiveRef.current && !inProgress) void loadJobsHub();
-    workableWasActiveRef.current = inProgress;
-  }, [loadJobsHub, workableSyncJob]);
+    if (atsWasActiveRef.current && !inProgress) void loadJobsHub();
+    atsWasActiveRef.current = inProgress;
+  }, [activeAts, atsSyncJob, loadJobsHub]);
 
   // Per-role agent spend for the BUDGET USED tile. This used to fan out one
   // /roles/{id}/agent/status call per agent-enabled role — up to 20 requests
@@ -466,20 +501,23 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   }, [isShowcase, roles]);
 
   const handleSyncNow = async () => {
-    if (isShowcase) return;
+    if (isShowcase || !activeAts) return;
     setError('');
     setSyncing(true);
     try {
-      const res = await orgApi.syncWorkable();
+      const res = activeAts === 'bullhorn'
+        ? await orgApi.syncBullhorn()
+        : await orgApi.syncWorkable();
       const payload = res?.data || {};
       const runId = extractRunId(payload);
       if (payload?.status === 'already_running') {
-        trackWorkableSync?.();
+        trackAtsSync?.();
         setSyncing(true);
         return;
       }
-      if (runId) {
-        trackWorkableSync?.();
+      if (runId || payload?.status === 'started') {
+        trackAtsSync?.();
+        setSyncing(true);
         return;
       }
       setSyncing(false);
@@ -489,49 +527,60 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       const runId = extractRunId(err?.response?.data) ?? extractRunId(err?.response?.data?.detail);
       if (status === 409 || runId != null) {
         try {
-          const statusRes = await orgApi.getWorkableSyncStatus(runId ?? undefined);
+          const statusRes = activeAts === 'bullhorn'
+            ? await orgApi.getBullhornSyncStatus()
+            : await orgApi.getWorkableSyncStatus(runId ?? undefined);
           const payload = statusRes?.data || {};
-          setOrgData((current) => mergeSyncStatusIntoOrg(current, payload));
+          setOrgData((current) => mergeSyncStatusIntoOrg(current, payload, activeAts));
           const inProgress = Boolean(payload.sync_in_progress);
           setSyncing(inProgress);
-          if (inProgress) trackWorkableSync?.();
+          if (inProgress) trackAtsSync?.();
           if (!inProgress) {
             await loadJobsHub();
           }
           return;
         } catch {
           setSyncing(true);
-          trackWorkableSync?.();
+          trackAtsSync?.();
           return;
         }
       }
       setSyncing(false);
-      setError('Workable sync could not be started.');
+      setError(`${atsProviderLabel(activeAts)} sync could not be started.`);
     }
   };
 
   const sourceCounts = useMemo(() => buildSourceCounts(roles), [roles]);
-  const workableRolesCount = sourceCounts.workable;
-  const workableSummary = orgData?.workable_last_sync_summary || {};
-  const workableHealth = resolveSyncHealth({
-    status: orgData?.workable_last_sync_status,
-    lastSyncedAt: orgData?.workable_last_sync_at,
+  const activeAtsLabel = atsProviderLabel(activeAts);
+  const activeAtsRolesCount = activeAts ? sourceCounts[activeAts] : 0;
+  const activeAtsLastSyncAt = activeAts === 'bullhorn'
+    ? orgData?.bullhorn_last_sync_at
+    : orgData?.workable_last_sync_at;
+  const activeAtsSummary = activeAts === 'bullhorn'
+    ? (orgData?.bullhorn_last_sync_summary || {})
+    : (orgData?.workable_last_sync_summary || {});
+  const activeAtsHealth = resolveSyncHealth({
+    status: activeAts === 'bullhorn'
+      ? orgData?.bullhorn_last_sync_status
+      : orgData?.workable_last_sync_status,
+    lastSyncedAt: activeAtsLastSyncAt,
   });
-  const workableHealthLabel = workableHealth === 'error'
+  const activeAtsHealthLabel = activeAtsHealth === 'error'
     ? 'Attention needed'
-    : workableHealth === 'stale'
+    : activeAtsHealth === 'stale'
       ? 'Needs refresh'
       : 'Healthy';
   const nextPullAt = useMemo(() => {
     // Jobs metadata syncs every 15 minutes (sync_workable_jobs Beat task).
     // Candidate cadences vary per role (starred/agent/nightly) — those
     // surface on the role page itself rather than here.
-    const lastSyncAt = orgData?.workable_last_sync_at;
+    if (activeAts !== 'workable') return null;
+    const lastSyncAt = activeAtsLastSyncAt;
     if (!lastSyncAt) return null;
     const parsed = new Date(lastSyncAt);
     if (Number.isNaN(parsed.getTime())) return null;
     return new Date(parsed.getTime() + (15 * 60000));
-  }, [orgData?.workable_last_sync_at]);
+  }, [activeAts, activeAtsLastSyncAt]);
 
   // Distinct clients present across the loaded roles, for the client dropdown.
   const clientOptions = useMemo(() => {
@@ -725,23 +774,25 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             ⌘K palette in Shell. The local "Search jobs by name" input was
             redundant chrome and is gone per the canvas spec. */}
 
-        {orgData?.workable_connected ? (
+        {activeAts ? (
           <Reveal className="wk-strip">
             <div className="lg">
-              <WorkableLogo size={30} className="!rounded-[7px] !shadow-none" />
+              {activeAts === 'bullhorn'
+                ? <BullhornLogo size={30} className="!rounded-[7px] !shadow-none" />
+                : <WorkableLogo size={30} className="!rounded-[7px] !shadow-none" />}
             </div>
             <div>
               <div style={{ fontSize: 'var(--fs-h3)', fontWeight: 600, marginBottom: '2px' }}>
-                Synced from Workable · {workableRolesCount} role{workableRolesCount === 1 ? '' : 's'}{sourceCounts.manual > 0 ? ` · ${sourceCounts.manual} created in Taali` : ''}
+                Synced from {activeAtsLabel} · {activeAtsRolesCount} role{activeAtsRolesCount === 1 ? '' : 's'}{sourceCounts.full_ats > 0 ? ` · ${sourceCounts.full_ats} created in Taali` : ''}
               </div>
               <div className="meta">
                 <span>
-                  <SyncPulse status={syncing ? 'healthy' : workableHealth} className="mr-2 inline-flex" />
-                  {syncing ? 'Syncing now' : workableHealthLabel}
+                  <SyncPulse status={syncing ? 'healthy' : activeAtsHealth} className="mr-2 inline-flex" />
+                  {syncing ? 'Syncing now' : activeAtsHealthLabel}
                 </span>
-                <span>Last pull <b>{formatRelativeDateTime(orgData?.workable_last_sync_at)}</b></span>
-                <span>Next in <b>{formatCountdown(nextPullAt)}</b></span>
-                <span><b>{getSyncSummaryValue(workableSummary, ['new_candidates', 'candidates_upserted'], 0)}</b> new candidates synced</span>
+                <span>Last pull <b>{formatRelativeDateTime(activeAtsLastSyncAt)}</b></span>
+                {nextPullAt ? <span>Next in <b>{formatCountdown(nextPullAt)}</b></span> : null}
+                <span><b>{getSyncSummaryValue(activeAtsSummary, ['new_candidates', 'candidates_upserted'], 0)}</b> new candidates synced</span>
               </div>
             </div>
             <div className="row">
@@ -760,7 +811,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
-                onClick={() => onNavigate('settings-workable')}
+                onClick={() => onNavigate(`settings-${activeAts}`)}
               >
                 Manage <span className="arrow">→</span>
               </button>
@@ -854,7 +905,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               aria-pressed={sourceFilter === filter.key}
               onClick={() => setSourceFilter(filter.key)}
             >
-              {filter.key === 'workable' ? <ArrowRight size={11} /> : null}
+              {filter.key === 'workable' || filter.key === 'bullhorn' ? <ArrowRight size={11} /> : null}
               <span>{filter.label}</span>
               <span className="ct">{sourceCounts[filter.key]}</span>
             </button>
@@ -935,10 +986,15 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <AnimatePresence initial={false} mode={reduced ? 'sync' : 'popLayout'}>
                 {filtered.map((role, roleIndex) => {
                   const stageCounts = role?.stage_counts || {};
-                  const workableRole = String(role?.source || '').toLowerCase() === 'workable';
+                  const roleProvider = roleAtsProvider(role);
+                  const roleProviderLabel = atsProviderLabel(roleProvider);
+                  const workableRole = roleProvider === 'workable';
                   const roleLive = isRoleLive(role);
                   const lifecycleDimmed = isRoleDimmed(role);
-                  const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
+                  const lastRoleActivity = role?.last_candidate_activity_at
+                    || role?.updated_at
+                    || (roleProvider === activeAts ? activeAtsLastSyncAt : null)
+                    || null;
                   const agentEnabled = Boolean(role?.agentic_mode_enabled);
                   // Soft pause keeps agentic_mode_enabled=true but stamps
                   // agent_paused_at, so an enabled-but-paused role must read
@@ -997,8 +1053,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         {roleLive ? (
                           <span
                             className="job-star is-locked"
-                            aria-label={workableRole ? 'Live Workable role · always in continuous sync' : 'Live native role · monitored continuously'}
-                            title={workableRole ? 'Live Workable role · always in continuous sync (auto-starred)' : 'Live native role · monitored continuously (auto-starred)'}
+                            aria-label={roleProvider ? `Live ${roleProviderLabel} role · always in continuous sync` : 'Live native role · monitored continuously'}
+                            title={roleProvider ? `Live ${roleProviderLabel} role · always in continuous sync (auto-starred)` : 'Live native role · monitored continuously (auto-starred)'}
                             style={{
                               padding: 2,
                               marginTop: 2,
@@ -1020,7 +1076,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             }}
                             aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
                             aria-pressed={Boolean(role.starred_for_auto_sync)}
-                            title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
+                            title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : `Star to auto-sync${roleProvider ? ` from ${roleProviderLabel}` : ''} and score in real-time`}
                             style={{
                               background: 'transparent',
                               border: 'none',
@@ -1069,7 +1125,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           <div className="role-meta">
                             {[
                               role?.role_kind === 'sister' && role?.ats_owner_role_name
-                                ? `Coupled to ${role.ats_owner_role_name} in Workable`
+                                ? `Coupled to ${role.ats_owner_role_name} in ${roleProviderLabel}`
                                 : null,
                               role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
                                 ? `${role.sister_role_count} related role${role.sister_role_count === 1 ? '' : 's'}`

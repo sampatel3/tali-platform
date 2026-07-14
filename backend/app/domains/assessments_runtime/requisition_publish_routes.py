@@ -30,7 +30,8 @@ from ...services.task_provisioning_service import (
     MIN_ASSESSMENT_INPUT_CHARS,
     role_assessment_input_text,
 )
-from .requisition_shared import _get_brief, _job_page_url, _org, _workable_spec
+from ..identity_access.organization_serialization import resolve_active_ats
+from .requisition_shared import _ats_spec, _get_brief, _job_page_url, _org
 from .roles_management_routes import (
     _request_autogenerate_assessment_task,
 )
@@ -53,15 +54,15 @@ def publish_requisition(
 
     Three things, all idempotent and re-publish-safe (the brief is NEVER locked,
     so it stays editable):
-      1. Mint-once a ``ref_code`` (the Workable bridge match key).
+      1. Mint-once a ``ref_code`` (the ATS bridge match key).
       2. Create/refresh an inactive ``Role`` (``job_status=draft``) linked to the
          brief and materialize its criteria — the job the recruiter sees in Jobs
-         and whose spec they copy into Workable.
+         and whose spec can optionally be distributed through the active ATS.
       3. Snapshot public-safe fields onto the PUBLIC careers JobPage (one per
          brief; re-publish reuses the token).
 
-    Returns the ref code + the ``workable_spec`` (the FE-rendered JD with the ref
-    line appended) so the FE can offer a one-click "Copy for Workable".
+    Returns provider-neutral ATS metadata plus ``ats_spec``.  The historical
+    ``workable_spec`` key remains as a compatibility alias.
     """
     brief = _get_brief(db, current_user.organization_id, brief_id)
     # Enforce the same "required brief fields must be filled" gate the frontend
@@ -185,6 +186,9 @@ def publish_requisition(
     # authorizes model-backed work. A materially changed, already-running role
     # reuses that durable authorization to replace its generated artifacts and
     # resume automatically; ambiguous/manual task choices fail closed for HITL.
+    active_ats = resolve_active_ats(org)
+    ats_provider = active_ats if active_ats in {"workable", "bullhorn"} else None
+    ats_spec = _ats_spec(data.jd_markdown, ref_code)
     return {
         "job_page_id": page.id,
         "token": page.token,
@@ -194,5 +198,7 @@ def publish_requisition(
         "ref_code": ref_code,
         "role_id": role.id,
         "job_status": role.job_status,
-        "workable_spec": _workable_spec(data.jd_markdown, ref_code),
+        "ats_provider": ats_provider,
+        "ats_spec": ats_spec,
+        "workable_spec": ats_spec,
     }

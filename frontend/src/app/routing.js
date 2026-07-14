@@ -87,6 +87,8 @@ export const pathForPage = (page, options = {}) => {
       return '/settings';
     case 'settings-workable':
       return '/settings/workable';
+    case 'settings-bullhorn':
+      return '/settings/bullhorn';
     case 'settings-billing':
       return '/settings/billing';
     case 'settings-team':

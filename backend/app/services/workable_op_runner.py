@@ -39,6 +39,16 @@ from .workable_actions_service import (
 logger = logging.getLogger("taali.workable_op_runner")
 
 
+class AtsJobRunPersistenceError(RuntimeError):
+    """Raised when an ATS operation cannot be durably tracked before publish."""
+
+    def __init__(self, op_type: str):
+        self.op_type = str(op_type or "unknown")
+        super().__init__(
+            f"could not persist BackgroundJobRun for ATS operation {self.op_type!r}"
+        )
+
+
 # Op type constants — also the dispatch keys.
 OP_APPROVE_DECISIONS = "approve_decisions"
 OP_OVERRIDE_DECISION = "override_decision"
@@ -60,6 +70,44 @@ def _recruiter_actor(user_id: int | None):
     return Actor(type=ACTOR_RECRUITER, user_id=int(user_id) if user_id else None)
 
 
+def _active_ats_label(
+    db: Session, organization_id: int, payload: dict | None = None
+) -> tuple[str, str]:
+    """Return ``(slug, label)`` for provider-aware audit/error wording."""
+    from ..components.integrations.resolver import (
+        resolve_application_ats_provider,
+        resolve_ats_provider,
+    )
+    from ..models.organization import Organization
+
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    provider = None
+    application_id = (payload or {}).get("application_id")
+    if application_id is not None:
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id == int(organization_id),
+            )
+            .first()
+        )
+        provider = resolve_application_ats_provider(org, db, app)
+        if provider is None and app is not None and app.bullhorn_job_submission_id:
+            return "bullhorn", "Bullhorn"
+    if provider is None:
+        provider = resolve_ats_provider(org, db)
+    slug = str(getattr(provider, "ats", "") or "").lower()
+    if slug == "bullhorn":
+        return "bullhorn", "Bullhorn"
+    if slug == "workable":
+        return "workable", "Workable"
+    # This runner predates provider routing and disconnected/local fixtures can
+    # still inject its legacy Workable errors. Bullhorn is always explicit via
+    # the resolver; preserve Workable wording for the fallback contract.
+    return "workable", "Workable"
+
+
 def _route_bullhorn_op(
     db: Session, organization_id: int, payload: dict, *, handler_name: str
 ) -> dict | None:
@@ -73,11 +121,11 @@ def _route_bullhorn_op(
     the Workable path is untouched for every non-Bullhorn org.
     """
     from ..components.integrations.bullhorn.provider import BullhornProvider
-    from ..components.integrations.resolver import resolve_ats_provider
+    from ..components.integrations.resolver import resolve_application_ats_provider
     from ..models.organization import Organization
 
     org = db.query(Organization).filter(Organization.id == organization_id).first()
-    if org is None or not isinstance(resolve_ats_provider(org, db), BullhornProvider):
+    if org is None:
         return None
     application_id = int(payload["application_id"])
     app = (
@@ -90,6 +138,22 @@ def _route_bullhorn_op(
     )
     if app is None:
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
+    provider = resolve_application_ats_provider(org, db, app)
+    if not isinstance(provider, BullhornProvider):
+        # A Bullhorn-linked application must never fall through to the Workable
+        # handler merely because Bullhorn was disabled/disconnected after the
+        # op was queued. Surface the divergence through the shared failure rail.
+        if app.bullhorn_job_submission_id and not app.workable_candidate_id:
+            raise WorkableWritebackError(
+                action=handler_name,
+                code="not_configured",
+                message=(
+                    "Bullhorn is disabled or disconnected for this linked "
+                    "application"
+                ),
+                retriable=False,
+            )
+        return None
     from ..components.integrations.bullhorn import op_handlers
 
     handler = getattr(op_handlers, handler_name)
@@ -122,6 +186,131 @@ def _requeue_decision(db: Session, decision_id: int, organization_id: int, *, no
     db.commit()
 
 
+def compensate_override_delivery_loss(
+    *,
+    organization_id: int,
+    decision_id: int,
+    job_run_id: int | None,
+    reason: str,
+    error_code: str,
+    allowed_run_statuses: tuple[str, ...] = ("queued",),
+    stale_before: datetime | None = None,
+) -> dict:
+    """Fail a non-replayable override delivery and return its decision to HITL.
+
+    Override operations can contain email or other non-idempotent side effects,
+    so a lost broker delivery must never be replayed from a stored payload.  The
+    ``BackgroundJobRun`` is instead the coordination row: lock it, prove it is
+    still in an eligible non-terminal state, fail it, and requeue only a decision
+    that is still ``processing``.  A worker that already terminalized the run is
+    left untouched; a worker that won the ``queued -> running`` race is likewise
+    left alone by the immediate (queued-only) compensator.
+
+    ``stale_before`` is used by the Beat watchdog.  For a running retry chain its
+    latest ``last_started_at`` receipt is authoritative, so a healthy delayed
+    retry is not reaped merely because the run row itself is old.
+    """
+    from ..models.background_job_run import JOB_KIND_WORKABLE_OP, BackgroundJobRun
+    from ..platform.database import SessionLocal
+
+    def _aware(value: object) -> datetime | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        run = None
+        if job_run_id is not None:
+            run = (
+                db.query(BackgroundJobRun)
+                .filter(
+                    BackgroundJobRun.id == int(job_run_id),
+                    BackgroundJobRun.organization_id == int(organization_id),
+                    BackgroundJobRun.kind == JOB_KIND_WORKABLE_OP,
+                )
+                .with_for_update()
+                .one_or_none()
+            )
+            if run is not None:
+                counters = run.counters if isinstance(run.counters, dict) else {}
+                if str(counters.get("op_type") or "") != OP_OVERRIDE_DECISION:
+                    return {
+                        "status": "wrong_op_type",
+                        "job_run_id": int(run.id),
+                        "requeued": False,
+                    }
+                if run.finished_at is not None or run.status not in allowed_run_statuses:
+                    return {
+                        "status": "already_terminal_or_active",
+                        "job_run_id": int(run.id),
+                        "run_status": run.status,
+                        "requeued": False,
+                    }
+                if stale_before is not None:
+                    reference = _aware(run.started_at)
+                    if run.status == "running":
+                        reference = _aware(counters.get("last_started_at")) or reference
+                    if reference is not None and reference > stale_before:
+                        return {
+                            "status": "not_stale",
+                            "job_run_id": int(run.id),
+                            "run_status": run.status,
+                            "requeued": False,
+                        }
+
+        decision = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.id == int(decision_id),
+                AgentDecision.organization_id == int(organization_id),
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        requeued = bool(decision is not None and decision.status == "processing")
+        if requeued:
+            decision.status = "pending"
+            decision.resolution_note = (reason or "")[:500] or None
+
+        now = datetime.now(timezone.utc)
+        if run is not None:
+            counters = dict(run.counters or {})
+            counters.update(
+                {
+                    "op_type": OP_OVERRIDE_DECISION,
+                    "decision_id": int(decision_id),
+                    "failure_code": str(error_code or "delivery_lost")[:100],
+                }
+            )
+            run.counters = counters
+            run.status = "failed"
+            run.finished_at = now
+            run.error = str(reason or "ATS override delivery was lost")[:2000]
+
+        db.commit()
+        return {
+            "status": "compensated",
+            "job_run_id": int(run.id) if run is not None else None,
+            "decision_id": int(decision_id),
+            "requeued": requeued,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> dict:
     """Drain a batch of approved decisions sequentially (self-contained).
 
@@ -139,6 +328,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
     # above covers enqueue_one / single approve.
     workable_target_stages = payload.get("workable_target_stages") or {}
     actor = _recruiter_actor(payload.get("user_id"))
+    _provider_slug, provider_label = _active_ats_label(db, organization_id)
 
     counters = {"total": len(ids), "succeeded": 0, "requeued": 0, "failed": 0, "skipped": 0}
     for decision_id in ids:
@@ -191,7 +381,10 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                 db,
                 decision_id,
                 organization_id,
-                note=f"Returned to queue: Workable didn't accept the update. {exc.message}",
+                note=(
+                    f"Returned to queue: {provider_label} didn't accept the "
+                    f"update. {exc.message}"
+                ),
             )
             counters["requeued"] += 1
         except HTTPException as exc:
@@ -460,41 +653,114 @@ def enqueue_workable_op(
     scope_id: int | None = None,
     job_kind: str | None = None,
     counters: dict | None = None,
-) -> int | None:
+) -> int:
     """Record a BackgroundJobRun and enqueue the serialized runner task.
 
-    Returns the job_run_id (None if bookkeeping failed — the task is still
-    enqueued so the write isn't lost). The caller has already done any
-    optimistic local flip (e.g. decision → processing) and committed.
+    Returns the durable job_run_id. No ATS task is published unless that row was
+    persisted first, so every accepted operation has a meter and poll handle.
+    The caller has already done any optimistic local flip (e.g. decision →
+    processing) and committed, and must compensate it if this raises
+    :class:`AtsJobRunPersistenceError`.
     """
+    import json
+
     from ..models.background_job_run import JOB_KIND_DECISION_BATCH, JOB_KIND_WORKABLE_OP
-    from .background_job_runs import SCOPE_KIND_ORG, create_run
+    from ..platform.config import settings
+    from ..platform.secrets import encrypt_text
+    from .background_job_runs import SCOPE_KIND_ORG, create_run, mark_dispatched
 
     kind = job_kind or (
         JOB_KIND_DECISION_BATCH if op_type == OP_APPROVE_DECISIONS else JOB_KIND_WORKABLE_OP
     )
+    replay_safe = op_type in {OP_MOVE_STAGE, OP_MANUAL_OUTCOME}
+    run_counters = dict(counters or {"op_type": op_type})
+    run_counters["op_type"] = op_type
+    if op_type == OP_OVERRIDE_DECISION:
+        # Deliberately persist only the non-secret coordination key, never the
+        # override payload.  A watchdog can return the decision to HITL, but it
+        # cannot replay a potentially non-idempotent recruiter action.
+        run_counters["decision_id"] = int(payload["decision_id"])
+    if replay_safe:
+        run_counters["recovery_payload"] = encrypt_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            settings.SECRET_KEY,
+        )
     job_run_id = create_run(
         kind=kind,
         scope_kind=SCOPE_KIND_ORG,
         scope_id=int(scope_id if scope_id is not None else organization_id),
         organization_id=int(organization_id),
-        counters=counters or {"op_type": op_type},
-        status="queued",
+        counters=run_counters,
+        status="dispatching" if replay_safe else "queued",
     )
+    if (
+        isinstance(job_run_id, bool)
+        or not isinstance(job_run_id, int)
+        or job_run_id <= 0
+    ):
+        # ``create_run`` is intentionally best-effort for ordinary background
+        # bookkeeping, but ATS writes require durable tracking. Fail before the
+        # broker publish so a provider side effect can never run unmetered.
+        raise AtsJobRunPersistenceError(op_type)
     from ..tasks.assessment_tasks import mark_workable_op_pending
     from ..tasks.workable_tasks import run_workable_op_task
 
     # Tell the periodic Workable syncs to yield the per-org mutex so this
     # user-facing write isn't starved behind a long candidate sync.
     mark_workable_op_pending(int(organization_id))
-    run_workable_op_task.apply_async(
-        kwargs={
-            "job_run_id": job_run_id,
-            "organization_id": int(organization_id),
-            "op_type": op_type,
-            "payload": payload,
-        }
-    )
+    try:
+        run_workable_op_task.apply_async(
+            kwargs={
+                "job_run_id": job_run_id,
+                "organization_id": int(organization_id),
+                "op_type": op_type,
+                "payload": payload,
+            }
+        )
+    except Exception as exc:
+        if op_type == OP_OVERRIDE_DECISION:
+            reason = (
+                "Returned to queue: the ATS override could not be delivered to "
+                "the background worker. No ATS side effect was replayed; review "
+                "the decision and try again."
+            )
+            outcome = compensate_override_delivery_loss(
+                organization_id=int(organization_id),
+                decision_id=int(payload["decision_id"]),
+                job_run_id=job_run_id,
+                reason=reason,
+                error_code="initial_queue_unavailable",
+                # If an ambiguous broker response already reached a worker and
+                # it won the running claim, do not race or undo that live task.
+                allowed_run_statuses=("queued",),
+            )
+            logger.error(
+                "ATS override broker kick failed; compensation status=%s "
+                "run_id=%s decision_id=%s error_type=%s",
+                outcome.get("status"),
+                job_run_id,
+                payload.get("decision_id"),
+                type(exc).__name__,
+            )
+            if outcome.get("status") in {
+                "compensated",
+                "already_terminal_or_active",
+            }:
+                return job_run_id
+        if not replay_safe or job_run_id is None:
+            raise
+        # The durable dispatching row is the outbox. Beat will replay this
+        # idempotent status operation; the request can return the already-
+        # committed local state without losing the remote update.
+        logger.error(
+            "ATS op broker kick failed; durable recovery will replay "
+            "run_id=%s error_type=%s",
+            job_run_id,
+            type(exc).__name__,
+        )
+    else:
+        if replay_safe:
+            mark_dispatched(job_run_id)
     return job_run_id
 
 
@@ -513,7 +779,13 @@ def surface_op_failure(
     trail so a dropped Workable write is never silent."""
     from ..domains.assessments_runtime.pipeline_service import append_application_event
 
-    note = f"Workable didn't accept the update after several tries. {error.message}"
+    provider_slug, provider_label = _active_ats_label(
+        db, int(organization_id), payload
+    )
+    note = (
+        f"{provider_label} didn't accept the update after several tries. "
+        f"{error.message}"
+    )
     try:
         if op_type == OP_OVERRIDE_DECISION:
             _requeue_decision(db, int(payload["decision_id"]), int(organization_id), note=note)
@@ -539,18 +811,34 @@ def surface_op_failure(
         )
         if app is None:
             return
+        if op_type == OP_MANUAL_OUTCOME and provider_slug == "bullhorn":
+            from .ats_writeback_state import set_outcome_writeback_state
+
+            set_outcome_writeback_state(
+                app,
+                provider="bullhorn",
+                status="failed",
+                target_outcome=str(payload.get("target_outcome") or ""),
+                error_code=error.code,
+            )
+        event_prefix = provider_slug if provider_slug in {"workable", "bullhorn"} else "ats"
         event_type = {
-            OP_MOVE_STAGE: "workable_move_stage_failed",
-            OP_MANUAL_OUTCOME: "workable_writeback_failed",
-            OP_POST_NOTE: "workable_writeback_failed",
-        }.get(op_type, "workable_writeback_failed")
+            OP_MOVE_STAGE: f"{event_prefix}_move_stage_failed",
+            OP_MANUAL_OUTCOME: f"{event_prefix}_writeback_failed",
+            OP_POST_NOTE: f"{event_prefix}_writeback_failed",
+        }.get(op_type, f"{event_prefix}_writeback_failed")
         append_application_event(
             db,
             app=app,
             event_type=event_type,
             actor_type="system",
             reason=note,
-            metadata={"op_type": op_type, "code": error.code, "source": "workable_op_runner"},
+            metadata={
+                "op_type": op_type,
+                "code": error.code,
+                "source": "workable_op_runner",
+                "ats": provider_slug,
+            },
         )
         db.commit()
     except Exception:  # pragma: no cover — surfacing must never raise

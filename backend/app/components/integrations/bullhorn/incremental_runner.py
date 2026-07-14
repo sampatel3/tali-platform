@@ -30,6 +30,7 @@ from ....platform.config import settings
 from ....platform.database import SessionLocal
 from . import events, reconcile
 from .sync_runner import (
+    BullhornMutexUnavailable,
     _acquire_mutex,
     _build_service,
     _org_connected,
@@ -45,6 +46,12 @@ _DEFAULT_SWEEP_LOOKBACK = timedelta(days=1)
 # Safety overlap subtracted from the watermark so a change landing right at the
 # boundary of the last run isn't missed (dateLastModified ordering is undocumented).
 _SWEEP_OVERLAP = timedelta(minutes=30)
+_GAP_RECOVERABLE_POLL_REASONS = {
+    "replay_unavailable",
+    "empty_replay",
+    "missing_request_id",
+    "event_handler_failed",
+}
 
 
 def _now() -> datetime:
@@ -84,11 +91,13 @@ def execute_bullhorn_event_poll(*, org_id: int) -> dict:
         sub_id, created = events.ensure_subscription(db, org, client=client)
         result: dict = {"status": "ok", "subscription_id": sub_id, "created": created}
 
+        gap_failed = False
         if created:
             # First subscription for this org: its queue starts empty, so anything
             # changed before it existed is invisible to events. Backfill via a
             # gap-covering sweep before polling.
             result["gap_sweep"] = _gap_sweep(db, org, client=client)
+            gap_failed = _sync_result_failed(result["gap_sweep"])
 
         poll = events.poll_and_process_events(db, org, client=client)
         if poll.get("status") == "subscription_dead":
@@ -98,12 +107,31 @@ def execute_bullhorn_event_poll(*, org_id: int) -> dict:
             events.recreate_subscription(db, org, client=client)
             result["recreated"] = True
             result["gap_sweep"] = _gap_sweep(db, org, client=client)
+            gap_failed = _sync_result_failed(result["gap_sweep"])
             poll = events.poll_and_process_events(db, org, client=client)
+        poll, recovery_failed = _recover_poll_gap(
+            db,
+            org,
+            client=client,
+            poll=poll,
+            result=result,
+        )
         result["poll"] = poll
+        poll_failed = _sync_result_failed(poll)
+        gap_failed = gap_failed or recovery_failed
+        if gap_failed or poll_failed:
+            result["status"] = "retry_pending"
+            return result
         _stamp_incremental(db, org)
         return result
-    except Exception:
-        logger.exception("Bullhorn event poll failed org_id=%s", org_id)
+    except BullhornMutexUnavailable:
+        return {"status": "skipped", "reason": "lock_unavailable"}
+    except Exception as exc:
+        logger.error(
+            "Bullhorn event poll failed org_id=%s error_type=%s",
+            org_id,
+            type(exc).__name__,
+        )
         return {"status": "error", "org_id": org_id}
     finally:
         if mutex_handle is not None:
@@ -136,10 +164,22 @@ def execute_bullhorn_reconcile(*, org_id: int) -> dict:
         since = _sweep_watermark(org)
         sweep = reconcile.sweep_modified_since(db, org, client=client, since=since)
         counts = reconcile.reconcile_counts(db, org, client=client)
+        if _sync_result_failed(sweep):
+            return {
+                "status": "retry_pending",
+                "sweep": sweep,
+                "reconciliation": counts,
+            }
         _stamp_incremental(db, org)
         return {"status": "ok", "sweep": sweep, "reconciliation": counts}
-    except Exception:
-        logger.exception("Bullhorn reconcile failed org_id=%s", org_id)
+    except BullhornMutexUnavailable:
+        return {"status": "skipped", "reason": "lock_unavailable"}
+    except Exception as exc:
+        logger.error(
+            "Bullhorn reconcile failed org_id=%s error_type=%s",
+            org_id,
+            type(exc).__name__,
+        )
         return {"status": "error", "org_id": org_id}
     finally:
         if mutex_handle is not None:
@@ -155,6 +195,87 @@ def _gap_sweep(db: Session, org: Organization, *, client) -> dict:
     known incremental watermark (or the default lookback on the very first run).
     """
     return reconcile.sweep_modified_since(db, org, client=client, since=_sweep_watermark(org))
+
+
+def _sync_result_failed(result: object) -> bool:
+    if not isinstance(result, dict):
+        return True
+    return bool(
+        int(result.get("errors") or 0) > 0
+        or result.get("status") not in {None, "ok"}
+    )
+
+
+def _recover_poll_gap(
+    db: Session,
+    org: Organization,
+    *,
+    client,
+    poll: dict,
+    result: dict,
+) -> tuple[dict, bool]:
+    """Self-heal an event batch that cannot be proven/replayed.
+
+    The previous watermark stays untouched while the fallback sweep runs. Only
+    a clean sweep may supersede an unreplayable requestId; we then poll once more
+    so events accumulated during recovery are not skipped. A bounded loop avoids
+    spinning if Bullhorn repeatedly returns malformed batches—the next beat tick
+    resumes from the unchanged watermark/checkpoint.
+    """
+    recoveries: list[dict] = []
+    for _ in range(2):
+        reason = str(poll.get("reason") or "")
+        if reason not in _GAP_RECOVERABLE_POLL_REASONS:
+            break
+        poison = poll.get("poison") if isinstance(poll.get("poison"), dict) else {}
+        if (
+            reason == "event_handler_failed"
+            and int(poison.get("attempts") or 0) < events.POISON_EVENT_RETRY_LIMIT
+        ):
+            # Preserve exact replay + the prior watermark for the bounded retry
+            # window. Only a repeatedly identical failure earns gap recovery.
+            break
+        expected_request_id = str(org.bullhorn_event_request_id or "").strip()
+        sweep = _gap_sweep(db, org, client=client)
+        recovery: dict = {"reason": reason, "sweep": sweep}
+        recoveries.append(recovery)
+        if _sync_result_failed(sweep):
+            result["recovery_sweeps"] = recoveries
+            return poll, True
+
+        reconciliation = None
+        if reason == "event_handler_failed":
+            # A clean sweep repairs inserts/updates and the count reconciliation
+            # makes any residual delete/drift visible before the poison anchor is
+            # superseded. An exception here leaves the checkpoint untouched.
+            reconciliation = reconcile.reconcile_counts(
+                db,
+                org,
+                client=client,
+            )
+            recovery["reconciliation"] = reconciliation
+
+        if expected_request_id and not events.clear_checkpoint_after_gap_recovery(
+            db,
+            org,
+            expected_request_id=expected_request_id,
+            reconciliation=reconciliation,
+        ):
+            result["recovery_sweeps"] = recoveries
+            return poll, True
+
+        if reason == "missing_request_id":
+            poll = {
+                **poll,
+                "status": "ok",
+                "recovered_via": "gap_sweep",
+            }
+            break
+        poll = events.poll_and_process_events(db, org, client=client)
+
+    if recoveries:
+        result["recovery_sweeps"] = recoveries
+    return poll, False
 
 
 def _sweep_watermark(org: Organization) -> datetime:

@@ -88,6 +88,12 @@ def runtime_capabilities(*, settings_obj: Any = settings) -> dict[str, Any]:
         "github_mock_mode": bool(
             getattr(settings_obj, "GITHUB_MOCK_MODE", False)
         ),
+        # Feature flags are process-local. Reporting Bullhorn here prevents a
+        # web pod with the integration enabled from activating a role while the
+        # default worker would silently suppress every Bullhorn handoff.
+        "bullhorn_enabled": bool(
+            getattr(settings_obj, "BULLHORN_ENABLED", False)
+        ),
         "claude_model": str(getattr(settings_obj, "CLAUDE_MODEL", "") or ""),
         "claude_scoring_batch_model": str(
             getattr(settings_obj, "CLAUDE_SCORING_BATCH_MODEL", "") or ""

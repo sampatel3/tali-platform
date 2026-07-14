@@ -39,13 +39,10 @@ def _lock_wait_countdown() -> int:
     return random.randint(5, 15)
 
 
-def _op_mutex_namespace(organization_id: int) -> str:
-    """Per-org mutex key prefix for this ATS-write op.
-
-    A Bullhorn-connected org uses the ``bullhorn:{org_id}`` namespace so a
-    Bullhorn write serializes against the Bullhorn sync (not the Workable one);
-    everything else uses the shared Workable default. Best-effort: any resolution
-    error falls back to the default namespace (never wedges a write)."""
+def _op_mutex_namespaces(
+    organization_id: int, payload: dict | None = None
+) -> tuple[str, ...]:
+    """Provider lock(s) for application- or decision-scoped ATS writes."""
     from .assessment_tasks import _WORKABLE_ORG_MUTEX_KEY_PREFIX
 
     try:
@@ -53,20 +50,91 @@ def _op_mutex_namespace(organization_id: int) -> str:
         from ..components.integrations.bullhorn.sync_runner import (
             BULLHORN_ORG_MUTEX_NAMESPACE,
         )
-        from ..components.integrations.resolver import resolve_ats_provider
+        from ..components.integrations.resolver import (
+            resolve_application_ats_provider,
+            resolve_ats_provider,
+        )
+        from ..models.candidate_application import CandidateApplication
+        from ..models.agent_decision import AgentDecision
         from ..models.organization import Organization
         from ..platform.database import SessionLocal
 
         db = SessionLocal()
         try:
             org = db.query(Organization).filter(Organization.id == organization_id).first()
-            if isinstance(resolve_ats_provider(org, db), BullhornProvider):
-                return BULLHORN_ORG_MUTEX_NAMESPACE
+            application_ids: set[int] = set()
+            if (payload or {}).get("application_id") is not None:
+                application_ids.add(int(payload["application_id"]))
+            decision_ids = list((payload or {}).get("decision_ids") or [])
+            if (payload or {}).get("decision_id") is not None:
+                decision_ids.append(int(payload["decision_id"]))
+            if decision_ids:
+                application_ids.update(
+                    int(row[0])
+                    for row in db.query(AgentDecision.application_id)
+                    .filter(
+                        AgentDecision.organization_id == int(organization_id),
+                        AgentDecision.id.in_([int(value) for value in decision_ids]),
+                    )
+                    .all()
+                )
+
+            namespaces: set[str] = set()
+            for app in (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.organization_id == int(organization_id),
+                    CandidateApplication.id.in_(application_ids),
+                )
+                .all()
+                if application_ids
+                else []
+            ):
+                provider = resolve_application_ats_provider(org, db, app)
+                if isinstance(provider, BullhornProvider) or (
+                    app.bullhorn_job_submission_id and not app.workable_candidate_id
+                ):
+                    namespaces.add(BULLHORN_ORG_MUTEX_NAMESPACE)
+                else:
+                    namespaces.add(_WORKABLE_ORG_MUTEX_KEY_PREFIX)
+            if not namespaces:
+                provider = resolve_ats_provider(org, db)
+                namespaces.add(
+                    BULLHORN_ORG_MUTEX_NAMESPACE
+                    if isinstance(provider, BullhornProvider)
+                    else _WORKABLE_ORG_MUTEX_KEY_PREFIX
+                )
+            # Stable order prevents mixed-provider decision batches deadlocking.
+            return tuple(sorted(namespaces))
         finally:
             db.close()
     except Exception:  # pragma: no cover — default namespace on any resolution error
         logger.exception("bullhorn mutex-namespace resolution failed org_id=%s", organization_id)
-    return _WORKABLE_ORG_MUTEX_KEY_PREFIX
+    # Provider resolution itself failed. Acquiring both in stable order is the
+    # only safe fallback: defaulting to Workable could let a Bullhorn token-
+    # rotating write run outside the Bullhorn lock.
+    try:
+        from ..components.integrations.bullhorn.sync_runner import (
+            BULLHORN_ORG_MUTEX_NAMESPACE,
+        )
+
+        return tuple(
+            sorted(
+                {
+                    _WORKABLE_ORG_MUTEX_KEY_PREFIX,
+                    BULLHORN_ORG_MUTEX_NAMESPACE,
+                }
+            )
+        )
+    except Exception:
+        return (_WORKABLE_ORG_MUTEX_KEY_PREFIX,)
+
+
+def _op_mutex_namespace(
+    organization_id: int, payload: dict | None = None
+) -> str:
+    """Backward-compatible single-namespace view for tests/callers."""
+    return _op_mutex_namespaces(organization_id, payload)[0]
 
 
 @celery_app.task(
@@ -114,6 +182,45 @@ def run_workable_op_task(
         mark_workable_op_pending,
     )
 
+    if (
+        isinstance(job_run_id, bool)
+        or not isinstance(job_run_id, int)
+        or job_run_id <= 0
+    ):
+        # Defense in depth: every production publisher must reserve a durable
+        # BackgroundJobRun first. If a legacy/direct caller bypasses that gate,
+        # surface the failure (including decision requeue / outcome receipt)
+        # without touching the ATS provider.
+        logger.error(
+            "run_workable_op refused unmetered ATS op organization_id=%s op_type=%s",
+            organization_id,
+            op_type,
+        )
+        db = SessionLocal()
+        try:
+            error = WorkableWritebackError(
+                action=op_type,
+                code="job_run_persistence_failed",
+                message="ATS operation had no durable background-job receipt",
+                retriable=False,
+            )
+            runner.surface_op_failure(
+                db,
+                organization_id=int(organization_id),
+                op_type=op_type,
+                payload=payload,
+                error=error,
+            )
+        except Exception:  # pragma: no cover - defensive surfacing only
+            logger.exception("failed to surface unmetered ATS op_type=%s", op_type)
+        finally:
+            db.close()
+        return {
+            "status": "failed",
+            "op_type": op_type,
+            "code": "job_run_persistence_failed",
+        }
+
     eager = bool(getattr(self.request, "is_eager", False))
     # Refresh the op-pending signal on every run — including each lock-wait
     # re-enqueue below — so the periodic syncs keep yielding the per-org mutex
@@ -123,18 +230,37 @@ def run_workable_op_task(
     # (build plan §6 "namespace bullhorn") so a Bullhorn write and a Bullhorn sync
     # for the same org never talk to the API concurrently; Workable orgs keep the
     # default (Workable) namespace. Same shared mutex util either way.
-    mutex_namespace = _op_mutex_namespace(int(organization_id))
+    mutex_namespaces = _op_mutex_namespaces(int(organization_id), payload)
+    from ..components.integrations.bullhorn.sync_runner import (
+        BULLHORN_ORG_MUTEX_NAMESPACE,
+    )
     # Short TTL + heartbeat (deploy-safe): if this worker is SIGKILLed
     # mid-write the heartbeat thread dies with it and the lock auto-expires in
     # ~2 min, instead of leaking for the 30-min static TTL and blocking ALL
     # ATS writes for this org until then.
-    lock = _acquire_workable_org_mutex(
-        int(organization_id),
-        source=f"workable_op:{op_type}",
-        heartbeat=True,
-        namespace=mutex_namespace,
-    )
-    if lock is None:
+    locks = []
+    lock_blocked = False
+    for mutex_namespace in mutex_namespaces:
+        lock = _acquire_workable_org_mutex(
+            int(organization_id),
+            source=f"ats_op:{op_type}",
+            heartbeat=True,
+            namespace=mutex_namespace,
+        )
+        # Workable retains its historical fail-open behavior on Redis errors.
+        # Bullhorn cannot: refresh tokens rotate once, so unguarded concurrent
+        # calls can consume the same token and strand the integration.
+        if lock is None or (
+            lock is False and mutex_namespace == BULLHORN_ORG_MUTEX_NAMESPACE
+        ):
+            lock_blocked = True
+            for held in reversed(locks):
+                _release_workable_org_mutex(held)
+            locks = []
+            break
+        if lock is not False:
+            locks.append(lock)
+    if lock_blocked:
         # Held by another Workable write (often a large approve batch that holds
         # the lock for its whole run). Wait it out: re-enqueue a FRESH task with
         # an incremented lock_attempt — separate from (and far larger than) the
@@ -144,16 +270,52 @@ def run_workable_op_task(
             if self.request.retries < self.max_retries:
                 raise self.retry(countdown=0)
         elif lock_attempt < _LOCK_WAIT_MAX_ATTEMPTS:
-            run_workable_op_task.apply_async(
-                kwargs={
-                    "job_run_id": job_run_id,
-                    "organization_id": int(organization_id),
+            try:
+                run_workable_op_task.apply_async(
+                    kwargs={
+                        "job_run_id": job_run_id,
+                        "organization_id": int(organization_id),
+                        "op_type": op_type,
+                        "payload": payload,
+                        "lock_attempt": lock_attempt + 1,
+                    },
+                    countdown=_lock_wait_countdown(),
+                )
+            except Exception as exc:
+                if op_type != runner.OP_OVERRIDE_DECISION:
+                    raise
+                reason = (
+                    "Returned to queue: the ATS override lost its background "
+                    "lock-wait delivery. Taali did not replay the ATS action; "
+                    "review the decision and try again."
+                )
+                outcome = runner.compensate_override_delivery_loss(
+                    organization_id=int(organization_id),
+                    decision_id=int(payload["decision_id"]),
+                    job_run_id=job_run_id,
+                    reason=reason,
+                    error_code="lock_wait_queue_unavailable",
+                    allowed_run_statuses=("queued",),
+                )
+                logger.error(
+                    "ATS override lock-wait kick failed; compensation status=%s "
+                    "run_id=%s decision_id=%s error_type=%s",
+                    outcome.get("status"),
+                    job_run_id,
+                    payload.get("decision_id"),
+                    type(exc).__name__,
+                )
+                if outcome.get("status") not in {
+                    "compensated",
+                    "already_terminal_or_active",
+                }:
+                    raise
+                return {
+                    "status": "delivery_compensated",
                     "op_type": op_type,
-                    "payload": payload,
-                    "lock_attempt": lock_attempt + 1,
-                },
-                countdown=_lock_wait_countdown(),
-            )
+                    "decision_id": int(payload["decision_id"]),
+                    "requeued": bool(outcome.get("requeued")),
+                }
             return {
                 "status": "lock_wait_requeued",
                 "op_type": op_type,
@@ -163,7 +325,7 @@ def run_workable_op_task(
         db = SessionLocal()
         try:
             err = WorkableWritebackError(
-                action=op_type, code="lock_timeout", message="Workable was busy", retriable=True
+                action=op_type, code="lock_timeout", message="ATS was busy", retriable=True
             )
             runner.surface_op_failure(
                 db, organization_id=int(organization_id), op_type=op_type, payload=payload, error=err
@@ -171,13 +333,33 @@ def run_workable_op_task(
         finally:
             db.close()
         background_job_runs.update_run(
-            job_run_id, status="failed", error="Workable lock timeout", finished=True
+            job_run_id, status="failed", error="ATS lock timeout", finished=True
         )
         return {"status": "lock_timeout", "op_type": op_type}
 
     db = SessionLocal()
     try:
-        background_job_runs.update_run(job_run_id, status="running")
+        from ..models.background_job_run import (
+            JOB_KIND_DECISION_BATCH,
+            JOB_KIND_WORKABLE_OP,
+        )
+
+        expected_kind = (
+            JOB_KIND_DECISION_BATCH
+            if op_type == runner.OP_APPROVE_DECISIONS
+            else JOB_KIND_WORKABLE_OP
+        )
+        if not background_job_runs.claim_ats_run(
+            job_run_id,
+            organization_id=int(organization_id),
+            expected_kind=expected_kind,
+            op_type=op_type,
+        ):
+            return {
+                "status": "already_terminal",
+                "op_type": op_type,
+                "job_run_id": job_run_id,
+            }
         try:
             result = runner.execute_op(
                 db, organization_id=int(organization_id), op_type=op_type, payload=payload
@@ -201,9 +383,17 @@ def run_workable_op_task(
             return {"status": "failed", "op_type": op_type, "code": exc.code}
         except Exception as exc:  # noqa: BLE001 — never leave a decision stuck in 'processing'
             db.rollback()
-            logger.exception("run_workable_op: unexpected error op_type=%s", op_type)
+            error_type = type(exc).__name__
+            logger.error(
+                "run_workable_op: unexpected error op_type=%s error_type=%s",
+                op_type,
+                error_type,
+            )
             err = WorkableWritebackError(
-                action=op_type, code="unexpected", message=str(exc)[:200], retriable=False
+                action=op_type,
+                code="unexpected",
+                message=f"Unexpected ATS operation failure ({error_type})",
+                retriable=False,
             )
             runner.surface_op_failure(
                 db, organization_id=int(organization_id), op_type=op_type, payload=payload, error=err
@@ -211,8 +401,12 @@ def run_workable_op_task(
             background_job_runs.update_run(
                 job_run_id,
                 status="failed",
-                counters={"op_type": op_type, "code": "unexpected"},
-                error=str(exc)[:300],
+                counters={
+                    "op_type": op_type,
+                    "code": "unexpected",
+                    "error_type": error_type,
+                },
+                error=f"Unexpected ATS operation failure ({error_type})",
                 finished=True,
             )
             return {"status": "failed", "op_type": op_type, "code": "unexpected"}
@@ -228,7 +422,149 @@ def run_workable_op_task(
         return {**result, "status": status, "op_type": op_type}
     finally:
         db.close()
-        _release_workable_org_mutex(lock)
+        for lock in reversed(locks):
+            _release_workable_org_mutex(lock)
+
+
+@celery_app.task(name="app.tasks.workable_tasks.recover_dispatching_workable_ops")
+def recover_dispatching_workable_ops(
+    limit: int = 200,
+    older_than_seconds: int = 120,
+    running_older_than_seconds: int = 900,
+) -> dict:
+    """Replay stale durable status ops across every nonterminal delivery state.
+
+    ``dispatching`` covers a broker exception before acceptance, ``queued`` an
+    accepted message that never began, and ``running`` a worker death or failed
+    final bookkeeping after an idempotent remote write. Only replay-safe status
+    operations carry the encrypted payload and are eligible.
+    """
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from ..models.background_job_run import BackgroundJobRun, JOB_KIND_WORKABLE_OP
+    from ..platform.config import settings
+    from ..platform.database import SessionLocal
+    from ..platform.secrets import decrypt_text
+    from ..services import background_job_runs
+
+    now = datetime.now(timezone.utc)
+    queued_cutoff = now - timedelta(
+        seconds=max(0, int(older_than_seconds))
+    )
+    running_cutoff = now - timedelta(
+        seconds=max(0, int(running_older_than_seconds))
+    )
+
+    def _stamp(value) -> datetime | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _is_due(row: BackgroundJobRun) -> bool:
+        counters = row.counters if isinstance(row.counters, dict) else {}
+        if row.status == "running":
+            reference = _stamp(counters.get("last_started_at")) or _stamp(
+                row.started_at
+            )
+            return reference is None or reference <= running_cutoff
+        references = [
+            _stamp(counters.get("last_recovery_claimed_at")),
+            _stamp(counters.get("last_dispatched_at")),
+            _stamp(row.started_at),
+        ]
+        reference = max((value for value in references if value is not None), default=None)
+        return reference is None or reference <= queued_cutoff
+
+    db = SessionLocal()
+    recovered = 0
+    failed = 0
+    try:
+        rows = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.kind == JOB_KIND_WORKABLE_OP,
+                BackgroundJobRun.status.in_(("dispatching", "queued", "running")),
+                BackgroundJobRun.finished_at.is_(None),
+            )
+            .order_by(BackgroundJobRun.id.asc())
+            .limit(max(1, int(limit)) * 4)
+            .all()
+        )
+        due_rows = [row for row in rows if _is_due(row)][: max(1, int(limit))]
+        for row in due_rows:
+            counters = row.counters if isinstance(row.counters, dict) else {}
+            encrypted_payload = str(counters.get("recovery_payload") or "")
+            op_type = str(counters.get("op_type") or "")
+            try:
+                payload = json.loads(
+                    decrypt_text(encrypted_payload, settings.SECRET_KEY)
+                )
+                if not isinstance(payload, dict) or not op_type:
+                    raise ValueError("recovery payload is invalid")
+            except Exception as exc:
+                # Corrupt/undecryptable internal state cannot become valid on a
+                # later Beat tick. Fail visibly instead of looping forever.
+                error_type = type(exc).__name__
+                row.status = "failed"
+                row.error = f"ATS recovery payload invalid ({error_type})"
+                row.finished_at = now
+                row.counters = {
+                    "op_type": op_type or "unknown",
+                    "code": "recovery_payload_invalid",
+                    "error_type": error_type,
+                }
+                db.commit()
+                failed += 1
+                logger.error(
+                    "invalid ATS op recovery payload run_id=%s error_type=%s",
+                    row.id,
+                    error_type,
+                )
+                continue
+
+            try:
+                # Durable claim before broker publication. A second Beat pod
+                # sees this fresh lease and skips it until the recovery timeout.
+                claimed_counters = dict(counters)
+                claimed_counters["last_recovery_claimed_at"] = now.isoformat()
+                row.counters = claimed_counters
+                row.status = "dispatching"
+                db.commit()
+                run_workable_op_task.apply_async(
+                    kwargs={
+                        "job_run_id": int(row.id),
+                        "organization_id": int(row.organization_id),
+                        "op_type": op_type,
+                        "payload": payload,
+                    }
+                )
+                background_job_runs.mark_dispatched(int(row.id))
+                recovered += 1
+            except Exception as exc:
+                db.rollback()
+                failed += 1
+                logger.error(
+                    "failed to recover ATS op run_id=%s error_type=%s",
+                    row.id,
+                    type(exc).__name__,
+                )
+        return {
+            "scanned": len(due_rows),
+            "recovered": recovered,
+            "failed": failed,
+        }
+    finally:
+        db.close()
 
 
 # Watchdog timeout for a stuck approve batch. The batch handler
@@ -239,6 +575,11 @@ def run_workable_op_task(
 # or the lock-wait re-enqueue chain dropped. 15 min clears the longest realistic
 # legitimate batch AND exceeds the max lock-wait window (~60 × 5-15s) with margin.
 _STUCK_DECISION_BATCH_TIMEOUT_MINUTES = 15
+# An override can legitimately sit between provider retries for up to 15
+# minutes, and lock-wait chains last about 10 minutes. Give both ample margin;
+# anything older has lost its only safe delivery and must return to HITL rather
+# than replaying a possibly non-idempotent side effect.
+_STUCK_OVERRIDE_TIMEOUT_MINUTES = 30
 
 
 @celery_app.task(
@@ -265,11 +606,10 @@ def expire_stuck_decision_batches(self) -> dict:
     the Hub queue (from ``counters['decision_ids']``, persisted at enqueue for
     exactly this).
 
-    Scoped to ``decision_batch`` only — single ``workable_op`` runs retry with
-    backoff and can be legitimately ``running`` for >2h, so reaping them here
-    would false-fail a healthy retry; their worker-death is covered by
-    ``acks_late`` re-delivery instead. The leaked Redis mutex is handled
-    separately by the op-path heartbeat/short-TTL, not here.
+    Scoped to ``decision_batch`` only. Replay-safe single ``workable_op`` rows
+    have their own encrypted-payload recovery sweep above; non-replayable
+    decision batches instead need their decisions returned to the Hub. The
+    leaked Redis mutex is handled separately by the op heartbeat/short TTL.
 
     The 15-min cutoff exceeds the max lock-wait window (~60 attempts × 5-15s),
     so a healthily-waiting ``queued`` batch isn't reaped before its own chain
@@ -353,6 +693,126 @@ def expire_stuck_decision_batches(self) -> dict:
         "status": "ok",
         "failed_run_count": len(failed_run_ids),
         "requeued_decision_count": len(requeued_ids),
+        "job_run_ids": failed_run_ids,
+        "decision_ids": requeued_ids,
+    }
+
+
+@celery_app.task(
+    name="app.tasks.workable_tasks.expire_stuck_override_ops",
+    max_retries=0,
+)
+def expire_stuck_override_ops(
+    limit: int = 200,
+    timeout_minutes: int = _STUCK_OVERRIDE_TIMEOUT_MINUTES,
+) -> dict:
+    """Compensate stale non-replayable override deliveries without replaying.
+
+    A queued message can be lost after broker acceptance, and a killed worker can
+    leave a run in ``running`` after the task's acknowledgement rail disappears.
+    The override payload is intentionally not persisted because it may include
+    non-idempotent email/action semantics.  This watchdog therefore uses only the
+    safe ``decision_id`` receipt: stale runs fail and a still-processing decision
+    returns to the Hub for an explicit recruiter retry.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from ..models.background_job_run import JOB_KIND_WORKABLE_OP, BackgroundJobRun
+    from ..platform.database import SessionLocal
+    from ..services import workable_op_runner as runner
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=max(1, int(timeout_minutes))
+    )
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.kind == JOB_KIND_WORKABLE_OP,
+                BackgroundJobRun.status.in_(("queued", "running")),
+                BackgroundJobRun.finished_at.is_(None),
+                BackgroundJobRun.started_at <= cutoff,
+            )
+            .order_by(BackgroundJobRun.id.asc())
+            .limit(max(1, min(int(limit), 1000)) * 4)
+            .all()
+        )
+        candidates: list[tuple[int, int, int]] = []
+        for row in rows:
+            counters = row.counters if isinstance(row.counters, dict) else {}
+            if str(counters.get("op_type") or "") != runner.OP_OVERRIDE_DECISION:
+                continue
+            try:
+                decision_id = int(counters["decision_id"])
+            except (KeyError, TypeError, ValueError):
+                logger.error(
+                    "stale ATS override lacks decision receipt run_id=%s",
+                    row.id,
+                )
+                continue
+            candidates.append(
+                (int(row.id), int(row.organization_id), decision_id)
+            )
+            if len(candidates) >= max(1, min(int(limit), 1000)):
+                break
+    except Exception:
+        db.rollback()
+        logger.exception("expire_stuck_override_ops scan failed")
+        return {"status": "error", "scanned": 0}
+    finally:
+        db.close()
+
+    failed_run_ids: list[int] = []
+    requeued_ids: list[int] = []
+    skipped = 0
+    errors = 0
+    for run_id, organization_id, decision_id in candidates:
+        reason = (
+            f"Returned to queue by watchdog: ATS override job {run_id} lost its "
+            f"delivery for more than {max(1, int(timeout_minutes))} minutes. "
+            "Taali did not replay the ATS side effect; confirm the ATS state "
+            "before trying again."
+        )
+        try:
+            outcome = runner.compensate_override_delivery_loss(
+                organization_id=organization_id,
+                decision_id=decision_id,
+                job_run_id=run_id,
+                reason=reason,
+                error_code="stale_delivery",
+                allowed_run_statuses=("queued", "running"),
+                stale_before=cutoff,
+            )
+        except Exception:
+            errors += 1
+            logger.exception(
+                "expire_stuck_override_ops compensation failed run_id=%s",
+                run_id,
+            )
+            continue
+        if outcome.get("status") != "compensated":
+            skipped += 1
+            continue
+        failed_run_ids.append(run_id)
+        if outcome.get("requeued"):
+            requeued_ids.append(decision_id)
+
+    if failed_run_ids:
+        logger.warning(
+            "expire_stuck_override_ops: failed %d run(s) %s, requeued %d decision(s) %s",
+            len(failed_run_ids),
+            failed_run_ids,
+            len(requeued_ids),
+            requeued_ids,
+        )
+    return {
+        "status": "ok" if not errors else "partial",
+        "scanned": len(candidates),
+        "failed_run_count": len(failed_run_ids),
+        "requeued_decision_count": len(requeued_ids),
+        "skipped": skipped,
+        "errors": errors,
         "job_run_ids": failed_run_ids,
         "decision_ids": requeued_ids,
     }

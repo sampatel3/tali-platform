@@ -21,8 +21,11 @@ enqueue is off (roles are never starred) — no network/Anthropic calls.
 
 from __future__ import annotations
 
+import pytest
+
 from app.components.integrations.bullhorn import events, reconcile
 from app.components.integrations.bullhorn.auth import BullhornAuth
+from app.components.integrations.bullhorn.errors import BullhornApiError
 from app.components.integrations.bullhorn.event_handlers import SUBSCRIBED_ENTITIES
 from app.components.integrations.bullhorn.service import BullhornService
 from app.models.candidate_application import CandidateApplication
@@ -98,7 +101,9 @@ def test_dead_subscription_is_detected_on_poll_then_recreated(db):
         sub_id, created = events.ensure_subscription(db, org, client=client)
         assert created is True
         # Simulate a pending crash-checkpoint on the (about-to-die) subscription.
-        org.bullhorn_event_request_id = "stale-req-id"
+        # Bullhorn requestIds are numeric; a valid-shaped stale id lets the fake
+        # report the subscription expiry itself.
+        org.bullhorn_event_request_id = "999999"
         db.commit()
         # Force the subscription past its 30-day expiry (poll now 404s).
         state.orgs["inc_exp"].subscriptions[sub_id].expired = True
@@ -179,6 +184,315 @@ def test_crash_replay_reprocesses_last_batch_from_checkpoint(db):
     assert db.query(Role).filter(Role.organization_id == org.id).count() == 1
     assert db.query(CandidateApplication).filter(CandidateApplication.organization_id == org.id).count() == 1
     assert org.bullhorn_event_request_id is None  # checkpoint cleared after replay
+
+
+def test_event_handler_failure_keeps_checkpoint_until_clean_replay(db, monkeypatch):
+    """A failed event never acknowledges its destructive batch."""
+    from app.components.integrations.bullhorn import events as events_mod
+
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_handler_retry", status_list=["New Lead"])
+    job = state.make_job_order(bh_org, title="Retry Me", is_open=True)
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="JobOrder",
+            entity_id=job["id"],
+            event_type="INSERTED",
+        )
+        real_dispatch = events_mod.dispatch_event
+        monkeypatch.setattr(events_mod, "dispatch_event", lambda *_a, **_k: "error")
+
+        failed = events.poll_and_process_events(db, org, client=client)
+
+        assert failed["status"] == "retry_pending"
+        assert failed["reason"] == "event_handler_failed"
+        assert failed["poison"]["attempts"] == 1
+        assert failed["poison"]["status"] == "retrying_exact_batch"
+        assert failed["poison"]["entity_types"] == ["JobOrder"]
+        checkpoint = org.bullhorn_event_request_id
+        assert checkpoint
+        assert org.bullhorn_last_sync_summary["event_poison_batch"]["attempts"] == 1
+
+        monkeypatch.setattr(events_mod, "dispatch_event", real_dispatch)
+        replayed = events.poll_and_process_events(db, org, client=client)
+
+    assert replayed["status"] == "ok"
+    assert replayed["batches"] >= 1
+    assert org.bullhorn_event_request_id is None
+    assert db.query(Role).filter(Role.organization_id == org.id).count() == 1
+    assert (
+        org.bullhorn_last_sync_summary["event_poison_batch"]["status"]
+        == "replayed_successfully"
+    )
+
+
+def test_repeated_poison_batch_self_heals_and_continues_later_batches(
+    db, monkeypatch
+):
+    """Three identical failures trigger a clean sweep, clear, and continuation."""
+    from app.components.integrations.bullhorn import events as events_mod
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    old_watermark = "2026-01-02T03:04:05+00:00"
+    org = _org(db)
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    org.bullhorn_last_sync_summary = {"last_incremental_at": old_watermark}
+    db.commit()
+
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_poison_recovery", status_list=["New Lead"])
+    poison_job = state.make_job_order(
+        bh_org,
+        id=999991,
+        title="Poison event role",
+        is_open=True,
+    )
+    later_job = state.make_job_order(
+        bh_org,
+        id=999992,
+        title="Later batch role",
+        is_open=True,
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="JobOrder",
+            entity_id=poison_job["id"],
+            event_type="UPDATED",
+        )
+        # Fill the first 100-event page. These candidate dirty flags safely skip
+        # because no corresponding local candidate exists.
+        for candidate_id in range(880001, 880100):
+            state.emit_event(
+                bh_org,
+                sub_id,
+                entity_name="Candidate",
+                entity_id=candidate_id,
+                event_type="UPDATED",
+            )
+        # This event must remain queued until poison recovery clears page one.
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="JobOrder",
+            entity_id=later_job["id"],
+            event_type="UPDATED",
+        )
+
+        real_dispatch = events_mod.dispatch_event
+
+        def _poison_one(db_, org_, event, **kwargs):
+            if str(event.get("entityId")) == str(poison_job["id"]):
+                return "error"
+            return real_dispatch(db_, org_, event, **kwargs)
+
+        monkeypatch.setattr(events_mod, "dispatch_event", _poison_one)
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        first = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+        second = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+        db.refresh(org)
+        assert first["status"] == "retry_pending"
+        assert second["status"] == "retry_pending"
+        assert org.bullhorn_event_request_id
+        assert org.bullhorn_last_sync_summary["last_incremental_at"] == old_watermark
+        assert org.bullhorn_config["event_poison_checkpoint"]["attempts"] == 2
+
+        recovered = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert recovered["status"] == "ok"
+    assert recovered["recovery_sweeps"][0]["reason"] == "event_handler_failed"
+    assert recovered["poll"]["status"] == "ok"
+    db.refresh(org)
+    assert org.bullhorn_event_request_id is None
+    assert "event_poison_checkpoint" not in (org.bullhorn_config or {})
+    telemetry = org.bullhorn_last_sync_summary["event_poison_batch"]
+    assert telemetry["status"] == "recovered_by_gap_sweep"
+    assert telemetry["attempts"] == 3
+    assert telemetry["entity_types"] == ["JobOrder"]
+    assert telemetry["event_types"] == ["UPDATED"]
+    assert "999991" not in str(telemetry)
+    assert org.bullhorn_last_sync_summary["last_incremental_at"] != old_watermark
+    assert (
+        db.query(Role)
+        .filter(Role.organization_id == org.id, Role.bullhorn_job_order_id == "999992")
+        .count()
+        == 1
+    )
+
+
+def test_poison_checkpoint_survives_failed_recovery_sweep(db, monkeypatch):
+    """At the retry limit, an unclean sweep still cannot acknowledge the batch."""
+    from app.components.integrations.bullhorn import events as events_mod
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    old_watermark = "2026-02-03T04:05:06+00:00"
+    org = _org(db)
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    org.bullhorn_last_sync_summary = {"last_incremental_at": old_watermark}
+    db.commit()
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_poison_sweep_fail", status_list=["New Lead"])
+    job = state.make_job_order(bh_org, title="Still anchored", is_open=True)
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="JobOrder",
+            entity_id=job["id"],
+            event_type="UPDATED",
+        )
+        monkeypatch.setattr(events_mod, "dispatch_event", lambda *_a, **_k: "error")
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+        monkeypatch.setattr(
+            incremental_runner,
+            "_gap_sweep",
+            lambda *_a, **_k: {"status": "retry_pending", "errors": 1},
+        )
+
+        incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+        incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+        failed = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+        still_failed = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert failed["status"] == "retry_pending"
+    assert still_failed["status"] == "retry_pending"
+    db.refresh(org)
+    assert org.bullhorn_event_request_id
+    assert org.bullhorn_config["event_poison_checkpoint"]["attempts"] == 3
+    assert org.bullhorn_last_sync_summary["last_incremental_at"] == old_watermark
+    assert (
+        org.bullhorn_last_sync_summary["event_poison_batch"]["status"]
+        == "recovery_due"
+    )
+
+
+def test_unreplayable_checkpoint_self_heals_via_gap_sweep(db, monkeypatch):
+    """A 400 replay is swept, superseded, and resumed without manual action."""
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_bad_replay", status_list=["New Lead"])
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    db.commit()
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        org.bullhorn_event_request_id = "999999"  # valid-shaped, unknown id → 400
+        db.commit()
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result["recovery_sweeps"][0]["reason"] == "replay_unavailable"
+    assert result["recovery_sweeps"][0]["sweep"]["status"] == "ok"
+    db.refresh(org)
+    assert org.bullhorn_event_request_id is None
+    assert org.bullhorn_last_sync_summary.get("last_incremental_at")
+
+
+def test_empty_replay_self_heals_via_gap_sweep(db, monkeypatch):
+    """An empty response for a non-empty checkpoint follows the same recovery."""
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_empty_replay", status_list=["New Lead"])
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    db.commit()
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        events.ensure_subscription(db, org, client=client)
+        org.bullhorn_event_request_id = "12345"
+        db.commit()
+        monkeypatch.setattr(
+            client,
+            "refetch_events",
+            lambda **_kwargs: {"requestId": 12345, "events": []},
+        )
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result["recovery_sweeps"][0]["reason"] == "empty_replay"
+    db.refresh(org)
+    assert org.bullhorn_event_request_id is None
+
+
+def test_failed_gap_recovery_keeps_checkpoint_and_watermark(db, monkeypatch):
+    """A sweep failure cannot acknowledge the stale event anchor or advance."""
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_failed_recovery", status_list=["New Lead"])
+    old_watermark = "2026-01-02T03:04:05+00:00"
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    org.bullhorn_last_sync_summary = {"last_incremental_at": old_watermark}
+    db.commit()
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        events.ensure_subscription(db, org, client=client)
+        org.bullhorn_event_request_id = "999999"
+        db.commit()
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+        monkeypatch.setattr(
+            incremental_runner,
+            "_gap_sweep",
+            lambda *_a, **_k: {"status": "retry_pending", "errors": 1},
+        )
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "retry_pending"
+    db.refresh(org)
+    assert org.bullhorn_event_request_id == "999999"
+    assert org.bullhorn_last_sync_summary["last_incremental_at"] == old_watermark
 
 
 # --- DELETED event → soft-delete ---------------------------------------------
@@ -321,6 +635,73 @@ def test_sweep_modified_since_upserts_without_events(db):
     assert result["job_orders"] == 1
     assert result["applications"] == 1
     assert db.query(CandidateApplication).filter(CandidateApplication.organization_id == org.id).count() == 1
+
+
+def test_sweep_repairs_missed_remote_job_close_with_count_only_telemetry(db):
+    """A close delivered by neither event nor delete still self-heals."""
+    from datetime import datetime, timedelta, timezone
+
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_missed_close", status_list=["New Lead"])
+    job, _cand, _sub = _seed_open_submission(state, bh_org, status="New Lead")
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        since = datetime.now(timezone.utc) - timedelta(days=1)
+        reconcile.sweep_modified_since(db, org, client=client, since=since)
+        role = db.query(Role).filter(Role.organization_id == org.id).one()
+        assert role.deleted_at is None
+
+        # Simulate a close whose event was lost. The fake now correctly applies
+        # isOpen:true, so the next complete open-id snapshot excludes this row.
+        job["isOpen"] = False
+        result = reconcile.sweep_modified_since(db, org, client=client, since=since)
+
+    db.refresh(role)
+    assert result["status"] == "ok"
+    assert result["roles_closed"] == 1
+    assert role.deleted_at is not None
+    assert role.bullhorn_job_data["isOpen"] is False
+    telemetry = org.bullhorn_last_sync_summary["job_order_repair"]
+    assert telemetry["source"] == "modified_since_sweep"
+    assert telemetry["remote_open_count"] == 0
+    assert telemetry["local_active_before"] == 1
+    assert telemetry["roles_closed"] == 1
+    assert telemetry["local_active_after"] == 0
+    assert all(not isinstance(value, (dict, list)) for value in telemetry.values())
+
+
+def test_failed_complete_snapshot_never_closes_local_role(db):
+    """Pagination uncertainty fails before the destructive missing-id repair."""
+    from datetime import datetime, timedelta, timezone
+
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Must remain active",
+        source="bullhorn",
+        bullhorn_job_order_id="900001",
+        bullhorn_job_data={"id": 900001, "isOpen": True},
+    )
+    db.add(role)
+    db.commit()
+
+    class _PartialSnapshotClient:
+        def search_open_job_orders_complete(self, *, fields: str):
+            raise BullhornApiError("partial complete snapshot")
+
+    with pytest.raises(BullhornApiError, match="partial"):
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=_PartialSnapshotClient(),
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+
+    db.refresh(role)
+    assert role.deleted_at is None
+    assert role.bullhorn_job_data["isOpen"] is True
 
 
 def test_reconcile_counts_flags_no_discrepancy_when_synced(db):

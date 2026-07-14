@@ -109,31 +109,59 @@ def enqueue_batch(
 
     job_run_id = None
     if accepted:
-        from ..services.workable_op_runner import OP_APPROVE_DECISIONS, enqueue_workable_op
-
-        job_run_id = enqueue_workable_op(
-            organization_id=int(organization_id),
-            op_type=OP_APPROVE_DECISIONS,
-            payload={
-                "decision_ids": accepted,
-                "user_id": int(actor.user_id) if actor.user_id else None,
-                "note": note,
-                "workable_target_stage": workable_target_stage,
-                "workable_target_stages": workable_target_stages or None,
-            },
-            # ``decision_ids`` lets the watchdog (expire_stuck_decision_batches)
-            # return exactly this batch's rows to the queue if the worker is
-            # killed mid-run. Overwritten by result counters on completion, so
-            # it only persists while the run is in-flight — which is all the
-            # watchdog needs.
-            counters={
-                "total": len(accepted),
-                "succeeded": 0,
-                "requeued": 0,
-                "failed": 0,
-                "decision_ids": accepted,
-            },
+        from ..services.workable_op_runner import (
+            OP_APPROVE_DECISIONS,
+            AtsJobRunPersistenceError,
+            enqueue_workable_op,
         )
+
+        try:
+            job_run_id = enqueue_workable_op(
+                organization_id=int(organization_id),
+                op_type=OP_APPROVE_DECISIONS,
+                payload={
+                    "decision_ids": accepted,
+                    "user_id": int(actor.user_id) if actor.user_id else None,
+                    "note": note,
+                    "workable_target_stage": workable_target_stage,
+                    "workable_target_stages": workable_target_stages or None,
+                },
+                # ``decision_ids`` lets the watchdog (expire_stuck_decision_batches)
+                # return exactly this batch's rows to the queue if the worker is
+                # killed mid-run. Overwritten by result counters on completion, so
+                # it only persists while the run is in-flight — which is all the
+                # watchdog needs.
+                counters={
+                    "total": len(accepted),
+                    "succeeded": 0,
+                    "requeued": 0,
+                    "failed": 0,
+                    "decision_ids": accepted,
+                },
+            )
+        except AtsJobRunPersistenceError:
+            # The optimistic processing flip is already committed so the
+            # worker can see it. If its durable tracking row cannot be created,
+            # fail closed before publish and return every untouched decision to
+            # HITL instead of stranding it in an unpollable processing state.
+            reason = (
+                "Returned to queue: Taali could not create durable tracking "
+                "for the ATS operation. No provider update was sent; try again."
+            )
+            rows = (
+                db.query(AgentDecision)
+                .filter(
+                    AgentDecision.organization_id == int(organization_id),
+                    AgentDecision.id.in_(accepted),
+                    AgentDecision.status == "processing",
+                )
+                .all()
+            )
+            for row in rows:
+                row.status = "pending"
+                row.resolution_note = reason[:500]
+            db.commit()
+            raise
     return {"job_run_id": job_run_id, "accepted": accepted, "failures": failures}
 
 

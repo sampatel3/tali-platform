@@ -14,6 +14,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.models.agent_decision import AgentDecision
 from app.models.background_job_run import (
     JOB_KIND_DECISION_BATCH,
@@ -25,10 +27,19 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.services.background_job_runs import SCOPE_KIND_ORG
+from app.services import background_job_runs
+from app.services.workable_op_runner import (
+    OP_OVERRIDE_DECISION,
+    AtsJobRunPersistenceError,
+    enqueue_workable_op,
+)
 from app.tasks import assessment_tasks
 from app.tasks.workable_tasks import (
     _STUCK_DECISION_BATCH_TIMEOUT_MINUTES,
+    _STUCK_OVERRIDE_TIMEOUT_MINUTES,
     expire_stuck_decision_batches,
+    expire_stuck_override_ops,
+    run_workable_op_task,
 )
 
 
@@ -86,6 +97,24 @@ def _make_run(db, org, *, kind, status, age_minutes, decision_ids):
         organization_id=int(org.id),
         status=status,
         counters={"total": len(decision_ids), "decision_ids": decision_ids},
+        started_at=datetime.now(timezone.utc) - timedelta(minutes=age_minutes),
+    )
+    db.add(run)
+    db.flush()
+    return run
+
+
+def _make_override_run(db, org, decision, *, status, age_minutes):
+    run = BackgroundJobRun(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        status=status,
+        counters={
+            "op_type": OP_OVERRIDE_DECISION,
+            "decision_id": int(decision.id),
+        },
         started_at=datetime.now(timezone.utc) - timedelta(minutes=age_minutes),
     )
     db.add(run)
@@ -243,6 +272,277 @@ def test_watchdog_leaves_single_workable_op_runs_alone(db):
     db.expire_all()
     assert db.query(BackgroundJobRun).get(run.id).status == "running"
     assert db.query(AgentDecision).get(d1.id).status == "processing"
+
+
+# --- non-replayable override delivery compensation -------------------------
+
+
+def test_override_initial_broker_rejection_requeues_and_fails_run(db, monkeypatch):
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role)
+    db.commit()
+
+    def _reject_publish(*args, **kwargs):
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(run_workable_op_task, "apply_async", _reject_publish)
+
+    run_id = enqueue_workable_op(
+        organization_id=int(org.id),
+        op_type=OP_OVERRIDE_DECISION,
+        payload={
+            "decision_id": int(decision.id),
+            "override_action": "advance",
+        },
+    )
+
+    assert run_id is not None
+    db.expire_all()
+    restored = db.get(AgentDecision, int(decision.id))
+    run = db.get(BackgroundJobRun, int(run_id))
+    assert restored.status == "pending"
+    assert "could not be delivered" in (restored.resolution_note or "")
+    assert run.status == "failed"
+    assert run.finished_at is not None
+    assert run.counters["op_type"] == OP_OVERRIDE_DECISION
+    assert run.counters["decision_id"] == int(decision.id)
+    # The non-replayable payload is never persisted for recovery.
+    assert "recovery_payload" not in run.counters
+
+
+def test_ats_op_is_never_published_without_durable_job_run(monkeypatch):
+    with patch("app.services.background_job_runs.create_run", return_value=None), patch.object(
+        run_workable_op_task, "apply_async"
+    ) as publish:
+        with pytest.raises(AtsJobRunPersistenceError):
+            enqueue_workable_op(
+                organization_id=123,
+                op_type=OP_OVERRIDE_DECISION,
+                payload={"decision_id": 456, "override_action": "advance"},
+            )
+
+    publish.assert_not_called()
+
+
+def test_background_job_creation_does_not_depend_on_post_commit_refresh(db):
+    org, _role = _seed(db)
+    db.commit()
+
+    with patch(
+        "sqlalchemy.orm.Session.refresh",
+        side_effect=AssertionError("post-commit refresh must not run"),
+    ):
+        run_id = background_job_runs.create_run(
+            kind=JOB_KIND_WORKABLE_OP,
+            scope_kind=SCOPE_KIND_ORG,
+            scope_id=int(org.id),
+            organization_id=int(org.id),
+            counters={"op_type": OP_OVERRIDE_DECISION},
+            status="queued",
+        )
+
+    assert isinstance(run_id, int) and run_id > 0
+    db.expire_all()
+    assert db.get(BackgroundJobRun, run_id) is not None
+
+
+def test_untracked_worker_delivery_is_refused_before_provider_work(db):
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role)
+    db.commit()
+
+    with patch("app.services.workable_op_runner.execute_op") as execute:
+        result = run_workable_op_task.run(
+            job_run_id=None,
+            organization_id=int(org.id),
+            op_type=OP_OVERRIDE_DECISION,
+            payload={"decision_id": int(decision.id), "override_action": "advance"},
+        )
+
+    assert result == {
+        "status": "failed",
+        "op_type": OP_OVERRIDE_DECISION,
+        "code": "job_run_persistence_failed",
+    }
+    execute.assert_not_called()
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "pending"
+
+
+@pytest.mark.parametrize("mismatch", ["organization", "op_type"])
+def test_worker_refuses_tracking_row_that_does_not_match_delivery(db, mismatch):
+    org, _role = _seed(db)
+    other_org = Organization(name="Other", slug=f"other-tracking-{id(org)}")
+    db.add(other_org)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_OVERRIDE_DECISION},
+        status="queued",
+    )
+    assert run_id is not None
+    organization_id = int(other_org.id) if mismatch == "organization" else int(org.id)
+    op_type = OP_OVERRIDE_DECISION if mismatch == "organization" else "move_stage"
+
+    with patch("app.services.workable_op_runner.execute_op") as execute:
+        result = run_workable_op_task.run(
+            job_run_id=int(run_id),
+            organization_id=organization_id,
+            op_type=op_type,
+            payload={},
+        )
+
+    assert result["status"] == "already_terminal"
+    execute.assert_not_called()
+    db.expire_all()
+    assert db.get(BackgroundJobRun, int(run_id)).status == "queued"
+
+
+def test_approve_batch_requeues_when_job_tracking_cannot_be_created(db):
+    from app.actions import approve_decision as approve_decision_action
+    from app.actions.types import ACTOR_RECRUITER, Actor
+
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role, status="pending")
+    db.commit()
+
+    with patch("app.services.background_job_runs.create_run", return_value=None):
+        with pytest.raises(AtsJobRunPersistenceError):
+            approve_decision_action.enqueue_batch(
+                db,
+                Actor(type=ACTOR_RECRUITER, user_id=None),
+                organization_id=int(org.id),
+                decision_ids=[int(decision.id)],
+            )
+
+    db.expire_all()
+    restored = db.get(AgentDecision, int(decision.id))
+    assert restored.status == "pending"
+    assert "No provider update was sent" in (restored.resolution_note or "")
+
+
+def test_override_requeues_when_job_tracking_cannot_be_created(db):
+    from app.actions import override_decision as override_decision_action
+    from app.actions.types import ACTOR_RECRUITER, Actor
+
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role, status="pending")
+    db.commit()
+
+    with patch("app.services.background_job_runs.create_run", return_value=None):
+        with pytest.raises(AtsJobRunPersistenceError):
+            override_decision_action.enqueue(
+                db,
+                Actor(type=ACTOR_RECRUITER, user_id=None),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+                override_action="advance",
+            )
+
+    db.expire_all()
+    restored = db.get(AgentDecision, int(decision.id))
+    assert restored.status == "pending"
+    assert "No provider update was sent" in (restored.resolution_note or "")
+
+
+@pytest.mark.parametrize("run_status", ["queued", "running"])
+def test_override_watchdog_requeues_stale_delivery(db, run_status):
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role)
+    run = _make_override_run(
+        db,
+        org,
+        decision,
+        status=run_status,
+        age_minutes=_STUCK_OVERRIDE_TIMEOUT_MINUTES + 5,
+    )
+    db.commit()
+
+    out = expire_stuck_override_ops()
+
+    assert out["failed_run_count"] == 1
+    assert out["requeued_decision_count"] == 1
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "pending"
+    terminal = db.get(BackgroundJobRun, int(run.id))
+    assert terminal.status == "failed"
+    assert terminal.finished_at is not None
+    assert terminal.counters["failure_code"] == "stale_delivery"
+
+
+def test_override_watchdog_ignores_fresh_delivery(db):
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role)
+    run = _make_override_run(db, org, decision, status="queued", age_minutes=1)
+    db.commit()
+
+    out = expire_stuck_override_ops()
+
+    assert out["failed_run_count"] == 0
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "processing"
+    assert db.get(BackgroundJobRun, int(run.id)).status == "queued"
+
+
+def test_override_watchdog_terminalizes_run_without_reopening_resolved_decision(db):
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role, status="approved")
+    run = _make_override_run(
+        db,
+        org,
+        decision,
+        status="running",
+        age_minutes=_STUCK_OVERRIDE_TIMEOUT_MINUTES + 5,
+    )
+    db.commit()
+
+    first = expire_stuck_override_ops()
+    second = expire_stuck_override_ops()
+
+    assert first["failed_run_count"] == 1
+    assert first["requeued_decision_count"] == 0
+    assert second["failed_run_count"] == 0
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "approved"
+    assert db.get(BackgroundJobRun, int(run.id)).status == "failed"
+
+
+def test_override_lock_wait_publish_rejection_compensates(db, monkeypatch):
+    org, role = _seed(db)
+    decision = _add_processing_decision(db, org, role)
+    run = _make_override_run(db, org, decision, status="queued", age_minutes=0)
+    db.commit()
+
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *args, **kwargs: None,
+    )
+
+    def _reject_publish(*args, **kwargs):
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(run_workable_op_task, "apply_async", _reject_publish)
+
+    out = run_workable_op_task.run(
+        job_run_id=int(run.id),
+        organization_id=int(org.id),
+        op_type=OP_OVERRIDE_DECISION,
+        payload={
+            "decision_id": int(decision.id),
+            "override_action": "advance",
+        },
+        lock_attempt=0,
+    )
+
+    assert out["status"] == "delivery_compensated"
+    assert out["requeued"] is True
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "pending"
+    assert db.get(BackgroundJobRun, int(run.id)).status == "failed"
 
 
 # --- op-path mutex heartbeat / short TTL ------------------------------------

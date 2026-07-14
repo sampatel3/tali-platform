@@ -675,11 +675,12 @@ def dispatch_assessment_invite_workable_handoff(
     """Run only the ATS handoff for an already provider-confirmed email."""
     from ...platform.database import SessionLocal
     from ...services.assessment_invite_workable_handoff import (
-        assessment_invite_workable_handoff_org,
+        assessment_invite_workable_handoff_context,
         defer_assessment_invite_workable_handoff,
         run_assessment_invite_workable_handoff,
     )
     from ...tasks.assessment_tasks import (
+        _WORKABLE_ORG_MUTEX_KEY_PREFIX,
         _acquire_workable_org_mutex,
         _release_workable_org_mutex,
         mark_workable_op_pending,
@@ -687,30 +688,39 @@ def dispatch_assessment_invite_workable_handoff(
 
     lookup = SessionLocal()
     try:
-        organization_id = assessment_invite_workable_handoff_org(
+        handoff_context = assessment_invite_workable_handoff_context(
             lookup,
             assessment_id=int(assessment_id),
             generation=int(generation),
         )
     finally:
         lookup.close()
-    if organization_id is None:
+    if handoff_context is None:
         return {"status": "missing_or_superseded"}
+    organization_id, provider_name = handoff_context
+    mutex_namespace = _WORKABLE_ORG_MUTEX_KEY_PREFIX
+    if provider_name == "bullhorn":
+        from ...components.integrations.bullhorn.sync_runner import (
+            BULLHORN_ORG_MUTEX_NAMESPACE,
+        )
+
+        mutex_namespace = BULLHORN_ORG_MUTEX_NAMESPACE
 
     mark_workable_op_pending(int(organization_id))
     mutex = _acquire_workable_org_mutex(
         int(organization_id),
-        source="workable_op:assessment_invite_handoff",
+        source=f"{provider_name}_op:assessment_invite_handoff",
         heartbeat=True,
+        namespace=mutex_namespace,
     )
-    if mutex is None:
+    if mutex is None or (mutex is False and provider_name == "bullhorn"):
         db = SessionLocal()
         try:
             return defer_assessment_invite_workable_handoff(
                 db,
                 assessment_id=int(assessment_id),
                 generation=int(generation),
-                error="Workable is busy; handoff will retry",
+                error=f"{provider_name.title()} is busy; handoff will retry",
             )
         finally:
             db.close()

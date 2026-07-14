@@ -237,9 +237,9 @@ function DecisionBatchCounters({ data }) {
   );
 }
 
-// A single Workable write-back op (override, hand-back stage move, manual
-// outcome sync, note) run through the generic serialized runner.
-const WORKABLE_OP_LABELS = {
+// A single ATS write-back op (Workable or Bullhorn) run through the shared
+// serialized runner.
+const ATS_OP_LABELS = {
   override_decision: 'Override',
   move_stage: 'Stage move',
   manual_outcome: 'Outcome sync',
@@ -248,19 +248,20 @@ const WORKABLE_OP_LABELS = {
 
 // Plain-English explanation for the failure codes the runner can emit, so the
 // panel never shows a bare code like ``api_error`` / ``not_writeable``.
-const WORKABLE_OP_CODE_LABELS = {
-  api_error: 'Workable API error',
-  not_writeable: 'No Workable write access',
-  lock_timeout: 'Workable was busy',
-  rate_limited: 'Workable rate limit hit',
+const ATS_OP_CODE_LABELS = {
+  api_error: 'ATS API error',
+  not_writeable: 'No ATS write access',
+  not_configured: 'ATS is disconnected',
+  lock_timeout: 'ATS was busy',
+  rate_limited: 'ATS rate limit hit',
   unexpected: 'Unexpected error',
 };
 
 function WorkableOpCounters({ data }) {
   const opType = String(data?.op_type || '');
-  const label = WORKABLE_OP_LABELS[opType] || (opType ? humanize(opType) : 'Workable update');
+  const label = ATS_OP_LABELS[opType] || (opType ? humanize(opType) : 'ATS update');
   const code = data?.code ? String(data.code) : null;
-  const codeLabel = code ? (WORKABLE_OP_CODE_LABELS[code] || humanize(code)) : null;
+  const codeLabel = code ? (ATS_OP_CODE_LABELS[code] || humanize(code)) : null;
   return (
     <div className="bg-jobs-panel-counters">
       <strong>{label}</strong>
@@ -668,7 +669,7 @@ export default function BackgroundJobsPanel() {
       });
     }
 
-    // Decision approve / bulk-approve batches + single Workable write-back
+    // Decision approve / bulk-approve batches + single ATS write-back
     // ops. Both run server-side only (no live in-memory source), so they
     // render purely from history. Scope is org-wide.
     for (const r of history) {
@@ -697,13 +698,13 @@ export default function BackgroundJobsPanel() {
       if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       rows.push({
         key: `workable-op-hist-${r.id}`,
-        type: 'Workable update',
+        type: 'ATS update',
         status: r.status,
         sortAt: tsValue(r.started_at),
         node: (
           <JobRow
             key={`workable-op-hist-${r.id}`}
-            type="Workable update"
+            type="ATS update"
             status={r.status}
             scope="Org-wide"
             counters={<WorkableOpCounters data={{ ...r.counters }} />}

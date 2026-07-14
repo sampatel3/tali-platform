@@ -138,6 +138,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
     role.auto_send_assessment = True
     role.auto_resend_assessment = True
     role.auto_advance = True
+    role.auto_reject_pre_screen = False
     db.add(task)
     db.commit()
 
@@ -157,6 +158,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
                 "auto_send_assessment": False,
                 "auto_resend_assessment": True,
                 "auto_advance": False,
+                "auto_reject_pre_screen": True,
             },
             headers=headers,
         )
@@ -168,6 +170,8 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
         "auto_send_assessment": False,
         "auto_resend_assessment": True,
         "auto_advance": False,
+        "auto_reject": None,
+        "auto_reject_pre_screen": True,
     }
     db.expire_all()
     persisted = db.query(Role).filter(Role.id == role.id).one()
@@ -176,6 +180,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
     assert persisted.auto_send_assessment is True
     assert persisted.auto_resend_assessment is True
     assert persisted.auto_advance is True
+    assert persisted.auto_reject_pre_screen is False
 
 
 def test_role_star_is_org_scoped(client):

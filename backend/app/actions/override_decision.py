@@ -161,19 +161,48 @@ def enqueue(
     decision.override_action = override_action
     db.commit()
 
-    from ..services.workable_op_runner import OP_OVERRIDE_DECISION, enqueue_workable_op
-
-    enqueue_workable_op(
-        organization_id=int(organization_id),
-        op_type=OP_OVERRIDE_DECISION,
-        payload={
-            "decision_id": int(decision_id),
-            "user_id": int(actor.user_id) if actor.user_id else None,
-            "override_action": override_action,
-            "note": note,
-            "workable_target_stage": workable_target_stage,
-        },
+    from ..services.workable_op_runner import (
+        OP_OVERRIDE_DECISION,
+        AtsJobRunPersistenceError,
+        enqueue_workable_op,
     )
+
+    try:
+        enqueue_workable_op(
+            organization_id=int(organization_id),
+            op_type=OP_OVERRIDE_DECISION,
+            payload={
+                "decision_id": int(decision_id),
+                "user_id": int(actor.user_id) if actor.user_id else None,
+                "override_action": override_action,
+                "note": note,
+                "workable_target_stage": workable_target_stage,
+            },
+        )
+    except AtsJobRunPersistenceError:
+        # No broker publish occurred. Undo the optimistic processing flip so a
+        # recruiter can safely retry and the decision never becomes invisible.
+        db.rollback()
+        current = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.id == int(decision_id),
+                AgentDecision.organization_id == int(organization_id),
+            )
+            .one_or_none()
+        )
+        if current is not None and current.status == "processing":
+            current.status = "pending"
+            current.resolution_note = (
+                "Returned to queue: Taali could not create durable tracking "
+                "for the ATS operation. No provider update was sent; try again."
+            )[:500]
+            db.commit()
+        raise
+    # The non-replayable delivery compensator may have returned this decision to
+    # ``pending`` in a separate short-lived session when the broker rejected the
+    # initial publish. Refresh so the response never falsely reports processing.
+    db.refresh(decision)
     return decision
 
 

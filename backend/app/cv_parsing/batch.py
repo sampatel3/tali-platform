@@ -314,9 +314,24 @@ def sweep_pending_applications(
             if cached.parse_failed:
                 # Deterministic failure already cached — re-parsing the
                 # same text re-fails; leave the row for a version bump.
+                from ..services.ats_cv_parse_outbox import (
+                    record_application_parse_failure,
+                )
+
+                record_application_parse_failure(
+                    db,
+                    application_id=int(app.id),
+                    error=str(cached.error_reason or "deterministic CV parse failure"),
+                    terminal=True,
+                )
                 summary["cache_failed_skip"] += 1
             else:
                 parse_and_store_cv_sections(app, db=db)
+                from ..services.ats_cv_parse_outbox import (
+                    record_application_parse_success,
+                )
+
+                record_application_parse_success(db, application_id=int(app.id))
                 summary["cache_applied"] += 1
                 actionable += 1
             continue
@@ -338,6 +353,16 @@ def sweep_pending_applications(
                 logger.exception(
                     "batch render-failure cache write failed app_id=%s", app.id
                 )
+            from ..services.ats_cv_parse_outbox import (
+                record_application_parse_failure,
+            )
+
+            record_application_parse_failure(
+                db,
+                application_id=int(app.id),
+                error="prompt_render_failed: batch request build",
+                terminal=True,
+            )
             summary["render_failed"] += 1
             continue
 
@@ -591,6 +616,9 @@ def apply_batch_results(db: Any, entries: Any, context: Optional[dict] = None) -
             summary["stale_skipped"] += 1
             continue
         store_parsed_cv_sections(app, parsed=parsed, cv_text=cv_text)
+        from ..services.ats_cv_parse_outbox import record_application_parse_success
+
+        record_application_parse_success(db, application_id=int(app.id))
         summary["applied"] += 1
 
     return summary

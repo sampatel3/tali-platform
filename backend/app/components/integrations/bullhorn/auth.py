@@ -43,6 +43,14 @@ from .errors import BullhornAuthError, redact_exc
 
 logger = logging.getLogger(__name__)
 
+# Bullhorn requires live access/session tokens in URL query parameters. httpx's
+# INFO request log includes the full URL, so allowing that logger below WARNING
+# can disclose credentials. This is deliberately a process-wide, monotonic
+# policy: a per-request raise/restore context is race-unsafe because one request
+# can restore INFO while another token-bearing request is still in flight.
+_httpx_logger = logging.getLogger("httpx")
+_httpx_logger.setLevel(max(_httpx_logger.level, logging.WARNING))
+
 # Bullhorn's documented discovery root. Overridable via constructor for tests /
 # region overrides; NEVER hardcode a swimlane past this — loginInfo returns the
 # real oauth + rest URLs for the customer.
@@ -58,17 +66,16 @@ def quiet_httpx() -> Iterator[None]:
     handler logs the full request URL — which would spill those live tokens into
     application logs. Workable's client is immune (it uses Bearer *headers*, which
     httpx does not log), but Bullhorn's URL-token contract forces this. We raise
-    only the ``httpx`` logger's threshold to WARNING around each request, then
-    restore it — narrower than muting httpx globally, and it leaves genuine httpx
-    warnings/errors intact.
+    only the ``httpx`` logger's threshold to WARNING and never lower it again.
+    Genuine httpx warnings/errors remain visible, while concurrent requests
+    cannot race a logger-level restore and expose each other's tokenized URLs.
     """
-    lg = logging.getLogger("httpx")
-    previous = lg.level
-    lg.setLevel(max(previous, logging.WARNING))
-    try:
-        yield
-    finally:
-        lg.setLevel(previous)
+    # Tests/logging frameworks may temporarily lower the logger after module
+    # import. Re-assert the security floor on every request, but never restore a
+    # less restrictive value. Concurrent contexts can therefore only move the
+    # process toward safer logging and cannot expose another request's URL.
+    _httpx_logger.setLevel(max(_httpx_logger.level, logging.WARNING))
+    yield
 
 
 def _code_from_authorize(resp: httpx.Response) -> str | None:
@@ -164,7 +171,12 @@ class BullhornAuth:
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:  # noqa: BLE001 — normalize to a typed auth error
-            raise BullhornAuthError(f"Bullhorn discovery failed: {redact_exc(exc)}") from exc
+            # Do not chain httpx exceptions: their traceback/request repr can
+            # contain Bullhorn's query-string credentials even when the outer
+            # message is redacted.
+            raise BullhornAuthError(
+                f"Bullhorn discovery failed: {redact_exc(exc)}"
+            ) from None
         oauth_url = data.get("oauthUrl")
         rest_url = data.get("restUrl")
         if not oauth_url or not rest_url:
@@ -202,9 +214,11 @@ class BullhornAuth:
             raise BullhornAuthError(
                 f"Bullhorn OAuth {grant} exchange failed (status "
                 f"{exc.response.status_code if exc.response else '?'})"
-            ) from exc
+            ) from None
         except Exception as exc:  # noqa: BLE001
-            raise BullhornAuthError(f"Bullhorn OAuth exchange failed: {redact_exc(exc)}") from exc
+            raise BullhornAuthError(
+                f"Bullhorn OAuth exchange failed: {redact_exc(exc)}"
+            ) from None
 
     def _adopt_pair_and_persist(self, token_payload: dict, *, rest_url: str | None) -> None:
         """Persist the rotated refresh token BEFORE adopting the new access token.
@@ -234,7 +248,7 @@ class BullhornAuth:
                 raise BullhornAuthError(
                     "Failed to persist rotated Bullhorn refresh token; "
                     "aborting before using the new access token"
-                ) from exc
+                ) from None
             self._refresh_token = new_refresh
         self._access_token = new_access
 
@@ -277,7 +291,9 @@ class BullhornAuth:
                     resp.raise_for_status()
                 code = _code_from_authorize(resp)
         except Exception as exc:  # noqa: BLE001
-            raise BullhornAuthError(f"Bullhorn authorize failed: {redact_exc(exc)}") from exc
+            raise BullhornAuthError(
+                f"Bullhorn authorize failed: {redact_exc(exc)}"
+            ) from None
         if not code:
             raise BullhornAuthError("Bullhorn authorize response missing code")
         exchange = {
@@ -326,7 +342,9 @@ class BullhornAuth:
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:  # noqa: BLE001
-            raise BullhornAuthError(f"Bullhorn REST login failed: {redact_exc(exc)}") from exc
+            raise BullhornAuthError(
+                f"Bullhorn REST login failed: {redact_exc(exc)}"
+            ) from None
         bh_token = data.get("BhRestToken")
         rest_url = data.get("restUrl")
         if not bh_token or not rest_url:

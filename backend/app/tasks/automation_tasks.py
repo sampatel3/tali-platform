@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 def _automatic_role_work_block_reason(role) -> str | None:
     """Return why queued autonomous role work must not start now.
 
-    A role can be paused or turned off after a broker accepts a task but before
-    the worker begins provider work.  Re-authorize at execution time so Pause
-    and Turn off stop *new* model spend; an already-started provider request is
-    still allowed to settle normally.
+    A role can be paused, turned off, locally closed, or closed in its linked
+    ATS after a broker accepts a task but before the worker begins provider
+    work. Re-authorize at execution time so those transitions stop *new* model
+    spend; an already-started provider request may still settle normally.
     """
 
     from ..services.role_execution_guard import automatic_role_action_block_reason
@@ -409,6 +409,8 @@ def run_application_auto_reject(
     bind=True,
     max_retries=3,
     default_retry_delay=30,
+    soft_time_limit=600,
+    time_limit=720,
 )
 def parse_application_cv_sections(
     self,
@@ -416,6 +418,7 @@ def parse_application_cv_sections(
     *,
     force: bool = False,
     origin: str | None = None,
+    outbox_id: int | None = None,
 ) -> dict:
     """Parse an application's stored CV text into structured ``cv_sections``.
 
@@ -465,15 +468,43 @@ def parse_application_cv_sections(
             .filter(CandidateApplication.id == application_id)
             .first()
         )
+        durable_outbox_id = None
+        if normalized_origin == "ats_ingest":
+            from ..services.ats_cv_parse_outbox import resolve_cv_parse_outbox_id
+
+            durable_outbox_id = resolve_cv_parse_outbox_id(
+                db,
+                application_id=int(application_id),
+                outbox_id=int(outbox_id) if outbox_id is not None else None,
+            )
         # The enqueue can land before the ingest transaction commits, so a
         # missing row / missing text is "not yet" rather than "never" —
         # retry a few times before giving up.
         if app is None:
+            if durable_outbox_id is not None:
+                from ..services.ats_cv_parse_outbox import record_cv_parse_failure
+
+                status = record_cv_parse_failure(
+                    db,
+                    outbox_id=durable_outbox_id,
+                    error="Application is unavailable",
+                    terminal=True,
+                )
+                return {"status": status, "application_id": application_id}
             if self.request.retries < self.max_retries:
                 raise self.retry(countdown=30)
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
 
         if app.deleted_at is not None:
+            if durable_outbox_id is not None:
+                from ..services.ats_cv_parse_outbox import record_cv_parse_failure
+
+                record_cv_parse_failure(
+                    db,
+                    outbox_id=durable_outbox_id,
+                    error="Application was deleted",
+                    terminal=True,
+                )
             return {
                 "status": "skipped",
                 "reason": "application_deleted",
@@ -488,6 +519,16 @@ def parse_application_cv_sections(
                 else _automatic_role_work_block_reason(role)
             )
             if role_block:
+                if durable_outbox_id is not None:
+                    from ..services.ats_cv_parse_outbox import (
+                        record_cv_parse_authority_blocked,
+                    )
+
+                    record_cv_parse_authority_blocked(
+                        db,
+                        outbox_id=durable_outbox_id,
+                        reason=role_block,
+                    )
                 return {
                     "status": "skipped",
                     "reason": "role_not_runnable",
@@ -496,23 +537,81 @@ def parse_application_cv_sections(
                 }
 
         if app.cv_sections is not None and not force:
+            if durable_outbox_id is not None:
+                from ..services.ats_cv_parse_outbox import record_cv_parse_success
+
+                record_cv_parse_success(db, outbox_id=durable_outbox_id)
             return {"status": "skipped", "reason": "already_parsed", "application_id": application_id}
 
         if not (app.cv_text or "").strip() and not ((app.candidate.cv_text if app.candidate else "") or "").strip():
+            if durable_outbox_id is not None:
+                from ..services.ats_cv_parse_outbox import record_cv_parse_missing_text
+
+                status = record_cv_parse_missing_text(
+                    db, outbox_id=durable_outbox_id
+                )
+                return {"status": status, "application_id": application_id}
             if self.request.retries < self.max_retries:
                 raise self.retry(countdown=30)
             return {"status": "skipped", "reason": "no_cv_text", "application_id": application_id}
 
+        if durable_outbox_id is not None:
+            from ..services.ats_cv_parse_outbox import claim_cv_parse_attempt
+
+            claim = claim_cv_parse_attempt(
+                db,
+                application_id=int(application_id),
+                outbox_id=durable_outbox_id,
+            )
+            if not claim.get("claimed"):
+                return {
+                    "status": "skipped",
+                    "reason": claim.get("reason"),
+                    "application_id": application_id,
+                }
+
         wrote = parse_and_store_cv_sections(app, db=db, force=force)
         try:
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
-            logger.exception(
-                "parse_application_cv_sections commit failed application_id=%s",
+            logger.error(
+                "CV parse commit failed application_id=%s error_code=result_commit_failed error_type=%s",
                 application_id,
+                type(exc).__name__,
             )
+            if durable_outbox_id is not None:
+                from ..services.ats_cv_parse_outbox import record_cv_parse_failure
+
+                record_cv_parse_failure(
+                    db,
+                    outbox_id=durable_outbox_id,
+                    error="CV parse result commit failed",
+                )
             return {"status": "error", "application_id": application_id}
+        if durable_outbox_id is not None:
+            from ..services.ats_cv_parse_outbox import (
+                cached_failure_for_application,
+                record_cv_parse_failure,
+                record_cv_parse_success,
+            )
+
+            if wrote:
+                durable_status = record_cv_parse_success(
+                    db, outbox_id=durable_outbox_id
+                )
+            else:
+                error, terminal = cached_failure_for_application(app)
+                durable_status = record_cv_parse_failure(
+                    db,
+                    outbox_id=durable_outbox_id,
+                    error=error,
+                    terminal=terminal,
+                )
+            return {
+                "status": durable_status,
+                "application_id": application_id,
+            }
         return {
             "status": "ok" if wrote else "no_sections",
             "application_id": application_id,

@@ -241,3 +241,28 @@ def test_resync_is_idempotent(db):
         .count()
         == 1
     )
+
+
+def test_full_sync_repairs_job_close_missed_by_events(db):
+    """A later full run closes a local role absent from the complete open set."""
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("e2e_missed_close", status_list=["New Lead"])
+    job = state.make_job_order(bh_org, title="Temporary opening", is_open=True)
+
+    with live_bullhorn_server(state) as server:
+        service = BullhornSyncService(_authed_service(server, bh_org))
+        service.sync_org(db, org, mode="full")
+        role = db.query(Role).filter(Role.organization_id == org.id).one()
+        assert role.deleted_at is None
+
+        job["isOpen"] = False  # close happened without a delivered event
+        progress = service.sync_org(db, org, mode="full")
+
+    db.refresh(role)
+    assert progress["phase"] == "completed"
+    assert progress["roles_closed"] == 1
+    assert progress["job_order_repair"]["remote_open_count"] == 0
+    assert progress["job_order_repair"]["local_active_before"] == 1
+    assert role.deleted_at is not None
+    assert role.bullhorn_job_data["isOpen"] is False

@@ -12,11 +12,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..models.role import JOB_STATUS_OPEN, ROLE_KIND_STANDARD, Role
-from .workable_actions_service import WORKABLE_NON_LIVE_JOB_STATES, workable_job_state
+from .ats_role_lifecycle import ats_job_lifecycle
 
 
 INTAKE_READY = "ready"
 INTAKE_ROLE_MISSING = "role_missing"
+INTAKE_ROLE_DELETED = "role_deleted"
 INTAKE_JOB_NOT_OPEN = "job_not_open"
 INTAKE_AGENT_OFF = "agent_off"
 INTAKE_AGENT_PAUSED = "agent_paused"
@@ -47,13 +48,22 @@ def native_intake_state(role: Role | None) -> dict[str, Any]:
     if role is None:
         return {"ready": False, "reason": INTAKE_ROLE_MISSING}
 
-    state = workable_job_state(role)
-    if getattr(role, "workable_job_id", None) and state in WORKABLE_NON_LIVE_JOB_STATES:
-        return {
+    if getattr(role, "deleted_at", None) is not None:
+        return {"ready": False, "reason": INTAKE_ROLE_DELETED}
+
+    ats = ats_job_lifecycle(role)
+    if ats.external_job_id and ats.external_job_live is False:
+        result = {
             "ready": False,
             "reason": INTAKE_ATS_JOB_NOT_LIVE,
-            "workable_job_state": state,
+            "ats_provider": ats.provider,
+            "external_job_state": ats.external_job_state,
         }
+        # Preserve the Workable-specific diagnostic key consumed by existing
+        # clients while adding the provider-neutral contract for Bullhorn.
+        if ats.provider == "workable":
+            result["workable_job_state"] = ats.external_job_state
+        return result
 
     if not role_uses_managed_native_lifecycle(role):
         # Compatibility for legacy/manual JobPage rows. New pages are created
@@ -75,16 +85,6 @@ def native_intake_state(role: Role | None) -> dict[str, Any]:
 
 def role_accepts_native_applications(role: Role | None) -> bool:
     return bool(native_intake_state(role).get("ready"))
-
-
-def _remote_boolean_is_false(value: Any) -> bool:
-    """Interpret an explicit remote boolean without treating absence as closed."""
-
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return value.strip().lower() in {"", "0", "false", "no", "off"}
-    return not bool(value)
 
 
 def role_allows_new_paid_ats_work(role: Role | None) -> bool:
@@ -113,15 +113,9 @@ def role_allows_new_paid_ats_work(role: Role | None) -> bool:
     if job_status is not None and job_status != JOB_STATUS_OPEN:
         return False
 
-    state = workable_job_state(role)
-    if getattr(role, "workable_job_id", None) and state in WORKABLE_NON_LIVE_JOB_STATES:
+    ats = ats_job_lifecycle(role)
+    if ats.external_job_id and ats.external_job_live is False:
         return False
-
-    if getattr(role, "bullhorn_job_order_id", None):
-        payload = getattr(role, "bullhorn_job_data", None)
-        payload = payload if isinstance(payload, dict) else {}
-        if "isOpen" in payload and _remote_boolean_is_false(payload.get("isOpen")):
-            return False
 
     return True
 
@@ -132,6 +126,7 @@ __all__ = [
     "INTAKE_ATS_JOB_NOT_LIVE",
     "INTAKE_JOB_NOT_OPEN",
     "INTAKE_READY",
+    "INTAKE_ROLE_DELETED",
     "native_intake_state",
     "role_accepts_native_applications",
     "role_allows_new_paid_ats_work",

@@ -71,9 +71,13 @@ def import_submission_history(
         history = client.get_job_submission_history(
             job_submission_id=submission_id, fields=SUBMISSION_HISTORY_FIELDS
         )
-    except Exception:  # pragma: no cover — never break the sync on history read
-        logger.exception("Bullhorn JobSubmissionHistory read failed submission=%s", submission_id)
-        return 0
+    except Exception as exc:
+        logger.error(
+            "Bullhorn JobSubmissionHistory read failed submission=%s error_type=%s",
+            submission_id,
+            type(exc).__name__,
+        )
+        raise
 
     # Chronological so the appended trail reads oldest→newest and each row's
     # ``from_stage`` can carry the prior status.
@@ -166,9 +170,13 @@ def import_notes(
     """
     try:
         notes = client.query_notes(candidate_id=bullhorn_candidate_id, fields=NOTE_FIELDS)
-    except Exception:  # pragma: no cover — never break the sync on notes read
-        logger.exception("Bullhorn Notes read failed candidate=%s", bullhorn_candidate_id)
-        return 0
+    except Exception as exc:
+        logger.error(
+            "Bullhorn Notes read failed candidate=%s error_type=%s",
+            bullhorn_candidate_id,
+            type(exc).__name__,
+        )
+        raise
 
     # A Bullhorn /query over Notes (personReference.id) can return the SAME note
     # twice on a join fan-out. Track ids added THIS batch so a duplicate in one
