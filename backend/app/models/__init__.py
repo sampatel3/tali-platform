@@ -7,7 +7,8 @@ from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
 from .interview_feedback import INTERVIEW_RECOMMENDATIONS, InterviewFeedback
-from .role import Role, role_tasks
+from .role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role, role_tasks
+from .sister_role_evaluation import SisterRoleEvaluation
 from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
 from .client import (
     CLIENT_STATUS_ACTIVE,

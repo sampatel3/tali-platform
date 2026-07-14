@@ -157,6 +157,13 @@ class RoleResponse(BaseModel):
     description: Optional[str] = None
     criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
+    role_kind: Literal["standard", "sister"] = "standard"
+    # Sister roles own an alternate job spec + scores, while this role owns the
+    # shared ATS application roster and all Workable write-backs.
+    ats_owner_role_id: Optional[int] = None
+    ats_owner_role_name: Optional[str] = None
+    effective_workable_job_id: Optional[str] = None
+    sister_role_count: int = 0
     workable_job_id: Optional[str] = None
     # Requisition -> Workable job lifecycle: draft | open | filled |
     # filled_external | cancelled. None for legacy / Workable-synced roles
@@ -313,7 +320,14 @@ class ApplicationResponse(BaseModel):
     # invalidation rework (~370 rows across roles 110–113). The writer is
     # gone from current code but the rows remain; rejecting them here
     # 500s every /applications listing that touches them.
-    score_status: Optional[Literal["pending", "running", "done", "error", "stale", "cancelled"]] = None
+    score_status: Optional[Literal["pending", "running", "done", "error", "stale", "cancelled", "unscorable"]] = None
+    # Present when this row is projected into a sister role. ``id`` remains the
+    # canonical source application id so every stage/outcome action routes to
+    # the ATS-owning application rather than a cloned pipeline record.
+    operational_role_id: Optional[int] = None
+    operational_role_name: Optional[str] = None
+    sister_role_id: Optional[int] = None
+    source_role_score: Optional[float] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
     workable_stage: Optional[str] = None

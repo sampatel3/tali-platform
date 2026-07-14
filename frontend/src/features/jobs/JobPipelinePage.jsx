@@ -6,6 +6,8 @@ import {
   ChevronDown,
   Copy,
   ExternalLink,
+  GitFork,
+  Link2,
   RefreshCw,
   Share2,
   Sparkles,
@@ -27,6 +29,7 @@ import { RequisitionSpecSections, JobStatusControl, ClientControl } from './Requ
 import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import CreateSisterRoleDialog from './CreateSisterRoleDialog';
 import SubmittalPackDialog from './SubmittalPackDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
@@ -325,6 +328,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [processDialogOpen, setProcessDialogOpen] = useState(false);
+  const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
+  const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
+  const [sisterRescoring, setSisterRescoring] = useState(false);
+  const [sisterPollVersion, setSisterPollVersion] = useState(0);
+  const previousSisterScoringStateRef = useRef(null);
   const [submittalDialogOpen, setSubmittalDialogOpen] = useState(false);
   // Phase 3a — "Add sourced candidate" compact form (a pre-applied prospect).
   const [sourcedFormOpen, setSourcedFormOpen] = useState(false);
@@ -340,6 +348,31 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [suggestedThreshold, setSuggestedThreshold] = useState(null);
   const [savingThresholdMode, setSavingThresholdMode] = useState(false);
+
+  useEffect(() => {
+    if (role?.role_kind !== 'sister' || !rolesApi?.sisterScoringStatus) {
+      setSisterScoringStatus(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      try {
+        const res = await rolesApi.sisterScoringStatus(numericRoleId);
+        if (cancelled) return;
+        const next = res?.data || null;
+        setSisterScoringStatus(next);
+        if (next?.status === 'running') timer = window.setTimeout(poll, 3000);
+      } catch {
+        if (!cancelled) setSisterScoringStatus(null);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [numericRoleId, role?.role_kind, rolesApi, sisterPollVersion]);
   const handleThresholdModeChange = useCallback(async (nextMode) => {
     if (!Number.isFinite(numericRoleId)) return;
     if (nextMode !== 'auto' && nextMode !== 'manual') return;
@@ -519,6 +552,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       if (seq !== loadSeqRef.current) return;
       loadedRoleIdRef.current = numericRoleId;
       const nextRole = roleRes?.data || null;
+      let applicationPayloads = [
+        ...(openAppsRes?.data || []),
+        ...(rejectedAppsRes?.data || []),
+      ];
+      // Sister roles evaluate the complete source cohort, including prior
+      // hires/withdrawals. The standard page keeps its two-query hot path;
+      // only the uncommon sister view pays this extra terminal-outcome fetch.
+      if (nextRole?.role_kind === 'sister') {
+        const [hiredAppsRes, withdrawnAppsRes] = await Promise.all([
+          rolesApi.listApplications(numericRoleId, appsQuery('hired')),
+          rolesApi.listApplications(numericRoleId, appsQuery('withdrawn')),
+        ]);
+        if (seq !== loadSeqRef.current) return;
+        applicationPayloads = [
+          ...applicationPayloads,
+          ...(hiredAppsRes?.data || []),
+          ...(withdrawnAppsRes?.data || []),
+        ];
+      }
       setRole(nextRole);
       setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
       setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
@@ -533,7 +585,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setRoleTasks(nextTasks);
       // Dedupe by id — defensive against any backend overlap.
       const byId = new Map();
-      for (const a of [...(openAppsRes?.data || []), ...(rejectedAppsRes?.data || [])]) {
+      for (const a of applicationPayloads) {
         if (a?.id != null && !byId.has(a.id)) byId.set(a.id, a);
       }
       const nextApps = [...byId.values()];
@@ -609,6 +661,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // workspace reload to reconcile them. A missing id or a failed refetch is a
   // no-op; the derived buckets (active/rejected) re-derive from the merged row.
   const patchApplicationRow = useCallback(async (applicationId) => {
+    // A sister row is a projection of a source application + alternate score;
+    // the one-application endpoint only returns the source view. Reload the
+    // projected roster after an ATS action so we do not replace it with the
+    // original role's score.
+    if (role?.role_kind === 'sister') {
+      await loadRoleWorkspace();
+      return;
+    }
     const numericId = Number(applicationId);
     if (!Number.isFinite(numericId) || !rolesApi?.getApplication) return;
     try {
@@ -642,7 +702,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } catch {
       // Quiet — the row keeps its last-known state until the next full load.
     }
-  }, [rolesApi, numericRoleId]);
+  }, [loadRoleWorkspace, role?.role_kind, rolesApi, numericRoleId]);
 
   // Pull this role's candidates' CURRENT Workable stages on demand — the manual
   // recovery for when the periodic sync lags or a Taali-side move raced a stale
@@ -665,6 +725,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   useEffect(() => {
     void loadRoleWorkspace();
   }, [loadRoleWorkspace]);
+
+  useEffect(() => {
+    const previous = previousSisterScoringStateRef.current;
+    const current = sisterScoringStatus?.status || null;
+    previousSisterScoringStateRef.current = current;
+    if (previous === 'running' && current && current !== 'running') {
+      void loadRoleWorkspace();
+    }
+  }, [loadRoleWorkspace, sisterScoringStatus?.status]);
 
   // The org-wide task list feeds the role-edit task picker on the Job
   // Specification tab and the assessment-task picker on the Agent settings
@@ -721,8 +790,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   });
 
   const rejectedApplications = useMemo(() => (
-    roleApplications.filter((application) => application?.application_outcome === 'rejected')
-  ), [roleApplications]);
+    roleApplications.filter((application) => (
+      role?.role_kind === 'sister'
+        ? application?.application_outcome !== 'open'
+        : application?.application_outcome === 'rejected'
+    ))
+  ), [role?.role_kind, roleApplications]);
   const activeApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'open')
   ), [roleApplications]);
@@ -858,8 +931,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ...stage,
       items: activeApplications.filter((application) => applicationFunnelBucket(application) === stage.key),
     })),
-    { key: 'rejected', label: 'Rejected', countLabel: 'closed', items: rejectedApplications },
-  ], [activeApplications, rejectedApplications]);
+    { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', countLabel: 'closed', items: rejectedApplications },
+  ], [activeApplications, rejectedApplications, role?.role_kind]);
 
   // Candidates-table rows: filter by the active stage segment, then sort by
   // the chosen column. Memoized on the data + sort so the 30s decision/agent
@@ -1231,6 +1304,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [publicJobUrl, showToast]);
 
+  const handleRescoreSister = useCallback(async () => {
+    if (!Number.isFinite(numericRoleId) || sisterRescoring) return;
+    setSisterRescoring(true);
+    try {
+      const res = await rolesApi.rescoreSister(numericRoleId);
+      setSisterScoringStatus(res?.data || null);
+      setSisterPollVersion((value) => value + 1);
+      showToast('Re-scoring queued for the coupled candidate roster.', 'success');
+      window.setTimeout(() => { void loadRoleWorkspace(); }, 1000);
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to queue the sister-role re-score.'), 'error');
+    } finally {
+      setSisterRescoring(false);
+    }
+  }, [loadRoleWorkspace, numericRoleId, rolesApi, showToast, sisterRescoring]);
+
   const handleOpenRoleSettings = () => {
     document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   };
@@ -1501,7 +1590,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 role is published, jump to the live /job/{token} page or copy
                 its link; when it isn't, a quiet hint that publishing happens
                 from the requisition (no publish button here). */}
-            {publicJobUrl ? (
+            {role?.role_kind !== 'sister' && publicJobUrl ? (
               <>
                 <a
                   className="btn btn-outline btn-sm"
@@ -1518,15 +1607,29 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   Copy link
                 </button>
               </>
-            ) : distribution && distribution.published !== true ? (
+            ) : role?.role_kind !== 'sister' && distribution && distribution.published !== true ? (
               <span className="btn btn-outline btn-sm is-muted" title="This role isn't published yet — publish it from its requisition to create a public job page." style={{ cursor: 'default', opacity: 0.75 }}>
                 Not published
               </span>
             ) : null}
-            <button type="button" className="btn btn-outline btn-sm" title="Share role" onClick={handleShareRole}>
-              <Share2 size={13} />
-              Share
-            </button>
+            {role?.role_kind !== 'sister' ? (
+              <button type="button" className="btn btn-outline btn-sm" title="Share role" onClick={handleShareRole}>
+                <Share2 size={13} />
+                Share
+              </button>
+            ) : null}
+            {role?.role_kind !== 'sister' && roleAtsType(role) === 'workable' ? (
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setSisterDialogOpen(true)}>
+                <GitFork size={13} />
+                Create sister role
+              </button>
+            ) : null}
+            {role?.role_kind === 'sister' ? (
+              <button type="button" className="btn btn-outline btn-sm" onClick={handleRescoreSister} disabled={sisterRescoring || sisterScoringStatus?.status === 'running'}>
+                {sisterRescoring || sisterScoringStatus?.status === 'running' ? <Spinner size={12} /> : <RefreshCw size={12} />}
+                {sisterScoringStatus?.status === 'running' ? `Scoring ${sisterScoringStatus.progress_percent || 0}%` : 'Re-score roster'}
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-outline btn-sm"
@@ -1537,16 +1640,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             >
               Edit role
             </button>
-            <button
-              type="button"
-              className="btn btn-purple btn-sm"
-              onClick={() => {
-                setCandidateSheetError('');
-                setCandidateSheetOpen(true);
-              }}
-            >
-              Invite candidate <span className="arrow">→</span>
-            </button>
+            {role?.role_kind !== 'sister' ? (
+              <button
+                type="button"
+                className="btn btn-purple btn-sm"
+                onClick={() => {
+                  setCandidateSheetError('');
+                  setCandidateSheetOpen(true);
+                }}
+              >
+                Invite candidate <span className="arrow">→</span>
+              </button>
+            ) : null}
           </>
         )}
         postTitle={(
@@ -1554,16 +1659,37 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
             <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
             <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-            <div className="f"><span className="k">{roleTasks.length > 1 ? 'Tasks · A/B' : 'Linked task'}</span><span className="v purple">{roleTasks.length ? roleTasks.map((t) => t.name).join(' · ') : 'Not linked yet'}</span></div>
+            {role?.role_kind === 'sister' ? (
+              <div className="f"><span className="k">Workable owner</span><span className="v purple">{role?.ats_owner_role_name || 'Original role'}</span></div>
+            ) : (
+              <div className="f"><span className="k">{roleTasks.length > 1 ? 'Tasks · A/B' : 'Linked task'}</span><span className="v purple">{roleTasks.length ? roleTasks.map((t) => t.name).join(' · ') : 'Not linked yet'}</span></div>
+            )}
+            {role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0 ? (
+              <div className="f"><span className="k">Coupled views</span><span className="v purple">{role.sister_role_count} sister role{role.sister_role_count === 1 ? '' : 's'}</span></div>
+            ) : null}
           </div>
         )}
         agent={roleAgent}
-        onActivateAgent={handleActivateAgent}
-        onPauseAgent={handlePauseAgent}
-        onResumeAgent={handleResumeAgent}
-        onTurnOffAgent={handleTurnOffAgent}
-        onAgentSettings={goToAgentSettings}
+        onActivateAgent={role?.role_kind === 'sister' ? undefined : handleActivateAgent}
+        onPauseAgent={role?.role_kind === 'sister' ? undefined : handlePauseAgent}
+        onResumeAgent={role?.role_kind === 'sister' ? undefined : handleResumeAgent}
+        onTurnOffAgent={role?.role_kind === 'sister' ? undefined : handleTurnOffAgent}
+        onAgentSettings={role?.role_kind === 'sister' ? undefined : goToAgentSettings}
       />
+      {role?.role_kind === 'sister' ? (
+        <div className="mx-auto mt-4 flex max-w-[1440px] flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3 text-sm">
+          <div className="flex items-center gap-2">
+            <Link2 size={15} className="text-[var(--taali-purple)]" />
+            <span>
+              This is a scoring view coupled to <strong>{role.ats_owner_role_name || 'the original Workable role'}</strong>.
+              Stages and candidate actions write back through that original application.
+            </span>
+          </div>
+          <button type="button" className="btn btn-outline btn-sm" onClick={() => navigate(`/jobs/${role.ats_owner_role_id}`)}>
+            Open original role
+          </button>
+        </div>
+      ) : null}
       <div className="page">
         <div className="mc-cockpit-main">
         {/* Flat single-strip funnel (matches pipeline-preview): each stage cell
@@ -1984,7 +2110,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   // the right so the active-pipeline tabs (All / Applied /
                   // Invited / In assessment / Review / Advanced) read
                   // left-to-right as a recruiter would walk the funnel.
-                  { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
+                  { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', count: rejectedApplications.length },
                 ].map((seg) => (
                   <button
                     key={seg.key}
@@ -2041,7 +2167,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               {/* WS2 — curated multi-candidate client submittal. Only offered
                   once the recruiter has ticked the candidates to include, so it
                   reads as an action on the current selection. */}
-              {selectedAppIds.size > 0 ? (
+              {role?.role_kind !== 'sister' && selectedAppIds.size > 0 ? (
                 <button
                   type="button"
                   className="btn btn-outline btn-sm"
@@ -2054,15 +2180,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
                   recruiter action: cascade Process opened via
                   ProcessCandidatesDialog. Label flips live during runs. */}
-              <button
-                type="button"
-                className={`btn btn-sm ${agentRunning ? 'btn-outline' : 'btn-purple'}`}
-                onClick={() => setProcessDialogOpen(true)}
-                disabled={String(processJobs?.[numericRoleId]?.status || '').toLowerCase() === 'running'}
-                title={agentRunning
-                  ? 'Manual override — the agent processes new candidates automatically. Use this only to run a pass yourself.'
-                  : undefined}
-              >
+              {role?.role_kind !== 'sister' ? (
+                <button
+                  type="button"
+                  className={`btn btn-sm ${agentRunning ? 'btn-outline' : 'btn-purple'}`}
+                  onClick={() => setProcessDialogOpen(true)}
+                  disabled={String(processJobs?.[numericRoleId]?.status || '').toLowerCase() === 'running'}
+                  title={agentRunning
+                    ? 'Manual override — the agent processes new candidates automatically. Use this only to run a pass yourself.'
+                    : undefined}
+                >
                 {(() => {
                   const pj = processJobs?.[numericRoleId];
                   const status = String(pj?.status || '').toLowerCase();
@@ -2078,7 +2205,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     : activeApplications.filter((a) => applicationFunnelBucket(a) === tableStageFilter).length;
                   return (<><Sparkles size={12} />Process {tabCount} candidate{tabCount === 1 ? '' : 's'}</>);
                 })()}
-              </button>
+                </button>
+              ) : sisterScoringStatus?.status === 'running' ? (
+                <span className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
+                  <Spinner size={12} /> Sister scores {sisterScoringStatus.progress_percent || 0}% complete
+                </span>
+              ) : null}
             </div>
             {/* Phase 3a — compact "add sourced candidate" form. A prospect added
                 here lands at the Sourced stage: no CV, not scored, no decision. */}
@@ -2152,8 +2284,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         <th aria-label="Select" style={{ width: 28 }}><input type="checkbox" aria-label="Select all visible candidates" checked={allSel} ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }} onChange={(e) => toggleAll(e.target.checked)} /></th>
                         <th>Candidate</th>
                         <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">Score{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">{role?.role_kind === 'sister' ? 'Sister score' : 'Score'}{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
                         </th>
+                        {role?.role_kind === 'sister' ? <th title={`Fit score on ${role?.ats_owner_role_name || 'the original role'}`}>Original fit</th> : null}
                         <th>Stage</th>
                         {/* External-ATS roles show the synced ATS stage;
                             full-ATS roles show the native Taali pipeline stage
@@ -2216,6 +2349,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                   className="mt-0.5"
                                 />
                               </td>
+                              {role?.role_kind === 'sister' ? (
+                                <td>
+                                  {application?.source_role_score != null
+                                    ? <span className="stage-pill">{Math.round(Number(application.source_role_score))}</span>
+                                    : <span className="ctable-em">—</span>}
+                                </td>
+                              ) : null}
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
@@ -2278,6 +2418,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         {/* Role editing is now inline on the Job Specification tab
             (<RoleSpecEditPanel>), so the role-edit slide-over is retired here. */}
+
+        <CreateSisterRoleDialog
+          open={sisterDialogOpen}
+          sourceRole={role}
+          rolesApi={rolesApi}
+          onClose={() => setSisterDialogOpen(false)}
+          onCreated={(createdRole) => {
+            setSisterDialogOpen(false);
+            showToast('Sister role created. Candidate scoring has started.', 'success');
+            if (createdRole?.id) navigate(`/jobs/${createdRole.id}`);
+          }}
+        />
 
         <CandidateSheet
           open={candidateSheetOpen}

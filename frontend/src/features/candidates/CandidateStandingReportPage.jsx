@@ -442,7 +442,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         // lazy-gates its own preview, so shipping the full parsed CV text on
         // every open was pure over-fetch.
         const [appRes, orgRes, eventsRes, decisionRes] = await Promise.all([
-          rolesApi.getApplication(numericApplicationId),
+          rolesApi.getApplication(
+            numericApplicationId,
+            backFromRoleId ? { params: { view_role_id: backFromRoleId } } : {},
+          ),
           organizationsApi?.get ? organizationsApi.get() : Promise.resolve(null),
           rolesApi?.listApplicationEvents && Number.isFinite(numericApplicationId)
             ? rolesApi.listApplicationEvents(numericApplicationId).catch(() => null)
@@ -494,7 +497,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setLoading(false);
       setRefreshing(false);
     }
-  }, [assessmentsApi, isShareRoute, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
+  }, [assessmentsApi, backFromRoleId, isShareRoute, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
 
   // Refetch JUST the candidate's pending decision (after an approve / override /
   // teach) without reloading the whole report. Recruiter-view only.
