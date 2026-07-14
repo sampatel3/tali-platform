@@ -16,7 +16,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { AgentLoop, MotionSystemProvider, Reveal, m, useReducedMotionSync } from '../../shared/motion';
-import { Building2, Filter, Inbox, Pause, Sparkles, Star, Zap } from 'lucide-react';
+import { Building2, Inbox, Pause, Sparkles, Star, Zap } from 'lucide-react';
 
 import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount } from '../../shared/metrics';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
@@ -276,11 +276,6 @@ export const JobsMotionPreview = () => {
               title={<>{sourceCounts.live} live <em>roles</em></>}
               period={false}
               subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
-              actions={(
-                <button type="button" className="btn btn-outline">
-                  <Filter size={13} /> Filter
-                </button>
-              )}
               agent={headerAgent}
               onPauseAgent={() => {}}
               offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
@@ -313,12 +308,18 @@ export const JobsMotionPreview = () => {
 
             {/* Source-filter chips — interactive, filters the grid. */}
             <Reveal delay={0.1}>
-              <div className="filter-row" id="jobs-source-filters">
+              <div
+                className="filter-row"
+                id="jobs-source-filters"
+                role="group"
+                aria-label="Filter jobs"
+              >
                 {SOURCE_FILTERS.map((filter) => (
                   <button
                     key={filter.key}
                     type="button"
                     className={`f-chip ${sourceFilter === filter.key ? 'on' : ''}`}
+                    aria-pressed={sourceFilter === filter.key}
                     onClick={() => setSourceFilter(filter.key)}
                   >
                     <span>{filter.label}</span>

@@ -3,7 +3,6 @@ import { useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
   Building2,
-  Filter,
   Globe,
   Inbox,
   Pause,
@@ -49,7 +48,6 @@ import {
   cappedStaggerDelay,
   fadeVariants,
   m,
-  motionSafeScrollBehavior,
   motionTransition,
   reducedFadeVariants,
   useReducedMotionSync,
@@ -680,14 +678,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
         actions={(
           <>
-            <button
-              type="button"
-              className="btn btn-outline"
-              onClick={() => document.getElementById('jobs-source-filters')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'center' })}
-            >
-              <Filter size={13} />
-              Filter
-            </button>
             {!isShowcase && jobBoardHref ? (
               <a
                 className="btn btn-outline"
@@ -848,13 +838,20 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           );
         })()}
 
-        <Reveal className="filter-row" id="jobs-source-filters" delay={0.16}>
+        <Reveal
+          className="filter-row"
+          id="jobs-source-filters"
+          role="group"
+          aria-label="Filter jobs"
+          delay={0.16}
+        >
           <span className="filter-row-label">Show</span>
           {SOURCE_FILTERS.map((filter) => (
             <button
               key={filter.key}
               type="button"
               className={`f-chip ${sourceFilter === filter.key ? 'on' : ''}`}
+              aria-pressed={sourceFilter === filter.key}
               onClick={() => setSourceFilter(filter.key)}
             >
               {filter.key === 'workable' ? <ArrowRight size={11} /> : null}
