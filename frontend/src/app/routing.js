@@ -58,11 +58,6 @@ export const pathForPage = (page, options = {}) => {
       return '/blog';
     case 'blog-post':
       return options.slug ? `/blog/${options.slug}` : '/blog';
-    case 'candidates':
-      // The Candidates tab is a real cross-role candidate list — every
-      // application the agent is working, filterable by role / stage /
-      // decision. Per-role pipelines still live under each job.
-      return '/candidates';
     case 'candidate-report': {
       if (!options.candidateApplicationId) return '/jobs';
       const base = `/candidates/${encodeURIComponent(options.candidateApplicationId)}`;

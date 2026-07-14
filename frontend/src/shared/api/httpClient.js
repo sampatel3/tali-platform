@@ -237,7 +237,7 @@ export const isPublicPath = (pathname = '', search = '') => {
   // Marketing showcase mode runs the recruiter pages with auth-bypassed
   // demo data. We must never bounce these to /login on a stray 401, since
   // they're loaded inside the public marketing iframe.
-  if ((pathname === '/jobs' || pathname === '/candidates') && search.includes('showcase=1') && search.includes('demo=1')) {
+  if (pathname === '/jobs' && search.includes('showcase=1') && search.includes('demo=1')) {
     return true;
   }
   return false;
