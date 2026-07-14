@@ -2,20 +2,22 @@
 
 Closes the "new job → no task → assessment send is misconfigured" gap.
 When a role has no linked task, this generates one (via the JD→spec
-generator), persists it as an org-owned DRAFT (is_active=False, flagged
-for human review), provisions its template repo, and links it to the
-role. A recruiter approves the draft before it goes live to candidates —
-auto-creation is automatic; going-live is gated.
+generator), persists it as an org-owned DRAFT, provisions its template repo,
+and links it to the role. The recruiter's single Turn-on command authorizes the
+exact draft only after its automated battle test and repository checks pass;
+there is no second manual task-approval step.
 
 Cost-safety: generation is a multi-call Sonnet operation (~$0.10-0.30).
-This service is invoked behind the ``AUTO_GENERATE_ASSESSMENT_TASKS``
-flag (default off) or on explicit recruiter request, never unbounded.
+For requisitions, publish records a spend-free deferred request and Turn on
+moves it into the paid worker outbox. The linked-task and claim-token guards
+prevent duplicate or stale-JD authoring.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import uuid
 from typing import Any, Dict, Optional
 
 from sqlalchemy import text
@@ -23,6 +25,31 @@ from sqlalchemy.orm import Session
 
 from ..models.role import Role
 from ..models.task import Task
+from .task_provisioning_state import (
+    PROVISIONING_AWAITING_ACTIVATION,
+    PROVISIONING_BLOCKED,
+    PROVISIONING_FAILED,
+    PROVISIONING_PENDING,
+    PROVISIONING_RECOVERABLE_STATUSES,
+    PROVISIONING_RETRY_WAIT,
+    PROVISIONING_RUNNING,
+    PROVISIONING_STALE_AFTER,
+    PROVISIONING_SUCCEEDED,
+    TaskProvisioningBlockedError,
+    TaskProvisioningClaim,
+    TaskProvisioningError,
+    TaskProvisioningRetryableError,
+    TaskProvisioningSupersededError,
+    _linked_task_id,
+    authorize_assessment_task_provisioning,
+    claim_assessment_task_provisioning,
+    finish_assessment_task_provisioning,
+    provisioning_state_is_due,
+    request_assessment_task_provisioning,
+    role_has_active_task,
+    role_has_linked_task,
+    task_provisioning_state,
+)
 from .task_spec_generator import generate_task_spec
 
 logger = logging.getLogger("taali.task_provisioning")
@@ -67,15 +94,6 @@ def _role_jd_text(role: Role) -> str:
     return text_blob.strip()
 
 
-def role_has_active_task(db: Session, role: Role) -> bool:
-    """True if the role already links at least one active task."""
-    try:
-        tasks = list(getattr(role, "tasks", None) or [])
-    except Exception:
-        tasks = []
-    return any(getattr(t, "is_active", False) for t in tasks)
-
-
 def generate_and_link_task_for_role(
     db: Session,
     role: Role,
@@ -83,24 +101,24 @@ def generate_and_link_task_for_role(
     api_key: str,
     organization_id: int,
     create_repo: bool = True,
+    claim_token: str | None = None,
 ) -> Optional[Task]:
     """Generate, persist (as a draft), and link an assessment task for ``role``.
 
-    Returns the created Task, or None if the role already has a task, the
-    JD is too thin, or generation failed. The Task is created
-    ``is_active=False`` with ``extra_data.generated=True`` and
-    ``needs_review=True`` so it does not go live until a recruiter approves.
-
-    Never raises — provisioning failures are logged and return None.
+    ``None`` has one meaning only: an idempotent delivery found a task already
+    linked. Insufficient persisted input raises ``TaskProvisioningBlockedError``;
+    generator/database failures raise ``TaskProvisioningRetryableError`` so the
+    worker can record and retry them instead of reporting a false no-op.
     """
-    if role_has_active_task(db, role):
-        logger.info("role %s already has an active task; skipping generation", role.id)
+    if role_has_linked_task(role):
+        logger.info("role %s already has a linked task; skipping generation", role.id)
         return None
 
     jd_text = _role_jd_text(role)
     if len(jd_text) < 120:
-        logger.info("role %s JD too thin (%d chars) to generate a task", role.id, len(jd_text))
-        return None
+        raise TaskProvisioningBlockedError(
+            f"role JD is too thin to generate an assessment ({len(jd_text)} chars; minimum 120)"
+        )
 
     role_name = str(getattr(role, "name", "") or "Role")
     role_slug = _slugify(role_name)
@@ -112,28 +130,73 @@ def generate_and_link_task_for_role(
             jd_text=jd_text,
             api_key=api_key,
             organization_id=int(organization_id),
+            role_id=int(role.id),
             deliverable_kind_hint=_deliverable_kind_hint(role_name, jd_text),
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("task generation raised for role %s", role.id)
-        return None
+        raise TaskProvisioningRetryableError(
+            f"task generator raised {type(exc).__name__}: {exc}"
+        ) from exc
 
     if not result.valid or not result.spec:
         logger.warning(
             "task generation invalid for role %s after %d attempt(s): %s",
             role.id, result.attempts, "; ".join(result.errors[:3]),
         )
-        return None
+        detail = "; ".join(result.errors[:3]) or "generator returned no valid spec"
+        raise TaskProvisioningRetryableError(
+            f"task generation remained invalid after {result.attempts} attempt(s): {detail}"
+        )
 
     spec = result.spec
-    task = _persist_generated_task(db, spec, organization_id=int(organization_id))
-    if task is None:
-        return None
+    # Re-lock immediately before persistence.  Generation is deliberately done
+    # without holding a row lock; this claim-token check prevents an older
+    # worker persisting stale output if the requisition was republished during
+    # the model calls.  The linked-task check also makes redelivery idempotent.
+    if claim_token:
+        locked_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role.id),
+                Role.organization_id == int(organization_id),
+            )
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if locked_role is None:
+            db.rollback()
+            raise TaskProvisioningSupersededError("role was removed during generation")
+        state = task_provisioning_state(locked_role)
+        if str(state.get("claim_token") or "") != str(claim_token):
+            db.rollback()
+            raise TaskProvisioningSupersededError(
+                "a newer role publish superseded this generation claim"
+            )
+        if _linked_task_id(db, int(role.id)) is not None:
+            db.rollback()
+            return None
+
+    try:
+        task = _persist_generated_task(
+            db, spec, organization_id=int(organization_id)
+        )
+        _link_role_task(db, role_id=int(role.id), task_id=int(task.id))
+        db.commit()
+        db.refresh(task)
+    except TaskProvisioningRetryableError:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception("failed to persist/link generated task for role %s", role.id)
+        raise TaskProvisioningRetryableError(
+            f"failed to persist/link generated assessment: {type(exc).__name__}: {exc}"
+        ) from exc
 
     if create_repo:
         _provision_repo_best_effort(task)
-
-    _link_role_task(db, role_id=int(role.id), task_id=int(task.id))
     logger.info(
         "generated draft task %s (task_key=%s) for role %s; needs review",
         task.id, task.task_key, role.id,
@@ -143,13 +206,15 @@ def generate_and_link_task_for_role(
 
 def _persist_generated_task(
     db: Session, spec: Dict[str, Any], *, organization_id: int
-) -> Optional[Task]:
+) -> Task:
     """Build + persist an org-owned DRAFT Task from a validated spec."""
     from .task_catalog import PERSISTED_TASK_SPEC_KEYS
 
     task_key = str(spec.get("task_id") or "").strip()
     if not task_key:
-        return None
+        raise TaskProvisioningRetryableError(
+            "validated task spec did not include task_id"
+        )
     # Avoid collision with an existing key for this org.
     existing = (
         db.query(Task)
@@ -157,11 +222,18 @@ def _persist_generated_task(
         .first()
     )
     if existing is not None:
-        task_key = f"{task_key}_{int(organization_id)}"
+        # Re-publish archives the old generated draft, so the generator may
+        # legitimately emit the same task_id again. Include an entropy suffix
+        # instead of reusing ``_<org>`` (which collided on the third revision
+        # and could point two drafts at the same template repository).
+        task_key = f"{task_key}_{int(organization_id)}_{uuid.uuid4().hex[:8]}"
 
     extra_data = {k: v for k, v in spec.items() if k not in PERSISTED_TASK_SPEC_KEYS}
     extra_data["generated"] = True
     extra_data["needs_review"] = True
+    from .task_battle_test import initialize_battle_test_provisioning
+
+    extra_data = initialize_battle_test_provisioning(extra_data)
 
     scenario = spec.get("scenario")
     task = Task(
@@ -182,15 +254,16 @@ def _persist_generated_task(
         evaluation_rubric=spec.get("evaluation_rubric"),
         extra_data=extra_data,
     )
+    db.add(task)
     try:
-        db.add(task)
         db.flush()
         db.refresh(task)
-        return task
-    except Exception:
-        db.rollback()
+    except Exception as exc:
         logger.exception("failed to persist generated task key=%s", task_key)
-        return None
+        raise TaskProvisioningRetryableError(
+            f"failed to persist generated task key={task_key}: {type(exc).__name__}: {exc}"
+        ) from exc
+    return task
 
 
 def _provision_repo_best_effort(task: Task) -> None:
@@ -217,13 +290,36 @@ def _link_role_task(db: Session, *, role_id: int, task_id: int) -> None:
             ),
             {"r": role_id, "t": task_id},
         )
-        db.commit()
-    except Exception:
-        db.rollback()
+    except Exception as exc:
         logger.exception("failed to link role %s ↔ task %s", role_id, task_id)
+        raise TaskProvisioningRetryableError(
+            f"failed to link role {role_id} to generated task {task_id}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 __all__ = [
+    "PROVISIONING_AWAITING_ACTIVATION",
+    "PROVISIONING_BLOCKED",
+    "PROVISIONING_FAILED",
+    "PROVISIONING_PENDING",
+    "PROVISIONING_RECOVERABLE_STATUSES",
+    "PROVISIONING_RETRY_WAIT",
+    "PROVISIONING_RUNNING",
+    "PROVISIONING_STALE_AFTER",
+    "PROVISIONING_SUCCEEDED",
+    "TaskProvisioningBlockedError",
+    "TaskProvisioningClaim",
+    "TaskProvisioningError",
+    "TaskProvisioningRetryableError",
+    "TaskProvisioningSupersededError",
+    "claim_assessment_task_provisioning",
+    "authorize_assessment_task_provisioning",
+    "finish_assessment_task_provisioning",
     "generate_and_link_task_for_role",
+    "provisioning_state_is_due",
+    "request_assessment_task_provisioning",
     "role_has_active_task",
+    "role_has_linked_task",
+    "task_provisioning_state",
 ]

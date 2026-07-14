@@ -2,78 +2,98 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/railway/lib.sh
+source "$ROOT_DIR/scripts/railway/lib.sh"
+
 BACKEND_DIR="${BACKEND_DIR:-$ROOT_DIR/backend}"
 ENV_NAME="${RAILWAY_ENVIRONMENT:-production}"
-WORKER_SERVICE="${RAILWAY_WORKER_SERVICE:-}"
+WEB_SERVICE="${RAILWAY_BACKEND_SERVICE:-resourceful-adaptation}"
+GENERAL_WORKER_SERVICE="${RAILWAY_WORKER_SERVICE:-taali-worker}"
+SCORING_WORKER_SERVICE="${RAILWAY_SCORING_WORKER_SERVICE:-taali-worker-scoring}"
 
-if ! command -v railway >/dev/null 2>&1; then
-  echo "error: railway CLI is not installed. Install with: npm i -g @railway/cli" >&2
-  exit 1
-fi
+for command in railway python3; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    echo "error: required command is not installed: $command" >&2
+    exit 1
+  fi
+done
 
-if [[ ! -d "$BACKEND_DIR" ]]; then
-  echo "error: backend directory not found: $BACKEND_DIR" >&2
-  exit 1
-fi
+for path in \
+  "$BACKEND_DIR" \
+  "$BACKEND_DIR/railway.json" \
+  "$BACKEND_DIR/app/scripts/railway_worker_start.py"; do
+  if [[ ! -e "$path" ]]; then
+    echo "error: required backend deployment path is missing: $path" >&2
+    exit 1
+  fi
+done
 
-if [[ ! -f "$BACKEND_DIR/railway.worker.json" ]]; then
-  echo "error: missing backend/railway.worker.json" >&2
-  exit 1
-fi
+railway_assert_distinct_services \
+  "$WEB_SERVICE" "$GENERAL_WORKER_SERVICE" "$SCORING_WORKER_SERVICE"
 
-cd "$ROOT_DIR"
 railway environment "$ENV_NAME" >/dev/null
 STATUS_FILE="$(mktemp)"
 trap 'rm -f "$STATUS_FILE"' EXIT
 railway status --json > "$STATUS_FILE"
+railway_service_snapshot \
+  "$STATUS_FILE" "$ENV_NAME" "$GENERAL_WORKER_SERVICE" >/dev/null
+railway_service_snapshot \
+  "$STATUS_FILE" "$ENV_NAME" "$SCORING_WORKER_SERVICE" >/dev/null
 
-if [[ -z "$WORKER_SERVICE" ]]; then
-  WORKER_SERVICE="$(python3 - "$STATUS_FILE" <<'PY'
-import json
-import re
-import sys
+echo "Pinning the production worker topology (environment: $ENV_NAME)..."
+railway variable set \
+  --service "$GENERAL_WORKER_SERVICE" \
+  --environment "$ENV_NAME" \
+  --skip-deploys \
+  TALI_SERVICE_MODE=worker \
+  TALI_WORKER_QUEUES=celery \
+  TALI_WORKER_BEAT=true >/dev/null
+railway variable set \
+  --service "$SCORING_WORKER_SERVICE" \
+  --environment "$ENV_NAME" \
+  --skip-deploys \
+  TALI_SERVICE_MODE=worker \
+  TALI_WORKER_QUEUES=scoring \
+  TALI_WORKER_BEAT=false >/dev/null
 
-payload = json.load(open(sys.argv[1]))
-services = [
-    edge.get("node", {}).get("name", "")
-    for edge in payload.get("services", {}).get("edges", [])
-]
-for name in services:
-    if re.search(r"worker", name, re.IGNORECASE):
-        print(name)
-        break
-PY
-)"
-fi
+railway_validate_worker_variables \
+  "$ENV_NAME" "$GENERAL_WORKER_SERVICE" "celery" "true"
+railway_validate_worker_variables \
+  "$ENV_NAME" "$SCORING_WORKER_SERVICE" "scoring" "false"
 
-if [[ -z "$WORKER_SERVICE" ]]; then
-  echo "No worker service found. Skipping worker deploy."
-  echo "Set RAILWAY_WORKER_SERVICE if your worker service name does not include 'worker'."
-  exit 0
-fi
+deploy_worker_service() {
+  local service="$1"
+  local queues="$2"
+  local beat="$3"
+  local fresh_status previous_id
 
-SERVICE_EXISTS="$(python3 - "$STATUS_FILE" "$WORKER_SERVICE" <<'PY'
-import json
-import sys
+  fresh_status="$(mktemp)"
+  railway status --json > "$fresh_status"
+  previous_id="$(railway_service_deployment_id "$fresh_status" "$ENV_NAME" "$service")"
+  rm -f "$fresh_status"
 
-status_file = sys.argv[1]
-service_name = sys.argv[2]
-payload = json.load(open(status_file))
-services = [
-    edge.get("node", {}).get("name")
-    for edge in payload.get("services", {}).get("edges", [])
-]
-print("1" if service_name in services else "0")
-PY
-)"
+  echo "Deploying '$service' (queues=$queues, beat=$beat) from $BACKEND_DIR ..."
+  (
+    cd "$BACKEND_DIR"
+    railway up \
+      --service "$service" \
+      --environment "$ENV_NAME" \
+      --detach
+  )
+  railway_wait_for_new_successful_deployment \
+    "$ENV_NAME" "$service" "$previous_id"
+}
 
-if [[ "$SERVICE_EXISTS" != "1" ]]; then
-  echo "error: Railway worker service '$WORKER_SERVICE' was not found." >&2
-  exit 1
-fi
+# General first so the one Beat scheduler remains available throughout the
+# coordinated rollout; scoring is a separate process and never owns Beat.
+deploy_worker_service "$GENERAL_WORKER_SERVICE" "celery" "true"
+deploy_worker_service "$SCORING_WORKER_SERVICE" "scoring" "false"
 
-cd "$BACKEND_DIR"
-echo "Deploying worker service '$WORKER_SERVICE' from $BACKEND_DIR (environment: $ENV_NAME)..."
-railway up --service "$WORKER_SERVICE" --environment "$ENV_NAME" --detach
+RAILWAY_ENVIRONMENT="$ENV_NAME" \
+RAILWAY_BACKEND_SERVICE="$WEB_SERVICE" \
+RAILWAY_WORKER_SERVICE="$GENERAL_WORKER_SERVICE" \
+RAILWAY_SCORING_WORKER_SERVICE="$SCORING_WORKER_SERVICE" \
+RAILWAY_STATUS_SCOPE=workers \
+  "$ROOT_DIR/scripts/railway/check_status.sh"
 
-echo "Deployment submitted. Ensure worker start command is configured to celery in Railway service settings."
+echo "Both worker deployments succeeded and the split topology is validated."

@@ -10,7 +10,9 @@ from .assessment_tasks import (
     sync_workable_daily_candidates,
     reap_stuck_workable_sync_runs,
     generate_assessment_task_for_role,
+    sweep_assessment_task_provisioning,
     battle_test_generated_task,
+    repair_generated_task_after_battle_failure,
 )
 # Eager-import the canonical email-task module so Celery registers
 # send_assessment_email / send_results_email on the worker. (Taali never
@@ -26,7 +28,21 @@ from ..components.notifications import tasks as _notification_email_tasks  # noq
 # them with "Received unregistered task" and silently discards.
 from .scoring_tasks import (
     batch_score_role,
+    recover_stuck_score_jobs,
     score_application_job,
+)
+# Incomplete rubric rows are a durable scoring outbox. Eager import both the
+# direct worker and Beat sweep or Celery silently drops their task names.
+from .rubric_retry_tasks import (
+    retry_incomplete_rubric_scoring,
+    sweep_incomplete_rubric_scoring,
+)
+# Queue-specific Beat canaries. Production activation requires fresh proof for
+# both the default and scoring queues, so this task must be registered on every
+# worker deployment just like the scoring tasks themselves.
+from .health_tasks import (
+    queue_worker_heartbeat,
+    release_stale_usage_credit_reservations,
 )
 # Eager-import corroboration_tasks so the worker registers the async
 # (shortlist-gated) graph + GitHub enrichment job — same unregistered-drop
@@ -84,6 +100,7 @@ from .agent_tasks import (
     agent_daily_review_role,
     agent_cohort_tick_sweep,
     agent_cohort_tick_role,
+    agent_recovery_sweep,
     pre_screen_reject_sweep,
     agent_expire_stuck_runs,
     agent_expire_stale_decisions,
@@ -153,6 +170,11 @@ from .outreach_tasks import (
     generate_campaign_drafts,
     send_campaign_messages,
 )
+# Talent-pool re-score is dispatched by an API route rather than Beat. The
+# worker still has to eager-import its module: Celery autodiscovery does not
+# traverse this package layout, so otherwise accepted jobs are dropped as an
+# unregistered task.
+from .pool_rescore_tasks import rescore_pool_against_requirement
 
 __all__ = [
     "celery_app",
@@ -163,9 +185,17 @@ __all__ = [
     "sync_agent_mode_roles",
     "sync_workable_daily_candidates",
     "reap_stuck_workable_sync_runs",
+    "generate_assessment_task_for_role",
+    "sweep_assessment_task_provisioning",
     "battle_test_generated_task",
+    "repair_generated_task_after_battle_failure",
     "score_application_job",
     "batch_score_role",
+    "recover_stuck_score_jobs",
+    "retry_incomplete_rubric_scoring",
+    "sweep_incomplete_rubric_scoring",
+    "queue_worker_heartbeat",
+    "release_stale_usage_credit_reservations",
     "rescore_pool_against_requirement",
     "generate_role_interview_focus",
     "generate_application_interview_pack",
@@ -185,6 +215,7 @@ __all__ = [
     "agent_daily_review_role",
     "agent_cohort_tick_sweep",
     "agent_cohort_tick_role",
+    "agent_recovery_sweep",
     "pre_screen_reject_sweep",
     "agent_expire_stuck_runs",
     "agent_expire_stale_decisions",

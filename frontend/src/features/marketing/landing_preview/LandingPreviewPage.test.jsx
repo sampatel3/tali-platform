@@ -60,7 +60,7 @@ describe('LandingPreviewPage', () => {
     expect(screen.queryByText(/Where this goes\./i)).toBeNull();
     // Pipeline stages carry real copy plus the new mono micro-detail lines.
     expect(screen.getByText('Hand back')).toBeTruthy();
-    expect(screen.getByText(/Plugs into your ATS/i)).toBeTruthy();
+    expect(screen.getByText(/Applicants arrive through your live Taali page/i)).toBeTruthy();
     expect(screen.getByText(/workable · bullhorn · api/i)).toBeTruthy();
     // The densified pipeline stats row.
     expect(screen.getByText(/battle-tested before use/i)).toBeTruthy();
@@ -410,7 +410,7 @@ describe('LandingPreviewPage', () => {
     expect(screen.getAllByRole('button', { name: /See it live/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /Book a demo/i }).length).toBeGreaterThan(0);
     // Funnel — the five steps, said once.
-    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
+    ['Intake', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
       expect(screen.getByText(step)).toBeTruthy();
     });
     expect(screen.getByText(/One agent,/i)).toBeTruthy();

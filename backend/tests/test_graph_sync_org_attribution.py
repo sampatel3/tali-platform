@@ -34,6 +34,8 @@ def test_sync_event_attributes_explicit_org_and_db():
         sync_module.sync_event(ev, db="DB_SENTINEL", bill_organization_id=99)
     assert captured["bill_organization_id"] == 99
     assert captured["db"] == "DB_SENTINEL"
+    assert captured["require_hard_admission"] is True
+    assert captured["require_role_admission"] is False
 
 
 def test_sync_event_falls_back_to_event_org():
@@ -49,6 +51,7 @@ def test_sync_event_falls_back_to_event_org():
         sync_module.sync_event(ev, db="DB")
     assert captured["bill_organization_id"] == 77
     assert captured["db"] == "DB"
+    assert captured["require_hard_admission"] is True
 
 
 def test_sync_interview_attributes_explicit_org():
@@ -63,6 +66,7 @@ def test_sync_interview_attributes_explicit_org():
         sync_module.sync_interview(iv, db="DB", bill_organization_id=55)
     assert captured["bill_organization_id"] == 55
     assert captured["db"] == "DB"
+    assert captured["require_hard_admission"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +91,42 @@ def _make_candidate(db):
     db.add(cand)
     db.flush()
     return cand
+
+
+def test_candidate_billing_role_comes_from_graph_worthy_application(db):
+    from app.models.candidate_application import CandidateApplication
+    from app.models.role import Role
+
+    cand = _make_candidate(db)
+    below = Role(organization_id=cand.organization_id, name="Below Gate")
+    eligible = Role(organization_id=cand.organization_id, name="Eligible")
+    db.add_all([below, eligible])
+    db.flush()
+    db.add_all(
+        [
+            CandidateApplication(
+                organization_id=cand.organization_id,
+                candidate_id=cand.id,
+                role_id=below.id,
+                status="applied",
+                pipeline_stage="review",
+                application_outcome="open",
+                source="manual",
+            ),
+            CandidateApplication(
+                organization_id=cand.organization_id,
+                candidate_id=cand.id,
+                role_id=eligible.id,
+                status="applied",
+                pipeline_stage="advanced",
+                application_outcome="open",
+                source="manual",
+            ),
+        ]
+    )
+    db.commit()
+
+    assert sync_module.billing_role_id_for_candidate(cand, db) == int(eligible.id)
 
 
 def _counting_dispatch(counter):

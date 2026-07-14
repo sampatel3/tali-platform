@@ -116,7 +116,15 @@ JD is the whole spec.
 (`set_agent_state`); and change its monthly spend budget, auto-reject, or \
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \
 recruiter asks — e.g. "restart the agent", "pause it", "set the budget to $50". \
-Activating needs a monthly budget set; if none is set, ask the recruiter for one.
+Activating needs a monthly budget. First activation defaults auto-promote ON and \
+persists one durable Turn-on command: it generates, battle-tests, repository-checks \
+and approves the assessment, retries production readiness, and then starts the \
+complete funnel cycle. The role stays honestly OFF while that work is pending. Tell \
+the recruiter the request is saved, they can leave the page, and no second task-approval \
+click is needed. Reversible assessment/advance actions then run automatically, while every \
+LLM/full-score/assessment reject recommendation still needs human confirmation. \
+Only deterministic pre-screen failures can auto-reject under an explicit reject \
+toggle. A manual pause remains until the recruiter explicitly resumes it.
 - Stale scores / re-scoring: v2.1.0 is the current scoring engine, but older \
 candidates may still carry OLD-engine (v1.x) scores — making v2.1.0 the default \
 does NOT re-score anyone (a re-score is a real spend). When `set_agent_state` \
@@ -129,13 +137,12 @@ ONLY on their explicit yes. Scope with `scope` = all / top_n (`limit`) / \
 above_threshold / below_threshold (`threshold`) / none. After a re-score, any \
 pending decision whose verdict flips is auto-corrected (gated/advanced ones stay \
 in the queue for the recruiter).
-- Assessment-task drafts: you author a candidate assessment task from the JD; it \
-sits as a DRAFT until the recruiter approves it. `list_draft_tasks` surfaces this \
-role's pending drafts as a review card — the recruiter approves it (goes live) or \
-rejects with structured feedback (you re-author it, you don't lose the work). \
-Mention pending drafts proactively ("you've a draft task awaiting review — want to \
-look?") and whenever the recruiter asks about tasks or assessments. The approve / \
-reject controls live on the card; you surface and explain, the recruiter decides.
+- Assessment-task drafts: `list_draft_tasks` is an OPTIONAL manual preview/revision \
+surface before Turn on, or a recovery tool after an activation is no longer running. \
+When its card says `automatic_activation=true`, the saved Turn-on command owns validation \
+and approval: explain progress, NEVER ask for another approval, and do not tell the \
+recruiter to use Approve/Reject controls. When no activation owns the draft, the card's \
+manual approve or structured reject-and-revise controls remain available on request.
 - PROACTIVELY STEER better decisions: `role_health_check` is a free, read-only \
 scan of what's most likely HURTING this role's decisions — a must-have almost \
 nobody meets (quietly killing the pool), a requirement you often can't verify \

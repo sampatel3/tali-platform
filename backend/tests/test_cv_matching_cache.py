@@ -272,6 +272,12 @@ def test_runner_caches_and_reuses(db, monkeypatch):
     monkeypatch.setattr(
         archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None
     )
+    # This test isolates the shared-result cache. The production runner now
+    # performs a second, separately metered requirement-grading call; its
+    # contract and fallback behavior are covered by the graded-score tests.
+    monkeypatch.setattr(
+        "app.cv_matching.runner.grade_requirements", lambda **_kwargs: {}
+    )
 
     client = _StubClient(messages=_StubMessages(tool_input=_valid_response_dict()))
 
@@ -306,6 +312,9 @@ def test_runner_skip_cache_bypasses(db, monkeypatch):
     )
     monkeypatch.setattr(
         archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "app.cv_matching.runner.grade_requirements", lambda **_kwargs: {}
     )
 
     client = _StubClient(messages=_StubMessages(tool_input=_valid_response_dict()))

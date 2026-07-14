@@ -22,6 +22,11 @@ own durable ``graph_episode_outbox`` path; this complements it.)
 
 Registered in ``app.tasks.__init__`` so the worker doesn't ``NotRegistered``
 them — the same trap documented for the other eager-imported tasks.
+
+Each task resolves the owning application role before provider work, then
+hard-admits every Graphiti Anthropic/Voyage call. Provider, budget, and
+metering outages use uncapped Celery retry with bounded backoff; missing rows
+retain the small bounded retry used only for the producer-commit race.
 """
 
 from __future__ import annotations
@@ -39,13 +44,18 @@ logger = logging.getLogger("taali.tasks.graph_ingest")
 # episode; a genuinely-absent row (producer rolled back, or the entity was
 # deleted) simply no-ops after the bounded retries.
 _NOT_FOUND_RETRY_COUNTDOWN = 10
-_MAX_RETRIES = 3
+_NOT_FOUND_MAX_RETRIES = 3
+_PROVIDER_RETRY_CAP_SECONDS = 3_600
+
+
+def _provider_retry_countdown(retries: int) -> int:
+    return min(_PROVIDER_RETRY_CAP_SECONDS, 60 * (2 ** max(int(retries), 0)))
 
 
 @celery_app.task(
     name="app.tasks.graph_ingest_tasks.sync_candidate_to_graph",
     bind=True,
-    max_retries=_MAX_RETRIES,
+    max_retries=None,
 )
 def sync_candidate_to_graph(self, candidate_id: int) -> dict:
     from ..models.candidate import Candidate
@@ -57,24 +67,37 @@ def sync_candidate_to_graph(self, candidate_id: int) -> dict:
             db.query(Candidate).filter(Candidate.id == candidate_id).one_or_none()
         )
         if candidate is None:
-            if self.request.retries < self.max_retries:
+            if self.request.retries < _NOT_FOUND_MAX_RETRIES:
                 raise self.retry(countdown=_NOT_FOUND_RETRY_COUNTDOWN)
             return {"status": "skipped", "reason": "candidate_not_found", "id": candidate_id}
         # Cost gate: only sync candidates the recruiter or Tali has advanced
         # past initial screening. Rejected / not-yet-advanced candidates are
         # skipped to keep Graphiti extraction bounded.
-        if not sync_module.should_sync_candidate_to_graph(candidate, db):
+        role_id = sync_module.billing_role_id_for_candidate(candidate, db)
+        if role_id is None:
             return {"status": "skipped", "reason": "below_cost_gate", "id": candidate_id}
         # bill_* tags each claude_call_log / usage_event with the right org +
         # candidate so graph-sync spend flows into the role's monthly budget
         # instead of landing org=NULL.
-        sync_module.sync_candidate(
-            candidate,
-            db=db,
-            bill_organization_id=int(candidate.organization_id)
-            if candidate.organization_id is not None else None,
-            bill_candidate_id=int(candidate.id),
-        )
+        try:
+            sync_module.sync_candidate(
+                candidate,
+                db=db,
+                bill_organization_id=int(candidate.organization_id)
+                if candidate.organization_id is not None else None,
+                bill_role_id=int(role_id),
+                require_role_admission=True,
+                raise_on_error=True,
+            )
+        except Exception as exc:
+            # Provider, credit, role-budget, and metering outages remain in
+            # Celery's durable queue indefinitely.  Admission happens before
+            # the provider, so a budget-denied retry never produces free work.
+            raise self.retry(
+                exc=exc,
+                countdown=_provider_retry_countdown(self.request.retries),
+                max_retries=None,
+            )
         return {"status": "ok", "id": candidate_id}
     finally:
         db.close()
@@ -83,7 +106,7 @@ def sync_candidate_to_graph(self, candidate_id: int) -> dict:
 @celery_app.task(
     name="app.tasks.graph_ingest_tasks.sync_interview_to_graph",
     bind=True,
-    max_retries=_MAX_RETRIES,
+    max_retries=None,
 )
 def sync_interview_to_graph(self, interview_id: int) -> dict:
     from ..models.application_interview import ApplicationInterview
@@ -97,17 +120,35 @@ def sync_interview_to_graph(self, interview_id: int) -> dict:
             .one_or_none()
         )
         if interview is None:
-            if self.request.retries < self.max_retries:
+            if self.request.retries < _NOT_FOUND_MAX_RETRIES:
                 raise self.retry(countdown=_NOT_FOUND_RETRY_COUNTDOWN)
             return {"status": "skipped", "reason": "interview_not_found", "id": interview_id}
+        application = getattr(interview, "application", None)
+        role_id = getattr(application, "role_id", None)
+        if role_id is None:
+            return {
+                "status": "skipped",
+                "reason": "role_attribution_unavailable",
+                "id": interview_id,
+            }
         # ApplicationInterview.organization_id is non-nullable — pass it
         # directly rather than relying on best-effort application-chain
         # resolution (which lands org=NULL when the relationship isn't loaded).
-        sync_module.sync_interview(
-            interview,
-            db=db,
-            bill_organization_id=int(interview.organization_id),
-        )
+        try:
+            sync_module.sync_interview(
+                interview,
+                db=db,
+                bill_organization_id=int(interview.organization_id),
+                bill_role_id=int(role_id),
+                require_role_admission=True,
+                raise_on_error=True,
+            )
+        except Exception as exc:
+            raise self.retry(
+                exc=exc,
+                countdown=_provider_retry_countdown(self.request.retries),
+                max_retries=None,
+            )
         return {"status": "ok", "id": interview_id}
     finally:
         db.close()
@@ -116,7 +157,7 @@ def sync_interview_to_graph(self, interview_id: int) -> dict:
 @celery_app.task(
     name="app.tasks.graph_ingest_tasks.sync_event_to_graph",
     bind=True,
-    max_retries=_MAX_RETRIES,
+    max_retries=None,
 )
 def sync_event_to_graph(self, event_id: int) -> dict:
     from ..models.candidate_application_event import CandidateApplicationEvent
@@ -130,16 +171,34 @@ def sync_event_to_graph(self, event_id: int) -> dict:
             .one_or_none()
         )
         if ev is None:
-            if self.request.retries < self.max_retries:
+            if self.request.retries < _NOT_FOUND_MAX_RETRIES:
                 raise self.retry(countdown=_NOT_FOUND_RETRY_COUNTDOWN)
             return {"status": "skipped", "reason": "event_not_found", "id": event_id}
+        application = getattr(ev, "application", None)
+        role_id = getattr(application, "role_id", None)
+        if role_id is None:
+            return {
+                "status": "skipped",
+                "reason": "role_attribution_unavailable",
+                "id": event_id,
+            }
         # Pass db + the event's (non-nullable) organization_id so the graph_sync
         # spend writes a per-org usage_event instead of landing org=NULL.
-        sync_module.sync_event(
-            ev,
-            db=db,
-            bill_organization_id=int(ev.organization_id),
-        )
+        try:
+            sync_module.sync_event(
+                ev,
+                db=db,
+                bill_organization_id=int(ev.organization_id),
+                bill_role_id=int(role_id),
+                require_role_admission=True,
+                raise_on_error=True,
+            )
+        except Exception as exc:
+            raise self.retry(
+                exc=exc,
+                countdown=_provider_retry_countdown(self.request.retries),
+                max_retries=None,
+            )
         return {"status": "ok", "id": event_id}
     finally:
         db.close()

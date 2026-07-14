@@ -15,8 +15,9 @@ from app.components.integrations.workable.sync_service import (
     _format_job_spec_from_api,
 )
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import JOB_STATUS_OPEN, Role
 from app.models.role_criterion import CRITERION_SOURCE_DERIVED
+from app.services.job_page_lifecycle import native_intake_state
 
 _REQS = (
     "Description\nSenior backend role.\n"
@@ -109,6 +110,8 @@ def test_empty_detail_fetch_merges_cached_rich_job_data(db):
         description=previous_spec,
         job_spec_text=previous_spec,
         workable_job_data=cached_job_data,
+        job_status=JOB_STATUS_OPEN,
+        agentic_mode_enabled=True,
         screening_pack_template={},
         tech_interview_pack_template={},
     )
@@ -132,6 +135,7 @@ def test_empty_detail_fetch_merges_cached_rich_job_data(db):
 
     assert created is False
     assert synced_role.workable_job_data["state"] == "closed"
+    assert native_intake_state(synced_role)["reason"] == "ats_job_not_live"
     assert synced_role.workable_job_data["details"] == cached_job_data["details"]
     assert synced_role.job_spec_text == previous_spec
     assert synced_role.description == previous_spec

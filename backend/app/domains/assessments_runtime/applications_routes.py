@@ -522,9 +522,16 @@ def _create_application_assessment(
     db: Session,
     void_existing: Assessment | None = None,
     void_reason: str | None = None,
+    pipeline_event_type: str = "assessment_invite_sent",
+    pipeline_reason: str = "Assessment invite created",
+    pipeline_metadata: dict | None = None,
 ) -> Assessment:
     token = secrets.token_urlsafe(32)
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    candidate_email = app.candidate.email if app.candidate else None
+    if not candidate_email:
+        raise HTTPException(status_code=400, detail="Application has no candidate email")
+    candidate_name = app.candidate.full_name or app.candidate.email
     if void_existing is not None:
         void_existing.is_voided = True
         void_existing.voided_at = utcnow()
@@ -548,6 +555,20 @@ def _create_application_assessment(
         void_existing.superseded_by_assessment_id = assessment.id
 
     _provision_assessment_branch(assessment, task)
+    if org:
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
+            position=task.name or "Technical assessment",
+            pipeline_source="recruiter",
+            pipeline_actor_type="recruiter",
+            pipeline_actor_id=current_user.id,
+            pipeline_reason=pipeline_reason,
+            pipeline_metadata=dict(pipeline_metadata or {}),
+            pipeline_event_type=pipeline_event_type,
+        )
     db.commit()
     db.refresh(assessment)
 
@@ -558,25 +579,6 @@ def _create_application_assessment(
         .first()
     )
 
-    candidate_email = app.candidate.email if app.candidate else None
-    if not candidate_email:
-        raise HTTPException(status_code=400, detail="Application has no candidate email")
-    candidate_name = app.candidate.full_name or app.candidate.email
-
-    if org:
-        dispatch_assessment_invite(
-            assessment=assessment,
-            org=org,
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            position=task.name or "Technical assessment",
-        )
-        try:
-            db.commit()
-            db.refresh(assessment)
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to persist invite metadata for assessment_id=%s", assessment.id)
     return assessment
 
 
@@ -4198,13 +4200,17 @@ def _run_sync_graph(org_id: int, *, refresh: bool = False) -> None:
                     # un-attributed call_log rows — reconciliation
                     # against Anthropic billing still closes, but the
                     # per-org usage tab misses the rows entirely.
+                    bill_role_id = graph_sync.latest_application_role_id_for_candidate(
+                        cand, db
+                    )
                     sent = graph_sync.sync_candidate(
                         cand,
                         db=db,
                         include_cv_text=True,
                         bill_organization_id=int(cand.organization_id)
                         if cand.organization_id is not None else None,
-                        bill_candidate_id=int(cand.id) if cand.id is not None else None,
+                        bill_role_id=bill_role_id,
+                        require_role_admission=bill_role_id is not None,
                     )
                     if sent == 0:
                         # Treat as error if Graphiti dropped everything (likely
@@ -5028,6 +5034,7 @@ def _run_process(
                                 bill_organization_id=org_id,
                                 bill_role_id=role_id,
                                 bill_user_id=user_id,
+                                require_role_admission=True,
                             )
                             if sent == 0:
                                 # Graphiti returned no episodes — likely an
@@ -5293,6 +5300,7 @@ def create_assessment_for_application(
     creation_gate = get_assessment_creation_gate(
         current_user.organization_id,
         db,
+        role_id=int(role.id),
         lock_organization=True,
     )
     if not creation_gate.get("can_create"):
@@ -5302,35 +5310,6 @@ def create_assessment_for_application(
         raise _assessment_create_conflict_response(existing)
 
     try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason="Pipeline initialized before assessment create",
-        )
-        transition_stage(
-            db,
-            app=app,
-            to_stage="invited",
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Assessment invite created",
-        )
-        append_application_event(
-            db,
-            app=app,
-            event_type="assessment_invite_sent",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Task sent",
-            metadata={
-                "task_id": data.task_id,
-                "duration_minutes": data.duration_minutes,
-            },
-        )
         assessment = _create_application_assessment(
             app=app,
             role=role,
@@ -5338,6 +5317,10 @@ def create_assessment_for_application(
             duration_minutes=data.duration_minutes,
             current_user=current_user,
             db=db,
+            pipeline_metadata={
+                "task_id": data.task_id,
+                "duration_minutes": data.duration_minutes,
+            },
         )
         refresh_application_score_cache(app, db=db)
         db.commit()
@@ -5390,6 +5373,7 @@ def retake_assessment_for_application(
     creation_gate = get_assessment_creation_gate(
         current_user.organization_id,
         db,
+        role_id=int(role.id),
         exclude_assessment_id=existing.id,
         lock_organization=True,
     )
@@ -5397,37 +5381,6 @@ def retake_assessment_for_application(
         raise HTTPException(status_code=402, detail=creation_gate.get("message"))
 
     try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason="Pipeline initialized before assessment retake",
-        )
-        transition_stage(
-            db,
-            app=app,
-            to_stage="invited",
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Assessment retake created",
-        )
-        append_application_event(
-            db,
-            app=app,
-            event_type="assessment_retake_sent",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Task retake sent",
-            metadata={
-                "task_id": data.task_id,
-                "duration_minutes": data.duration_minutes,
-                "void_reason": data.void_reason,
-                "previous_assessment_id": existing.id,
-            },
-        )
         assessment = _create_application_assessment(
             app=app,
             role=role,
@@ -5437,6 +5390,14 @@ def retake_assessment_for_application(
             db=db,
             void_existing=existing,
             void_reason=data.void_reason,
+            pipeline_event_type="assessment_retake_sent",
+            pipeline_reason="Assessment retake created",
+            pipeline_metadata={
+                "task_id": data.task_id,
+                "duration_minutes": data.duration_minutes,
+                "void_reason": data.void_reason,
+                "previous_assessment_id": existing.id,
+            },
         )
         refresh_application_score_cache(app, db=db)
         db.commit()

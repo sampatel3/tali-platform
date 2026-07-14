@@ -8,6 +8,7 @@
 // billed spend vs cap — never raw model cost, model names, or reasoning labels.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ArrowUpRight,
   FilterX,
@@ -32,7 +33,7 @@ import { outcomeOf } from './DecisionLogTab';
 
 const PANEL_POLL_MS = 5000;
 const ACTIVITY_POLL_MS = 15000;
-const COHORT_BEAT_SECS = 1800;
+const COHORT_BEAT_SECS = 3600;
 
 const nextCycleLabel = (lastCycleAt) => {
   if (!lastCycleAt) return 'soon';
@@ -69,7 +70,12 @@ const AgentCard = ({ a }) => {
   // paused-card visual; otherwise lavender.
   const barHi = p >= 90;
   return (
-    <div className={`an-acard ${a.running ? 'run' : 'paused'}`}>
+    <Link
+      className={`an-acard ${a.running ? 'run' : 'paused'}`}
+      to={`/jobs/${a.role_id}?view=role-fit`}
+      aria-label={`Open agent settings for ${a.name}`}
+      style={{ display: 'block', color: 'inherit', textDecoration: 'none' }}
+    >
       <div className="at">
         <span className="an-name" title={a.name}>{a.name}</span>
         {a.running ? (
@@ -89,7 +95,7 @@ const AgentCard = ({ a }) => {
         <div className="sr"><span>Pending</span><b>{safeNum(a.pending)}</b></div>
         <div className="sr"><span>Last run</span><b>{a.last_run_at ? fmtRelAgo(a.last_run_at) : '—'}</b></div>
       </div>
-    </div>
+    </Link>
   );
 };
 
@@ -186,7 +192,7 @@ export const FleetTab = () => {
         <div className="an-fkpi">
           <div className="k">Cycles · 24h</div>
           <div className="v">{safeNum(k.cycles_24h)}</div>
-          <div className="s">~every 30m</div>
+          <div className="s">~every 60m</div>
         </div>
         <div className={`an-fkpi${safeNum(k.errors_24h) > 0 ? ' attn' : ''}`}>
           <div className="k">Errors · 24h</div>

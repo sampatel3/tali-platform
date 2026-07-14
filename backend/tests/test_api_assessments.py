@@ -38,7 +38,17 @@ def _fetch_one(model, *filters):
         return verify_db.query(model).filter(*filters).first()
 
 
-def test_create_assessment_success(client):
+def test_create_assessment_success(client, db, monkeypatch):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+
+    kicked: list[tuple[int, str | None]] = []
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda assessment_id, reply_to=None: kicked.append(
+            (int(assessment_id), reply_to)
+        ),
+    )
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers).json()
     resp = create_assessment_via_api(client, headers, task["id"])
@@ -46,6 +56,12 @@ def test_create_assessment_success(client):
     data = resp.json()
     assert "id" in data
     assert data["task_id"] == task["id"]
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == int(data["id"])).one()
+    assert row.invite_email_status == "pending_dispatch"
+    assert len(kicked) == 1
+    assert kicked[0][0] == int(data["id"])
+    assert kicked[0][1] is not None  # recruiter reply-to survives the commit hook
 
 
 def test_create_assessment_creates_branch_on_assignment(client, monkeypatch):

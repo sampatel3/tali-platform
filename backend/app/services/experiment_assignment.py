@@ -152,6 +152,76 @@ def _prior_arm_for_key(
     return next((a for a in active_arms if int(a.id) == int(prior[0])), None)
 
 
+def role_assignable_tasks(
+    db: Session,
+    role: Role,
+    *,
+    organization_id: int,
+) -> tuple[list[Task], str | None]:
+    """Return every task a future unattended assignment can select.
+
+    This is the activation-time counterpart to ``resolve_task_and_variant``.
+    It deliberately uses the same active-task, experiment-window and active-arm
+    rules, but needs no candidate id because it only proves that a future draw
+    can resolve to a linked active task.  The returned set is also the exact set
+    whose template repositories Turn-on readiness must verify.
+    """
+    tasks = [
+        task
+        for task in (getattr(role, "tasks", None) or [])
+        if bool(getattr(task, "is_active", False))
+    ]
+    if not tasks:
+        return [], f"role {role.id} has no active tasks linked"
+
+    experiments = _active_experiments(
+        db,
+        role_id=int(role.id),
+        organization_id=int(organization_id),
+    )
+    if len(experiments) > 1:
+        return [], (
+            f"role {role.id} has {len(experiments)} active experiments; "
+            "expected at most one"
+        )
+    if len(experiments) == 1:
+        exp = experiments[0]
+        active_task_ids = {int(task.id) for task in tasks}
+        active_arms = [
+            arm
+            for arm in exp.arms
+            if bool(arm.is_active) and int(arm.task_id) in active_task_ids
+        ]
+        if not active_arms:
+            return [], (
+                f"experiment {exp.id} has no active arms with active linked tasks"
+            )
+        selected_ids = {int(arm.task_id) for arm in active_arms}
+        return [task for task in tasks if int(task.id) in selected_ids], None
+
+    if len(tasks) > 1:
+        return [], (
+            f"role {role.id} has {len(tasks)} active linked tasks and no active "
+            "experiment to select one"
+        )
+    return tasks, None
+
+
+def role_task_configuration_error(
+    db: Session,
+    role: Role,
+    *,
+    organization_id: int,
+) -> str | None:
+    """Validate that unattended assessment assignment is deterministic."""
+    _tasks, error = role_assignable_tasks(
+        db,
+        role,
+        organization_id=organization_id,
+    )
+    return error
+
+
 def resolve_task_and_variant(
     db: Session,
     role: Role,
@@ -162,22 +232,27 @@ def resolve_task_and_variant(
 ) -> ArmChoice:
     """Pick the task (and any knob variant) for an assessment send.
 
-    Order: no-tasks (soft misconfigured) → explicit ``task_id`` (forced) →
-    active experiment (random, stable, arm-reuse) → legacy single/ambiguous.
+    Order: explicit ``task_id`` validation/forced selection → no active tasks
+    (soft misconfigured) → active experiment (random, stable, arm-reuse) →
+    legacy single/ambiguous.
     """
-    tasks = list(role.tasks or [])
-    if not tasks:
-        raise RoleTaskMisconfigured(
-            f"role {role.id} has no tasks linked — cannot send assessment"
-        )
+    linked_tasks = list(role.tasks or [])
 
     # 1. Explicit recruiter override — forced (excluded from the random cohort).
     if task_id is not None:
-        task = next((t for t in tasks if int(t.id) == int(task_id)), None)
+        task = next((t for t in linked_tasks if int(t.id) == int(task_id)), None)
         if task is None:
             raise HTTPException(
                 status_code=422,
                 detail=f"task_id={task_id} is not linked to role {role.id}",
+            )
+        if not bool(getattr(task, "is_active", False)):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"task_id={task_id} is inactive and cannot be sent; "
+                    "approve or activate the task first"
+                ),
             )
         experiments = _active_experiments(
             db, role_id=int(role.id), organization_id=organization_id
@@ -200,6 +275,14 @@ def resolve_task_and_variant(
             experiment=exp,
         )
 
+    # Inactive generated drafts are linked for review, but are not an
+    # assessment stage and must never be assigned to a candidate.
+    tasks = [t for t in linked_tasks if bool(getattr(t, "is_active", False))]
+    if not tasks:
+        raise RoleTaskMisconfigured(
+            f"role {role.id} has no active tasks linked — cannot send assessment"
+        )
+
     # 2. Active experiment — randomized, stable assignment.
     experiments = _active_experiments(
         db, role_id=int(role.id), organization_id=organization_id
@@ -210,10 +293,15 @@ def resolve_task_and_variant(
         )
     if len(experiments) == 1:
         exp = experiments[0]
-        active_arms = [a for a in exp.arms if a.is_active]
+        active_task_ids = {int(t.id) for t in tasks}
+        active_arms = [
+            a
+            for a in exp.arms
+            if a.is_active and int(a.task_id) in active_task_ids
+        ]
         if not active_arms:
             raise RoleTaskMisconfigured(
-                f"experiment {exp.id} has no active arms — cannot assign"
+                f"experiment {exp.id} has no active arms with active tasks — cannot assign"
             )
         assignment_key = f"{exp.id}:{candidate_id}:{int(role.id)}"
         arm = _prior_arm_for_key(
@@ -242,6 +330,6 @@ def resolve_task_and_variant(
     if len(tasks) == 1:
         return ArmChoice(task=tasks[0], method=ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT)
     raise RoleTaskMisconfigured(
-        f"role {role.id} has {len(tasks)} linked tasks; pass task_id explicitly "
+        f"role {role.id} has {len(tasks)} active linked tasks; pass task_id explicitly "
         "to disambiguate (recruiter must pick when there are multiple)."
     )

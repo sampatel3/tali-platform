@@ -126,6 +126,7 @@ def get_or_regenerate(
                 "organization_id": getattr(role, "organization_id", None),
                 "role_id": int(role.id),
                 "entity_id": f"role:{role.id}",
+                "trace_id": f"interview-tech:role:{role.id}:{live_sig}",
             },
         )
     except Exception:

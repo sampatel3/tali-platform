@@ -27,6 +27,97 @@ def test_health_endpoint(client):
     assert resp.status_code == 200
 
 
+def test_readiness_endpoint_returns_503_for_degraded_runtime(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.main._health_payload",
+        lambda: {"status": "degraded", "service": "taali-api"},
+    )
+
+    resp = client.get("/ready")
+
+    assert resp.status_code == 503
+    assert resp.json()["status"] == "degraded"
+
+
+def test_readiness_endpoint_returns_200_for_healthy_runtime(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.main._health_payload",
+        lambda: {"status": "healthy", "service": "taali-api"},
+    )
+
+    resp = client.get("/ready")
+
+    assert resp.status_code == 200
+
+
+def test_health_exposes_local_shadow_usage_meter_mode(client, monkeypatch):
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "DEPLOYMENT_ENV", "development")
+    monkeypatch.setattr(settings, "SENTRY_DSN", None)
+    monkeypatch.setattr(settings, "FRONTEND_URL", "http://localhost:5173")
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", False)
+    monkeypatch.setattr(
+        settings,
+        "USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY",
+        False,
+    )
+
+    payload = client.get("/health").json()
+
+    assert payload["usage_meter"] == {
+        "mode": "shadow",
+        "live": False,
+        "ready": True,
+        "production_emergency_override": False,
+    }
+
+
+def test_health_marks_production_shadow_emergency_override_unready(
+    client, monkeypatch
+):
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "DEPLOYMENT_ENV", "production")
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", False)
+    monkeypatch.setattr(
+        settings,
+        "USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY",
+        True,
+    )
+
+    payload = client.get("/health").json()
+
+    assert payload["status"] == "degraded"
+    assert payload["usage_meter"] == {
+        "mode": "shadow_emergency_override",
+        "live": False,
+        "ready": False,
+        "production_emergency_override": True,
+    }
+
+
+def test_health_exposes_live_production_usage_meter_mode(client, monkeypatch):
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "DEPLOYMENT_ENV", "production")
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    monkeypatch.setattr(
+        settings,
+        "USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY",
+        False,
+    )
+
+    payload = client.get("/health").json()
+
+    assert payload["usage_meter"] == {
+        "mode": "live",
+        "live": True,
+        "ready": True,
+        "production_emergency_override": False,
+    }
+
+
 def test_api_root(client):
     """API root should return some response."""
     resp = client.get("/api/v1/")

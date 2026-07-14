@@ -2,10 +2,10 @@
 
 Runs the deterministic engine over every undecided, scored, open candidate for a
 role using the scores ALREADY stored on the application — no sub-agents, no
-Anthropic calls — re-flows existing bulk decisions against the current
-threshold, and raises a volume guard when a lot of positive decisions pile up
-for recruiter review. Commits its own work; never raises on a single bad
-candidate.
+Anthropic calls — applies the role autonomy contract, re-flows existing bulk
+decisions against the current threshold, and raises a volume guard when a lot
+of positive decisions genuinely remain for recruiter review. Commits its own
+work; never raises on a single bad candidate.
 """
 from __future__ import annotations
 
@@ -47,6 +47,87 @@ DEFAULT_PER_TICK_LIMIT = 250
 VOLUME_GUARD_PENDING_LIMIT = 60
 
 _POSITIVE_TYPES = ("send_assessment", "advance_to_interview")
+
+
+def _auto_execute_existing_pending_positives(
+    db: Session,
+    *,
+    role: Role,
+    eff,
+    has_task: bool,
+    limit: int,
+) -> Counter:
+    """Drain deterministic positive cards that pre-date auto-promote.
+
+    This is the activation/recovery half of the one-switch contract. Every row
+    is re-evaluated against CURRENT scores/policy before execution; stale,
+    post-handover or guarded rows remain pending. LLM-authored rows are excluded
+    because they lack the deterministic provenance needed for unattended replay.
+    """
+    result: Counter = Counter()
+    rows = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == int(role.id),
+            AgentDecision.status == "pending",
+            AgentDecision.model_version == "bulk-deterministic",
+            AgentDecision.decision_type.in_(_POSITIVE_TYPES),
+        )
+        .order_by(AgentDecision.id.asc())
+        .limit(int(limit))
+        .all()
+    )
+    if not rows:
+        return result
+
+    from ...agent_runtime.tool_registry import maybe_auto_execute_decision
+
+    for decision in rows:
+        app = (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id == int(decision.application_id))
+            .one_or_none()
+        )
+        if app is None:
+            continue
+        inputs = _inputs_for(
+            app,
+            role_id=int(role.id),
+            org_id=int(role.organization_id),
+            eff=eff,
+            has_task=has_task,
+        )
+        if inputs is None:
+            continue
+        try:
+            verdict = evaluate(inputs, db=db)
+            current_type = resolve_persisted_decision_type(
+                verdict.decision_type, has_assessment_task=has_task
+            )
+        except Exception:
+            logger.exception(
+                "pending-positive re-evaluate failed decision=%s", decision.id
+            )
+            result["errors"] += 1
+            continue
+        if current_type != decision.decision_type:
+            result["stale_skipped"] += 1
+            continue
+        outcome = maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type=str(decision.decision_type),
+            on_policy=True,
+            force_human_review=is_post_handover_workable_stage(
+                getattr(app, "workable_stage", None)
+            ),
+        )
+        if outcome["executed"]:
+            result["executed"] += 1
+        elif outcome["auto_send_held"] or outcome["action_held"]:
+            result["held"] += 1
+    return result
 
 
 def _reconcile_stale_pending(db: Session, *, role: Role, eff, has_task: bool) -> int:
@@ -129,6 +210,27 @@ def decide_role_cohort(
         )
     except Exception:
         logger.exception("threshold reconcile failed role=%s", role.id)
+        db.rollback()
+
+    # A role may have accumulated deterministic HITL cards before the recruiter
+    # turned on auto-promote. Drain the currently on-policy positives now; the
+    # main candidate query below intentionally excludes pending rows and cannot
+    # own this recovery case itself.
+    try:
+        existing = _auto_execute_existing_pending_positives(
+            db,
+            role=role,
+            eff=eff,
+            has_task=has_task,
+            limit=limit,
+        )
+        summary["existing_auto_executed"] = existing["executed"]
+        summary["existing_auto_held"] = existing["held"]
+        summary["existing_auto_errors"] = existing["errors"]
+        if existing["executed"] or existing["held"]:
+            db.commit()
+    except Exception:
+        logger.exception("pending-positive autonomy drain failed role=%s", role.id)
         db.rollback()
 
     candidates = (
@@ -262,6 +364,31 @@ def decide_role_cohort(
         if getattr(decision, "_just_created", True):
             summary["created"] += 1
             summary[decision_type] += 1
+            try:
+                from ...agent_runtime.tool_registry import maybe_auto_execute_decision
+
+                autonomy = maybe_auto_execute_decision(
+                    db,
+                    role=role,
+                    decision=decision,
+                    decision_type=decision_type,
+                    on_policy=True,
+                    force_human_review=post_handover,
+                )
+                if autonomy["executed"]:
+                    summary["auto_executed"] += 1
+                elif autonomy["auto_send_held"] or autonomy["action_held"]:
+                    summary["auto_held"] += 1
+            except Exception:
+                # Queueing the deterministic recommendation is the safe
+                # fallback. One failed auto action must not abort the rest of
+                # a large cohort.
+                logger.exception(
+                    "bulk auto-execute failed app=%s decision=%s",
+                    app.id,
+                    decision.id,
+                )
+                summary["auto_execute_errors"] += 1
         else:
             summary["dedup"] += 1
 

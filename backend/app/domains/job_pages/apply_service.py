@@ -2,9 +2,9 @@
 
 A person submits an application to a PUBLISHED job page. Deterministic and cheap:
 resolve/create the candidate by identity keys, run the knockout gate, create the
-application (idempotent per candidate+role), and — on a knockout failure — emit
-the SAME deterministic reject the platform's other automatic rejects emit, so the
-candidate lands on the Decision Hub for the recruiter to approve or override.
+application (idempotent per candidate+role), and — on a knockout failure —
+resolve the deterministic reject for an opted-in running role or emit the same
+Decision Hub fallback the platform's other automatic rejects use.
 
 No LLM here (the knockout gate is the pre-LLM filter). The resume upload +
 scoring fan-out is wired in the route, which owns the request/transaction. This
@@ -24,6 +24,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...services.candidate_identity_service import normalize_phone, resolve_candidate
 from ...services.pre_screen_decision_emitter import queue_knockout_reject
+from .knockout_automation import try_auto_resolve_knockout
 from .screening_service import evaluate_knockouts, list_role_questions
 
 # The recruiter-facing free-text reason a knockout failure is rejected under. A
@@ -253,10 +254,10 @@ def submit_application(
     The constraint stays the backstop for a concurrent double-submit — the
     route catches the ``IntegrityError`` and re-reads.
 
-    On a knockout failure the application is created with the answers recorded,
-    and a pending ``skip_assessment_reject`` decision is queued (the outcome
-    stays ``open`` — the reject is a recruiter-approved HITL step, exactly like a
-    pre-screen reject). NO knockout detail is returned to the caller.
+    On a knockout failure the application is created with the answers recorded.
+    A running role that explicitly enables deterministic auto-reject resolves it
+    directly; otherwise a pending ``skip_assessment_reject`` decision is queued
+    for recruiter HITL. NO knockout detail is returned to the caller.
     """
     answers = answers or {}
 
@@ -323,20 +324,28 @@ def submit_application(
     _promote_matching_prospect(db, org_id, candidate, application, email=email)
 
     if not passed:
-        # Stamp the recommended-reject state (free-text), mirroring the
-        # pre-screen reject path. The Decision Hub card emits identically via the
-        # free-text reason; the ATS owns any structured disposition reason.
-        application.auto_reject_state = "awaiting_recruiter_approval"
-        application.auto_reject_reason = _KNOCKOUT_REJECT_REASON
-        queue_knockout_reject(
+        resolved = try_auto_resolve_knockout(
             db,
-            organization_id=org_id,
             role=role,
             application=application,
             reason=_KNOCKOUT_REJECT_REASON,
             failed_question_ids=failed,
-            disqualification_reason_id=None,
         )
+        if not resolved:
+            # Policy off, role no longer runnable, or ATS write-back failure:
+            # retain the existing HITL path. The ATS owns any structured
+            # disposition reason, so the card carries only the free-text reason.
+            application.auto_reject_state = "awaiting_recruiter_approval"
+            application.auto_reject_reason = _KNOCKOUT_REJECT_REASON
+            queue_knockout_reject(
+                db,
+                organization_id=org_id,
+                role=role,
+                application=application,
+                reason=_KNOCKOUT_REJECT_REASON,
+                failed_question_ids=failed,
+                disqualification_reason_id=None,
+            )
 
     _ensure_eeo_token(db, application)
     return ApplyResult(

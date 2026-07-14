@@ -330,7 +330,7 @@ const PIPELINE_STAGES = [
   {
     n: '01',
     t: 'Source',
-    d: 'Plugs into your ATS. Candidates, roles and JDs sync in; nothing to set up.',
+    d: 'Applicants arrive through your live Taali page and connected ATS. Outbound starts only from an audience and campaign you approve.',
     meta: 'workable · bullhorn · api',
   },
   {
@@ -372,7 +372,7 @@ const PipelineSection = ({ reduced, pipelineRef }) => (
       reduced={reduced}
       eyebrow="THE PIPELINE"
       headParts={['An agent that runs the', 'funnel.']}
-      sub="It finds candidates, reads every CV, runs the assessment, and puts a decision in front of you with the evidence attached. You approve. It executes."
+      sub="Applicants arrive through your live job page and connected ATS. The agent reads every CV, runs the assessment, and moves on-policy reversible steps automatically; ambiguous, off-policy, and irreversible outcomes come to you with evidence."
     />
 
     <PipelineRibbon />

@@ -306,6 +306,8 @@ def role_to_response(
             for c in loaded_criteria
             if getattr(c, "deleted_at", None) is None
         ]
+    from ...services.agent_policy_settings import effective_agent_policy
+
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -336,7 +338,11 @@ def role_to_response(
         auto_reject=bool(getattr(role, "auto_reject", False)),
         auto_reject_pre_screen=bool(getattr(role, "auto_reject_pre_screen", False)),
         auto_promote=bool(getattr(role, "auto_promote", False)),
+        auto_send_assessment=getattr(role, "auto_send_assessment", None),
+        auto_resend_assessment=getattr(role, "auto_resend_assessment", None),
+        auto_advance=getattr(role, "auto_advance", None),
         auto_skip_assessment=bool(getattr(role, "auto_skip_assessment", False)),
+        agent_effective_policy=effective_agent_policy(role),
         workable_actor_member_id=role.workable_actor_member_id,
         starred_for_auto_sync=bool(getattr(role, "starred_for_auto_sync", False)),
         agentic_mode_enabled=bool(getattr(role, "agentic_mode_enabled", False)),
@@ -348,6 +354,15 @@ def role_to_response(
         agent_paused_at=getattr(role, "agent_paused_at", None),
         agent_paused_reason=getattr(role, "agent_paused_reason", None),
         agent_last_run_at=getattr(role, "agent_last_run_at", None),
+        agent_bootstrap_status=getattr(role, "agent_bootstrap_status", None),
+        agent_bootstrap_error=getattr(role, "agent_bootstrap_error", None),
+        agent_bootstrap_started_at=getattr(role, "agent_bootstrap_started_at", None),
+        agent_bootstrap_completed_at=getattr(role, "agent_bootstrap_completed_at", None),
+        assessment_task_provisioning=(
+            getattr(role, "assessment_task_provisioning", None)
+            if not summary
+            else None
+        ),
         tasks_count=tasks_count,
         applications_count=applications_count,
         stage_counts=stage_counts or {},
@@ -442,6 +457,8 @@ def _requirements_fit_score(details: dict | None) -> float | None:
 
 
 def _score_formula_label(mode: str | None) -> str:
+    if mode == "rubric_grading_pending":
+        return "Assessment grading is incomplete; no TAALI score is available yet"
     if mode == "assessment_plus_role_fit":
         return "TAALI Score = 50% Assessment + 50% Role fit"
     if mode == "assessment_only_fallback":
@@ -449,8 +466,18 @@ def _score_formula_label(mode: str | None) -> str:
     return "TAALI Score currently reflects Role fit until assessment signal is available"
 
 
+def _assessment_grading_incomplete(assessment: Assessment | None) -> bool:
+    return bool(
+        assessment
+        and (
+            getattr(assessment, "scoring_partial", False)
+            or getattr(assessment, "scoring_failed", False)
+        )
+    )
+
+
 def _assessment_score_100(assessment: Assessment | None) -> float | None:
-    if not assessment:
+    if not assessment or _assessment_grading_incomplete(assessment):
         return None
     for value in (
         getattr(assessment, "assessment_score", None),
@@ -471,7 +498,7 @@ def _assessment_score_100(assessment: Assessment | None) -> float | None:
 
 
 def _assessment_taali_score_100(assessment: Assessment | None) -> float | None:
-    if not assessment:
+    if not assessment or _assessment_grading_incomplete(assessment):
         return None
     if getattr(assessment, "taali_score", None) is not None:
         normalized = _normalize_score_100_for_response(getattr(assessment, "taali_score", None))
@@ -706,7 +733,16 @@ def _score_summary_from_active_assessments(
         role_fit_score = _assessment_role_fit_score_100(completed_assessment)
         assessment_score = _assessment_score_100(completed_assessment)
         taali_score = _assessment_taali_score_100(completed_assessment)
-        mode = "assessment_plus_role_fit" if role_fit_score is not None else "assessment_only_fallback"
+        grading_incomplete = _assessment_grading_incomplete(completed_assessment)
+        mode = (
+            "rubric_grading_pending"
+            if grading_incomplete
+            else (
+                "assessment_plus_role_fit"
+                if role_fit_score is not None
+                else "assessment_only_fallback"
+            )
+        )
         assessment_status = _assessment_status_value(completed_assessment)
         assessment_id = completed_assessment.id
         assessment_completed_at = completed_assessment.completed_at
@@ -745,6 +781,18 @@ def _score_summary_from_active_assessments(
         "assessment_id": assessment_id,
         "assessment_status": assessment_status,
         "assessment_completed_at": assessment_completed_at,
+        "assessment_grading_pending": bool(
+            completed_assessment
+            and _assessment_grading_incomplete(completed_assessment)
+        ),
+        "scoring_partial": bool(
+            completed_assessment
+            and getattr(completed_assessment, "scoring_partial", False)
+        ),
+        "scoring_failed": bool(
+            completed_assessment
+            and getattr(completed_assessment, "scoring_failed", False)
+        ),
         "has_voided_attempts": _has_voided_attempts_from_loaded_relationship(app),
         # Invite delivery tracking for the invited-candidate tracker. Drawn from
         # the latest attempt (the one currently in flight for pending invites).
@@ -838,18 +886,32 @@ def refresh_application_score_cache(
         db is not None
         and not is_resolved(app)
         and prior_assessment_score is not None
-        and app.assessment_score_cache_100 is not None
     ):
         try:
-            new_score = float(app.assessment_score_cache_100)
-            if abs(new_score - prior_assessment_score) >= 5.0:
+            new_score = (
+                float(app.assessment_score_cache_100)
+                if app.assessment_score_cache_100 is not None
+                else None
+            )
+            invalidated_by_incomplete_grading = (
+                new_score is None
+                and score_summary.get("mode") == "rubric_grading_pending"
+            )
+            if invalidated_by_incomplete_grading or (
+                new_score is not None
+                and abs(new_score - prior_assessment_score) >= 5.0
+            ):
                 # Lazy import to avoid circulars at module load.
                 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
                 supersede_pending_decisions_for_app(
                     db, int(app.id),
                     reason=(
-                        f"assessment_score_shifted: "
-                        f"{prior_assessment_score:.1f} -> {new_score:.1f}"
+                        "assessment_grading_incomplete"
+                        if invalidated_by_incomplete_grading
+                        else (
+                            f"assessment_score_shifted: "
+                            f"{prior_assessment_score:.1f} -> {new_score:.1f}"
+                        )
                     ),
                 )
         except Exception:  # pragma: no cover — defensive
@@ -905,6 +967,7 @@ def score_summary_from_cache(app: CandidateApplication) -> dict[str, Any]:
         "assessment_id": None,
         "assessment_status": None,
         "assessment_completed_at": None,
+        "assessment_grading_pending": mode == "rubric_grading_pending",
         "has_voided_attempts": False,
     }
 
@@ -941,6 +1004,9 @@ def _assessment_preview_for_application(app: CandidateApplication) -> dict[str, 
         "weakest_dimension": weakest_dimension,
         "completed_at": completed_assessment.completed_at,
         "status": _assessment_status_value(completed_assessment),
+        "assessment_grading_pending": _assessment_grading_incomplete(completed_assessment),
+        "scoring_partial": bool(getattr(completed_assessment, "scoring_partial", False)),
+        "scoring_failed": bool(getattr(completed_assessment, "scoring_failed", False)),
         "is_voided": bool(getattr(completed_assessment, "is_voided", False)),
     }
 
@@ -960,6 +1026,9 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
             "assessment_id": assessment.id,
             "task_name": assessment.task.name if getattr(assessment, "task", None) else None,
             "status": _assessment_status_value(assessment),
+            "assessment_grading_pending": _assessment_grading_incomplete(assessment),
+            "scoring_partial": bool(getattr(assessment, "scoring_partial", False)),
+            "scoring_failed": bool(getattr(assessment, "scoring_failed", False)),
             "assessment_score": _assessment_score_100(assessment),
             "taali_score": _assessment_taali_score_100(assessment),
             "role_fit_score": _assessment_role_fit_score_100(assessment),
@@ -1214,6 +1283,13 @@ def _patch_live_assessment_summary(payload: dict[str, Any], app: CandidateApplic
     summary["assessment_status"] = _assessment_status_value(relevant)
     summary["assessment_completed_at"] = (
         getattr(completed, "completed_at", None) if completed is not None else None
+    )
+    summary["assessment_grading_pending"] = _assessment_grading_incomplete(completed)
+    summary["scoring_partial"] = bool(
+        completed and getattr(completed, "scoring_partial", False)
+    )
+    summary["scoring_failed"] = bool(
+        completed and getattr(completed, "scoring_failed", False)
     )
     summary["invite_tracking"] = _invite_tracking_payload(latest)
 

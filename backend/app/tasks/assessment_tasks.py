@@ -78,6 +78,301 @@ def cleanup_expired_assessments():
         db.close()
 
 
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=300)
+def repair_generated_task_after_battle_failure(
+    self, task_id: int, organization_id: int
+):
+    """Metered, bounded in-place re-authoring from battle-test feedback.
+
+    At most two model-backed repair attempts are allowed across the lifetime of
+    a generated draft. Successful repairs preserve the Task id/role link, reset
+    a durable battle-test intent, and immediately re-test. Exhaustion is the
+    genuine HITL boundary (the recruiter can inspect/skip the assessment).
+    """
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy.orm import Session
+
+    from ..models.role import Role, role_tasks
+    from ..models.task import Task
+    from ..platform.config import settings
+    from ..platform.database import SessionLocal
+    from ..services.task_battle_test import (
+        BATTLE_TEST_MAX_REPAIR_ATTEMPTS,
+        BATTLE_TEST_REPAIR_EXHAUSTED,
+        BATTLE_TEST_REPAIR_FAILED,
+        BATTLE_TEST_REPAIR_RETRY_WAIT,
+        BATTLE_TEST_REPAIRING,
+        apply_battle_test_repair,
+        battle_test_provisioning_action,
+        battle_test_repair_feedback,
+        reconstruct_generated_task_spec,
+    )
+    from ..services.task_provisioning_service import (
+        _provision_repo_best_effort,
+        _role_jd_text,
+        _slugify,
+    )
+    from ..services.task_spec_generator import revise_task_spec
+
+    db: Session = SessionLocal()
+    claim_token: str | None = None
+    model_attempts = 0
+    try:
+        task = (
+            db.query(Task)
+            .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
+            .with_for_update()
+            .one_or_none()
+        )
+        if task is None:
+            return {"status": "skipped", "reason": "task_not_found"}
+        if battle_test_provisioning_action(task) != "repair":
+            state = (
+                task.extra_data.get("battle_test_provisioning", {})
+                if isinstance(task.extra_data, dict)
+                else {}
+            )
+            return {"status": "noop", "reason": state.get("status") or "not_due"}
+
+        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+        state = (
+            dict(extra.get("battle_test_provisioning"))
+            if isinstance(extra.get("battle_test_provisioning"), dict)
+            else {}
+        )
+        model_attempts = int(state.get("repair_attempts") or 0)
+        if model_attempts >= BATTLE_TEST_MAX_REPAIR_ATTEMPTS:
+            state["status"] = BATTLE_TEST_REPAIR_EXHAUSTED
+            state["updated_at"] = datetime.now(timezone.utc).isoformat()
+            extra["battle_test_provisioning"] = state
+            task.extra_data = extra
+            db.commit()
+            return {"status": "repair_exhausted", "repair_attempts": model_attempts}
+
+        claim_token = uuid.uuid4().hex
+        state.update(
+            {
+                "status": BATTLE_TEST_REPAIRING,
+                "claim_token": claim_token,
+                "last_error": None,
+                "next_attempt_at": None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        extra["battle_test_provisioning"] = state
+        task.extra_data = extra
+        db.commit()
+
+        api_key = str(getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
+        if not api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is not configured for automated task repair"
+            )
+
+        role_id = db.execute(
+            role_tasks.select()
+            .with_only_columns(role_tasks.c.role_id)
+            .where(role_tasks.c.task_id == int(task_id))
+            .limit(1)
+        ).scalar_one_or_none()
+        if role_id is None:
+            raise RuntimeError("generated task is no longer linked to its role")
+        role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == int(organization_id),
+            )
+            .one_or_none()
+        )
+        if role is None:
+            raise RuntimeError("generated task is no longer linked to its role")
+
+        # Count immediately before the metered generator call. Configuration
+        # failures consume no repair budget; every provider-backed re-author
+        # attempt does, whether or not it returns a valid spec.
+        task = (
+            db.query(Task)
+            .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
+            .with_for_update()
+            .populate_existing()
+            .one()
+        )
+        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+        state = dict(extra.get("battle_test_provisioning") or {})
+        if str(state.get("claim_token") or "") != claim_token:
+            db.rollback()
+            return {"status": "superseded"}
+        model_attempts = int(state.get("repair_attempts") or 0) + 1
+        state["repair_attempts"] = model_attempts
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        extra["battle_test_provisioning"] = state
+        task.extra_data = extra
+        db.commit()
+        db.refresh(task)
+
+        failed_report = (
+            dict(task.extra_data.get("battle_test"))
+            if isinstance(task.extra_data, dict)
+            and isinstance(task.extra_data.get("battle_test"), dict)
+            else {}
+        )
+        feedback = battle_test_repair_feedback(failed_report)
+        result = revise_task_spec(
+            prior_spec=reconstruct_generated_task_spec(task),
+            feedback=feedback,
+            role_name=str(role.name or "Role"),
+            role_slug=_slugify(str(role.name or "Role")),
+            jd_text=_role_jd_text(role),
+            api_key=api_key,
+            organization_id=int(organization_id),
+            role_id=int(role.id),
+            # Global repair budget is two provider calls across task retries;
+            # keep the generator's inner validation loop to one call here.
+            max_attempts=1,
+        )
+        if not result.valid or not result.spec:
+            errors = "; ".join(result.errors[:3]) or "invalid repaired spec"
+            no_provider_call = any(
+                marker in error.lower()
+                for error in result.errors
+                for marker in (
+                    "insufficient usage credits",
+                    "insufficient role monthly budget",
+                    "usage reservation failed",
+                )
+            )
+            if no_provider_call:
+                # Reservation/configuration failures did not spend or invoke a
+                # model, so do not burn one of the two content-repair attempts.
+                task = (
+                    db.query(Task)
+                    .filter(
+                        Task.id == int(task_id),
+                        Task.organization_id == int(organization_id),
+                    )
+                    .with_for_update()
+                    .populate_existing()
+                    .one()
+                )
+                extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+                state = dict(extra.get("battle_test_provisioning") or {})
+                if str(state.get("claim_token") or "") == claim_token:
+                    model_attempts = max(0, model_attempts - 1)
+                    state["repair_attempts"] = model_attempts
+                    extra["battle_test_provisioning"] = state
+                    task.extra_data = extra
+                    db.commit()
+            raise RuntimeError(f"automated task repair was invalid: {errors}")
+
+        task = (
+            db.query(Task)
+            .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if task is None:
+            return {"status": "superseded", "reason": "task_removed"}
+        state = (
+            dict(task.extra_data.get("battle_test_provisioning"))
+            if isinstance(task.extra_data, dict)
+            and isinstance(task.extra_data.get("battle_test_provisioning"), dict)
+            else {}
+        )
+        if str(state.get("claim_token") or "") != claim_token:
+            db.rollback()
+            return {"status": "superseded"}
+        apply_battle_test_repair(
+            task,
+            result.spec,
+            feedback=feedback,
+            failed_report=failed_report,
+            repair_attempts=model_attempts,
+        )
+        db.commit()
+        db.refresh(task)
+        _provision_repo_best_effort(task)
+        try:
+            battle_test_generated_task.delay(int(task.id), int(organization_id))
+        except Exception:
+            logger.exception(
+                "repaired-task battle-test kick failed task=%s; sweep will recover",
+                task.id,
+            )
+        return {
+            "status": "repaired",
+            "task_id": int(task.id),
+            "repair_attempts": model_attempts,
+        }
+    except Exception as exc:
+        db.rollback()
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(self.max_retries or 0)
+        countdown = 300
+        exhausted = model_attempts >= BATTLE_TEST_MAX_REPAIR_ATTEMPTS
+        if claim_token:
+            task = (
+                db.query(Task)
+                .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
+                .with_for_update()
+                .one_or_none()
+            )
+            if task is not None:
+                extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+                state = dict(extra.get("battle_test_provisioning") or {})
+                if str(state.get("claim_token") or "") == claim_token:
+                    if exhausted:
+                        status = BATTLE_TEST_REPAIR_EXHAUSTED
+                        next_attempt_at = None
+                    elif retries < max_retries:
+                        status = BATTLE_TEST_REPAIR_RETRY_WAIT
+                        next_attempt_at = datetime.now(timezone.utc) + timedelta(
+                            seconds=countdown
+                        )
+                    else:
+                        status = BATTLE_TEST_REPAIR_FAILED
+                        next_attempt_at = datetime.now(timezone.utc) + timedelta(hours=1)
+                    state.update(
+                        {
+                            "status": status,
+                            "last_error": f"{type(exc).__name__}: {exc}"[:2000],
+                            "next_attempt_at": (
+                                next_attempt_at.isoformat() if next_attempt_at else None
+                            ),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    extra["battle_test_provisioning"] = state
+                    task.extra_data = extra
+                    db.commit()
+        if exhausted:
+            logger.error(
+                "automated battle-test repair exhausted task=%s attempts=%s: %s",
+                task_id,
+                model_attempts,
+                exc,
+            )
+            return {
+                "status": "repair_exhausted",
+                "task_id": int(task_id),
+                "repair_attempts": model_attempts,
+                "reason": str(exc),
+            }
+        if retries < max_retries:
+            raise self.retry(exc=exc, countdown=countdown)
+        return {
+            "status": "repair_failed",
+            "task_id": int(task_id),
+            "reason": str(exc),
+            "retry_after_seconds": 3600,
+        }
+    finally:
+        db.close()
+
+
 @celery_app.task
 def finalize_timed_out_assessments(limit: int = 25):
     """Server-side timer enforcement: capture + score IN_PROGRESS assessments
@@ -88,8 +383,9 @@ def finalize_timed_out_assessments(limit: int = 25):
     finalized. Without this sweep their effort is lost (the row lingers IN_PROGRESS
     and ``cleanup_expired_assessments`` used to discard it). Here we finalize each
     timed-out row through the real submit pipeline so it reaches the recruiter as a
-    COMPLETED_DUE_TO_TIMEOUT result. Anthropic/E2B-heavy → routed to the ``scoring``
-    queue (see ``_TASK_ROUTES``). ``limit`` bounds per-tick work.
+    COMPLETED_DUE_TO_TIMEOUT result and wakes the enabled role agent after commit.
+    Anthropic/E2B-heavy → routed to the ``scoring`` queue (see ``_TASK_ROUTES``).
+    ``limit`` bounds per-tick work.
     """
     from sqlalchemy.orm import Session
     from ..platform.database import SessionLocal
@@ -1111,52 +1407,524 @@ def reap_stuck_workable_sync_runs():
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=2, default_retry_delay=300)
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=300)
 def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
     """Auto-provision an assessment task for a newly-created role from its JD.
 
     Generation is a multi-call Sonnet operation, so it runs off the
-    request path here. The generated task is persisted as a DRAFT
-    (needs recruiter review) and linked to the role. No-op if the role
-    already has an active task or the JD is too thin.
+    request path here. The generated task is persisted as an inactive DRAFT
+    and linked to the role; a durable Turn-on intent approves it automatically
+    only after battle/repository validation. No-op if the role
+    already has any linked task (including a generated review draft) or the JD
+    is too thin.
 
-    Gated by ``settings.AUTO_GENERATE_ASSESSMENT_TASKS`` at the enqueue
-    site — this task assumes the caller already checked the flag.
+    Every requested run is claimed against Role-backed durable state. Generator
+    and persistence failures are retried with bounded exponential backoff; Beat
+    later recovers an exhausted chain, lost broker kick, or stale worker claim.
     """
+    from datetime import datetime, timedelta, timezone
+
     from sqlalchemy.orm import Session
     from ..platform.database import SessionLocal
     from ..platform.config import settings
     from ..models.role import Role
-    from ..services.task_provisioning_service import generate_and_link_task_for_role
-
-    api_key = str(getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
-    if not api_key:
-        logger.warning("generate_assessment_task_for_role: no ANTHROPIC_API_KEY; skipping role=%s", role_id)
-        return {"status": "skipped", "reason": "no_api_key"}
+    from ..services.task_provisioning_service import (
+        PROVISIONING_BLOCKED,
+        PROVISIONING_FAILED,
+        PROVISIONING_RETRY_WAIT,
+        PROVISIONING_SUCCEEDED,
+        TaskProvisioningBlockedError,
+        TaskProvisioningRetryableError,
+        TaskProvisioningSupersededError,
+        claim_assessment_task_provisioning,
+        finish_assessment_task_provisioning,
+        generate_and_link_task_for_role,
+    )
 
     db: Session = SessionLocal()
+    claim_token: str | None = None
     try:
+        claim = claim_assessment_task_provisioning(
+            db,
+            role_id=int(role_id),
+            organization_id=int(organization_id),
+        )
+        if claim.status == "missing":
+            return {"status": "skipped", "reason": "role_not_found"}
+        if claim.status == "already_linked":
+            return {
+                "status": "already_linked",
+                "task_id": claim.linked_task_id,
+            }
+        if claim.status != "claimed" or not claim.claim_token:
+            return {"status": "noop", "reason": claim.status}
+        claim_token = claim.claim_token
+
+        api_key = str(getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
+        if not api_key:
+            raise TaskProvisioningRetryableError(
+                "ANTHROPIC_API_KEY is not configured for assessment-task generation"
+            )
+
         role = (
             db.query(Role)
             .filter(Role.id == role_id, Role.organization_id == organization_id)
-            .first()
+            .one_or_none()
         )
         if role is None:
-            return {"status": "skipped", "reason": "role_not_found"}
+            raise TaskProvisioningSupersededError("role was removed after claim")
         task = generate_and_link_task_for_role(
-            db, role, api_key=api_key, organization_id=organization_id,
+            db,
+            role,
+            api_key=api_key,
+            organization_id=organization_id,
+            claim_token=claim_token,
         )
         if task is None:
-            return {"status": "noop"}
+            finish_assessment_task_provisioning(
+                db,
+                role_id=role_id,
+                organization_id=organization_id,
+                claim_token=claim_token,
+                status=PROVISIONING_SUCCEEDED,
+            )
+            return {"status": "already_linked"}
+
+        state_finished = finish_assessment_task_provisioning(
+            db,
+            role_id=role_id,
+            organization_id=organization_id,
+            claim_token=claim_token,
+            status=PROVISIONING_SUCCEEDED,
+            task_id=int(task.id),
+        )
+        if not state_finished:
+            return {"status": "superseded", "task_id": int(task.id)}
         # Battle-test the fresh draft so the review card carries a report
         # card (repo boots, baseline fails meaningfully) instead of raw JSON.
-        battle_test_generated_task.delay(int(task.id), int(organization_id))
-        return {"status": "generated", "task_id": int(task.id), "task_key": task.task_key, "needs_review": True}
-    except Exception as exc:  # pragma: no cover — defensive
-        logger.exception("generate_assessment_task_for_role failed role=%s", role_id)
-        raise self.retry(exc=exc)
+        try:
+            battle_test_generated_task.delay(int(task.id), int(organization_id))
+        except Exception:  # the generated/link state is already durable
+            logger.warning(
+                "battle-test kick failed for generated task %s", task.id, exc_info=True
+            )
+        return {
+            "status": "generated",
+            "task_id": int(task.id),
+            "task_key": task.task_key,
+            "needs_review": True,
+        }
+    except TaskProvisioningBlockedError as exc:
+        db.rollback()
+        if claim_token:
+            finish_assessment_task_provisioning(
+                db,
+                role_id=role_id,
+                organization_id=organization_id,
+                claim_token=claim_token,
+                status=PROVISIONING_BLOCKED,
+                error=str(exc),
+            )
+        logger.warning("assessment-task provisioning blocked role=%s: %s", role_id, exc)
+        return {"status": "blocked", "reason": str(exc)}
+    except TaskProvisioningSupersededError as exc:
+        db.rollback()
+        logger.info("assessment-task provisioning superseded role=%s: %s", role_id, exc)
+        return {"status": "superseded", "reason": str(exc)}
+    except Exception as exc:
+        db.rollback()
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(self.max_retries or 0)
+        if retries < max_retries:
+            countdown = min(300 * (2 ** min(retries, 3)), 1800)
+            if claim_token:
+                recorded = finish_assessment_task_provisioning(
+                    db,
+                    role_id=role_id,
+                    organization_id=organization_id,
+                    claim_token=claim_token,
+                    status=PROVISIONING_RETRY_WAIT,
+                    error=f"{type(exc).__name__}: {exc}",
+                    next_attempt_at=datetime.now(timezone.utc)
+                    + timedelta(seconds=countdown),
+                )
+                if not recorded:
+                    return {"status": "superseded", "reason": str(exc)}
+            logger.warning(
+                "assessment-task provisioning retry role=%s retry=%s/%s in=%ss: %s",
+                role_id,
+                retries + 1,
+                max_retries,
+                countdown,
+                exc,
+            )
+            raise self.retry(exc=exc, countdown=countdown)
+
+        # The Celery chain is bounded. Persist a cooled-down failed state so the
+        # periodic sweep can start a later chain (for example after a missing
+        # API key is configured) without any recruiter/manual recovery step.
+        if claim_token:
+            finish_assessment_task_provisioning(
+                db,
+                role_id=role_id,
+                organization_id=organization_id,
+                claim_token=claim_token,
+                status=PROVISIONING_FAILED,
+                error=f"{type(exc).__name__}: {exc}",
+                next_attempt_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        logger.exception(
+            "assessment-task provisioning retries exhausted role=%s", role_id
+        )
+        return {"status": "failed", "reason": str(exc), "retry_after_seconds": 3600}
     finally:
         db.close()
+
+
+@celery_app.task
+def sweep_assessment_task_provisioning(limit: int = 200):
+    """Recover generation, battle-test, and one-click activation outboxes."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy.orm import Session, selectinload
+
+    from ..models.role import Role
+    from ..models.task import Task
+    from ..platform.config import settings
+    from ..platform.database import SessionLocal
+    from ..services.task_provisioning_service import (
+        PROVISIONING_RECOVERABLE_STATUSES,
+        provisioning_state_is_due,
+        task_provisioning_state,
+    )
+    from ..services.task_battle_test import battle_test_provisioning_action
+    from ..services.role_activation_intent import (
+        ACTIVATION_ACTIVE_STATUSES,
+        activation_intent_state,
+        activation_intent_task_ready,
+        block_activation_intent_if_task_exhausted,
+    )
+
+    db: Session = SessionLocal()
+    bounded_limit = max(1, min(int(limit), 1000))
+    rows: list[Role] = []
+    try:
+        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+            status_expr = Role.assessment_task_provisioning["status"].as_string()
+            rows = (
+                db.query(Role)
+                .filter(
+                    Role.deleted_at.is_(None),
+                    Role.assessment_task_provisioning.isnot(None),
+                    status_expr.in_(sorted(PROVISIONING_RECOVERABLE_STATUSES)),
+                )
+                .order_by(Role.created_at.asc(), Role.id.asc())
+                .limit(bounded_limit)
+                .all()
+            )
+        now = datetime.now(timezone.utc)
+        role_keys = [
+            (int(role.id), int(role.organization_id))
+            for role in rows
+            if provisioning_state_is_due(task_provisioning_state(role), now=now)
+        ]
+        # Generated Task.extra_data is itself the battle-test outbox. Scan a
+        # generous bounded set so legacy generated drafts (created before the
+        # explicit provisioning sub-state) are recovered too.
+        battle_rows = (
+            db.query(Task)
+            .filter(
+                Task.organization_id.isnot(None),
+                Task.is_active.is_(False),
+                Task.extra_data.isnot(None),
+            )
+            .order_by(Task.created_at.desc(), Task.id.desc())
+            .limit(max(1000, min(bounded_limit * 10, 5000)))
+            .all()
+        )
+        actionable_tasks = [
+            (int(task.id), int(task.organization_id), action)
+            for task in battle_rows
+            if isinstance(task.extra_data, dict)
+            and task.extra_data.get("generated")
+            and task.extra_data.get("needs_review", True)
+            and (action := battle_test_provisioning_action(task, now=now))
+        ][:bounded_limit]
+        battle_keys = [
+            (task_id, org_id)
+            for task_id, org_id, action in actionable_tasks
+            if action == "battle_test"
+        ]
+        repair_keys = [
+            (task_id, org_id)
+            for task_id, org_id, action in actionable_tasks
+            if action == "repair"
+        ]
+        activation_status = Role.assessment_task_provisioning[
+            "activation_intent"
+        ]["status"].as_string()
+        activation_rows = (
+            db.query(Role)
+            .options(selectinload(Role.tasks))
+            .filter(
+                Role.deleted_at.is_(None),
+                Role.agentic_mode_enabled.is_(False),
+                Role.assessment_task_provisioning.isnot(None),
+                activation_status.in_(sorted(ACTIVATION_ACTIVE_STATUSES)),
+            )
+            .order_by(Role.updated_at.asc(), Role.id.asc())
+            .limit(bounded_limit)
+            .all()
+        )
+        activation_blocked = sum(
+            1
+            for role in activation_rows
+            if block_activation_intent_if_task_exhausted(role, now=now)
+        )
+        if activation_blocked:
+            db.commit()
+        activation_keys = [
+            (
+                int(role.id),
+                str(activation_intent_state(role).get("request_id") or ""),
+            )
+            for role in activation_rows
+            if activation_intent_task_ready(role)
+            and activation_intent_state(role).get("request_id")
+        ]
+        focus_rows = (
+            db.query(Role)
+            .filter(
+                Role.deleted_at.is_(None),
+                Role.agentic_mode_enabled.is_(True),
+                Role.job_spec_text.isnot(None),
+                Role.job_spec_text != "",
+                Role.interview_focus.is_(None),
+            )
+            .order_by(Role.updated_at.asc(), Role.id.asc())
+            .limit(bounded_limit)
+            .all()
+        )
+        focus_keys = []
+        for role in focus_rows:
+            provisioning = (
+                role.assessment_task_provisioning
+                if isinstance(role.assessment_task_provisioning, dict)
+                else {}
+            )
+            focus_state = provisioning.get("interview_focus_provisioning") or {}
+            next_attempt = focus_state.get("next_attempt_at")
+            if next_attempt:
+                try:
+                    parsed = datetime.fromisoformat(
+                        str(next_attempt).replace("Z", "+00:00")
+                    )
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    if parsed > now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            focus_keys.append(int(role.id))
+        tech_rows = (
+            db.query(Role)
+            .filter(
+                Role.deleted_at.is_(None),
+                Role.agentic_mode_enabled.is_(True),
+                Role.job_spec_text.isnot(None),
+                Role.job_spec_text != "",
+                Role.tech_questions_signature.is_(None),
+            )
+            .order_by(Role.updated_at.asc(), Role.id.asc())
+            .limit(bounded_limit)
+            .all()
+        )
+        tech_keys = []
+        for role in tech_rows:
+            provisioning = (
+                role.assessment_task_provisioning
+                if isinstance(role.assessment_task_provisioning, dict)
+                else {}
+            )
+            tech_state = provisioning.get("tech_questions_provisioning") or {}
+            next_attempt = tech_state.get("next_attempt_at")
+            if next_attempt:
+                try:
+                    parsed = datetime.fromisoformat(
+                        str(next_attempt).replace("Z", "+00:00")
+                    )
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    if parsed > now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            tech_keys.append(int(role.id))
+    finally:
+        db.close()
+
+    dispatched = 0
+    failed = 0
+    for pending_role_id, pending_org_id in role_keys:
+        try:
+            generate_assessment_task_for_role.delay(
+                pending_role_id, pending_org_id
+            )
+            dispatched += 1
+        except Exception:
+            failed += 1
+            logger.exception(
+                "assessment-task provisioning sweep kick failed role=%s",
+                pending_role_id,
+            )
+
+    battle_dispatched = 0
+    battle_failed = 0
+    for pending_task_id, pending_task_org_id in battle_keys:
+        try:
+            battle_test_generated_task.delay(
+                pending_task_id, pending_task_org_id
+            )
+            battle_dispatched += 1
+        except Exception:
+            battle_failed += 1
+            logger.exception(
+                "generated-task battle-test sweep kick failed task=%s",
+                pending_task_id,
+            )
+
+    repair_dispatched = 0
+    repair_failed = 0
+    for pending_task_id, pending_task_org_id in repair_keys:
+        try:
+            repair_generated_task_after_battle_failure.delay(
+                pending_task_id, pending_task_org_id
+            )
+            repair_dispatched += 1
+        except Exception:
+            repair_failed += 1
+            logger.exception(
+                "generated-task repair sweep kick failed task=%s",
+                pending_task_id,
+            )
+    activation_dispatched = 0
+    activation_failed = 0
+    from .agent_tasks import agent_cohort_tick_role
+
+    for pending_role_id, activation_request_id in activation_keys:
+        try:
+            agent_cohort_tick_role.delay(
+                pending_role_id,
+                activation=True,
+                activation_intent_id=activation_request_id,
+            )
+            activation_dispatched += 1
+        except Exception:
+            activation_failed += 1
+            logger.exception(
+                "durable role activation sweep kick failed role=%s",
+                pending_role_id,
+            )
+    focus_dispatched = 0
+    focus_failed = 0
+    from .automation_tasks import generate_role_interview_focus
+
+    for pending_role_id in focus_keys:
+        try:
+            generate_role_interview_focus.delay(pending_role_id)
+            focus_dispatched += 1
+        except Exception:
+            focus_failed += 1
+            logger.exception(
+                "interview-focus recovery kick failed role=%s", pending_role_id
+            )
+    tech_dispatched = 0
+    tech_failed = 0
+    from .automation_tasks import regenerate_role_tech_questions
+
+    for pending_role_id in tech_keys:
+        try:
+            regenerate_role_tech_questions.delay(pending_role_id)
+            tech_dispatched += 1
+        except Exception:
+            tech_failed += 1
+            logger.exception(
+                "tech-question recovery kick failed role=%s", pending_role_id
+            )
+    return {
+        "status": "ok",
+        "scanned": len(rows),
+        "due": len(role_keys),
+        "dispatched": dispatched,
+        "failed": failed,
+        "generation_enabled": bool(
+            getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False)
+        ),
+        "battle_scanned": len(battle_rows),
+        "battle_due": len(battle_keys),
+        "battle_dispatched": battle_dispatched,
+        "battle_failed": battle_failed,
+        "repair_due": len(repair_keys),
+        "repair_dispatched": repair_dispatched,
+        "repair_failed": repair_failed,
+        "activation_due": len(activation_keys),
+        "activation_dispatched": activation_dispatched,
+        "activation_failed": activation_failed,
+        "activation_blocked": activation_blocked,
+        "interview_focus_due": len(focus_keys),
+        "interview_focus_dispatched": focus_dispatched,
+        "interview_focus_failed": focus_failed,
+        "tech_questions_due": len(tech_keys),
+        "tech_questions_dispatched": tech_dispatched,
+        "tech_questions_failed": tech_failed,
+    }
+
+
+def _kick_ready_activation_intents_for_task(
+    db, *, task_id: int, organization_id: int
+) -> None:
+    """Low-latency post-battle kick; the provisioning sweep is the backstop."""
+    from ..models.role import Role, role_tasks
+    from ..services.role_activation_intent import (
+        activation_intent_state,
+        activation_intent_task_ready,
+        block_activation_intent_if_task_exhausted,
+    )
+    from .agent_tasks import agent_cohort_tick_role
+
+    roles = (
+        db.query(Role)
+        .join(role_tasks, role_tasks.c.role_id == Role.id)
+        .filter(
+            role_tasks.c.task_id == int(task_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(False),
+        )
+        .all()
+    )
+    blocked = False
+    for role in roles:
+        if block_activation_intent_if_task_exhausted(role):
+            db.add(role)
+            blocked = True
+    if blocked:
+        db.commit()
+    for role in roles:
+        intent = activation_intent_state(role)
+        if not intent.get("request_id") or not activation_intent_task_ready(role):
+            continue
+        try:
+            agent_cohort_tick_role.delay(
+                int(role.id),
+                activation=True,
+                activation_intent_id=str(intent["request_id"]),
+            )
+        except Exception:
+            logger.exception(
+                "post-battle activation kick failed role=%s; sweep will retry",
+                role.id,
+            )
 
 
 @celery_app.task
@@ -1182,33 +1950,257 @@ def recompute_task_calibrations():
         db.close()
 
 
-@celery_app.task(bind=True, max_retries=1, default_retry_delay=120)
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
 def battle_test_generated_task(self, task_id: int, organization_id: int):
     """Run the E2B battle-test on a generated draft and stamp the report card.
 
-    Sandbox-only (no Anthropic calls). The report lands at
-    ``task.extra_data.battle_test`` where the agent-chat draft review card
-    surfaces it. Safe to re-run — the report is overwritten in place.
+    Sandbox-only (no Anthropic calls). Task.extra_data is the durable intent and
+    claim record, so a lost kick or worker crash is recovered by the same Beat
+    sweep as JD generation. Duplicate deliveries collapse under a row lock.
     """
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
     from sqlalchemy.orm import Session
     from ..platform.database import SessionLocal
     from ..models.task import Task
-    from ..services.task_battle_test import persist_battle_test, run_battle_test
+    from ..services.task_battle_test import (
+        BATTLE_TEST_FAILED,
+        BATTLE_TEST_MAX_REPAIR_ATTEMPTS,
+        BATTLE_TEST_REPAIR_EXHAUSTED,
+        BATTLE_TEST_REPAIR_FAILED,
+        BATTLE_TEST_REPAIR_PENDING,
+        BATTLE_TEST_REPAIR_RETRY_WAIT,
+        BATTLE_TEST_REPAIRING,
+        BATTLE_TEST_RETRY_WAIT,
+        BATTLE_TEST_RUNNING,
+        BATTLE_TEST_SUCCEEDED,
+        battle_test_provisioning_is_due,
+        battle_test_repair_feedback,
+        run_battle_test,
+    )
 
     db: Session = SessionLocal()
+    claim_token: str | None = None
     try:
         task = (
             db.query(Task)
             .filter(Task.id == task_id, Task.organization_id == organization_id)
-            .first()
+            .with_for_update()
+            .one_or_none()
         )
         if task is None:
             return {"status": "skipped", "reason": "task_not_found"}
+        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+        if not extra.get("generated"):
+            return {"status": "skipped", "reason": "not_generated"}
+        if isinstance(extra.get("battle_test"), dict):
+            state = (
+                dict(extra.get("battle_test_provisioning"))
+                if isinstance(extra.get("battle_test_provisioning"), dict)
+                else {}
+            )
+            if state.get("status") in {
+                BATTLE_TEST_REPAIR_PENDING,
+                BATTLE_TEST_REPAIRING,
+                BATTLE_TEST_REPAIR_RETRY_WAIT,
+                BATTLE_TEST_REPAIR_FAILED,
+                BATTLE_TEST_REPAIR_EXHAUSTED,
+            }:
+                return {
+                    "status": "noop",
+                    "reason": state.get("status"),
+                    "task_id": int(task.id),
+                }
+            if state.get("status") != BATTLE_TEST_SUCCEEDED:
+                now = datetime.now(timezone.utc).isoformat()
+                extra["battle_test_provisioning"] = {
+                    **state,
+                    "status": BATTLE_TEST_SUCCEEDED,
+                    "last_error": None,
+                    "next_attempt_at": None,
+                    "updated_at": now,
+                    "completed_at": now,
+                }
+                task.extra_data = extra
+                db.commit()
+            return {
+                "status": "already_done",
+                "task_id": int(task.id),
+                "verdict": extra["battle_test"].get("verdict"),
+            }
+        if not battle_test_provisioning_is_due(task):
+            state = extra.get("battle_test_provisioning") or {}
+            return {"status": "noop", "reason": state.get("status") or "not_due"}
+
+        state = (
+            dict(extra.get("battle_test_provisioning"))
+            if isinstance(extra.get("battle_test_provisioning"), dict)
+            else {}
+        )
+        claim_token = uuid.uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+        extra["battle_test_provisioning"] = {
+            **state,
+            "status": BATTLE_TEST_RUNNING,
+            "claim_token": claim_token,
+            "attempts": int(state.get("attempts") or 0) + 1,
+            "last_error": None,
+            "next_attempt_at": None,
+            "started_at": now,
+            "updated_at": now,
+        }
+        task.extra_data = extra
+        db.commit()
+        db.refresh(task)
+
         report = run_battle_test(task)
-        persist_battle_test(db, task, report)
-        return {"status": "done", "task_id": int(task.id), "verdict": report.get("verdict")}
-    except Exception as exc:  # pragma: no cover — defensive
-        logger.exception("battle_test_generated_task failed task=%s", task_id)
-        raise self.retry(exc=exc)
+        # ``run_battle_test`` returns infrastructure exceptions as a report so
+        # the card can render. Treat those as retryable delivery failures; a
+        # deterministic structural fail (no error) is a valid completed report
+        # that correctly remains behind bounded automatic repair and, only
+        # after repair exhaustion, the explicit HITL boundary.
+        if report.get("error"):
+            raise RuntimeError(f"battle-test infrastructure error: {report['error']}")
+
+        task = (
+            db.query(Task)
+            .filter(Task.id == task_id, Task.organization_id == organization_id)
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if task is None:
+            return {"status": "superseded", "reason": "task_removed"}
+        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+        state = (
+            dict(extra.get("battle_test_provisioning"))
+            if isinstance(extra.get("battle_test_provisioning"), dict)
+            else {}
+        )
+        if str(state.get("claim_token") or "") != claim_token:
+            db.rollback()
+            return {"status": "superseded"}
+        completed_at = datetime.now(timezone.utc).isoformat()
+        extra["battle_test"] = report
+        if report.get("verdict") != "pass":
+            repair_attempts = int(state.get("repair_attempts") or 0)
+            repair_available = repair_attempts < BATTLE_TEST_MAX_REPAIR_ATTEMPTS
+            repair_status = (
+                BATTLE_TEST_REPAIR_PENDING
+                if repair_available
+                else BATTLE_TEST_REPAIR_EXHAUSTED
+            )
+            feedback = battle_test_repair_feedback(report)
+            extra["battle_test_provisioning"] = {
+                **state,
+                "status": repair_status,
+                "last_error": feedback[:2000],
+                "next_attempt_at": None,
+                "updated_at": completed_at,
+                "completed_at": completed_at if not repair_available else None,
+            }
+            task.extra_data = extra
+            db.commit()
+            if repair_available:
+                try:
+                    repair_generated_task_after_battle_failure.delay(
+                        int(task.id), int(organization_id)
+                    )
+                except Exception:
+                    logger.exception(
+                        "battle-test repair kick failed task=%s; sweep will recover",
+                        task.id,
+                    )
+                return {
+                    "status": "repair_queued",
+                    "task_id": int(task.id),
+                    "verdict": report.get("verdict"),
+                    "repair_attempts": repair_attempts,
+                }
+            return {
+                "status": "repair_exhausted",
+                "task_id": int(task.id),
+                "verdict": report.get("verdict"),
+                "repair_attempts": repair_attempts,
+            }
+
+        extra["battle_test_provisioning"] = {
+            **state,
+            "status": BATTLE_TEST_SUCCEEDED,
+            "last_error": None,
+            "next_attempt_at": None,
+            "updated_at": completed_at,
+            "completed_at": completed_at,
+        }
+        task.extra_data = extra
+        db.commit()
+        _kick_ready_activation_intents_for_task(
+            db, task_id=int(task.id), organization_id=int(organization_id)
+        )
+        return {
+            "status": "done",
+            "task_id": int(task.id),
+            "verdict": report.get("verdict"),
+        }
+    except Exception as exc:  # provider/DB errors are durable + bounded
+        db.rollback()
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(self.max_retries or 0)
+        countdown = min(120 * (2 ** min(retries, 4)), 1800)
+        if claim_token:
+            retry_task = (
+                db.query(Task)
+                .filter(Task.id == task_id, Task.organization_id == organization_id)
+                .with_for_update()
+                .one_or_none()
+            )
+            if retry_task is not None:
+                retry_extra = (
+                    dict(retry_task.extra_data)
+                    if isinstance(retry_task.extra_data, dict)
+                    else {}
+                )
+                retry_state = (
+                    dict(retry_extra.get("battle_test_provisioning"))
+                    if isinstance(retry_extra.get("battle_test_provisioning"), dict)
+                    else {}
+                )
+                if str(retry_state.get("claim_token") or "") == claim_token:
+                    next_attempt = datetime.now(timezone.utc) + (
+                        timedelta(seconds=countdown)
+                        if retries < max_retries
+                        else timedelta(hours=1)
+                    )
+                    retry_extra["battle_test_provisioning"] = {
+                        **retry_state,
+                        "status": (
+                            BATTLE_TEST_RETRY_WAIT
+                            if retries < max_retries
+                            else BATTLE_TEST_FAILED
+                        ),
+                        "last_error": f"{type(exc).__name__}: {exc}"[:2000],
+                        "next_attempt_at": next_attempt.isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    retry_task.extra_data = retry_extra
+                    db.commit()
+        if retries < max_retries:
+            logger.warning(
+                "battle-test retry task=%s retry=%s/%s in=%ss: %s",
+                task_id,
+                retries + 1,
+                max_retries,
+                countdown,
+                exc,
+            )
+            raise self.retry(exc=exc, countdown=countdown)
+        logger.exception("battle_test_generated_task retries exhausted task=%s", task_id)
+        return {
+            "status": "failed",
+            "task_id": int(task_id),
+            "reason": str(exc),
+            "retry_after_seconds": 3600,
+        }
     finally:
         db.close()

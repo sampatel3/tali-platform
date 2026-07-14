@@ -42,9 +42,9 @@ const formatUsd = (cents) => {
 const DEFAULT_BUDGET_USD = 50;
 
 // Inline activator shown inside the OFF-state agent strip: a compact budget
-// input + Turn-on button, laid out horizontally. `onActivate(cents)` is
-// fire-and-forget — the parent optimistically flips the strip to ON, so the
-// activator simply unmounts on the next render.
+// input + Turn-on button, laid out horizontally. The parent owns asynchronous
+// activation; this activator remains mounted until authoritative role state
+// confirms that the agent is ON (or durable activation is shown as pending).
 const AgentOffActivator = ({ onActivate, currentBudgetCents }) => {
   // Seed from the role's already-saved cap so activating never silently
   // overwrites it with the $50 default; fall back to the default only when
@@ -118,6 +118,7 @@ const AgentStrip = ({
     tick = null,
     inFlight = false,
     pausedReason = null,
+    bootstrapStatus = null,
   } = agent || {};
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
   const isManualPause = /recruiter|paused by/i.test(String(pausedReason || ''));
@@ -133,7 +134,7 @@ const AgentStrip = ({
   const budgetLabel = formatUsd(budgetCents);
 
   const label = status === 'on'
-    ? 'Agent on'
+    ? (bootstrapStatus === 'starting' ? 'Agent starting' : 'Agent on')
     : status === 'paused'
       ? (isManualPause ? 'Paused' : 'Auto-paused')
       : 'Agent off';
@@ -144,14 +145,16 @@ const AgentStrip = ({
   if (status === 'on') {
     message = tick;
   } else if (status === 'paused') {
-    // Short — the Resume button already conveys "resume to continue".
+    // Manual pauses wait for the recruiter. System holds are rechecked by the
+    // recovery sweep, while Resume remains an optional immediate retry.
     if (isManualPause) {
       message = 'Paused by you';
     } else {
       const r = String(pausedReason || '').toLowerCase();
-      if (r.startsWith('monthly usd cap')) message = 'Monthly budget reached';
+      if (r.startsWith('monthly usd cap')) message = 'Monthly budget reached · auto-checking';
       else if (r.includes('decision budget')) message = 'Cycle limit reached';
-      else message = 'Auto-paused';
+      else if (r.includes('bootstrap failed')) message = 'Startup held · auto-checking';
+      else message = 'System hold · auto-checking';
     }
   } else if (!onActivate) {
     message = offStateMessage || 'Open a role to turn on agent mode there.';
@@ -181,14 +184,29 @@ const AgentStrip = ({
       {message ? <span className="ab-tick" title={typeof message === 'string' ? message : undefined}>{message}</span> : <span className="ab-tick" />}
 
       {showBudget ? (
-        <span className="ab-budget" title="Covers pre-screen, scoring, semantic search, assessments, and the agent on this role.">
+        <span className="ab-budget" title="AI usage only: model-backed pre-screening, scoring, semantic search, assessment grading, and agent reasoning. Sandbox, email, storage, and repository hosting are separate.">
           <span className="ab-budget-amt">{spentLabel}<span className="of"> / {budgetLabel}</span></span>
           <span className="ab-budget-bar"><i style={{ width: `${pct}%` }} /></span>
         </span>
       ) : null}
 
       {status === 'off' && onActivate ? (
-        <AgentOffActivator onActivate={onActivate} currentBudgetCents={budgetCents} />
+        <span className="ab-actions">
+          {onSettings ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              iconOnly
+              className="ab-btn ic"
+              title="Review agent settings before Turn on"
+              aria-label="Configure agent"
+              onClick={onSettings}
+            >
+              <SettingsIcon size={13} strokeWidth={1.7} />
+            </Button>
+          ) : null}
+          <AgentOffActivator onActivate={onActivate} currentBudgetCents={budgetCents} />
+        </span>
       ) : (
         <span className="ab-actions">
           {hasBulkCounts ? (
@@ -404,6 +422,8 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     // budget exhausted" / "monthly USD cap reached" / etc. instead of a
     // hardcoded blanket message.
     pausedReason: status.paused_reason || null,
+    bootstrapStatus: status.bootstrap_status || null,
+    bootstrapError: status.bootstrap_error || null,
   };
 };
 
@@ -465,6 +485,14 @@ const tickFromCurrentRun = (run) => {
 
 const formatTick = (status) => {
   if (!status) return null;
+  if (status.bootstrap_status === 'starting') {
+    return 'Starting first autonomous cycle…';
+  }
+  if (status.bootstrap_status === 'failed') {
+    return status.bootstrap_error
+      ? `Startup failed — ${status.bootstrap_error}`
+      : 'Startup failed — retry Turn on.';
+  }
   return tickFromActivity(status.last_activity)
     || tickFromCurrentRun(status.current_run)
     || 'Idle · waiting for new candidates.';

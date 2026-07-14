@@ -65,6 +65,10 @@ def _attribute_search(organization_id: int, label: str):
         GraphMeteringContext(
             organization_id=int(organization_id),
             episode_name=f"graph_search:{label}",
+            trace_id=f"graph-search:{int(organization_id)}:{label}",
+            # Searches are workspace-level reads: admit against organization
+            # credits without inventing a role attribution.
+            require_hard_admission=True,
         )
     )
     try:

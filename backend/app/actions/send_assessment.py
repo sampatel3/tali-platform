@@ -29,11 +29,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..components.assessments.repository import utcnow
 from ..components.assessments.service import get_assessment_creation_gate
-from ..domains.assessments_runtime.pipeline_service import (
-    ensure_pipeline_fields,
-    initialize_pipeline_event_if_missing,
-    transition_stage,
-)
 from ..domains.assessments_runtime.role_support import (
     get_application,
     latest_valid_role_assessment,
@@ -49,7 +44,7 @@ from ..services.experiment_assignment import (
     RoleTaskMisconfigured,
     resolve_task_and_variant,
 )
-from .types import ACTOR_AGENT, Actor
+from .types import ACTOR_AGENT, ACTOR_SYSTEM, Actor
 
 
 logger = logging.getLogger("taali.actions.send_assessment")
@@ -87,7 +82,8 @@ def run(
     override with an explicit value in the 15–180 range.
 
     Returns ``SendAssessmentResult`` with ``status`` one of:
-    - ``"sent"``: assessment created and invite dispatched
+    - ``"queued"``: assessment + durable delivery intent committed; provider
+      confirmation will atomically move the application to invited
     - ``"already_exists"``: a valid assessment already exists for this
       candidate+role pair (idempotent — agent should not retry)
     - ``"insufficient_credits"``: the org's billing gate refused
@@ -106,12 +102,45 @@ def run(
             detail=f"application {application_id} has no role — cannot send assessment",
         )
 
-    role = (
-        db.query(Role)
-        .options(joinedload(Role.tasks))
-        .filter(Role.id == app.role_id, Role.organization_id == organization_id)
-        .first()
-    )
+    automatic_actor = actor.type in {ACTOR_AGENT, ACTOR_SYSTEM}
+    if automatic_actor:
+        from ..services.role_execution_guard import (
+            automatic_role_action_block_reason,
+            lock_live_role,
+        )
+
+        role = lock_live_role(
+            db,
+            role_id=int(app.role_id),
+            organization_id=int(organization_id),
+        )
+        block_reason = automatic_role_action_block_reason(role)
+        if block_reason:
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                f"Automatic assessment send held: {block_reason}",
+            )
+        # Load the linked-task collection only after the live role row has been
+        # locked.  A concurrent re-publish must either complete first (and make
+        # this call observe OFF) or wait until this send transaction finishes.
+        role = (
+            db.query(Role)
+            .options(joinedload(Role.tasks))
+            .filter(
+                Role.id == int(app.role_id),
+                Role.organization_id == int(organization_id),
+            )
+            .populate_existing()
+            .one_or_none()
+        )
+    else:
+        role = (
+            db.query(Role)
+            .options(joinedload(Role.tasks))
+            .filter(Role.id == app.role_id, Role.organization_id == organization_id)
+            .first()
+        )
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {app.role_id} not found")
 
@@ -158,7 +187,10 @@ def run(
 
     # Billing gate.
     gate = get_assessment_creation_gate(
-        organization_id, db, lock_organization=True
+        organization_id,
+        db,
+        role_id=int(role.id),
+        lock_organization=True,
     )
     if not gate.get("can_create"):
         return SendAssessmentResult(
@@ -168,59 +200,119 @@ def run(
         )
     org = gate.get("organization")
 
-    # Pipeline: invited.
-    ensure_pipeline_fields(app)
-    initialize_pipeline_event_if_missing(
-        db,
-        app=app,
-        actor_type="system",
-        actor_id=actor.event_actor_id,
-        reason="Pipeline initialized before assessment send",
-    )
-    transition_stage(
-        db,
-        app=app,
-        to_stage="invited",
-        source=actor.type,
-        actor_type=actor.type,
-        actor_id=actor.event_actor_id,
-        reason=("Assessment invite sent by agent" if actor.type == ACTOR_AGENT else "Assessment invite sent"),
-        metadata={
-            "assessment_mode": "agent_send" if actor.type == ACTOR_AGENT else "manual",
-            "task_id": int(task.id),
-            "assignment_method": choice.method,
-            "experiment_id": int(choice.experiment.id) if choice.experiment is not None else None,
-        },
-    )
-
-    # Create Assessment row.
-    token = secrets.token_urlsafe(32)
-    assessment = Assessment(
-        organization_id=organization_id,
-        candidate_id=int(candidate.id),
-        task_id=int(task.id),
-        role_id=int(role.id),
-        application_id=int(app.id),
-        token=token,
-        duration_minutes=effective_duration,
-        expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
-        workable_candidate_id=app.workable_candidate_id,
-        workable_job_id=role.workable_job_id,
-        experiment_id=int(choice.experiment.id) if choice.experiment is not None else None,
-        experiment_arm_id=int(choice.arm.id) if choice.arm is not None else None,
-        assignment_method=choice.method,
-        assignment_key=choice.assignment_key,
-        knob_variant_applied=choice.knob_overrides,
-        score_weights_override=knobs.get("score_weights"),
-        calibration_enabled=knobs.get("calibration_enabled"),
-    )
-    db.add(assessment)
+    # Keep every action-owned mutation behind its own SAVEPOINT.  This action is
+    # used both standalone and inside the autonomy dispatcher's savepoint.  A
+    # full ``Session.rollback()`` here would also erase the caller's durable
+    # AgentDecision/AgentRun; a nested transaction rolls back only the pipeline,
+    # assessment and invite-attempt mutations while leaving the caller usable.
     try:
-        db.flush()
+        with db.begin_nested():
+            # Create Assessment row.
+            token = secrets.token_urlsafe(32)
+            assessment = Assessment(
+                organization_id=organization_id,
+                candidate_id=int(candidate.id),
+                task_id=int(task.id),
+                role_id=int(role.id),
+                application_id=int(app.id),
+                token=token,
+                duration_minutes=effective_duration,
+                expires_at=utcnow()
+                + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
+                workable_candidate_id=app.workable_candidate_id,
+                workable_job_id=role.workable_job_id,
+                experiment_id=(
+                    int(choice.experiment.id)
+                    if choice.experiment is not None
+                    else None
+                ),
+                experiment_arm_id=(
+                    int(choice.arm.id) if choice.arm is not None else None
+                ),
+                assignment_method=choice.method,
+                assignment_key=choice.assignment_key,
+                knob_variant_applied=choice.knob_overrides,
+                score_weights_override=knobs.get("score_weights"),
+                calibration_enabled=knobs.get("calibration_enabled"),
+            )
+            db.add(assessment)
+            db.flush()
+
+            # Provision GitHub branch (same as recruiter flow).
+            try:
+                repo_service = AssessmentRepositoryService(
+                    settings.GITHUB_ORG, settings.GITHUB_TOKEN
+                )
+                branch_ctx = repo_service.create_assessment_branch(
+                    task, int(assessment.id)
+                )
+                assessment.assessment_repo_url = branch_ctx.repo_url
+                assessment.assessment_branch = branch_ctx.branch_name
+                assessment.clone_command = branch_ctx.clone_command
+            except AssessmentRepositoryError as exc:
+                logger.exception(
+                    "send_assessment: repo provisioning failed assessment_id=%s",
+                    assessment.id,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to initialize assessment repository",
+                ) from exc
+
+            db.flush()
+
+            # Dispatch invite (Workable-first hybrid with manual fallback).
+            if org is not None:
+                from ..domains.integrations_notifications.invite_flow import (
+                    dispatch_assessment_invite,
+                )
+
+                try:
+                    dispatch_assessment_invite(
+                        assessment=assessment,
+                        org=org,
+                        candidate_email=candidate.email,
+                        candidate_name=candidate.full_name or candidate.email,
+                        position=task.name or "Technical assessment",
+                        pipeline_source=(
+                            actor.type if actor.type in {"agent", "recruiter"} else "agent"
+                        ),
+                        pipeline_actor_type=actor.type,
+                        pipeline_actor_id=actor.event_actor_id,
+                        pipeline_reason=(
+                            "Assessment invite sent by agent"
+                            if actor.type == ACTOR_AGENT
+                            else "Assessment invite sent"
+                        ),
+                        pipeline_metadata={
+                            "assessment_mode": (
+                                "agent_send" if actor.type == ACTOR_AGENT else "manual"
+                            ),
+                            "task_id": int(task.id),
+                            "assignment_method": choice.method,
+                            "experiment_id": (
+                                int(choice.experiment.id)
+                                if choice.experiment is not None
+                                else None
+                            ),
+                        },
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "send_assessment: invite dispatch failed assessment_id=%s",
+                        assessment.id,
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            "Assessment invite delivery is unavailable; "
+                            "no send was confirmed"
+                        ),
+                    ) from exc
     except IntegrityError as exc:
-        db.rollback()
         # Race: another path created the assessment between our gate check
-        # and flush. Return the existing one.
+        # and flush. The SAVEPOINT has already rolled back, so the caller's
+        # outer transaction remains usable while we recover the winning row.
         existing = latest_valid_role_assessment(
             candidate_id=int(candidate.id),
             role_id=int(role.id),
@@ -232,37 +324,4 @@ def run(
         logger.exception("send_assessment: integrity error with no existing assessment found")
         raise HTTPException(status_code=500, detail="Failed to create assessment") from exc
 
-    # Provision GitHub branch (same as recruiter flow).
-    try:
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        branch_ctx = repo_service.create_assessment_branch(task, int(assessment.id))
-        assessment.assessment_repo_url = branch_ctx.repo_url
-        assessment.assessment_branch = branch_ctx.branch_name
-        assessment.clone_command = branch_ctx.clone_command
-    except AssessmentRepositoryError:
-        db.rollback()
-        logger.exception(
-            "send_assessment: repo provisioning failed assessment_id=%s", assessment.id
-        )
-        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-
-    db.flush()
-
-    # Dispatch invite (Workable-first hybrid with manual fallback).
-    if org is not None:
-        from ..domains.integrations_notifications.invite_flow import dispatch_assessment_invite
-
-        try:
-            dispatch_assessment_invite(
-                assessment=assessment,
-                org=org,
-                candidate_email=candidate.email,
-                candidate_name=candidate.full_name or candidate.email,
-                position=task.name or "Technical assessment",
-            )
-        except Exception:  # pragma: no cover — invite dispatch is best-effort
-            logger.exception(
-                "send_assessment: invite dispatch failed assessment_id=%s", assessment.id
-            )
-
-    return SendAssessmentResult(assessment, "sent")
+    return SendAssessmentResult(assessment, "queued")

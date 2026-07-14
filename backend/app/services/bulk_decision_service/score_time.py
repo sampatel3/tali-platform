@@ -1,11 +1,11 @@
 """Score-time single-candidate deterministic decision.
 
-Materialises a SCORED candidate's deterministic verdict as a PENDING HITL
-decision the moment the score lands — decoupled from the agent cohort tick
-(which only runs on active roles, so paused-role candidates would otherwise
-strand as "not yet decided"). Single-candidate twin of ``decide_role_cohort``
-that deliberately omits its role-level side effects (no threshold reconcile, no
-volume guard).
+Materialises a SCORED candidate's deterministic verdict the moment the score
+lands, then applies the role's autonomy contract. Enabled/unpaused roles with
+``auto_promote`` execute reversible positive decisions immediately; rejects,
+paused/off roles, post-handover conflicts and guard holds remain pending HITL.
+Single-candidate twin of ``decide_role_cohort`` that deliberately omits its
+role-level side effects (no threshold reconcile, no volume guard).
 """
 from __future__ import annotations
 
@@ -39,12 +39,11 @@ logger = logging.getLogger("taali.bulk_decision")
 def ensure_deterministic_decision(
     db: Session, *, app: CandidateApplication, role: Role
 ) -> str | None:
-    """Make sure a SCORED candidate carries its deterministic verdict as a
-    PENDING HITL decision — generated the moment the score lands, decoupled from
-    the agent cohort tick (which only runs on active roles, so paused-role
-    candidates strand as "not yet decided"). The verdict is intrinsic to the
-    score; this materialises it. Fresh score → HITL (the recruiter approves;
-    NEVER auto-applied).
+    """Make sure a SCORED candidate carries its deterministic verdict —
+    generated the moment the score lands, decoupled from the agent cohort tick.
+    The verdict is intrinsic to the score; the shared autonomy dispatcher then
+    executes a reversible positive action when policy allows, otherwise the
+    decision remains pending.
 
     Single-candidate twin of ``decide_role_cohort`` that reuses the same verdict
     + queue funnel, but deliberately OMITS its role-level side effects:
@@ -163,8 +162,23 @@ def ensure_deterministic_decision(
             )
             return None
         if getattr(decision, "_just_created", True):
+            from ...agent_runtime.tool_registry import maybe_auto_execute_decision
+
+            autonomy = maybe_auto_execute_decision(
+                db,
+                role=role,
+                decision=decision,
+                decision_type=decision_type,
+                on_policy=True,
+                # A recruiter may already be interviewing this person in the
+                # ATS. Surface the recommendation, never move them silently.
+                force_human_review=post_handover,
+            )
             logger.info(
-                "score-time deterministic decision app=%s -> %s", app.id, decision_type
+                "score-time deterministic decision app=%s -> %s auto_executed=%s",
+                app.id,
+                decision_type,
+                autonomy["executed"],
             )
             return decision_type
         return None  # dedup / one-pending guard returned an existing row

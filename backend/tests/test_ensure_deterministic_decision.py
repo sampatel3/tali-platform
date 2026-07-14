@@ -108,6 +108,44 @@ def test_queues_advance_above_bar_no_task(db):
     assert bds.ensure_deterministic_decision(db, app=app, role=role) == "advance_to_interview"
 
 
+def test_running_auto_promote_role_executes_score_time_advance(db):
+    """The normal score-completion producer must honor auto_promote instead
+    of pre-empting the agent with a permanently pending HITL card."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    role.auto_promote = True
+    db.commit()
+    app = _add_app(db, org, role, role_fit=80.0)
+
+    assert bds.ensure_deterministic_decision(db, app=app, role=role) == "advance_to_interview"
+    db.commit()
+
+    db.refresh(app)
+    assert app.pipeline_stage == "advanced"
+    assert app.pipeline_stage_source == "agent"
+    decision = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == app.id)
+        .one()
+    )
+    assert decision.status == "approved"
+    assert decision.human_disposition == "auto_approved"
+    assert _pending(db, role) == []
+
+
+def test_paused_auto_promote_role_keeps_score_time_advance_pending(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=False, paused=True)
+    role.auto_promote = True
+    db.commit()
+    app = _add_app(db, org, role, role_fit=80.0)
+
+    assert bds.ensure_deterministic_decision(db, app=app, role=role) == "advance_to_interview"
+    db.commit()
+
+    db.refresh(app)
+    assert app.pipeline_stage == "applied"
+    assert len(_pending(db, role)) == 1
+
+
 def test_queues_send_above_bar_with_task(db):
     org, role = _seed_role(db, score_threshold=50, with_task=True)
     app = _add_app(db, org, role, role_fit=80.0)

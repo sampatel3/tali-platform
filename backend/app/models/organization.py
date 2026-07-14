@@ -100,9 +100,10 @@ class Organization(Base):
     # alembic 067.
     default_role_budget_cents = Column(Integer, nullable=True)
     default_score_threshold = Column(Integer, nullable=True)
-    # Workspace-wide spend cap (cents). When projected month-end > cap, the
-    # agent pauses new invites — surfaced via the "Spend over budget"
-    # notification. NULL means no cap configured.
+    # Legacy/reserved workspace-cap value kept for API/database compatibility.
+    # It is not an enforced admission control. Active spend controls are funded
+    # organization credits plus each role's monthly AI-usage cap; do not expose
+    # this field as a hard cap until enforcement is implemented end to end.
     monthly_spend_cap_cents = Column(Integer, nullable=True)
     workspace_settings = Column(JSON, nullable=True)
     # The org's canonical "complete requisition spec" definition that the

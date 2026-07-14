@@ -18,6 +18,9 @@ def test_attribute_search_sets_org_then_resets():
         assert ctx is not None
         assert ctx.organization_id == 42
         assert ctx.episode_name == "graph_search:predicate"
+        assert ctx.require_hard_admission is True
+        assert ctx.require_role_admission is False
+        assert ctx.role_id is None  # explicit workspace spend, not invented role spend
     assert graph_metering_ctx.get() is None  # reset on exit
 
 

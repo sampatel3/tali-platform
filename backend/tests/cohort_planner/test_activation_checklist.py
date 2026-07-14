@@ -118,6 +118,34 @@ def test_surface_skips_gaps_that_are_already_filled(db):
     assert _open_kinds(db, role) == set()
 
 
+def test_inactive_generated_task_still_surfaces_approval_gap(db):
+    org = _make_org(db)
+    role = _make_role(db, org, score_threshold=70)
+    db.add(
+        RoleCriterion(
+            role_id=role.id,
+            source="recruiter",
+            bucket="must",
+            text="Python",
+            weight=1.0,
+        )
+    )
+    draft = Task(
+        organization_id=org.id,
+        name="Generated draft",
+        description="Needs approval",
+        is_active=False,
+    )
+    db.add(draft)
+    db.flush()
+    role.tasks.append(draft)
+    db.flush()
+
+    surface_activation_questions(db, role=role)
+    db.flush()
+    assert _open_kinds(db, role) == {"task_assignment_missing"}
+
+
 def test_surface_intent_slot_carries_settings_link(db):
     """The intent_slot_missing canonical template embeds the settings-tab
     link via response_schema so the frontend can render a button."""

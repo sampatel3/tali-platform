@@ -206,16 +206,19 @@ def rescore_assessment(
             final_code = snap.get("final") or ""
             break
 
-    # Reset failure flags and re-open so the submit pipeline's atomic claim passes.
-    assessment.scoring_failed = False
-    assessment.scoring_partial = False
-    assessment.status = AssessmentStatus.IN_PROGRESS
-    db.commit()
-
     from ...components.assessments.service import submit_assessment as _submit_service
 
     try:
-        _submit_service(assessment, final_code, int(assessment.tab_switch_count or 0), db)
+        _submit_service(
+            assessment,
+            final_code,
+            int(assessment.tab_switch_count or 0),
+            db,
+            retry_scoring=True,
+            # A recruiter re-score is an audit correction, not a second
+            # completion event. Avoid duplicate email/ATS writeback.
+            suppress_completion_side_effects=True,
+        )
     except HTTPException:
         raise
     except Exception as exc:

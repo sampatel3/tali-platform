@@ -171,6 +171,31 @@ def test_sweep_submits_per_org_and_dedupes_in_flight(db, monkeypatch):
     assert len(fake.created) == 2
 
 
+def test_sweep_blocks_batch_submit_before_provider_when_credits_are_empty(
+    db, monkeypatch
+):
+    org, role, _ = _seed_app(
+        db,
+        cv_text="Unique zero-credit batch CV text.",
+        email="zero-credit@x.test",
+    )
+    org.credits_balance = 0
+    role.monthly_usd_budget_cents = 5_000
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    fake = _FakeBatches()
+    _patch_client(monkeypatch, fake)
+
+    summary = sweep_pending_applications(db)
+
+    assert summary["admission_blocked"] == 1
+    assert summary["batches"] == []
+    assert fake.created == []
+
+
 def test_sweep_excludes_closed_and_archived_roles(db, monkeypatch):
     """Apps on dead reqs are excluded in SQL — the 2026-06 audit's
     dead-req-spend lesson. Covers both Workable states (closed/archived)

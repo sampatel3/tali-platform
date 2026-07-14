@@ -158,10 +158,10 @@ def _persist_pre_screen_error(
     # ``application_needs_pre_screen`` knows when the last attempt was.
     # Previously this was deliberately left NULL so transient errors
     # would self-heal on the next tick — but that produced 7,668 burned
-    # Anthropic round-trips on 2026-05-21 (the cohort tick fires every
-    # 30 min and every failed app retried each tick). The backoff below
+    # Anthropic round-trips on 2026-05-21 (the cohort tick repeatedly retried
+    # every failed app; its current proactive cadence is hourly). The backoff below
     # gives the same self-heal property but bounded: errors retry after
-    # ``PRE_SCREEN_ERROR_BACKOFF`` (default 6h) instead of every 30 min.
+    # ``PRE_SCREEN_ERROR_BACKOFF`` (default 6h) instead of every cohort sweep.
     # New-CV upload still beats the timestamp via the staleness check,
     # so a re-uploaded CV always retries immediately.
     app.pre_screen_run_at = _utcnow()
@@ -229,6 +229,7 @@ def execute_pre_screen_only(
 
     from ..cv_matching import MODEL_VERSION as PRE_SCREEN_MODEL_VERSION
     from ..cv_matching.runner_pre_screen import run_pre_screen
+    from .pre_screen_usage_admission import run_with_pre_screen_admission
     from .role_requirement_service import build_pre_screen_requirements
 
     requirements = build_pre_screen_requirements(role)
@@ -274,13 +275,14 @@ def execute_pre_screen_only(
             "entity_id": f"application:{app.id}",
         }
     try:
-        pre = run_pre_screen(
-            cv_text,
-            job_spec_text,
-            requirements,
-            client=client,
-            workable_context=workable_context or None,
+        pre, credit_reservation = run_with_pre_screen_admission(
+            lambda admitted: run_pre_screen(
+                cv_text, job_spec_text, requirements, client=client,
+                workable_context=workable_context or None,
+                metering_context=admitted,
+            ),
             metering_context=pre_screen_metering_context,
+            trace_id=f"pre-screen:application:{int(app.id)}",
         )
     except Exception as exc:  # noqa: BLE001 — guard the LLM call
         _persist_pre_screen_error(app, reason=f"pre_screen_failed: {exc}"[:500])
@@ -294,7 +296,10 @@ def execute_pre_screen_only(
         pre.cache_hit
         and db is not None
         and getattr(app, "organization_id", None)
-        and (pre.input_tokens or pre.output_tokens or pre.cache_read_tokens or pre.cache_creation_tokens)
+        and (
+            pre.input_tokens or pre.output_tokens or pre.cache_read_tokens
+            or pre.cache_creation_tokens or credit_reservation is not None
+        )
     ):
         try:
             _meter_record_event(
@@ -309,6 +314,10 @@ def execute_pre_screen_only(
                 cache_creation_tokens=pre.cache_creation_tokens,
                 cache_hit=True,
                 entity_id=f"application:{app.id}",
+                credit_reservation=(
+                    credit_reservation.as_metering_payload()
+                    if credit_reservation is not None else None
+                ),
             )
         except Exception:  # pragma: no cover — defensive
             logger.exception(
@@ -444,9 +453,9 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
       that the candidate wants another shot.
     - **NEW**: most recent attempt ERRORED and was within
       ``PRE_SCREEN_ERROR_BACKOFF`` → NOT needed. Previously errored
-      apps re-fired on every 30-min cohort tick, hitting Anthropic with
-      ~48 retries/day per failed candidate (7,668 burned round-trips on
-      2026-05-21 alone). Backoff lets transient errors self-heal on a
+      apps re-fired on every cohort tick, hitting Anthropic repeatedly
+      (7,668 burned round-trips on 2026-05-21 alone). Backoff lets transient
+      errors self-heal on a
       bounded cadence instead of immediately.
     - Otherwise → not needed.
     """

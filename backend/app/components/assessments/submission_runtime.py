@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Type
 
 from fastapi import HTTPException
@@ -158,6 +158,89 @@ def _capture_sandbox_repo_files(
     return {}
 
 
+def _durable_candidate_branch_snapshot(
+    assessment: Assessment,
+) -> Dict[str, str] | None:
+    """Return the exact pushed candidate branch/head recorded at submission.
+
+    A retry may only rebuild a killed sandbox from this marker.  Merely having
+    an assessment branch is not enough: that branch starts life as the task
+    template, so cloning it without proof of a successful submission push can
+    silently grade starter code as the candidate's work.
+    """
+    evidence = (
+        assessment.git_evidence
+        if isinstance(getattr(assessment, "git_evidence", None), dict)
+        else {}
+    )
+    branch = str(getattr(assessment, "assessment_branch", None) or "").strip()
+    repo_url = str(getattr(assessment, "assessment_repo_url", None) or "").strip()
+    recorded_branch = str(evidence.get("candidate_branch") or "").strip()
+    head_sha = str(evidence.get("candidate_branch_head_sha") or "").strip()
+    try:
+        push_succeeded = (
+            evidence.get("candidate_branch_push_status") == "succeeded"
+            and int(evidence.get("push_returncode")) == 0
+        )
+    except (TypeError, ValueError):
+        push_succeeded = False
+    if not (
+        push_succeeded
+        and branch
+        and repo_url
+        and recorded_branch == branch
+        and head_sha
+    ):
+        return None
+    return {"branch": branch, "head_sha": head_sha, "repo_url": repo_url}
+
+
+def _open_submission_sandbox(
+    e2b: Any,
+    assessment: Assessment,
+    task: Task,
+    *,
+    retry_scoring: bool,
+    recover_retry_sandbox_fn: Callable[[Any, Assessment, Task], Any] | None,
+) -> Any:
+    """Connect to the candidate sandbox, or recover a retry fail-closed."""
+    if not retry_scoring:
+        if assessment.e2b_session_id:
+            return e2b.connect_sandbox(assessment.e2b_session_id)
+        return e2b.create_sandbox()
+
+    reconnect_error: Exception | None = None
+    if assessment.e2b_session_id:
+        try:
+            return e2b.connect_sandbox(assessment.e2b_session_id)
+        except Exception as exc:
+            reconnect_error = exc
+            logger.info(
+                "Retry sandbox is unavailable; attempting pushed-branch recovery assessment_id=%s",
+                assessment.id,
+            )
+    else:
+        reconnect_error = RuntimeError("assessment has no sandbox session id")
+
+    # Never create a blank sandbox here.  The recovery callback must clone and
+    # verify the exact pushed candidate commit before returning it for tests.
+    if _durable_candidate_branch_snapshot(assessment) is None:
+        raise RuntimeError(
+            "Cannot recover assessment scoring: no verified candidate branch push"
+        ) from reconnect_error
+    if recover_retry_sandbox_fn is None:
+        raise RuntimeError(
+            "Cannot recover assessment scoring: branch recovery is unavailable"
+        ) from reconnect_error
+
+    sandbox = recover_retry_sandbox_fn(e2b, assessment, task)
+    if sandbox is None:
+        raise RuntimeError(
+            "Cannot recover assessment scoring: branch recovery returned no sandbox"
+        ) from reconnect_error
+    return sandbox
+
+
 def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[str, Any]:
     if not parse_pattern:
         return {"passed": 0, "failed": 0, "total": 0, "parse_error": False}
@@ -302,30 +385,74 @@ def submit_assessment_impl(
     e2b_service_cls: Type[Any],
     workspace_repo_root_fn: Callable[[Task], str],
     collect_git_evidence_fn: Callable[[Any, str], Dict[str, Any]],
+    recover_retry_sandbox_fn: Callable[[Any, Assessment, Task], Any] | None = None,
+    retry_scoring: bool = False,
+    suppress_completion_side_effects: bool = False,
+    enqueue_rubric_retry_on_commit: bool = True,
 ) -> Dict[str, Any]:
     """Run tests, compute scores, persist results, and trigger notifications."""
-    if assessment.status != AssessmentStatus.IN_PROGRESS:
-        raise HTTPException(status_code=400, detail="Assessment cannot be submitted in current state")
+    terminal_statuses = {
+        AssessmentStatus.COMPLETED,
+        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+    }
+    if retry_scoring:
+        if assessment.status not in terminal_statuses:
+            raise HTTPException(status_code=400, detail="Only a completed assessment can be re-scored")
+        terminal_status = assessment.status
+    else:
+        if assessment.status != AssessmentStatus.IN_PROGRESS:
+            raise HTTPException(status_code=400, detail="Assessment cannot be submitted in current state")
+        terminal_status = AssessmentStatus.COMPLETED
 
-    # Atomically claim the submission to close the duplicate-submit race: two
-    # rapid POST /submit calls would otherwise both pass the check above and each
-    # run the full (expensive) scoring pipeline. The winning UPDATE flips the
-    # status; a losing caller sees rowcount 0 and 409s.
-    claimed = (
-        db.query(Assessment)
-        .filter(
-            Assessment.id == assessment.id,
-            Assessment.status == AssessmentStatus.IN_PROGRESS,
+    if not retry_scoring:
+        # Atomically claim the submission to close the duplicate-submit race:
+        # two rapid POST /submit calls would otherwise both run the expensive
+        # scoring pipeline. Retry workers use their own durable lease and keep
+        # the candidate's terminal lifecycle state intact.
+        #
+        # Persist the browser's final artifact in that same claim. Everything
+        # after this commit depends on E2B/GitHub/provider availability; if one
+        # of those fails, the durable retry must grade the candidate's actual
+        # submission rather than falling back to an older snapshot/starter.
+        claimed_snapshots = [
+            dict(item)
+            for item in (assessment.code_snapshots or [])
+            if isinstance(item, dict)
+        ]
+        claimed_snapshots.append({"final": final_code})
+        claimed_prompts = [
+            dict(item)
+            for item in (assessment.ai_prompts or [])
+            if isinstance(item, dict)
+        ]
+        if claimed_prompts:
+            claimed_prompts[-1] = {
+                **claimed_prompts[-1],
+                "code_after": final_code,
+            }
+        claimed_tab_switch_count = (
+            0 if settings_obj.MVP_DISABLE_PROCTORING else tab_switch_count
         )
-        .update(
-            {Assessment.status: AssessmentStatus.COMPLETED},
-            synchronize_session=False,
+        claimed = (
+            db.query(Assessment)
+            .filter(
+                Assessment.id == assessment.id,
+                Assessment.status == AssessmentStatus.IN_PROGRESS,
+            )
+            .update(
+                {
+                    Assessment.status: AssessmentStatus.COMPLETED,
+                    Assessment.code_snapshots: claimed_snapshots,
+                    Assessment.ai_prompts: claimed_prompts,
+                    Assessment.tab_switch_count: claimed_tab_switch_count,
+                },
+                synchronize_session=False,
+            )
         )
-    )
-    db.commit()
-    if not claimed:
-        raise HTTPException(status_code=409, detail="Assessment already submitted")
-    db.refresh(assessment)
+        db.commit()
+        if not claimed:
+            raise HTTPException(status_code=409, detail="Assessment already submitted")
+        db.refresh(assessment)
 
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
@@ -344,10 +471,13 @@ def submit_assessment_impl(
     # --- 1. Run tests ---
     repo_root = workspace_repo_root_fn(task)
     e2b = e2b_service_cls(settings_obj.E2B_API_KEY)
-    if assessment.e2b_session_id:
-        sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
-    else:
-        sandbox = e2b.create_sandbox()
+    sandbox = _open_submission_sandbox(
+        e2b,
+        assessment,
+        task,
+        retry_scoring=retry_scoring,
+        recover_retry_sandbox_fn=recover_retry_sandbox_fn,
+    )
 
     test_results = _run_task_test_runner(e2b, sandbox, task, repo_root)
     if not isinstance(test_results, dict) or (
@@ -370,65 +500,125 @@ def submit_assessment_impl(
     # deliverable-lens grader sees the actual shipped artifact. Best-effort.
     sandbox_repo_files = _capture_sandbox_repo_files(sandbox, repo_root)
 
-    # --- 2. Capture git evidence and persist branch state (store before push so diff not lost on failure) ---
+    # --- 2. Capture git evidence and durably push the exact candidate head. ---
     try:
         evidence = collect_git_evidence_fn(sandbox, repo_root)
         assessment.git_evidence = evidence
         assessment.final_repo_state = evidence.get("head_sha")
         is_demo_assessment = bool(getattr(assessment, "is_demo", False))
-        if evidence.get("status_porcelain"):
-            branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
-            if is_demo_assessment and not branch_name:
-                evidence["push_skipped"] = True
-                evidence["push_reason"] = "demo_local_repository"
-                assessment.git_evidence = evidence
-            else:
-                push_target = f"HEAD:{branch_name}" if branch_name else "HEAD"
-                push_result = sandbox.run_code(
-                    "import json,subprocess,pathlib\n"
-                    f"repo=pathlib.Path({repo_root!r})\n"
-                    "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                    "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                    f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
-                    "payload={\n"
-                    " 'commit_returncode': commit.returncode,\n"
-                    " 'commit_stderr': (commit.stderr or '')[-500:],\n"
-                    " 'push_returncode': push.returncode,\n"
-                    " 'push_stderr': (push.stderr or '')[-500:],\n"
-                    "}\n"
-                    "print(json.dumps(payload))\n"
+        branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
+        repo_url = (getattr(assessment, "assessment_repo_url", None) or "").strip()
+        if is_demo_assessment and not branch_name:
+            evidence["push_skipped"] = True
+            evidence["push_reason"] = "demo_local_repository"
+            assessment.git_evidence = evidence
+        else:
+            if not branch_name or not repo_url:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Candidate submission branch is not configured",
                 )
-                push_payload: Dict[str, Any] = {}
-                try:
-                    out = _execution_stdout_text(push_result).strip().splitlines()
-                    if out:
-                        push_payload = json.loads(out[-1])
-                except Exception:
-                    push_payload = {}
 
-                push_rc = int(push_payload.get("push_returncode", 0) or 0)
-                if push_rc != 0:
-                    evidence["push_returncode"] = push_rc
-                    evidence["push_stderr"] = push_payload.get("push_stderr", "")
-                    assessment.git_evidence = evidence
-                    if not bool(getattr(settings_obj, "GITHUB_MOCK_MODE", False)) and not is_demo_assessment:
-                        raise HTTPException(status_code=500, detail="Failed to push candidate branch updates")
+            # Always push HEAD, even with a clean worktree. Terminal agents may
+            # have committed locally already; gating on status_porcelain would
+            # strand those commits in the soon-to-be-killed sandbox.
+            push_target = f"HEAD:{branch_name}"
+            push_result = sandbox.run_code(
+                "import json,subprocess,pathlib\n"
+                f"repo=pathlib.Path({repo_root!r})\n"
+                "add=subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
+                "head=subprocess.run(['git','rev-parse','HEAD'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                "payload={\n"
+                " 'add_returncode': add.returncode,\n"
+                " 'commit_returncode': commit.returncode,\n"
+                " 'commit_stderr': (commit.stderr or '')[-500:],\n"
+                " 'push_returncode': push.returncode,\n"
+                " 'push_stderr': (push.stderr or '')[-500:],\n"
+                " 'head_returncode': head.returncode,\n"
+                " 'head_sha': (head.stdout or '').strip(),\n"
+                "}\n"
+                "print(json.dumps(payload))\n"
+            )
+            try:
+                out = _execution_stdout_text(push_result).strip().splitlines()
+                push_payload = json.loads(out[-1]) if out else {}
+                add_rc = int(push_payload["add_returncode"])
+                commit_rc = int(push_payload["commit_returncode"])
+                push_rc = int(push_payload["push_returncode"])
+                head_rc = int(push_payload["head_returncode"])
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to verify candidate branch push",
+                ) from exc
 
-                evidence = collect_git_evidence_fn(sandbox, repo_root)
-                evidence["push_returncode"] = push_payload.get("push_returncode", 0)
-                if push_payload.get("push_stderr"):
-                    evidence["push_stderr"] = push_payload.get("push_stderr", "")
-                if push_rc != 0 and is_demo_assessment:
-                    evidence["push_skipped"] = True
-                    evidence["push_reason"] = "demo_push_not_required"
+            pushed_head = str(push_payload.get("head_sha") or "").strip()
+            had_uncommitted_changes = bool(evidence.get("status_porcelain"))
+            commit_ok = commit_rc == 0 or (
+                commit_rc == 1 and not had_uncommitted_changes
+            )
+            checkpoint_ok = (
+                add_rc == 0
+                and commit_ok
+                and push_rc == 0
+                and head_rc == 0
+                and bool(pushed_head)
+            )
+            if not checkpoint_ok:
+                evidence["push_returncode"] = push_rc
+                evidence["push_stderr"] = push_payload.get("push_stderr", "")
+                evidence["candidate_branch_push_status"] = "failed"
                 assessment.git_evidence = evidence
-                assessment.final_repo_state = evidence.get("head_sha")
+                if not is_demo_assessment:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to push candidate branch updates",
+                    )
+
+            evidence = collect_git_evidence_fn(sandbox, repo_root)
+            evidence.update(
+                {
+                    "push_returncode": push_rc,
+                    "candidate_branch_push_status": (
+                        "succeeded" if checkpoint_ok else "failed"
+                    ),
+                    "candidate_branch": branch_name,
+                    "candidate_branch_head_sha": pushed_head,
+                }
+            )
+            if push_payload.get("push_stderr"):
+                evidence["push_stderr"] = push_payload.get("push_stderr", "")
+            if push_rc != 0 and is_demo_assessment:
+                evidence["push_skipped"] = True
+                evidence["push_reason"] = "demo_push_not_required"
+            assessment.git_evidence = evidence
+            assessment.final_repo_state = pushed_head or evidence.get("head_sha")
+
+            if checkpoint_ok:
+                # This commit is the durable recovery checkpoint. Provider
+                # grading happens later and may fail independently.
+                try:
+                    db.commit()
+                    db.refresh(assessment)
+                except Exception as exc:
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to persist candidate branch checkpoint",
+                    ) from exc
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         import logging as _logging
 
         _logging.getLogger("taali.assessments").exception("Failed to capture git evidence on manual submit")
+        if not bool(getattr(assessment, "is_demo", False)):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to checkpoint candidate submission branch",
+            ) from exc
     finally:
         e2b.close_sandbox(sandbox)
 
@@ -649,9 +839,9 @@ def submit_assessment_impl(
     # --- 3b. Rubric-driven scoring (#37): grade against the task's
     # ``evaluation_rubric.dimensions`` via the Claude-driven RubricScorer
     # shipped in #419. Overrides ``assessment_score_100`` when the rubric
-    # grades cleanly; falls back to the heuristic composite when grading
-    # fails (so the candidate is never blocked from a score by a transient
-    # Anthropic error).
+    # grades cleanly. A partial/failed rubric is evidence, never a score: the
+    # heuristic remains available for diagnostics but no authoritative
+    # assessment/TAALI value is persisted until every dimension is graded.
     # Deterministic process features — the loop skeleton (test runs,
     # challenges, cadence) counted from ai_prompts + timeline. Computed
     # regardless of whether rubric grading runs: recruiter evidence first,
@@ -664,8 +854,13 @@ def submit_assessment_impl(
         logger.exception("process feature computation failed assessment_id=%s", assessment.id)
         process_features = {}
 
+    rubric_required = bool(task.evaluation_rubric)
+    rubric_fully_graded = not rubric_required
+    rubric_partial = False
+    rubric_failed = False
+    heuristic_assessment_score_100 = assessment_score_100
     rubric_breakdown: Dict[str, Any] = {}
-    if task.evaluation_rubric and settings_obj.ANTHROPIC_API_KEY:
+    if rubric_required and settings_obj.ANTHROPIC_API_KEY:
         try:
             from .rubric_scoring import (
                 RubricScorer,
@@ -731,20 +926,37 @@ def submit_assessment_impl(
                 api_key=settings_obj.ANTHROPIC_API_KEY,
                 organization_id=int(assessment.organization_id),
                 assessment_id=int(assessment.id),
+                role_id=(
+                    int(assessment.role_id)
+                    if getattr(assessment, "role_id", None) is not None
+                    else None
+                ),
+                trace_id=(
+                    f"assessment:{int(assessment.id)}:submission:"
+                    f"{get_request_id() or 'background'}"
+                ),
             )
             rubric_result = scorer.grade_rubric(task.evaluation_rubric, artifacts)
             if rubric_result.dimensions:
-                # The rubric weighted score becomes the authoritative
-                # ``assessment_score_100`` going forward — heuristics are
-                # kept in score_breakdown for the radar chart but the
-                # final number reflects the criteria-graded judgment.
-                old_score = assessment_score_100
-                assessment_score_100 = round(float(rubric_result.weighted_score_100), 2)
-                assessment_score_10 = round(assessment_score_100 / 10.0, 1)
+                rubric_fully_graded = rubric_result.fully_graded
+                has_successful_dimension = any(
+                    dimension.error is None for dimension in rubric_result.dimensions
+                )
+                rubric_partial = not rubric_fully_graded and has_successful_dimension
+                rubric_failed = not rubric_fully_graded and not has_successful_dimension
+                partial_weighted_score = round(float(rubric_result.weighted_score_100), 2)
                 rubric_breakdown = {
-                    "weighted_score_100": rubric_result.weighted_score_100,
+                    "status": (
+                        "complete"
+                        if rubric_fully_graded
+                        else ("partial" if rubric_partial else "failed")
+                    ),
+                    "weighted_score_100": partial_weighted_score if rubric_fully_graded else None,
+                    "partial_weighted_score_100": (
+                        partial_weighted_score if rubric_partial else None
+                    ),
                     "model_used": rubric_result.model_used,
-                    "fully_graded": rubric_result.fully_graded,
+                    "fully_graded": rubric_fully_graded,
                     "failed_dimension_ids": rubric_result.failed_dimension_ids,
                     "dimensions": [
                         {
@@ -758,7 +970,7 @@ def submit_assessment_impl(
                         }
                         for d in rubric_result.dimensions
                     ],
-                    "heuristic_score_for_comparison": old_score,
+                    "heuristic_score_for_comparison": heuristic_assessment_score_100,
                     # Anthropic AI Fluency "4 Ds" rollup (Delegation / Description
                     # / Discernment / Diligence) + Deliverable. Derived from the
                     # same dimension grades; additive, does NOT change the score.
@@ -774,24 +986,70 @@ def submit_assessment_impl(
                     task.evaluation_rubric, rubric_result.dimensions, part_weights,
                 )
                 rubric_breakdown["part_scores"] = part_scores
-                if part_scores.get("practice") is not None and part_scores.get("blended_100") is not None:
-                    assessment_score_100 = round(float(part_scores["blended_100"]), 2)
+                if rubric_fully_graded:
+                    # Only a complete rubric may become authoritative.
+                    assessment_score_100 = partial_weighted_score
+                    if (
+                        part_scores.get("practice") is not None
+                        and part_scores.get("blended_100") is not None
+                    ):
+                        assessment_score_100 = round(float(part_scores["blended_100"]), 2)
                     assessment_score_10 = round(assessment_score_100 / 10.0, 1)
                     rubric_breakdown["weighted_score_100"] = assessment_score_100
+                    taali_score_100 = (
+                        compute_taali_score(assessment_score_100, role_fit_score_100)
+                        or round(float(assessment_score_100), 1)
+                    )
                 logger.info(
                     "RubricScorer applied assessment=%s heuristic=%.2f rubric=%.2f parts=%s failed=%s",
-                    assessment.id, old_score, assessment_score_100,
+                    assessment.id, heuristic_assessment_score_100, partial_weighted_score,
                     {k: part_scores.get(k) for k in ("practice", "applied")},
                     rubric_result.failed_dimension_ids,
                 )
-                # Recompute downstream blends with the new assessment score.
-                taali_score_100 = compute_taali_score(assessment_score_100, role_fit_score_100) or round(float(assessment_score_100), 1)
+            else:
+                rubric_failed = True
+                rubric_breakdown = {
+                    "status": "failed",
+                    "fully_graded": False,
+                    "failed_dimension_ids": list((task.evaluation_rubric or {}).keys()),
+                    "dimensions": [],
+                    "error": "rubric_returned_no_dimensions",
+                    "heuristic_score_for_comparison": heuristic_assessment_score_100,
+                }
         except Exception:
             logger.exception(
-                "RubricScorer wire-in failed (falling back to heuristic) assessment_id=%s",
+                "RubricScorer wire-in failed assessment_id=%s",
                 assessment.id,
             )
-            rubric_breakdown = {"error": "rubric_scoring_failed"}
+            rubric_failed = True
+            rubric_breakdown = {
+                "status": "failed",
+                "fully_graded": False,
+                "failed_dimension_ids": list((task.evaluation_rubric or {}).keys()),
+                "dimensions": [],
+                "error": "rubric_scoring_failed",
+                "heuristic_score_for_comparison": heuristic_assessment_score_100,
+            }
+    elif rubric_required:
+        rubric_failed = True
+        rubric_breakdown = {
+            "status": "failed",
+            "fully_graded": False,
+            "failed_dimension_ids": list((task.evaluation_rubric or {}).keys()),
+            "dimensions": [],
+            "error": "rubric_grader_unavailable",
+            "heuristic_score_for_comparison": heuristic_assessment_score_100,
+        }
+
+    grading_incomplete = rubric_required and not rubric_fully_graded
+    if grading_incomplete:
+        # A heuristic or partial rubric must never masquerade as an assessment
+        # result. Keep the diagnostics in score_breakdown, clear every headline
+        # score, and let the durable retry worker finish grading.
+        assessment_score_100 = None
+        assessment_score_10 = None
+        taali_score_100 = None
+        score_mode = "rubric_grading_pending"
 
     # --- 3c. Difficulty tier reached + CV-claim-consistency tell (central
     # tiers model). Computed from the test pass-ratio + the judgment dimension.
@@ -815,10 +1073,15 @@ def submit_assessment_impl(
 
     # --- 4. Persist ---
     completion_ts = datetime.now(timezone.utc)
-    assessment.status = AssessmentStatus.COMPLETED
-    assessment.completed_due_to_timeout = False
-    assessment.completed_at = completion_ts
-    assessment.scored_at = completion_ts
+    assessment.status = terminal_status
+    if not retry_scoring:
+        assessment.completed_due_to_timeout = False
+        assessment.completed_at = completion_ts
+    elif not assessment.completed_at:
+        assessment.completed_at = completion_ts
+    assessment.scored_at = None if grading_incomplete else completion_ts
+    assessment.scoring_partial = bool(rubric_partial)
+    assessment.scoring_failed = bool(rubric_failed)
     assessment.score = assessment_score_10
     assessment.final_score = assessment_score_100
     assessment.assessment_score = assessment_score_100
@@ -899,6 +1162,52 @@ def submit_assessment_impl(
         fraud_flags=composite.get("fraud", {}).get("flags", []),
     )
 
+    prior_breakdown = (
+        assessment.score_breakdown
+        if isinstance(getattr(assessment, "score_breakdown", None), dict)
+        else {}
+    )
+    prior_rubric = (
+        prior_breakdown.get("rubric_grading")
+        if isinstance(prior_breakdown.get("rubric_grading"), dict)
+        else {}
+    )
+    prior_retry = (
+        dict(prior_rubric.get("retry"))
+        if isinstance(prior_rubric.get("retry"), dict)
+        else {}
+    )
+    if grading_incomplete:
+        attempts = max(0, int(prior_retry.get("attempt_count") or 0))
+        delay_minutes = min(360, max(1, 2 ** min(attempts, 8)))
+        prior_retry.update(
+            {
+                "status": (
+                    "running" if prior_retry.get("status") == "running" else "pending"
+                ),
+                "attempt_count": attempts,
+                "next_attempt_at": (
+                    datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+                ).isoformat(),
+                "last_error": (
+                    rubric_breakdown.get("error")
+                    or ", ".join(rubric_breakdown.get("failed_dimension_ids") or [])
+                    or "rubric_grading_incomplete"
+                ),
+            }
+        )
+    elif retry_scoring or prior_retry:
+        prior_retry.update(
+            {
+                "status": "complete",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "next_attempt_at": None,
+                "last_error": None,
+            }
+        )
+    if prior_retry:
+        rubric_breakdown["retry"] = prior_retry
+
     # Store the full breakdown: component scores (0-100) + 8 category scores (0-10) +
     # detailed per-metric scores + explanations + fit match + rubric grades (#37).
     assessment.score_breakdown = {
@@ -942,7 +1251,7 @@ def submit_assessment_impl(
     }
     assessment.score_weights_used = composite.get("weights_used", {})
     assessment.flags = composite.get("fraud", {}).get("flags", [])
-    assessment.scored_at = utcnow()
+    assessment.scored_at = None if grading_incomplete else utcnow()
     assessment.total_duration_seconds = duration_seconds
     assessment.total_prompts = len(interactions)
     prompt_input_tokens = sum(max(0, int(it.get("input_tokens", 0) or 0)) for it in interactions)
@@ -1044,15 +1353,25 @@ def submit_assessment_impl(
             actor_type="system",
             reason="Pipeline initialized at assessment submit",
         )
-        transition_stage(
-            db,
-            app=application_row,
-            to_stage="review",
-            source="system",
-            actor_type="system",
-            reason="Assessment completed",
-            metadata={"assessment_id": assessment.id, "completed_due_to_timeout": False},
-        )
+        if not grading_incomplete:
+            transition_stage(
+                db,
+                app=application_row,
+                to_stage="review",
+                source="system",
+                actor_type="system",
+                reason=(
+                    "Assessment grading completed"
+                    if retry_scoring
+                    else "Assessment completed"
+                ),
+                metadata={
+                    "assessment_id": assessment.id,
+                    "completed_due_to_timeout": bool(
+                        getattr(assessment, "completed_due_to_timeout", False)
+                    ),
+                },
+            )
         refresh_application_score_cache(application_row, db=db)
 
     try:
@@ -1062,20 +1381,35 @@ def submit_assessment_impl(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to submit assessment")
 
+    if grading_incomplete and not retry_scoring and enqueue_rubric_retry_on_commit:
+        # The DB row is the durable outbox; this direct kick keeps latency low,
+        # while the periodic sweep recovers broker outages and worker crashes.
+        try:
+            from ...tasks.rubric_retry_tasks import retry_incomplete_rubric_scoring
+
+            retry_incomplete_rubric_scoring.delay(int(assessment.id))
+        except Exception:
+            logger.exception(
+                "Failed to enqueue rubric retry assessment_id=%s; sweep will recover",
+                assessment.id,
+            )
+
     # --- 5. Notifications ---
     # Notify the org's primary admin — the oldest active admin account, falling
     # back to the oldest active member. Deterministic, unlike a bare .first()
     # (which picked an arbitrary user); the assessment-complete email now has a
     # well-defined recipient rather than whoever the DB happened to return.
-    notify_user = (
-        db.query(User)
-        .filter(
-            User.organization_id == assessment.organization_id,
-            User.is_active.is_(True),
+    notify_user = None
+    if not grading_incomplete and not suppress_completion_side_effects:
+        notify_user = (
+            db.query(User)
+            .filter(
+                User.organization_id == assessment.organization_id,
+                User.is_active.is_(True),
+            )
+            .order_by(User.is_superuser.desc(), User.created_at.asc())
+            .first()
         )
-        .order_by(User.is_superuser.desc(), User.created_at.asc())
-        .first()
-    )
     if notify_user:
         from ...components.notifications.tasks import send_results_email
 
@@ -1084,12 +1418,21 @@ def submit_assessment_impl(
             if assessment.candidate
             else "Candidate"
         )
-        send_results_email.delay(
-            user_email=notify_user.email,
-            candidate_name=candidate_name,
-            score=assessment.score,
-            assessment_id=assessment.id,
-        )
+        try:
+            send_results_email.delay(
+                user_email=notify_user.email,
+                candidate_name=candidate_name,
+                score=assessment.score,
+                assessment_id=assessment.id,
+            )
+        except Exception:
+            # Scoring is already committed and authoritative. Never invalidate
+            # it (or rerun grading and duplicate side effects) because the
+            # notification broker is temporarily unavailable.
+            logger.exception(
+                "Failed to enqueue assessment result email assessment_id=%s",
+                assessment.id,
+            )
 
     # Assessments are Taali-native: only mirror the result back into Workable
     # when the org has write-back enabled (workable_writeback). Read-only orgs
@@ -1100,7 +1443,9 @@ def submit_assessment_impl(
 
     assessment_workable_optin = workable_writeback_enabled(org)
     if (
-        not settings_obj.MVP_DISABLE_WORKABLE
+        not grading_incomplete
+        and not suppress_completion_side_effects
+        and not settings_obj.MVP_DISABLE_WORKABLE
         and assessment_workable_optin
         and org
         and org.workable_connected
@@ -1111,24 +1456,35 @@ def submit_assessment_impl(
         from ...tasks.assessment_tasks import post_results_to_workable
         from ...services.workable_actions_service import resolve_workable_actor_member_id
 
-        post_results_to_workable.delay(
-            access_token=org.workable_access_token,
-            subdomain=org.workable_subdomain,
-            candidate_id=assessment.workable_candidate_id,
-            assessment_data={
-                "score": assessment.score or 0,
-                "tests_passed": assessment.tests_passed or 0,
-                "tests_total": assessment.tests_total or 0,
-                "time_taken": assessment.duration_minutes,
-                "results_url": f"{settings_obj.FRONTEND_URL}/assessments/{assessment.id}",
-            },
-            member_id=resolve_workable_actor_member_id(org, getattr(application_row, "role", None)),
-            request_id=get_request_id(),
-        )
+        try:
+            post_results_to_workable.delay(
+                access_token=org.workable_access_token,
+                subdomain=org.workable_subdomain,
+                candidate_id=assessment.workable_candidate_id,
+                assessment_data={
+                    "score": assessment.score or 0,
+                    "tests_passed": assessment.tests_passed or 0,
+                    "tests_total": assessment.tests_total or 0,
+                    "time_taken": assessment.duration_minutes,
+                    "results_url": f"{settings_obj.FRONTEND_URL}/assessments/{assessment.id}",
+                },
+                member_id=resolve_workable_actor_member_id(
+                    org, getattr(application_row, "role", None)
+                ),
+                request_id=get_request_id(),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to enqueue assessment Workable writeback assessment_id=%s",
+                assessment.id,
+            )
 
     return {
         "success": True,
         "score": assessment.score,
+        "grading_status": "pending" if grading_incomplete else "complete",
+        "scoring_partial": bool(assessment.scoring_partial),
+        "scoring_failed": bool(assessment.scoring_failed),
         "tests_passed": passed,
         "tests_total": total,
         "quality_analysis": quality.get("analysis") if quality.get("success") else None,

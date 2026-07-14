@@ -70,14 +70,17 @@ logger = logging.getLogger(__name__)
 # never delivered, never surfaced, never retried (the 2026-06-25 incident).
 #
 # Sends now go through ``_send_resend_email``, which retries in-process with
-# bounded exponential backoff + jitter. The SDK (resend==2.4.0) raises
-# ``ResendError`` with ``.code`` set to the HTTP status but DISCARDS the
+# bounded exponential backoff + jitter. The SDK (resend==2.33.0) raises
+# ``ResendError`` with ``.code`` set to the HTTP status; its send options also
+# expose the provider idempotency header used for durable invite recovery. The
+# exception still discards the
 # response, so the ``Retry-After`` header isn't available — we honor it if a
 # future SDK version exposes it (a ``retry_after`` attribute) and otherwise
 # fall back to backoff calibrated to clear the per-second limit. Anything still
 # failing after the in-process budget is reported up (``rate_limited`` /
-# ``retryable`` flags) so the Celery task can re-queue and, once exhausted,
-# surface a ``failed`` status to the recruiter rather than swallow it.
+# ``retryable`` flags) so the Celery task can re-queue and hand transient
+# exhaustion to its durable recovery sweep. Explicit permanent 4xx refusal is
+# surfaced as ``failed`` / HITL rather than swallowed.
 _RETRYABLE_STATUS_CODES = {"429", "500", "502", "503", "504"}
 _MAX_SEND_ATTEMPTS = 4
 _BASE_BACKOFF_SECONDS = 0.5
@@ -133,7 +136,12 @@ def _send_backoff_seconds(attempt: int, exc: Exception) -> float:
     return base + random.uniform(0.0, 0.4)
 
 
-def _send_resend_email(payload: dict, *, recipient: str) -> dict:
+def _send_resend_email(
+    payload: dict,
+    *,
+    recipient: str,
+    idempotency_key: str | None = None,
+) -> dict:
     """Send one email via Resend with bounded retry/backoff on 429 + transient
     5xx. Returns the raw Resend response on success; re-raises the last
     exception once the in-process attempt budget is spent (the caller maps that
@@ -144,6 +152,15 @@ def _send_resend_email(payload: dict, *, recipient: str) -> dict:
         payload["reply_to"] = f"support@{BRAND_DOMAIN}"
     for attempt in range(1, _MAX_SEND_ATTEMPTS + 1):
         try:
+            if idempotency_key:
+                # resend>=2.33 exposes SendOptions. The same key is reused for
+                # every in-process/Celery/Beat retry of one assessment invite,
+                # so an accepted request whose response was lost cannot send a
+                # second candidate email.
+                return resend.Emails.send(
+                    payload,
+                    {"idempotency_key": str(idempotency_key)},
+                )
             return resend.Emails.send(payload)
         except Exception as exc:  # noqa: BLE001 — classified below, re-raised if permanent
             retryable, is_rate_limit = classify_send_error(exc)
@@ -182,6 +199,7 @@ class EmailService:
         frontend_url: str,
         candidate_facing_brand: str | None = None,
         reply_to: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict:
         """Send the assessment invite email, co-branded with the org.
 
@@ -230,7 +248,19 @@ class EmailService:
             if reply_to_clean:
                 payload["reply_to"] = reply_to_clean
 
-            email = _send_resend_email(payload, recipient=candidate_email)
+            stable_key = (
+                (idempotency_key or "").strip()
+                or (
+                    f"assessment-invite/{int(assessment_id)}"
+                    if assessment_id is not None
+                    else None
+                )
+            )
+            email = _send_resend_email(
+                payload,
+                recipient=candidate_email,
+                idempotency_key=stable_key,
+            )
 
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
             logger.info("Assessment invite sent successfully (email_id=%s, to=%s)", email_id, candidate_email)
@@ -248,6 +278,7 @@ class EmailService:
                 "rate_limited": is_rate_limit,
                 "retryable": retryable,
                 "retry_after": _retry_after_seconds(e),
+                "error_code": _send_error_code(e),
             }
 
     def send_results_notification(
@@ -479,4 +510,3 @@ class EmailService:
         except Exception as exc:
             logger.error("Failed to send expiry reminder to %s: %s", candidate_email, str(exc))
             return {"success": False, "email_id": ""}
-

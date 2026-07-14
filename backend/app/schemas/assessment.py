@@ -92,6 +92,10 @@ class AssessmentResponse(BaseModel):
     score_weights_used: Optional[Dict[str, float]] = None
     flags: Optional[List[str]] = None
     scored_at: Optional[datetime] = None
+    scoring_failed: Optional[bool] = False
+    scoring_partial: Optional[bool] = False
+    repo_capture_failed: Optional[bool] = False
+    test_parse_error: Optional[bool] = False
     is_voided: Optional[bool] = False
     voided_at: Optional[datetime] = None
     void_reason: Optional[str] = None

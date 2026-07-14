@@ -13,6 +13,8 @@ from fastapi import HTTPException
 
 from app.components.assessments import service as assessments_svc
 from app.models.assessment import Assessment, AssessmentStatus
+from app.models.role import Role
+from app.tasks import agent_tasks
 from app.tasks.assessment_tasks import (
     cleanup_expired_assessments,
     finalize_timed_out_assessments,
@@ -84,7 +86,17 @@ def test_finalize_scores_and_marks_timeout(client, db, monkeypatch):
     a = _make_assessment(client, db, headers, task["id"],
                          status=AssessmentStatus.IN_PROGRESS, started_minutes_ago=40)
 
-    def fake_submit(assessment, final_code, tab_switch_count, _db):
+    def fake_submit(
+        assessment,
+        final_code,
+        tab_switch_count,
+        _db,
+        *,
+        wake_agent_on_commit=True,
+        enqueue_rubric_retry_on_commit=True,
+    ):
+        assert wake_agent_on_commit is False
+        assert enqueue_rubric_retry_on_commit is False
         assessment.status = AssessmentStatus.COMPLETED
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.taali_score = 7.5
@@ -103,6 +115,64 @@ def test_finalize_scores_and_marks_timeout(client, db, monkeypatch):
     assert a.scoring_failed in (False, None)
     assert a.taali_score == 7.5  # the score the submit pipeline produced is preserved
     assert a.completed_at is not None
+
+
+def test_timed_out_finalization_wakes_enabled_role_once_after_terminal_commit(
+    client, db, monkeypatch
+):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    role_response = client.post(
+        "/api/v1/roles",
+        json={"name": "Timeout Agent Role"},
+        headers=headers,
+    )
+    assert role_response.status_code in (200, 201), role_response.text
+    role = db.get(Role, role_response.json()["id"])
+    role.agentic_mode_enabled = True
+
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    a.role_id = role.id
+    db.commit()
+
+    def fake_submit(
+        assessment,
+        final_code,
+        tab_switch_count,
+        _db,
+        *,
+        wake_agent_on_commit=True,
+        enqueue_rubric_retry_on_commit=True,
+    ):
+        assert wake_agent_on_commit is False
+        assert enqueue_rubric_retry_on_commit is False
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.completed_at = datetime.now(timezone.utc)
+        assessment.taali_score = 8.4
+        _db.commit()
+        return {"ok": True}
+
+    wake_calls: list[tuple[int, bool]] = []
+    monkeypatch.setattr(assessments_svc, "submit_assessment", fake_submit)
+    monkeypatch.setattr(
+        agent_tasks.agent_cohort_tick_role,
+        "delay",
+        lambda role_id, *, activation: wake_calls.append((role_id, activation)),
+    )
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "finalized"
+    db.refresh(a)
+    assert a.status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    assert wake_calls == [(role.id, False)]
 
 
 def test_finalize_survives_scoring_failure(client, db, monkeypatch):
@@ -189,7 +259,15 @@ def test_sweep_finalizes_timed_out_and_skips_active(client, db, monkeypatch):
     active = _make_assessment(client, db, headers, task["id"],
                               status=AssessmentStatus.IN_PROGRESS, started_minutes_ago=5)
 
-    def fake_submit(assessment, final_code, tab_switch_count, _db):
+    def fake_submit(
+        assessment,
+        final_code,
+        tab_switch_count,
+        _db,
+        *,
+        wake_agent_on_commit=True,
+    ):
+        assert wake_agent_on_commit is False
         assessment.status = AssessmentStatus.COMPLETED
         assessment.completed_at = datetime.now(timezone.utc)
         _db.commit()

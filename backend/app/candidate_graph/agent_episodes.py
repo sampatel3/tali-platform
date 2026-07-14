@@ -165,6 +165,7 @@ def build_recruiter_action_episode(
     action: str,
     reason: str | None,
     happened_at: datetime,
+    role_id: int | None = None,
 ) -> Episode | None:
     if organization_id <= 0:
         return None
@@ -204,6 +205,7 @@ def build_hiring_outcome_episode(
     outcome_type: str,
     quality_signal: float | None,
     observed_at: datetime,
+    role_id: int | None = None,
 ) -> Episode | None:
     if organization_id <= 0:
         return None
@@ -249,13 +251,37 @@ def build_hiring_outcome_episode(
 # ---------------------------------------------------------------------------
 
 
+def _dispatch_metered(episode: Episode, payload: dict[str, Any]) -> int:
+    """Dispatch one derived graph episode without an unmetered provider path."""
+    organization_id = int(payload["organization_id"])
+    raw_role_id = payload.get("role_id")
+    role_id = int(raw_role_id) if raw_role_id is not None else None
+    raw_candidate_id = payload.get("candidate_taali_id")
+    candidate_id = (
+        int(raw_candidate_id) if raw_candidate_id is not None else None
+    )
+    raw_user_id = payload.get("recruiter_id") or payload.get("authored_by_user_id")
+    user_id = int(raw_user_id) if raw_user_id else None
+    return dispatch(
+        [episode],
+        bill_organization_id=organization_id,
+        bill_role_id=role_id,
+        bill_user_id=user_id,
+        bill_candidate_id=candidate_id,
+        bill_trace_id=f"graph-direct:{episode.name}",
+        require_hard_admission=True,
+        require_role_admission=role_id is not None,
+        raise_on_error=True,
+    )
+
+
 def emit_score_event(**kwargs: Any) -> bool:
     """Write a single agent-score episode. Returns True if dispatched."""
     episode = build_agent_score_episode(**kwargs)
     if episode is None:
         return False
     try:
-        sent = dispatch([episode])
+        sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
         logger.warning("emit_score_event failed: %s", exc)
@@ -267,7 +293,7 @@ def emit_decision_event(**kwargs: Any) -> bool:
     if episode is None:
         return False
     try:
-        sent = dispatch([episode])
+        sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
         logger.warning("emit_decision_event failed: %s", exc)
@@ -279,7 +305,7 @@ def emit_recruiter_action_event(**kwargs: Any) -> bool:
     if episode is None:
         return False
     try:
-        sent = dispatch([episode])
+        sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
         logger.warning("emit_recruiter_action_event failed: %s", exc)
@@ -291,7 +317,7 @@ def emit_hiring_outcome_event(**kwargs: Any) -> bool:
     if episode is None:
         return False
     try:
-        sent = dispatch([episode])
+        sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
         logger.warning("emit_hiring_outcome_event failed: %s", exc)
@@ -361,7 +387,7 @@ def emit_role_intent_event(**kwargs: Any) -> bool:
     if episode is None:
         return False
     try:
-        sent = dispatch([episode])
+        sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
         logger.warning("emit_role_intent_event failed: %s", exc)

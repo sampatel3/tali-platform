@@ -47,6 +47,17 @@
   border: 1px solid color-mix(in oklab, var(--amber) 40%, var(--line));
 }
 .job-agent-pill.is-paused .d { background: var(--bg-2); }
+.job-agent-pill.is-queued {
+  background: var(--purple-soft);
+  color: var(--purple);
+  border: 1px solid color-mix(in oklab, var(--purple) 35%, var(--line));
+}
+.job-agent-pill.is-queued .d { background: var(--bg-2); }
+.job-agent-pill.is-needs-input {
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+  border: 1px solid color-mix(in oklab, var(--amber) 40%, var(--line));
+}
 .job-agent-pill.is-off {
   background: var(--bg-3);
   color: var(--mute);

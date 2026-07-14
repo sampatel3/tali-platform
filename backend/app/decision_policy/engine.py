@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from ..models.decision_policy import DecisionPolicy as DecisionPolicyRow
 from .intent import apply_intent_overrides
-from .schema import DECISION_POINT_NAMES, DecisionPoint, PolicyJson
+from .schema import DECISION_POINT_NAMES, DecisionPoint, PolicyJson, Rule
 
 
 logger = logging.getLogger("taali.decision_policy.engine")
@@ -233,6 +233,98 @@ def apply_effective_threshold(policy: "PolicyJson", value: float | None) -> "Pol
             new_points[point_name] = point
     if not changed:
         return policy
+    return policy.model_copy(update={"decision_points": new_points})
+
+
+_FAILED_ASSESSMENT_CONDITION = (
+    "assessment_completed AND assessment_score < assessment_score_min"
+)
+
+
+def apply_completed_assessment_outcome_rules(policy: PolicyJson) -> PolicyJson:
+    """Keep a completed failed assessment out of the passive cascade gap.
+
+    Older persisted v1 policies predate the explicit failed-assessment branch:
+    their advance rule only checked ``taali_score`` and their reject point only
+    checked role fit.  A strong CV could therefore mask a low assessment and
+    either advance the candidate or fall all the way through to ``no_action``.
+
+    Treat the policy's existing ``assessment_score_min`` as the pass/fail
+    boundary.  A highest-priority passive rule prevents advance below that
+    floor, then a matching reject rule queues the existing HITL reject decision.
+    This is an ephemeral compatibility overlay, so already-activated policies
+    receive the invariant without mutating their frozen audit revision.  New
+    policies persist the same rules directly in ``bootstrap._default_policy_json``.
+    """
+    advance = policy.decision_points.get("advance_to_interview")
+    reject = policy.decision_points.get("reject")
+    if advance is None or reject is None:
+        return policy
+    raw_floor = advance.thresholds.get("assessment_score_min")
+    if raw_floor is None:
+        return policy
+    try:
+        assessment_floor = float(raw_floor)
+    except (TypeError, ValueError):  # pragma: no cover - schema already numeric
+        return policy
+
+    # Remove older/lower-priority copies before prepending the invariant.  The
+    # schema permits recruiter-authored priorities up to 10_000, so insertion
+    # order plus the maximum priority guarantees this guard wins ties.
+    advance_rules = [
+        rule
+        for rule in advance.rules
+        if not (
+            rule.if_ == _FAILED_ASSESSMENT_CONDITION and rule.then == "skip"
+        )
+    ]
+    advance_rules.insert(
+        0,
+        Rule.model_validate(
+            {
+                "if": _FAILED_ASSESSMENT_CONDITION,
+                "then": "skip",
+                "priority": 10_000,
+                "reason_template": (
+                    "Completed assessment is below the policy pass floor; "
+                    "advance is blocked and the reject decision point must decide."
+                ),
+            }
+        ),
+    )
+
+    reject_thresholds = dict(reject.thresholds)
+    reject_thresholds["assessment_score_min"] = assessment_floor
+    reject_rules = [
+        rule
+        for rule in reject.rules
+        if not (
+            rule.if_ == _FAILED_ASSESSMENT_CONDITION
+            and rule.then == "queue_reject_decision"
+        )
+    ]
+    reject_rules.insert(
+        0,
+        Rule.model_validate(
+            {
+                "if": _FAILED_ASSESSMENT_CONDITION,
+                "then": "queue_reject_decision",
+                "priority": 10_000,
+                "reason_template": (
+                    "Completed assessment is below the policy pass floor; "
+                    "queueing reject for recruiter approval."
+                ),
+            }
+        ),
+    )
+
+    new_points = dict(policy.decision_points)
+    new_points["advance_to_interview"] = advance.model_copy(
+        update={"rules": advance_rules}
+    )
+    new_points["reject"] = reject.model_copy(
+        update={"thresholds": reject_thresholds, "rules": reject_rules}
+    )
     return policy.model_copy(update={"decision_points": new_points})
 
 
@@ -703,6 +795,7 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
     # threshold FIRST (so it's the base), then let recruiter-intent
     # strictness nudge it.
     policy = apply_effective_threshold(policy, inputs.effective_role_fit_threshold)
+    policy = apply_completed_assessment_outcome_rules(policy)
 
     intent_payload = inputs.intent or {}
     overlaid, intent_overrode = apply_intent_overrides(policy, intent_payload)
@@ -817,6 +910,7 @@ __all__ = [
     "DecisionInputs",
     "ManualAction",
     "PolicyDecision",
+    "apply_completed_assessment_outcome_rules",
     "evaluate",
     "load_active_policy",
     "merge_role_into_default",

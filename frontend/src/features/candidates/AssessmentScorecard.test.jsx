@@ -69,6 +69,22 @@ describe('readGradedRubricDimensions', () => {
     expect(fromString[0].citations).toEqual(['transcript turn 4']);
     expect(readGradedRubricDimensions({ score_breakdown: 'not json' })).toEqual([]);
   });
+
+  it('synthesizes honest per-dimension errors when the grader failed before returning grades', () => {
+    const dimensions = readGradedRubricDimensions({
+      score_breakdown: {
+        rubric_grading: {
+          status: 'failed',
+          fully_graded: false,
+          failed_dimension_ids: ['quality', 'judgment'],
+          error: 'rubric_grader_unavailable',
+        },
+      },
+    });
+    expect(dimensions.map((dimension) => dimension.id)).toEqual(['quality', 'judgment']);
+    expect(dimensions.every((dimension) => dimension.score == null)).toBe(true);
+    expect(dimensions.every((dimension) => dimension.error === 'rubric_grader_unavailable')).toBe(true);
+  });
 });
 
 describe('AssessmentScorecard', () => {
@@ -107,5 +123,45 @@ describe('AssessmentScorecard', () => {
   it('shows the empty state for an unscored assessment', () => {
     render(<AssessmentScorecard assessment={{}} />);
     expect(screen.getByTestId('assessment-scorecard-empty')).toBeTruthy();
+  });
+
+  it('surfaces partial grading errors without rendering them as zero scores', () => {
+    const partial = {
+      ...ASSESSMENT,
+      scoring_partial: true,
+      score_breakdown: {
+        rubric_grading: {
+          status: 'partial',
+          fully_graded: false,
+          fluency_4d: ASSESSMENT.score_breakdown.rubric_grading.fluency_4d,
+          dimensions: [
+            ...ASSESSMENT.score_breakdown.rubric_grading.dimensions,
+            {
+              id: 'provider_failed_dimension',
+              score: 0,
+              rating: 'error',
+              reasoning: 'Grading is incomplete.',
+              error: 'insufficient credits',
+            },
+          ],
+        },
+      },
+      evaluation_rubric: {
+        ...ASSESSMENT.evaluation_rubric,
+        provider_failed_dimension: { lens: 'discernment' },
+      },
+    };
+
+    const dimensions = readGradedRubricDimensions(partial);
+    const failed = dimensions.find((dimension) => dimension.id === 'provider_failed_dimension');
+    expect(failed.score).toBeNull();
+    expect(failed.error).toBe('insufficient credits');
+
+    render(<AssessmentScorecard assessment={partial} />);
+    expect(screen.getByTestId('assessment-grading-pending')).toBeTruthy();
+    expect(screen.getByText(/Provider Failed Dimension: insufficient credits/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Discernment/ }));
+    expect(screen.getByText('pending')).toBeTruthy();
+    expect(screen.queryByText('0 / 100')).toBeNull();
   });
 });

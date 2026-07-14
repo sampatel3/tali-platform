@@ -8,6 +8,10 @@ adds stale rows for already-scored apps.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 from sqlalchemy.orm import sessionmaker
 
@@ -20,6 +24,8 @@ from app.models import (
     Role,
     SCORE_JOB_DONE,
     SCORE_JOB_ERROR,
+    SCORE_JOB_PENDING,
+    SCORE_JOB_RUNNING,
 )
 from app.cv_matching import runner as cv_match_runner
 from app.cv_matching.schemas import CVMatchOutput, ScoringStatus
@@ -37,6 +43,9 @@ from app.models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 @pytest.fixture(autouse=True)
 def _force_inline_celery(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key-not-used")
+    # This file explicitly stubs the legacy runner below; keep the production
+    # holistic rollout from bypassing that stub and making a real network call.
+    monkeypatch.setattr(settings, "HOLISTIC_SCORING_ENABLED", False)
     # Skip the pre-screen gate — these tests target the orchestrator's
     # behaviour around the v3 cv_match pipeline (cache, errors, retries),
     # not the pre-screen filter. Pre-screen has its own coverage.
@@ -226,6 +235,342 @@ def test_existing_pending_job_is_reused_when_not_forced(monkeypatch, session) ->
     reused = enqueue_score(db, app)
     assert reused is not None
     assert reused.id == pending.id, "pending job must be returned, not duplicated"
+
+
+def test_direct_enqueue_counts_existing_role_job_commitments(
+    monkeypatch, session,
+) -> None:
+    """Public applies cannot enqueue past the role cap while jobs are pending."""
+    db, org, role, app = session
+    # One SCORE admission is 30,000 microcredits == 3 cents.
+    role.monthly_usd_budget_cents = 3
+    db.add(
+        CvScoreJob(
+            application_id=app.id,
+            role_id=role.id,
+            status=SCORE_JOB_PENDING,
+        )
+    )
+    candidate = Candidate(organization_id=org.id, email="second@example.com")
+    db.add(candidate)
+    db.flush()
+    second = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="applied",
+        cv_text="Another experienced Python and AWS engineer.",
+    )
+    db.add(second)
+    db.commit()
+
+    from app.tasks import scoring_tasks
+    dispatch = MagicMock(return_value=SimpleNamespace(id="must-not-dispatch"))
+    monkeypatch.setattr(scoring_tasks.score_application_job, "delay", dispatch)
+
+    assert enqueue_score(db, second) is None
+    dispatch.assert_not_called()
+    assert (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == second.id)
+        .count()
+        == 0
+    )
+
+
+def test_direct_enqueue_role_admission_error_fails_closed(
+    monkeypatch, session,
+) -> None:
+    db, _org, _role, app = session
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "ensure_role_capacity",
+        MagicMock(side_effect=RuntimeError("budget query unavailable")),
+    )
+
+    assert enqueue_score(db, app) is None
+    assert db.query(CvScoreJob).count() == 0
+
+
+def test_direct_enqueue_org_meter_error_fails_closed(
+    monkeypatch, session,
+) -> None:
+    db, _org, _role, app = session
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_meter_reserve",
+        MagicMock(side_effect=RuntimeError("ledger unavailable")),
+    )
+
+    assert enqueue_score(db, app) is None
+    assert db.query(CvScoreJob).count() == 0
+
+
+def test_broker_failure_marks_attempt_error_and_allows_retry(monkeypatch, session) -> None:
+    db, _org, _role, app = session
+    from app.tasks import scoring_tasks
+
+    def broker_down(*_args, **_kwargs):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(scoring_tasks.score_application_job, "delay", broker_down)
+    with pytest.raises(RuntimeError, match="redis unavailable"):
+        enqueue_score(db, app)
+
+    failed = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id)
+        .order_by(CvScoreJob.id.desc())
+        .first()
+    )
+    assert failed.status == SCORE_JOB_ERROR
+    assert "broker_dispatch_failed" in (failed.error_message or "")
+
+    monkeypatch.setattr(
+        scoring_tasks.score_application_job,
+        "delay",
+        lambda *_args, **_kwargs: SimpleNamespace(id="retry-task"),
+    )
+    retried = enqueue_score(db, app)
+    assert retried is not None and retried.id != failed.id
+    assert retried.celery_task_id == "retry-task"
+
+
+def test_reaper_redispatches_latest_broker_failure_without_waiting_for_hourly_agent(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.tasks import scoring_tasks
+
+    failed = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_ERROR,
+        error_message="broker_dispatch_failed: redis unavailable",
+        finished_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+    )
+    db.add(failed)
+    db.commit()
+    dispatched: list[int] = []
+
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "enqueue_score",
+        lambda _db, application, *, force=False: (
+            dispatched.append(int(application.id)) or SimpleNamespace(id=999)
+        ),
+    )
+
+    result = scoring_tasks.recover_stuck_score_jobs.run(limit=10)
+
+    assert dispatched == [int(app.id)]
+    assert result["recovered"] == 1
+    assert result["stale_attempts"] == 0
+    assert result["broker_failure_retry_minutes"] == 1
+
+
+def test_stuck_score_recovery_archives_attempt_and_redispatches(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.tasks import scoring_tasks
+
+    stale = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status="pending",
+        queued_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+    )
+    duplicate_stale = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status="running",
+        queued_at=datetime.now(timezone.utc) - timedelta(minutes=35),
+        started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+    )
+    db.add_all([stale, duplicate_stale])
+    db.commit()
+    dispatched: list[int] = []
+
+    def fake_enqueue(_db, application, *, force=False):
+        dispatched.append(int(application.id))
+        return SimpleNamespace(id=999)
+
+    monkeypatch.setattr(cv_score_orchestrator, "enqueue_score", fake_enqueue)
+    result = scoring_tasks.recover_stuck_score_jobs.run(
+        limit=10,
+        pending_stale_minutes=15,
+        running_stale_minutes=15,
+    )
+
+    db.refresh(stale)
+    db.refresh(duplicate_stale)
+    assert stale.status == SCORE_JOB_ERROR
+    assert duplicate_stale.status == SCORE_JOB_ERROR
+    assert stale.error_message == "stale_attempt_recovered"
+    assert dispatched == [int(app.id)]
+    assert result["recovered"] == 1
+    assert result["stale_attempts"] == 2
+
+
+def test_stuck_score_recovery_does_not_duplicate_legitimate_queue_delay(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.tasks import scoring_tasks
+
+    pending = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_PENDING,
+        queued_at=datetime.now(timezone.utc) - timedelta(minutes=90),
+    )
+    running = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_RUNNING,
+        queued_at=datetime.now(timezone.utc) - timedelta(minutes=50),
+        started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+    )
+    db.add_all([pending, running])
+    db.commit()
+
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "enqueue_score",
+        lambda *_args, **_kwargs: pytest.fail("live queue work was redispatched"),
+    )
+    result = scoring_tasks.recover_stuck_score_jobs.run(limit=10)
+
+    db.refresh(pending)
+    db.refresh(running)
+    assert pending.status == SCORE_JOB_PENDING
+    assert running.status == SCORE_JOB_RUNNING
+    assert result["stale_attempts"] == 0
+    assert result["recovered"] == 0
+    assert result["pending_stale_minutes"] == 360
+    assert result["running_stale_minutes"] == 60
+
+
+def test_score_worker_persists_running_lease_before_expensive_call(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.platform.database import SessionLocal
+    from app.tasks import scoring_tasks
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_PENDING,
+    )
+    db.add(job)
+    db.commit()
+
+    observed: dict[str, object] = {}
+
+    def fake_execute(_db, *, application, job, force_full_score=False):
+        observer = SessionLocal()
+        try:
+            persisted = (
+                observer.query(CvScoreJob)
+                .filter(CvScoreJob.id == int(job.id))
+                .one()
+            )
+            observed["status"] = persisted.status
+            observed["started_at"] = persisted.started_at
+        finally:
+            observer.close()
+        job.status = SCORE_JOB_DONE
+        job.cache_hit = "miss"
+        job.finished_at = datetime.now(timezone.utc)
+
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    assert observed["status"] == SCORE_JOB_RUNNING
+    assert observed["started_at"] is not None
+    assert result["status"] == SCORE_JOB_DONE
+    db.refresh(job)
+    assert job.status == SCORE_JOB_DONE
+
+
+def test_score_worker_discards_result_when_role_intent_changes_mid_call(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.tasks import scoring_tasks
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_PENDING,
+    )
+    db.add(job)
+    db.commit()
+
+    def fake_execute(worker_db, *, application, job, force_full_score=False):
+        # Simulate a re-publish committing while the provider call was in
+        # flight: the computed score belongs to the old fingerprint, while the
+        # live role now carries materially different hiring intent.
+        live_role = worker_db.query(Role).filter(Role.id == role.id).one()
+        live_role.job_spec_text = "Materially revised requisition intent"
+        application.cv_match_score = 99.0
+        application.cv_match_details = {"summary": "old-JD output"}
+        job.status = SCORE_JOB_DONE
+        job.finished_at = datetime.now(timezone.utc)
+
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    assert result["status"] == "superseded_role_intent"
+    db.expire_all()
+    persisted_app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.id == app.id)
+        .one()
+    )
+    persisted_attempt = db.query(CvScoreJob).filter(CvScoreJob.id == job.id).one()
+    latest = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id)
+        .order_by(CvScoreJob.id.desc())
+        .first()
+    )
+    assert persisted_app.cv_match_score is None
+    assert persisted_app.cv_match_details is None
+    assert persisted_attempt.status == SCORE_JOB_ERROR
+    assert persisted_attempt.error_message == "superseded_role_intent"
+    assert latest is not None and latest.status == "stale"
+    assert latest.error_message == "rescore_after_role_reconfiguration"
+
+
+def test_score_worker_hard_limit_precedes_running_lease_recovery() -> None:
+    from app.tasks import scoring_tasks
+
+    assert scoring_tasks.score_application_job.soft_time_limit == (
+        scoring_tasks.SCORE_TASK_SOFT_LIMIT_SECONDS
+    )
+    assert scoring_tasks.score_application_job.time_limit == (
+        scoring_tasks.SCORE_TASK_HARD_LIMIT_SECONDS
+    )
+    assert scoring_tasks.SCORE_TASK_HARD_LIMIT_SECONDS < (
+        scoring_tasks.DEFAULT_RUNNING_STALE_MINUTES * 60
+    )
 
 
 def test_force_creates_new_job_even_when_pending_exists(monkeypatch, session) -> None:

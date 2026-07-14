@@ -281,6 +281,10 @@ def build_breakdown(assessment: Assessment) -> Dict[str, Any]:
 
 
 def _score_mode_for_assessment(assessment: Assessment) -> str | None:
+    if bool(getattr(assessment, "scoring_partial", False)) or bool(
+        getattr(assessment, "scoring_failed", False)
+    ):
+        return "rubric_grading_pending"
     assessment_score = getattr(assessment, "assessment_score", None)
     if assessment_score is None:
         assessment_score = getattr(assessment, "final_score", None)
@@ -406,6 +410,10 @@ def assessment_to_response(
         "score_weights_used": assessment.score_weights_used,
         "flags": assessment.flags,
         "scored_at": assessment.scored_at,
+        "scoring_failed": bool(getattr(assessment, "scoring_failed", False)),
+        "scoring_partial": bool(getattr(assessment, "scoring_partial", False)),
+        "repo_capture_failed": bool(getattr(assessment, "repo_capture_failed", False)),
+        "test_parse_error": bool(getattr(assessment, "test_parse_error", False)),
         "is_voided": bool(getattr(assessment, "is_voided", False)),
         "voided_at": getattr(assessment, "voided_at", None),
         "void_reason": getattr(assessment, "void_reason", None),

@@ -4,7 +4,7 @@ settings from the chat.
 Mirrors the role-update PATCH in ``assessments_runtime/roles_management_routes.py``
 (budget gate on activate, clear-pause on resume, auto-sync star, an immediate
 cycle kick) and reuses the SAME helpers — ``budget_guard.resume_if_under_budget``
-and the ``agent_daily_review_role`` task — so steering from chat and from the
+and the complete ``agent_cohort_tick_role`` task — so steering from chat and from the
 settings UI stay in lockstep. Commits before kicking a cycle so the worker
 sees the new state (same ordering the route uses).
 """
@@ -16,7 +16,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models.role import Role
+from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+from ..services.agent_policy_settings import (
+    GRANULAR_AUTOMATION_FIELDS,
+    activation_policy_values,
+    effective_agent_policy,
+    role_automation_enabled,
+)
 
 logger = logging.getLogger("taali.agent_chat.controls")
 
@@ -37,23 +43,148 @@ def _state(role: Role) -> dict[str, Any]:
         "auto_reject": bool(role.auto_reject),
         "auto_reject_pre_screen": bool(role.auto_reject_pre_screen),
         "auto_promote": bool(role.auto_promote),
+        "auto_send_assessment": getattr(role, "auto_send_assessment", None),
+        "auto_resend_assessment": getattr(role, "auto_resend_assessment", None),
+        "auto_advance": getattr(role, "auto_advance", None),
         "auto_skip_assessment": bool(role.auto_skip_assessment),
+        "effective_policy": effective_agent_policy(role),
     }
 
 
-def _kick_cycle(role: Role) -> None:
-    """Enqueue an immediate daily-review cycle (same as the settings UI on
+def _kick_cycle(role: Role, *, activation: bool = False) -> bool:
+    """Enqueue the complete cohort pipeline (same as the settings UI on
     activate/resume). Never block the chat turn on a broker hiccup."""
     try:
-        from ..tasks.agent_tasks import agent_daily_review_role
+        from ..tasks.agent_tasks import agent_cohort_tick_role
 
-        agent_daily_review_role.delay(int(role.id))
-    except Exception:  # pragma: no cover — best-effort; the beat sweep catches up
+        agent_cohort_tick_role.delay(int(role.id), activation=activation)
+        return True
+    except Exception:  # pragma: no cover — fail-closed caller handles state
         logger.exception("failed to enqueue agent cycle for role_id=%s", role.id)
+        return False
 
 
-def set_agent_state(db: Session, role: Role, *, action: str) -> dict[str, Any]:
-    """``activate`` (turn on / resume) or ``pause`` the role's agent."""
+def _needs_durable_task_activation(role: Role) -> bool:
+    """Whether first activation must provision/approve an assessment task.
+
+    Keep this aligned with the role-page Turn-on control: an explicit assessment
+    skip can use the immediate activation path. A generated draft (or no task
+    yet) belongs to the persisted activation intent. A republish-blocked role
+    also uses that path even when it preserved an active manual task: this Turn
+    on is the required HITL confirmation, and the durable worker records the
+    reconfiguration resolution before switching the role back ON.
+    """
+    if bool(role.agentic_mode_enabled) or bool(role.auto_skip_assessment):
+        return False
+    provisioning = (
+        role.assessment_task_provisioning
+        if isinstance(role.assessment_task_provisioning, dict)
+        else {}
+    )
+    reconfiguration = provisioning.get("reconfiguration")
+    if (
+        isinstance(reconfiguration, dict)
+        and str(reconfiguration.get("status") or "") == "blocked"
+    ):
+        return True
+    return not any(bool(task.is_active) for task in list(role.tasks or []))
+
+
+def _queue_durable_activation(
+    db: Session,
+    role: Role,
+    *,
+    user_id: int,
+) -> dict[str, Any]:
+    """Persist first Turn on, then make only best-effort latency kicks.
+
+    Generation, battle testing, repository verification, readiness and the
+    OFF->ON transition are all recovered by backend sweeps.  The chat request is
+    therefore safe to close immediately after this commit.
+    """
+    from ..services.role_activation_intent import (
+        activation_intent_task_ready,
+        request_role_activation_intent,
+    )
+
+    policy = activation_policy_values(role)
+    intent = request_role_activation_intent(
+        role,
+        user_id=int(user_id),
+        monthly_budget_cents=int(role.monthly_usd_budget_cents or 0),
+        auto_promote=policy["auto_promote"],
+        auto_send_assessment=policy["auto_send_assessment"],
+        auto_resend_assessment=policy["auto_resend_assessment"],
+        auto_advance=policy["auto_advance"],
+    )
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception:
+        db.rollback()
+        logger.exception("failed to persist chat activation role_id=%s", role.id)
+        return {
+            "type": "agent_state",
+            "ok": False,
+            "reason": "activation_persist_failed",
+            "message": "I couldn't save the Turn-on request, so I left the agent off. Try again.",
+            "agent": _state(role),
+        }
+
+    # These dispatches reduce latency only. A broker failure is deliberately not
+    # returned as a failed command because the saved outbox is retried by Beat.
+    try:
+        if not list(role.tasks or []):
+            from ..tasks.assessment_tasks import generate_assessment_task_for_role
+
+            generate_assessment_task_for_role.delay(
+                int(role.id), int(role.organization_id)
+            )
+        elif activation_intent_task_ready(role):
+            from ..tasks.agent_tasks import agent_cohort_tick_role
+
+            agent_cohort_tick_role.delay(
+                int(role.id),
+                activation=True,
+                activation_intent_id=str(intent["request_id"]),
+            )
+    except Exception:
+        logger.warning(
+            "initial chat Turn-on kick failed role_id=%s; sweep will retry",
+            role.id,
+            exc_info=True,
+        )
+
+    return {
+        "type": "agent_state",
+        "ok": True,
+        "action": "activation_queued",
+        "message": (
+            "Turn on is saved. The agent is generating and validating its assessment, "
+            "then will turn itself on after production readiness passes. No second "
+            "approval click is needed, and you can leave this page."
+        ),
+        "activation_intent": {
+            "request_id": intent.get("request_id"),
+            "status": intent.get("status"),
+        },
+        "agent": _state(role),
+    }
+
+
+def set_agent_state(
+    db: Session,
+    role: Role,
+    *,
+    action: str,
+    user_id: int,
+) -> dict[str, Any]:
+    """``activate`` (turn on / resume) or ``pause`` the role's agent.
+
+    First activation grants reversible positive autonomy by default, while the
+    irreversible reject rail remains human-confirmed. Production activation and
+    every resume fail closed on runtime/readiness or bootstrap dispatch errors.
+    """
     act = (action or "").strip().lower()
 
     if act in _ACTIVATE:
@@ -68,17 +199,114 @@ def set_agent_state(db: Session, role: Role, *, action: str) -> dict[str, Any]:
                 ),
                 "agent": _state(role),
             }
+        # A fresh role without an active assessment uses the exact same durable
+        # one-click path as the role-page button. Do this before synchronous
+        # readiness: task generation/approval is part of that saved command, not
+        # a prerequisite the recruiter must satisfy manually.
+        if _needs_durable_task_activation(role):
+            return _queue_durable_activation(db, role, user_id=int(user_id))
+        from ..services.agent_activation_readiness import (
+            activation_readiness,
+            readiness_message,
+        )
+
+        readiness = activation_readiness(role)
+        if not readiness.get("ready"):
+            return {
+                "type": "agent_state",
+                "ok": False,
+                "reason": "runtime_unready",
+                "message": (
+                    "I left the agent off because its production runtime is not ready: "
+                    + readiness_message(readiness)
+                ),
+                "agent": _state(role),
+            }
         was_enabled = bool(role.agentic_mode_enabled)
         was_paused = role.agent_paused_at is not None
+        previous = {
+            "agentic_mode_enabled": was_enabled,
+            "agent_paused_at": role.agent_paused_at,
+            "agent_paused_reason": role.agent_paused_reason,
+            "auto_promote": bool(role.auto_promote),
+            "auto_send_assessment": getattr(role, "auto_send_assessment", None),
+            "auto_resend_assessment": getattr(role, "auto_resend_assessment", None),
+            "auto_advance": getattr(role, "auto_advance", None),
+            "starred_for_auto_sync": bool(role.starred_for_auto_sync),
+            "job_status": role.job_status,
+        }
         role.agentic_mode_enabled = True
-        if role.agent_paused_at is not None:        # re-enabling clears the pause
-            role.agent_paused_at = None
-            role.agent_paused_reason = None
+        resumed = False
+        if was_paused:
+            from ..agent_runtime import budget_guard
+
+            resumed = bool(
+                budget_guard.resume_if_under_budget(
+                    db, role=role, explicit=True
+                )
+            )
+            if not resumed:
+                # Do not let a chat synonym such as "start" bypass the same
+                # cap/runtime guard used by the HTTP Resume controls.
+                role.agentic_mode_enabled = previous["agentic_mode_enabled"]
+                return {
+                    "type": "agent_state",
+                    "ok": False,
+                    "reason": "resume_blocked",
+                    "message": (
+                        "I left the agent paused because its budget/runtime "
+                        "resume guard did not pass."
+                    ),
+                    "agent": _state(role),
+                }
+        # Preserve concrete action-level choices on activation. A truly legacy
+        # role with no choices gets the historical all-positive-actions default.
+        if not was_enabled:
+            policy = activation_policy_values(role)
+            role.auto_promote = policy["auto_promote"]
+            for field in GRANULAR_AUTOMATION_FIELDS:
+                setattr(role, field, policy[field])
         if not role.starred_for_auto_sync:          # agent-on implies auto-sync
             role.starred_for_auto_sync = True
+        # Chat activation has the same native-requisition go-live semantics as
+        # the role PATCH. Workable remains optional for the one-switch path.
+        if (
+            not was_enabled
+            and role.source == "requisition"
+            and role.job_status == JOB_STATUS_DRAFT
+            and not role.workable_job_id
+        ):
+            role.job_status = JOB_STATUS_OPEN
+        if (not was_enabled) and not resumed:
+            role.agent_bootstrap_status = "starting"
+            role.agent_bootstrap_error = None
+            role.agent_bootstrap_started_at = _now()
+            role.agent_bootstrap_completed_at = None
         db.commit()
         if (not was_enabled) or was_paused:         # activation OR resume → kick a cycle
-            _kick_cycle(role)
+            if not _kick_cycle(role, activation=not was_enabled):
+                # Match the HTTP toggle's fail-closed behavior. Do not tell the
+                # recruiter the agent is active when the worker queue refused
+                # its bootstrap.
+                role.agentic_mode_enabled = previous["agentic_mode_enabled"]
+                role.agent_paused_at = previous["agent_paused_at"]
+                role.agent_paused_reason = previous["agent_paused_reason"]
+                role.auto_promote = previous["auto_promote"]
+                for field in GRANULAR_AUTOMATION_FIELDS:
+                    setattr(role, field, previous[field])
+                role.starred_for_auto_sync = previous["starred_for_auto_sync"]
+                role.job_status = previous["job_status"]
+                role.agent_bootstrap_status = "failed"
+                role.agent_bootstrap_error = "agent bootstrap dispatch failed"
+                role.agent_bootstrap_completed_at = _now()
+                db.commit()
+                return {
+                    "type": "agent_state",
+                    "ok": False,
+                    "reason": "dispatch_failed",
+                    "message": "The worker queue is unavailable; I left the agent off/paused. Try again.",
+                    "agent": _state(role),
+                }
         result = {"type": "agent_state", "ok": True, "action": "activated", "agent": _state(role)}
         # Heads-up on activation: if the role still carries OLD-engine scores,
         # surface the count so the agent OFFERS a (scoped, opt-in) re-score in
@@ -112,11 +340,18 @@ def adjust_agent_settings(
     auto_reject: bool | None = None,
     auto_reject_pre_screen: bool | None = None,
     auto_promote: bool | None = None,
+    auto_send_assessment: bool | None = None,
+    auto_resend_assessment: bool | None = None,
+    auto_advance: bool | None = None,
     auto_skip_assessment: bool | None = None,
 ) -> dict[str, Any]:
-    """Update budget / auto-reject / auto-promote / auto-skip-assessment. Only
-    the fields passed are changed. Raising the budget over month-to-date spend
-    resumes a budget-paused role (same helper as the settings UI)."""
+    """Update budget / auto-reject / auto-promote / auto-skip-assessment.
+
+    Only passed fields change. A healthier budget may resume an automatic hold
+    (same helper as the settings UI); it never clears a recruiter-authored
+    manual pause. Reject toggles govern deterministic pre-screen execution, not
+    the human-confirm rail for full-score/assessment reject recommendations.
+    """
     changed: list[str] = []
     if monthly_budget_cents is not None:
         role.monthly_usd_budget_cents = max(0, int(monthly_budget_cents))
@@ -130,6 +365,38 @@ def adjust_agent_settings(
     if auto_promote is not None:
         role.auto_promote = bool(auto_promote)
         changed.append("auto_promote")
+        concrete_values = {
+            bool(getattr(role, field))
+            for field in GRANULAR_AUTOMATION_FIELDS
+            if getattr(role, field, None) is not None
+        }
+        explicit_granular = any(
+            value is not None
+            for value in (
+                auto_send_assessment,
+                auto_resend_assessment,
+                auto_advance,
+            )
+        )
+        if not explicit_granular and len(concrete_values) <= 1:
+            for field in GRANULAR_AUTOMATION_FIELDS:
+                setattr(role, field, bool(auto_promote))
+    for field, value in (
+        ("auto_send_assessment", auto_send_assessment),
+        ("auto_resend_assessment", auto_resend_assessment),
+        ("auto_advance", auto_advance),
+    ):
+        if value is not None:
+            setattr(role, field, bool(value))
+            changed.append(field)
+    if any(
+        getattr(role, field, None) is not None
+        for field in GRANULAR_AUTOMATION_FIELDS
+    ):
+        role.auto_promote = all(
+            role_automation_enabled(role, field)
+            for field in GRANULAR_AUTOMATION_FIELDS
+        )
     skip_changed = (
         auto_skip_assessment is not None
         and bool(role.auto_skip_assessment) != bool(auto_skip_assessment)
@@ -143,7 +410,11 @@ def adjust_agent_settings(
         try:
             from ..agent_runtime import budget_guard
 
-            resumed = bool(budget_guard.resume_if_under_budget(db, role=role))
+            resumed = bool(
+                budget_guard.resume_if_under_budget(
+                    db, role=role, explicit=False
+                )
+            )
         except Exception:  # pragma: no cover — never block the turn
             logger.exception("resume_if_under_budget failed for role_id=%s", role.id)
 
@@ -162,11 +433,23 @@ def adjust_agent_settings(
             logger.exception(
                 "assessment-stage reconcile failed for role_id=%s", role.id
             )
-    if resumed:
-        _kick_cycle(role)
+    resume_error = None
+    if resumed and not _kick_cycle(role):
+        # The shared readiness gate proved the runtime healthy immediately
+        # before resume, but the broker can still reject this specific handoff.
+        # Restore the pause and persist a durable failed acknowledgement rather
+        # than returning a green agent that never received its bootstrap task.
+        role.agent_paused_at = _now()
+        role.agent_paused_reason = "agent bootstrap dispatch failed"
+        role.agent_bootstrap_status = "failed"
+        role.agent_bootstrap_error = "agent bootstrap dispatch failed"
+        role.agent_bootstrap_completed_at = _now()
+        db.commit()
+        resumed = False
+        resume_error = "worker queue unavailable; agent left paused"
     return {
         "type": "agent_settings", "ok": True, "changed": changed,
-        "resumed": resumed, "agent": _state(role),
+        "resumed": resumed, "resume_error": resume_error, "agent": _state(role),
     }
 
 

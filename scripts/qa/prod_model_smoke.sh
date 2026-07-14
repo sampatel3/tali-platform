@@ -4,7 +4,7 @@ set -euo pipefail
 API_BASE="${TAALI_API_BASE_URL:-https://resourceful-adaptation-production.up.railway.app/api/v1}"
 TEST_EMAIL="${TAALI_TEST_EMAIL:-sampatel@deeplight.ae}"
 TEST_PASSWORD="${TAALI_TEST_PASSWORD:-}"
-EXPECTED_MODEL="${EXPECTED_CLAUDE_MODEL:-claude-3-5-haiku-latest}"
+EXPECTED_MODEL="${EXPECTED_CLAUDE_MODEL:-claude-haiku-4-5-20251001}"
 
 if [[ -z "$TEST_PASSWORD" ]]; then
   echo "error: TAALI_TEST_PASSWORD is required" >&2

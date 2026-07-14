@@ -10,6 +10,7 @@ from __future__ import annotations
 from ...models.organization import Organization
 from ...platform.config import settings
 from ...schemas.organization import (
+    AgentDefaults,
     AiToolingConfig,
     FirefliesConfig,
     NotificationPreferences,
@@ -118,6 +119,14 @@ def merge_ai_tooling_config(org: Organization, incoming: OrgUpdate) -> dict:
     if incoming.ai_tooling_config is None:
         return base
     updates = incoming.ai_tooling_config.model_dump(exclude_none=True)
+    incoming_defaults = updates.pop("agent_defaults", None)
+    if incoming_defaults is not None:
+        existing_defaults = base.get("agent_defaults")
+        if not isinstance(existing_defaults, dict):
+            existing_defaults = AgentDefaults().model_dump()
+        updates["agent_defaults"] = AgentDefaults(
+            **{**existing_defaults, **incoming_defaults}
+        ).model_dump()
     return AiToolingConfig(**{**base, **updates}).model_dump()
 
 

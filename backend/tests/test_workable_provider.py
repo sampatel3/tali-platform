@@ -60,7 +60,17 @@ def test_list_tests_workable_shape(client):
     assert task.json()["name"] in names
 
 
-def test_create_assessment_auto_provisions_role_and_enqueues_pending(client, db):
+def test_create_assessment_auto_provisions_role_and_enqueues_pending(
+    client, db, monkeypatch
+):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+
+    kicked: list[int] = []
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda assessment_id, reply_to=None: kicked.append(int(assessment_id)),
+    )
     headers, email = auth_headers(client, organization_name="OrgWkbCreate")
     task = create_task_via_api(client, headers).json()
     secret = _mint_key(client, headers, ["roles:read", "assessments:write"])
@@ -97,6 +107,8 @@ def test_create_assessment_auto_provisions_role_and_enqueues_pending(client, db)
     a = db.query(Assessment).filter(Assessment.id == assessment_id).first()
     assert a is not None
     assert a.workable_callback_url == "https://acme.workable.com/assessments/8823119"
+    assert a.invite_email_status == "pending_dispatch"
+    assert kicked == [assessment_id]
     pending = (
         db.query(WorkableWebhookOutbox)
         .filter(WorkableWebhookOutbox.dedup_key == f"wkb-assessment-{assessment_id}-pending")

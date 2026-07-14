@@ -217,7 +217,7 @@ def test_batch_requeues_send_assessment_when_role_has_no_task(db):
     refreshed = db.query(AgentDecision).get(decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be approved"
     note = (refreshed.resolution_note or "").lower()
-    assert "no tasks linked" in note
+    assert "no active tasks linked" in note
     assert "unexpected error" not in note
 
 

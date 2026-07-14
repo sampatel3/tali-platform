@@ -7,30 +7,17 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import quote
 
-import httpx
-
 from ..platform.config import settings
+from .assessment_repository_github import AssessmentRepositoryGitHubMixin
+from .assessment_repository_types import AssessmentRepositoryError, BranchContext
 from .task_repo_service import normalize_repo_files
 
 
-class AssessmentRepositoryError(RuntimeError):
-    """Raised when repository provisioning fails."""
-
-
-@dataclass
-class BranchContext:
-    repo_url: str
-    branch_name: str
-    clone_command: str
-
-
-class AssessmentRepositoryService:
+class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
     """GitHub repo/branch manager with local mock harness for tests/dev."""
 
     def __init__(self, github_org: str | None = None, github_token: str | None = None):
@@ -71,136 +58,41 @@ class AssessmentRepositoryService:
             raise AssessmentRepositoryError(f"{context} failed ({result.returncode}): {detail}")
         return result
 
-    def _require_token(self) -> str:
-        token = (self.github_token or "").strip()
-        if not token:
-            raise AssessmentRepositoryError("GITHUB_TOKEN is required when GITHUB_MOCK_MODE is false")
-        return token
-
-    def _headers(self) -> Dict[str, str]:
-        token = self._require_token()
-        return {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-
-    @staticmethod
-    def _is_rate_limited(response: httpx.Response) -> bool:
-        if response.status_code == 429:
-            return True
-        if response.status_code == 403:
-            if response.headers.get("X-RateLimit-Remaining") == "0":
-                return True
-            body = (response.text or "").lower()
-            return "rate limit" in body or "secondary rate" in body
-        return False
-
-    def _rate_limit_delay(self, response: httpx.Response, attempt: int) -> float:
-        """Honor Retry-After / X-RateLimit-Reset where present, capped."""
-        retry_after = response.headers.get("Retry-After")
-        if retry_after:
-            try:
-                return min(float(retry_after), 15.0)
-            except ValueError:
-                pass
-        reset = response.headers.get("X-RateLimit-Reset")
-        if reset:
-            try:
-                delta = float(reset) - time.time()
-                if delta > 0:
-                    return min(delta, 15.0)
-            except ValueError:
-                pass
-        return float(min(2 ** attempt, 8))
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        json_payload: Dict[str, Any] | None = None,
-        expected_statuses: tuple[int, ...] = (200,),
-    ) -> httpx.Response:
-        url = f"{self.api_base}{path}"
-        attempts = 4
-        response: httpx.Response | None = None
-        for attempt in range(attempts):
-            try:
-                response = httpx.request(
-                    method,
-                    url,
-                    headers=self._headers(),
-                    json=json_payload,
-                    timeout=self.http_timeout_seconds,
-                )
-            except httpx.HTTPError as exc:
-                raise AssessmentRepositoryError(f"GitHub API request failed for {path}: {exc}") from exc
-
-            # Back off on GitHub primary/secondary rate limits rather than
-            # surfacing an opaque error when many candidates start at once.
-            if (
-                self._is_rate_limited(response)
-                and response.status_code not in expected_statuses
-                and attempt < attempts - 1
-            ):
-                time.sleep(self._rate_limit_delay(response, attempt))
-                continue
-            break
-
-        assert response is not None  # loop always assigns or raises
-        if response.status_code not in expected_statuses:
-            detail = response.text.strip()[:500]
-            raise AssessmentRepositoryError(
-                f"GitHub API {method} {path} returned {response.status_code}: {detail}"
-            )
-        return response
-
-    def _ensure_repo_exists(self, repo_name: str) -> None:
-        check = self._request(
-            "GET",
-            f"/repos/{self.github_org}/{repo_name}",
-            expected_statuses=(200, 404),
-        )
-        if check.status_code == 200:
-            return
-
-        create = self._request(
-            "POST",
-            f"/orgs/{self.github_org}/repos",
-            json_payload={
-                "name": repo_name,
-                "private": True,
-                "auto_init": False,
-                "has_issues": False,
-                "has_wiki": False,
-                "has_projects": False,
-            },
-            expected_statuses=(201, 422),
-        )
-        if create.status_code == 201:
-            return
-
-        # 422 can happen due to existing repo in races/retries; verify and continue if present.
-        verify = self._request(
-            "GET",
-            f"/repos/{self.github_org}/{repo_name}",
-            expected_statuses=(200, 404),
-        )
-        if verify.status_code == 200:
-            return
-        detail = create.text.strip()[:500]
-        raise AssessmentRepositoryError(f"Unable to create repository {repo_name}: {detail}")
-
     def _ensure_mock_repo(self, repo_name: str, files: Dict[str, str]) -> Path:
         repo = self.mock_root / self.github_org / repo_name
         repo.mkdir(parents=True, exist_ok=True)
-        for rel, content in files.items():
-            target = repo / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
         self._run(["git", "init", "-b", "main"], repo)
-        self._run(["git", "add", "."], repo)
+
+        # Mock repos are long-lived across assessment branches. Always restore
+        # the template branch before syncing task files; merely re-running
+        # ``git init -b main`` does not switch an existing repository away from
+        # its last candidate branch, and legacy empty repos may have no main ref.
+        has_main = self._run(
+            ["git", "show-ref", "--verify", "--quiet", "refs/heads/main"], repo
+        ).returncode == 0
+        if has_main:
+            self._run_strict(["git", "checkout", "-f", "main"], repo, "checkout mock main")
+        else:
+            has_head = self._run(
+                ["git", "rev-parse", "--verify", "HEAD"], repo
+            ).returncode == 0
+            if has_head:
+                self._run_strict(
+                    ["git", "branch", "-f", "main", "HEAD"],
+                    repo,
+                    "create mock main",
+                )
+                self._run_strict(
+                    ["git", "checkout", "-f", "main"], repo, "checkout mock main"
+                )
+            else:
+                self._run_strict(
+                    ["git", "checkout", "-B", "main"], repo, "initialize mock main"
+                )
+
+        self._clear_worktree(repo)
+        self._write_repo_files(repo, files)
+        self._run_strict(["git", "add", "-A"], repo, "stage mock template files")
         commit = self._run(
             [
                 "git",
@@ -292,31 +184,6 @@ class AssessmentRepositoryService:
             expected_statuses=(200, 422),
         )
 
-    def _main_head_sha(self, repo_name: str) -> str:
-        ref = self._request(
-            "GET",
-            f"/repos/{self.github_org}/{repo_name}/git/ref/heads/main",
-            expected_statuses=(200, 404),
-        )
-        if ref.status_code == 404:
-            raise AssessmentRepositoryError(f"Repository {repo_name} has no main branch")
-        payload = ref.json() if ref.content else {}
-        sha = (payload.get("object") or {}).get("sha")
-        if not sha:
-            raise AssessmentRepositoryError(f"Unable to resolve main branch SHA for {repo_name}")
-        return str(sha)
-
-    @staticmethod
-    def _response_message(response: httpx.Response) -> str:
-        try:
-            payload = response.json()
-        except ValueError:
-            return response.text or ""
-        message = payload.get("message")
-        if isinstance(message, str):
-            return message
-        return str(payload)
-
     # Digest stamped into the repo *description* after each sync, so a later send
     # can tell "main already holds these files" with one GET instead of a full
     # clone+rewrite+push (the dominant, per-org-serialized cost of a send).
@@ -364,6 +231,53 @@ class AssessmentRepositoryService:
         self._sync_repo_main_branch(repo_name, files)
         self._stamp_template_hash(repo_name, files)
         return self.get_template_repo_url(task)
+
+    def verify_template_repo(self, task: Any) -> str:
+        """Prove that ``task`` has a usable template repository and ``main``.
+
+        This is deliberately task-specific.  A successful generic GitHub token
+        probe says nothing about whether the repository a future assessment
+        branch will be created from actually exists.  Approval and production
+        Turn-on readiness call this method so an active task can never be only a
+        database flag backed by a missing repository.
+
+        Returns the clone URL on success and raises
+        :class:`AssessmentRepositoryError` on any uncertainty.
+        """
+        repo_name = self._repo_name(task)
+        files = self._repo_files(task)
+        if not files:
+            raise AssessmentRepositoryError(
+                f"Task {getattr(task, 'id', repo_name)} has no repository files"
+            )
+
+        if self.mock_mode:
+            repo = self.mock_root / self.github_org / repo_name
+            if not repo.is_dir() or not (repo / ".git").is_dir():
+                raise AssessmentRepositoryError(
+                    f"Mock template repository {repo_name} does not exist"
+                )
+            main = self._run(["git", "rev-parse", "--verify", "refs/heads/main"], repo)
+            if main.returncode != 0 or not (main.stdout or "").strip():
+                detail = (main.stderr or main.stdout or "").strip()[-500:]
+                raise AssessmentRepositoryError(
+                    f"Mock template repository {repo_name} has no main branch: {detail}"
+                )
+            return self.get_template_repo_url_by_name(repo_name)
+
+        repo = self._request(
+            "GET",
+            f"/repos/{self.github_org}/{repo_name}",
+            expected_statuses=(200, 404),
+        )
+        if repo.status_code != 200:
+            raise AssessmentRepositoryError(
+                f"Template repository {self.github_org}/{repo_name} does not exist"
+            )
+        # The exact downstream branch path resolves main in the same way.  This
+        # catches an empty/half-created repo even when the repository GET passes.
+        self._main_head_sha(repo_name)
+        return self.get_template_repo_url_by_name(repo_name)
 
     def get_template_repo_url(self, task: Any) -> str:
         repo_name = self._repo_name(task)

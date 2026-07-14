@@ -1,6 +1,8 @@
 """Native public apply on job pages — flag gate, knockout auto-reject (decision
 surfaces), idempotency + race, rate limit, resume/scoring wiring, no knockout
 leak in the public payload."""
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
@@ -16,7 +18,9 @@ from app.models import (
     Prospect,
     Role,
     RoleBrief,
+    Task,
 )
+from app.models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN
 from app.platform.config import settings
 from app.services import rate_limit
 from app.services.rate_limit import reset_memory_buckets
@@ -33,13 +37,23 @@ def _enable_apply(monkeypatch):
     reset_memory_buckets()
 
 
-def _published_page(db, *, slug="acme", token=None):
+def _published_page(
+    db,
+    *,
+    slug="acme",
+    token=None,
+    source="manual",
+    job_status=None,
+):
     token = token or f"tok-{slug}"
     org = Organization(name=slug.title(), slug=slug)
     db.add(org)
     db.flush()
     role = Role(
-        organization_id=org.id, name="Staff Engineer", source="manual",
+        organization_id=org.id,
+        name="Staff Engineer",
+        source=source,
+        job_status=job_status,
         job_spec_text="Build things.",
     )
     db.add(role)
@@ -191,10 +205,188 @@ def test_apply_flag_off_returns_503(client, db, monkeypatch):
     assert r.status_code == 503
 
 
+def test_draft_requisition_page_is_visible_but_does_not_accept_applications(client, db):
+    _org, _role, page = _published_page(
+        db,
+        slug="draft-requisition",
+        source="requisition",
+        job_status=JOB_STATUS_DRAFT,
+    )
+    db.commit()
+
+    payload = client.get(f"/api/v1/public/job/{page.token}").json()
+    blocked = client.post(
+        _url(page),
+        data={"full_name": "Draft Applicant", "email": "draft@x.test"},
+        files={"resume": ("cv.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert payload["accepts_applications"] is False
+    assert payload["resume_required"] is False
+    assert blocked.status_code == 404
+    assert db.query(CandidateApplication).count() == 0
+
+
+def test_open_requisition_stops_intake_when_agent_is_off(client, db):
+    _org, role, page = _published_page(
+        db,
+        slug="open-requisition",
+        source="requisition",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = False
+    db.commit()
+
+    payload = client.get(f"/api/v1/public/job/{page.token}").json()
+    blocked = client.post(
+        _url(page),
+        data={"full_name": "No Resume", "email": "no-resume@x.test"},
+    )
+
+    assert payload["accepts_applications"] is False
+    assert payload["resume_required"] is False
+    assert blocked.status_code == 404
+    assert db.query(CandidateApplication).count() == 0
+
+
+def test_open_requisition_stops_intake_while_agent_is_paused(client, db):
+    _org, role, page = _published_page(
+        db,
+        slug="paused-requisition",
+        source="requisition",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    role.agent_paused_at = datetime.now(timezone.utc)
+    role.agent_paused_reason = "monthly role cap reached"
+    db.commit()
+
+    payload = client.get(f"/api/v1/public/job/{page.token}").json()
+    blocked = client.post(
+        _url(page),
+        data={"full_name": "Paused Applicant", "email": "paused@x.test"},
+        files={"resume": ("cv.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert payload["accepts_applications"] is False
+    assert blocked.status_code == 404
+    assert db.query(CandidateApplication).count() == 0
+
+
+def test_workable_adopted_requisition_stops_native_intake_when_ats_job_closes(
+    client, db
+):
+    _org, role, page = _published_page(
+        db,
+        slug="closed-workable-mirror",
+        source="workable",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    role.workable_job_id = "ENG-42"
+    role.workable_job_data = {"state": "closed"}
+    db.commit()
+
+    payload = client.get(f"/api/v1/public/job/{page.token}").json()
+    blocked = client.post(
+        _url(page),
+        data={"full_name": "Late Applicant", "email": "late@x.test"},
+        files={"resume": ("cv.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert payload["accepts_applications"] is False
+    assert blocked.status_code == 404
+    assert db.query(CandidateApplication).count() == 0
+
+
 def test_apply_requires_contact(client, db):
     org, role, page = _published_page(db, slug="contact")
     db.commit()
     assert client.post(_url(page), data={"full_name": "C"}).status_code == 422
+
+
+def test_assessment_path_requires_a_usable_candidate_email(client, db):
+    org, role, page = _published_page(db, slug="assessment-email")
+    task = Task(
+        organization_id=org.id,
+        name="Take-home",
+        is_active=True,
+    )
+    db.add(task)
+    db.flush()
+    role.tasks.append(task)
+    db.commit()
+
+    phone_only = client.post(
+        _url(page),
+        data={"full_name": "Phone Only", "phone": "+971 50 123 4567"},
+    )
+    malformed = client.post(
+        _url(page),
+        data={
+            "full_name": "Bad Email",
+            "email": "not-an-email",
+            "phone": "+971 50 123 4568",
+        },
+    )
+
+    assert phone_only.status_code == 422
+    assert malformed.status_code == 422
+    assert "valid email" in phone_only.text.lower()
+    assert "assessment" in malformed.text.lower()
+    assert db.query(CandidateApplication).count() == 0
+
+
+def test_assessment_email_gate_is_disabled_when_role_explicitly_skips_stage(
+    client, db
+):
+    org, role, page = _published_page(db, slug="skip-assessment-email")
+    task = Task(organization_id=org.id, name="Take-home", is_active=True)
+    db.add(task)
+    db.flush()
+    role.tasks.append(task)
+    role.auto_skip_assessment = True
+    db.commit()
+
+    response = client.post(
+        _url(page),
+        data={"full_name": "Phone Candidate", "phone": "+971 50 333 4444"},
+    )
+
+    assert response.status_code == 200, response.text
+
+
+def test_agent_run_job_requires_resume_before_accepting_application(client, db):
+    org, role, page = _published_page(
+        db,
+        slug="agent-resume",
+        source="requisition",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    db.commit()
+
+    missing = client.post(
+        _url(page), data={"full_name": "C", "email": "c@x.test"}
+    )
+    assert missing.status_code == 422
+    assert "resume" in missing.text.lower()
+    assert db.query(CandidateApplication).count() == 0
+
+
+def test_public_payload_marks_resume_required_for_agent_run_job(client, db):
+    org, role, page = _published_page(
+        db,
+        slug="agent-payload",
+        source="requisition",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    db.commit()
+
+    payload = client.get(f"/api/v1/public/job/{page.token}").json()
+    assert payload["accepts_applications"] is True
+    assert payload["resume_required"] is True
 
 
 def test_apply_unknown_job_404(client, db):
@@ -466,6 +658,79 @@ def test_resume_triggers_storage_and_scoring(client, db, monkeypatch):
     assert calls["kwargs"].get("score") is True
 
 
+def test_idempotent_reapply_repairs_missing_resume_and_triggers_scoring(
+    client, db, monkeypatch
+):
+    """Legacy/pre-gate applications may exist without CV text. A candidate
+    re-submitting the now-required resume must repair that same row rather than
+    report success while silently discarding the upload."""
+    org, role, page = _published_page(
+        db,
+        slug="resume-repair",
+        source="requisition",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    candidate = Candidate(
+        organization_id=org.id,
+        full_name="Legacy Applicant",
+        email="legacy-resume@x.test",
+    )
+    db.add(candidate)
+    db.flush()
+    existing = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="applied",
+        application_outcome="open",
+        source="careers",
+        screening_answers={"_knockout": {"passed": True, "failed": []}},
+    )
+    db.add(existing)
+    db.commit()
+    existing_id = int(existing.id)
+
+    from app.services import application_events, document_service
+
+    monkeypatch.setattr(
+        document_service,
+        "process_document_upload",
+        lambda **_kwargs: {
+            "file_url": "s3://bucket/repaired.pdf",
+            "filename": "repaired.pdf",
+            "extracted_text": "Experienced platform engineer",
+            "text_preview": "Experienced platform engineer",
+        },
+    )
+    monkeypatch.setattr(document_service, "load_stored_document_bytes", lambda _url: None)
+    calls = {}
+    monkeypatch.setattr(
+        application_events,
+        "on_application_created",
+        lambda app, **kwargs: calls.update({"app_id": app.id, "kwargs": kwargs}),
+    )
+
+    response = client.post(
+        _url(page),
+        data={"full_name": "Legacy Applicant", "email": "legacy-resume@x.test"},
+        files={"resume": ("repaired.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["application_id"] == existing_id
+    db.expire_all()
+    repaired = db.query(CandidateApplication).filter_by(id=existing_id).one()
+    assert repaired.cv_file_url == "s3://bucket/repaired.pdf"
+    assert repaired.cv_text == "Experienced platform engineer"
+    assert repaired.candidate.cv_file_url == "s3://bucket/repaired.pdf"
+    assert calls == {
+        "app_id": existing_id,
+        "kwargs": {"score": True, "score_force": True},
+    }
+
+
 def test_resume_rejects_wrong_type(client, db):
     org, role, page = _published_page(db, slug="badtype")
     db.commit()
@@ -475,6 +740,44 @@ def test_resume_rejects_wrong_type(client, db):
         files={"resume": ("virus.exe", b"MZ", "application/octet-stream")},
     )
     assert r.status_code == 422
+
+
+def test_unreadable_resume_is_rejected_before_application_is_accepted(
+    client, db, monkeypatch
+):
+    org, role, page = _published_page(
+        db,
+        slug="unreadable-resume",
+        source="requisition",
+        job_status=JOB_STATUS_OPEN,
+    )
+    role.agentic_mode_enabled = True
+    db.commit()
+
+    from app.services import document_service
+
+    monkeypatch.setattr(
+        document_service,
+        "process_document_upload",
+        lambda **_kwargs: {
+            "file_url": "s3://bucket/image-only.pdf",
+            "filename": "image-only.pdf",
+            "extracted_text": "   \n\t ",
+            "text_preview": "",
+        },
+    )
+
+    response = client.post(
+        _url(page),
+        data={"full_name": "Scanned Resume", "email": "scan@x.test"},
+        files={"resume": ("image-only.pdf", b"scanned", "application/pdf")},
+    )
+
+    assert response.status_code == 422
+    assert "couldn't read" in response.text.lower()
+    db.expire_all()
+    assert db.query(CandidateApplication).count() == 0
+    assert db.query(Candidate).count() == 0
 
 
 def test_public_payload_hides_knockout_fields(client, db):

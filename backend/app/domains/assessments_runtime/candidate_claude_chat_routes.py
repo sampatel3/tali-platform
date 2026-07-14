@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
@@ -61,14 +62,39 @@ from ...models.task import Task
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...schemas.assessment import ClaudeChatRequest
+from ...services.pricing_service import Feature
 from ...services.role_budget_gate import can_spend_on_role
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
+from ...services.usage_metering_service import (
+    InsufficientCreditsError,
+    reserve,
+)
 
 logger = logging.getLogger("taali.candidate_claude_chat")
 router = APIRouter()
 
 _MAX_HISTORY_MESSAGES = 20
 _MAX_CONTEXT_CHARS = 12000
+
+
+def _reserve_paid_assessment_call(db: Session, *, organization_id: int) -> None:
+    """Fail closed before each candidate-triggered paid model call."""
+    try:
+        reserve(
+            db,
+            organization_id=int(organization_id),
+            feature=Feature.ASSESSMENT,
+        )
+    except InsufficientCreditsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "message": (
+                    "This assessment's AI credit balance has been reached. "
+                    "You can keep working and submit when you're ready."
+                )
+            },
+        ) from exc
 
 
 def _build_agentic_system_prompt(task: Task, interrogation_directive: str) -> str:
@@ -210,6 +236,10 @@ async def chat_with_claude_agentic(
     )
     prior_state = derive_interrogation_state(decision_points, prompts)
 
+    trace_seed = (data.request_id or "").strip() or uuid.uuid4().hex
+    trace_root = f"assessment:{int(assessment.id)}:chat:{trace_seed}"
+    role_id = int(role.id) if role is not None else None
+
     messages = _flatten_prompts_to_messages(prompts, _MAX_HISTORY_MESSAGES)
     new_message = data.message.strip()
     if not new_message:
@@ -236,6 +266,10 @@ async def chat_with_claude_agentic(
     persist_state: dict[str, dict[str, str]] = {}
     merged_state = prior_state
     if decision_points and not all_resolved(prior_state):
+        _reserve_paid_assessment_call(
+            db,
+            organization_id=int(assessment.organization_id),
+        )
         outcome = classify_response(
             decision_points=decision_points,
             candidate_message=new_message,
@@ -243,6 +277,8 @@ async def chat_with_claude_agentic(
             api_key=api_key,
             organization_id=int(assessment.organization_id),
             assessment_id=int(assessment.id),
+            role_id=role_id,
+            trace_id=f"{trace_root}:classifier",
         )
         merged_state, persist_state = merge_state(prior_state, outcome.by_dp)
         if outcome.error:
@@ -271,11 +307,17 @@ async def chat_with_claude_agentic(
         if isinstance(remaining, (int, float)):
             budget_remaining_usd = float(remaining)
 
+    _reserve_paid_assessment_call(
+        db,
+        organization_id=int(assessment.organization_id),
+    )
     service = AgentSDKChatService(
         api_key=api_key,
         organization_id=int(assessment.organization_id),
         assessment_id=int(assessment.id),
         executor=executor,
+        role_id=role_id,
+        trace_id=f"{trace_root}:agent",
         # PR-10: optional per-task model override (extra_data.agent_model).
         # None → the service default (CLAUDE_CHAT_MODEL env → Haiku 4.5), so
         # behaviour is unchanged until a task opts a harder scenario onto a

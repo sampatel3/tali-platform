@@ -78,7 +78,18 @@ def reserve(
     if not _is_live():
         return estimate
 
-    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    # ``record_event`` intentionally commits debits in a fresh session at
+    # several call sites (notably the candidate assessment SDK).  A long-lived
+    # request session may therefore already have an Organization instance in
+    # its identity map with the pre-debit balance.  ``populate_existing`` makes
+    # every paid-call gate read the current database value instead of allowing
+    # a second call on stale credits.
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == organization_id)
+        .populate_existing()
+        .first()
+    )
     if org is None:
         raise InsufficientCreditsError(
             organization_id=organization_id, required=estimate, available=0
@@ -108,6 +119,8 @@ def record_event(
     role_id: Optional[int] = None,
     entity_id: Optional[str] = None,
     metadata: Optional[dict] = None,
+    provider_cost_usd_micro: Optional[int] = None,
+    credit_reservation: object | None = None,
 ) -> UsageEvent:
     """Record a billable Claude call. Always writes a ``usage_events`` row.
     In live mode also writes a paired ledger debit and decrements the org's
@@ -132,7 +145,15 @@ def record_event(
     # full model x usage x {standard,batch} corpus — see
     # tests/test_metering_pricing_parity.py), so this is a zero-behaviour-change
     # swap. The per-feature markup below stays tali business logic.
-    if is_voyage_model(model):
+    if provider_cost_usd_micro is not None:
+        # Some provider-owned agent loops expose a trustworthy aggregate cost
+        # for the completed invocation but not the individual wire calls.  Let
+        # those callers feed the reported total through this canonical path so
+        # the UsageEvent and live ledger debit remain atomic.  ``None`` means
+        # "price from tokens"; an explicit zero remains zero and is never
+        # replaced with an invented estimate.
+        raw_anthropic_cost_micro = max(int(provider_cost_usd_micro), 0)
+    elif is_voyage_model(model):
         # Voyage embeddings (Graphiti's vector layer) are a non-Anthropic
         # provider: input tokens only, no output/cache/tier. Price via the
         # Voyage rate table instead of the Anthropic seam so the spend still
@@ -193,6 +214,8 @@ def record_event(
     # Persist the tier in metadata (there is no dedicated column yet) so batch
     # spend stays queryable and reconciliation can tell standard vs batch apart.
     meta = dict(metadata or {})
+    if provider_cost_usd_micro is not None:
+        meta.setdefault("cost_source", "provider_reported")
     if service_tier and service_tier != "standard":
         meta.setdefault("service_tier", service_tier)
 
@@ -218,7 +241,26 @@ def record_event(
     db.flush()  # populate event.id
 
     if _is_live():
-        _debit_ledger(db, organization_id=organization_id, event=event)
+        from .usage_credit_reservations import (
+            reservation_from_payload,
+            settle_credit_reservation,
+        )
+
+        reservation = reservation_from_payload(credit_reservation)
+        if (
+            reservation is not None
+            and reservation.live
+            and int(reservation.organization_id) == int(organization_id)
+            and reservation.feature == feature_enum.value
+        ):
+            settle_credit_reservation(
+                db,
+                organization_id=organization_id,
+                event=event,
+                reservation=reservation,
+            )
+        else:
+            _debit_ledger(db, organization_id=organization_id, event=event)
     else:
         logger.debug(
             "usage_metering[shadow] org=%s feature=%s tokens=%s/%s charged=%s",

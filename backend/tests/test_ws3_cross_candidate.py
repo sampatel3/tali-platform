@@ -20,7 +20,16 @@ def _org_role(db, slug):
     org = Organization(name="X", slug=slug)
     db.add(org)
     db.flush()
-    role = Role(organization_id=org.id, name="Backend", source="manual", description="jd")
+    role = Role(
+        organization_id=org.id,
+        name="Backend",
+        source="manual",
+        description="jd",
+        # The end-to-end pre-screen case goes through the real role-level
+        # usage admission rail. Give this fixture an explicit funded cap so
+        # the test reaches the fraud-signal behavior it is meant to cover.
+        monthly_usd_budget_cents=100,
+    )
     db.add(role)
     db.flush()
     return org, role
@@ -141,7 +150,10 @@ def test_prescreen_persists_cross_candidate_signals(db):
     _app(db, org, role, first, cv="A perfectly ordinary CV about backend work.")
     dup = _cand(db, org, email="other@x.test", phone="555111222")
     app = _app(db, org, role, dup, cv="Another ordinary CV, no copy-paste at all.")
-    db.flush()
+    # Hard usage admission runs in an independent metering session so the
+    # hold is durable before any provider call. Mirror the production worker
+    # boundary: the application, role and cap must already be committed.
+    db.commit()
 
     class _LLM:
         decision = "yes"; reason = "ok"; score = 70.0; unverified_claim = False

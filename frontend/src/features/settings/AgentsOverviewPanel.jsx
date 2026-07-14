@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Bar,
   BarChart,
@@ -20,9 +21,9 @@ import { Spinner } from '../../shared/ui/TaaliPrimitives';
 // Background jobs table cadence; the activity feed is heavier so it lags.
 const PANEL_POLL_MS = 5000;
 const ACTIVITY_POLL_MS = 15000;
-// The agent cohort runs on a ~30-min beat (resets on deploy). Used only to
+// The agent cohort runs on a ~60-min recovery beat. Used only to
 // estimate the next cycle client-side — same heuristic as the local monitor.
-const COHORT_BEAT_SECS = 1800;
+const COHORT_BEAT_SECS = 3600;
 
 const ACTIVITY_ICON = { run: '◐', decision: '◆', event: '→', needs_input: '?' };
 
@@ -133,7 +134,12 @@ function AgentCard({ a }) {
     ? `last run ${fmtRelShort(a.last_run_at)} · next run on schedule`
     : act.text;
   return (
-    <div className={`agz-agent ${a.running ? 'run' : 'paused'}`}>
+    <Link
+      className={`agz-agent ${a.running ? 'run' : 'paused'}`}
+      to={`/jobs/${a.role_id}?view=role-fit`}
+      aria-label={`Open agent settings for ${a.name}`}
+      style={{ display: 'block', color: 'inherit', textDecoration: 'none' }}
+    >
       <div className="agz-agent-top">
         <span className="agz-agent-name" title={a.name}>{a.name}</span>
         {a.running ? (
@@ -158,7 +164,7 @@ function AgentCard({ a }) {
         <span>pending <b>{a.pending}</b></span>
         <span />
       </div>
-    </div>
+    </Link>
   );
 }
 

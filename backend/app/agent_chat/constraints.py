@@ -3,7 +3,7 @@
 When the recruiter says "cap salary at 25k on this role" the agent edits a
 ``RoleCriterion`` (a constraint chip) and re-screens — exactly what the
 manual criteria CRUD does, plus an immediate stale-score sweep so the
-re-evaluation starts now instead of waiting for the 30-minute safety net.
+re-evaluation starts now instead of waiting for the hourly safety net.
 
 Unlike a score-threshold change (instant re-filter, no LLM — see
 ``impact.apply_threshold``), a constraint edit changes the pre-screen prompt
@@ -167,6 +167,20 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
         from ..services.role_criteria_service import sync_derived_criteria
 
         sync_derived_criteria(db, role)
+        from ..platform.config import settings
+
+        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+            from ..services.task_provisioning_service import (
+                request_assessment_task_provisioning,
+            )
+
+            # The chat turn commits this mutation. Persist provisioning intent
+            # with it; Beat supplies the post-commit dispatch/recovery.
+            request_assessment_task_provisioning(
+                role,
+                reason="agent_job_spec_update",
+                supersede_generated_drafts=True,
+            )
         db.flush()
     except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
         db.rollback()

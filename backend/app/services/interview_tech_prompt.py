@@ -24,6 +24,12 @@ from typing import Any, Iterable
 from ..llm import strip_json_fences
 from ..llm.models import FAST_MODEL
 from ..platform.config import settings
+from .pricing_service import Feature
+from .provider_usage_admission import (
+    release_provider_usage,
+    reserve_provider_usage,
+    with_credit_reservation,
+)
 
 logger = logging.getLogger("taali.interview_tech")
 
@@ -288,6 +294,39 @@ def generate_tech_questions(
             logger.warning("Failed to build Anthropic client for tech interview prompt: %s", exc)
             return None
 
+    call_metering = {"feature": "interview_tech", **(metering or {})}
+    reservation = None
+    meter_org_id = call_metering.get("organization_id")
+    meter_role_id = call_metering.get("role_id")
+    if meter_org_id is not None and meter_role_id is not None:
+        try:
+            reservation = reserve_provider_usage(
+                organization_id=int(meter_org_id),
+                role_id=int(meter_role_id),
+                feature=Feature.INTERVIEW_TECH,
+                trace_id=(
+                    str(call_metering.get("trace_id"))
+                    if call_metering.get("trace_id")
+                    else f"interview-tech:role:{int(meter_role_id)}"
+                ),
+                entity_id=str(
+                    call_metering.get("entity_id")
+                    or f"role:{int(meter_role_id)}"
+                ),
+                sub_feature="role_tech_questions",
+            )
+        except Exception as exc:
+            # Questions have a deterministic fallback. Fail closed on paid
+            # admission instead of bypassing either the org ledger or role cap.
+            logger.warning(
+                "Tech interview prompt blocked by usage admission "
+                "(role_id=%s): %s",
+                meter_role_id,
+                exc,
+            )
+            return None
+        call_metering = with_credit_reservation(call_metering, reservation)
+
     try:
         response = client.messages.create(
             model=MODEL_VERSION,
@@ -295,9 +334,13 @@ def generate_tech_questions(
             temperature=0,
             system="You are an expert technical interviewer. Respond ONLY with valid JSON.",
             messages=[{"role": "user", "content": prompt}],
-            metering={"feature": "interview_tech", **(metering or {})},
+            metering=call_metering,
         )
     except Exception as exc:
+        release_provider_usage(
+            reservation,
+            reason=f"interview_tech_call_failed:{type(exc).__name__}",
+        )
         logger.warning("Tech interview prompt call failed: %s", exc)
         return None
 

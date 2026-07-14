@@ -30,15 +30,22 @@ def test_sync_candidate_passes_billing_when_gate_open():
     cand.organization_id = 42
     captured: dict = {}
     with patch.object(git, "SessionLocal", return_value=_fake_session(cand)), patch(
-        "app.candidate_graph.sync.should_sync_candidate_to_graph", return_value=True
+        "app.candidate_graph.sync.billing_role_id_for_candidate", return_value=9
     ), patch(
         "app.candidate_graph.sync.sync_candidate",
+        autospec=True,
         side_effect=lambda c, **k: captured.update(k),
     ):
         res = _run(git.sync_candidate_to_graph, 7)
     assert res["status"] == "ok"
     assert captured["bill_organization_id"] == 42
-    assert captured["bill_candidate_id"] == 7
+    assert captured["bill_role_id"] == 9
+    assert captured["require_role_admission"] is True
+    assert captured["raise_on_error"] is True
+    # sync_candidate derives candidate attribution from ``candidate.id``;
+    # passing the old, nonexistent bill_candidate_id keyword crashed the real
+    # Celery task even though an unconstrained MagicMock accepted it.
+    assert "bill_candidate_id" not in captured
 
 
 def test_sync_candidate_skips_below_cost_gate():
@@ -47,7 +54,7 @@ def test_sync_candidate_skips_below_cost_gate():
     cand.organization_id = 42
     calls = {"n": 0}
     with patch.object(git, "SessionLocal", return_value=_fake_session(cand)), patch(
-        "app.candidate_graph.sync.should_sync_candidate_to_graph", return_value=False
+        "app.candidate_graph.sync.billing_role_id_for_candidate", return_value=None
     ), patch(
         "app.candidate_graph.sync.sync_candidate",
         side_effect=lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
@@ -61,6 +68,7 @@ def test_sync_interview_threads_org():
     iv = MagicMock()
     iv.id = 3
     iv.organization_id = 55
+    iv.application.role_id = 12
     captured: dict = {}
     with patch.object(git, "SessionLocal", return_value=_fake_session(iv)), patch(
         "app.candidate_graph.sync.sync_interview",
@@ -69,12 +77,16 @@ def test_sync_interview_threads_org():
         res = _run(git.sync_interview_to_graph, 3)
     assert res["status"] == "ok"
     assert captured["bill_organization_id"] == 55
+    assert captured["bill_role_id"] == 12
+    assert captured["require_role_admission"] is True
+    assert captured["raise_on_error"] is True
 
 
 def test_sync_event_threads_org():
     ev = MagicMock()
     ev.id = 9
     ev.organization_id = 99
+    ev.application.role_id = 13
     captured: dict = {}
     with patch.object(git, "SessionLocal", return_value=_fake_session(ev)), patch(
         "app.candidate_graph.sync.sync_event",
@@ -83,3 +95,34 @@ def test_sync_event_threads_org():
         res = _run(git.sync_event_to_graph, 9)
     assert res["status"] == "ok"
     assert captured["bill_organization_id"] == 99
+    assert captured["bill_role_id"] == 13
+    assert captured["require_role_admission"] is True
+    assert captured["raise_on_error"] is True
+
+
+def test_provider_failure_is_retried_without_terminal_cap():
+    cand = MagicMock()
+    cand.id = 7
+    cand.organization_id = 42
+    provider_error = RuntimeError("voyage unavailable")
+    with patch.object(git, "SessionLocal", return_value=_fake_session(cand)), patch(
+        "app.candidate_graph.sync.billing_role_id_for_candidate", return_value=9
+    ), patch(
+        "app.candidate_graph.sync.sync_candidate", side_effect=provider_error
+    ), patch.object(
+        git.sync_candidate_to_graph,
+        "retry",
+        side_effect=RuntimeError("retry scheduled"),
+    ) as retry:
+        try:
+            git.sync_candidate_to_graph.run(7)
+        except RuntimeError as exc:
+            assert str(exc) == "retry scheduled"
+        else:  # pragma: no cover
+            raise AssertionError("provider failure should remain queued for retry")
+
+    assert git.sync_candidate_to_graph.max_retries is None
+    retry.assert_called_once()
+    kwargs = retry.call_args.kwargs
+    assert kwargs["exc"] is provider_error
+    assert kwargs["max_retries"] is None

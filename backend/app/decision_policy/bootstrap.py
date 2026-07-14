@@ -116,12 +116,28 @@ def _default_policy_json(*, role_fit_min: float) -> dict[str, Any]:
                 },
                 "rules": [
                     {
-                        "if": "taali_score >= taali_score_min AND assessment_completed",
+                        "if": (
+                            "assessment_completed AND assessment_score < "
+                            "assessment_score_min"
+                        ),
+                        "then": "skip",
+                        "priority": 10_000,
+                        "reason_template": (
+                            "Completed assessment is below the policy pass floor; "
+                            "advance is blocked and the reject decision point must "
+                            "decide."
+                        ),
+                    },
+                    {
+                        "if": (
+                            "taali_score >= taali_score_min AND assessment_score >= "
+                            "assessment_score_min AND assessment_completed"
+                        ),
                         "then": "queue_advance_decision",
                         "priority": 50,
                         "reason_template": (
-                            "TAALI score clears advance threshold and assessment "
-                            "is complete — queueing advance for recruiter approval."
+                            "TAALI and assessment scores clear their advance "
+                            "thresholds — queueing advance for recruiter approval."
                         ),
                     },
                 ],
@@ -130,11 +146,24 @@ def _default_policy_json(*, role_fit_min: float) -> dict[str, Any]:
             "reject": {
                 "thresholds": {
                     "role_fit_max": role_fit_reject_ceiling,
+                    "assessment_score_min": 50.0,
                 },
                 "weights": {
                     "role_fit_score": 1.0,
                 },
                 "rules": [
+                    {
+                        "if": (
+                            "assessment_completed AND assessment_score < "
+                            "assessment_score_min"
+                        ),
+                        "then": "queue_reject_decision",
+                        "priority": 10_000,
+                        "reason_template": (
+                            "Completed assessment is below the policy pass floor; "
+                            "queueing reject for recruiter approval."
+                        ),
+                    },
                     {
                         # Pre-screen-stage auto-reject. The eligibility
                         # flag is computed by the caller (Celery

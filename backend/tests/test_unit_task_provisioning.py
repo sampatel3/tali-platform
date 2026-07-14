@@ -5,10 +5,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.services.task_provisioning_service import (
+    PROVISIONING_PENDING,
+    TaskProvisioningBlockedError,
+    TaskProvisioningRetryableError,
     _deliverable_kind_hint,
     _slugify,
+    provisioning_state_is_due,
+    request_assessment_task_provisioning,
     role_has_active_task,
+    role_has_linked_task,
     generate_and_link_task_for_role,
 )
 from app.services.task_spec_generator import GeneratedSpecResult
@@ -46,6 +54,9 @@ class TestRoleHasActiveTask:
     def test_active_task(self):
         assert role_has_active_task(MagicMock(), _role(tasks=[SimpleNamespace(is_active=True)])) is True
 
+    def test_any_linked_task_includes_inactive_draft(self):
+        assert role_has_linked_task(_role(tasks=[SimpleNamespace(is_active=False)])) is True
+
 
 class TestGenerateAndLink:
     def test_skips_when_role_has_active_task(self):
@@ -53,16 +64,27 @@ class TestGenerateAndLink:
         out = generate_and_link_task_for_role(MagicMock(), role, api_key="sk-x", organization_id=2)
         assert out is None
 
+    def test_skips_when_role_has_inactive_draft(self):
+        role = _role(tasks=[SimpleNamespace(is_active=False)])
+        out = generate_and_link_task_for_role(
+            MagicMock(), role, api_key="sk-x", organization_id=2
+        )
+        assert out is None
+
     def test_skips_when_jd_too_thin(self):
         role = _role(job_spec_text="short", description="")
-        out = generate_and_link_task_for_role(MagicMock(), role, api_key="sk-x", organization_id=2)
-        assert out is None
+        with pytest.raises(TaskProvisioningBlockedError, match="too thin"):
+            generate_and_link_task_for_role(
+                MagicMock(), role, api_key="sk-x", organization_id=2
+            )
 
     @patch("app.services.task_provisioning_service.generate_task_spec")
     def test_skips_when_generation_invalid(self, mock_gen):
         mock_gen.return_value = GeneratedSpecResult(spec=None, valid=False, errors=["bad"], attempts=3)
-        out = generate_and_link_task_for_role(MagicMock(), _role(), api_key="sk-x", organization_id=2)
-        assert out is None
+        with pytest.raises(TaskProvisioningRetryableError, match="remained invalid"):
+            generate_and_link_task_for_role(
+                MagicMock(), _role(), api_key="sk-x", organization_id=2
+            )
 
     @patch("app.services.task_provisioning_service._link_role_task")
     @patch("app.services.task_provisioning_service._provision_repo_best_effort")
@@ -81,9 +103,93 @@ class TestGenerateAndLink:
         kw = mock_gen.call_args.kwargs
         assert kw["organization_id"] == 2
         assert kw["role_slug"] == "security_engineer"
+        assert kw["role_id"] == 7
 
     @patch("app.services.task_provisioning_service.generate_task_spec")
-    def test_generation_exception_is_swallowed(self, mock_gen):
+    def test_generation_exception_is_retryable(self, mock_gen):
         mock_gen.side_effect = RuntimeError("boom")
-        out = generate_and_link_task_for_role(MagicMock(), _role(), api_key="sk-x", organization_id=2)
-        assert out is None
+        with pytest.raises(TaskProvisioningRetryableError, match="boom"):
+            generate_and_link_task_for_role(
+                MagicMock(), _role(), api_key="sk-x", organization_id=2
+            )
+
+
+class TestDurableProvisioningIntent:
+    def test_request_stamps_recoverable_state(self):
+        role = _role()
+
+        requested = request_assessment_task_provisioning(
+            role, reason="requisition_publish"
+        )
+
+        assert requested is True
+        assert role.assessment_task_provisioning["status"] == PROVISIONING_PENDING
+        assert role.assessment_task_provisioning["reason"] == "requisition_publish"
+        assert role.assessment_task_provisioning["request_id"]
+        assert provisioning_state_is_due(role.assessment_task_provisioning) is True
+
+    def test_existing_link_is_terminal_not_re_requested(self):
+        role = _role(tasks=[SimpleNamespace(id=91, is_active=False)])
+
+        requested = request_assessment_task_provisioning(
+            role, reason="requisition_publish"
+        )
+
+        assert requested is False
+        assert role.assessment_task_provisioning["status"] == "succeeded"
+        assert role.assessment_task_provisioning["task_id"] == 91
+
+    def test_jd_change_supersedes_only_inactive_generated_review_draft(self):
+        draft = SimpleNamespace(
+            id=92,
+            is_active=False,
+            extra_data={
+                "generated": True,
+                "needs_review": True,
+                "battle_test_provisioning": {
+                    "status": "running",
+                    "claim_token": "old-worker",
+                },
+            },
+        )
+        role = _role(tasks=[draft])
+
+        requested = request_assessment_task_provisioning(
+            role,
+            reason="requisition_publish",
+            supersede_generated_drafts=True,
+        )
+
+        assert requested is True
+        assert role.tasks == []
+        assert role.assessment_task_provisioning["status"] == PROVISIONING_PENDING
+        assert role.assessment_task_provisioning["superseded_task_ids"] == [92]
+        assert draft.extra_data["superseded"] is True
+        assert draft.extra_data["needs_review"] is False
+        assert draft.extra_data["battle_test_provisioning"]["status"] == "superseded"
+        assert draft.extra_data["battle_test_provisioning"]["claim_token"] is None
+
+    @pytest.mark.parametrize(
+        "linked",
+        [
+            SimpleNamespace(
+                id=93,
+                is_active=True,
+                extra_data={"generated": True, "needs_review": False},
+            ),
+            SimpleNamespace(id=94, is_active=False, extra_data={"generated": False}),
+        ],
+    )
+    def test_jd_change_preserves_active_and_manual_tasks(self, linked):
+        role = _role(tasks=[linked])
+
+        requested = request_assessment_task_provisioning(
+            role,
+            reason="requisition_publish",
+            supersede_generated_drafts=True,
+        )
+
+        assert requested is False
+        assert role.tasks == [linked]
+        assert role.assessment_task_provisioning["status"] == "succeeded"
+        assert role.assessment_task_provisioning["task_id"] == linked.id

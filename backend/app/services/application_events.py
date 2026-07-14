@@ -8,14 +8,15 @@ enqueue." Today there are two events:
 - ``on_application_created(app, *, score)`` — fires when an application
   is ingested from any source (manual upload, Workable sync). Enqueues
   the per-candidate auto work (interview pack, auto-reject) and, when
-  ``score=True``, the recruiter-implicit scoring job (e.g. recruiter
-  uploaded a CV by hand — that's an implicit "score this" intent).
+  ``score=True``, the scoring job for ingestion paths that promise immediate
+  evaluation (public requisition apply and recruiter CV upload).
 
-Policy reminder: CV match scoring is HUMAN-triggered. Workable bulk sync
-calls these handlers with ``score=False`` so the sync ingests cleanly
-without auto-enqueueing scoring for everyone it pulls. Recruiter-driven
-flows (POST /applications, POST /applications/{id}/upload-cv) pass
-``score=True``.
+Policy reminder: Workable bulk sync calls these handlers with ``score=False``
+so one import does not enqueue an unbounded burst. For an enabled role, the
+bounded cohort worker drains that backlog automatically; no recruiter scoring
+click is required. Recruiter uploads and native requisition applications pass
+``score=True`` for the low-latency path; the latter is safe because Turn on is
+credit/budget/readiness gated.
 
 These helpers must be cheap and synchronous — they only schedule Celery
 tasks via ``.delay()``. The actual Claude work happens on the worker.
@@ -66,9 +67,8 @@ def on_application_created(
       pre-existing Workable scores)
 
     When ``score=True``, also enqueues a CV match scoring job. Pass this
-    only from human-triggered ingestion flows where the recruiter's
-    intent is implicitly "score this": manual CV upload endpoints and the
-    explicit Score / Rescore / Score-selected buttons.
+    from ingestion flows that promise immediate evaluation: native public
+    applications, manual CV upload endpoints, and explicit Score/Rescore.
 
     Interview-pack regeneration is **not** scheduled here. Generating a
     pack costs ~$0.013 in Haiku 4.5 spend per candidate; doing it for
@@ -78,9 +78,10 @@ def on_application_created(
     passes pre-screen and gets a v3 score — the only point at which the
     pack carries useful, candidate-specific signal.
 
-    The Workable bulk sync passes ``score=False`` so importing N
-    candidates doesn't auto-enqueue N scoring jobs — recruiters trigger
-    scoring when they're ready, on their own schedule.
+    The Workable bulk sync passes ``score=False`` so importing N candidates
+    doesn't burst-enqueue N scoring jobs. An enabled role's bounded cohort
+    sweep drains them automatically; the explicit scoring controls remain
+    operator recovery/override surfaces.
     """
     if app is None:
         return
@@ -155,13 +156,10 @@ def on_application_created(
                 application_id,
             )
 
-    # Phase 7: per-application event trigger removed. The cohort-planner
-    # orchestrator runs role-wide on a Celery beat schedule
-    # (``agent_cohort_tick`` every 30 min per active role) and surveys
-    # the cohort itself — there's no value in waking it up for one
-    # application. Events still write to ``candidate_application_events``
-    # for the audit trail; the agent's manual_action_reader and
-    # cohort tools read those rows on the next tick.
+    # The score-completion task wakes the role immediately, so no separate
+    # application-created wake is needed on the healthy path. The hourly
+    # cohort sweep remains the recovery backstop if the initial score dispatch
+    # is rejected during a transient broker outage.
 
     logger.info(
         "on_application_created enqueued application_id=%s score=%s",

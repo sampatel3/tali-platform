@@ -1,6 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('./RoleScreeningQuestions', () => ({
+  default: () => <div data-testid="screening-question-editor" />,
+}));
+
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 
 // Minimal props: the tab renders the autonomy toggles from the role record.
@@ -17,26 +21,97 @@ const baseProps = (roleOverrides = {}) => ({
   thresholdMode: 'manual',
 });
 
-describe('RoleAgentSettingsTab auto-promote toggle', () => {
-  it('surfaces the auto-promote toggle with plain auto-send + guard copy', () => {
+describe('RoleAgentSettingsTab autonomy policy', () => {
+  it('surfaces each positive automation grant separately', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
-    expect(screen.getByText('Auto-promote')).toBeInTheDocument();
-    // Discoverability: the copy must say the agent sends assessments
-    // automatically to candidates who pass screening.
-    expect(
-      screen.getByText(/sends assessments automatically to candidates who pass screening/i),
-    ).toBeInTheDocument();
-    // And it must surface the safety guard (held for review at the daily/budget cap).
-    expect(screen.getByText(/daily send limit or budget cap/i)).toBeInTheDocument();
+    expect(screen.getByText('Send assessments automatically')).toBeInTheDocument();
+    expect(screen.getByText('Resend assessment invites automatically')).toBeInTheDocument();
+    expect(screen.getByText('Advance on-policy candidates automatically')).toBeInTheDocument();
+    expect(screen.getByText('Reject deterministic screening failures automatically')).toBeInTheDocument();
   });
 
-  it('reflects the persisted auto_promote value and fires onAutonomyChange', () => {
+  it('uses effective granular policy and fires the exact action change', () => {
     const onAutonomyChange = vi.fn();
-    render(<RoleAgentSettingsTab {...baseProps({ auto_promote: true })} onAutonomyChange={onAutonomyChange} />);
-    const toggle = screen.getByRole('button', { name: 'Auto-promote' });
-    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        auto_promote: true,
+        auto_send_assessment: false,
+        agent_effective_policy: { auto_send_assessment: false },
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+    const toggle = screen.getByRole('button', { name: 'Send assessments automatically' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(toggle);
-    expect(onAutonomyChange).toHaveBeenCalledWith('auto_promote', false);
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
+  });
+
+  it('previews the first-Turn-on autonomous default for an untouched role', () => {
+    const onAutonomyChange = vi.fn();
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        auto_promote: false,
+        auto_send_assessment: null,
+        auto_resend_assessment: null,
+        auto_advance: null,
+        agent_effective_policy: {
+          auto_send_assessment: false,
+          auto_resend_assessment: false,
+          auto_advance: false,
+        },
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    const send = screen.getByRole('button', { name: 'Send assessments automatically' });
+    const resend = screen.getByRole('button', { name: 'Resend assessment invites automatically' });
+    const advance = screen.getByRole('button', { name: 'Advance on-policy candidates automatically' });
+    expect(send).toHaveAttribute('aria-pressed', 'true');
+    expect(resend).toHaveAttribute('aria-pressed', 'true');
+    expect(advance).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(send);
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', false);
+  });
+
+  it('renders one consolidated deterministic-rejection control', () => {
+    const onAutonomyChange = vi.fn();
+    render(<RoleAgentSettingsTab
+      {...baseProps({ auto_reject: true, auto_reject_pre_screen: false })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+    const toggle = screen.getByRole('button', { name: 'Reject deterministic screening failures automatically' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /^Auto-reject$/i })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(onAutonomyChange).toHaveBeenCalledWith('deterministic_pre_screen_reject', false);
+  });
+});
+
+describe('RoleAgentSettingsTab reject and pause boundaries', () => {
+  it('makes the irreversible human-confirm rail explicit', () => {
+    render(<RoleAgentSettingsTab {...baseProps()} />);
+    expect(
+      screen.getAllByText(/full-score and assessment reject recommendations always/i).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/explicit opt-in for rules-based pre-screen failures when policy and ATS safeguards pass/i),
+    ).toBeInTheDocument();
+  });
+
+  it('distinguishes manual pauses from automatic budget, credit, and startup holds', () => {
+    render(<RoleAgentSettingsTab {...baseProps()} />);
+    expect(screen.getByText('AUTOMATIC HOLDS')).toBeInTheDocument();
+    expect(screen.getByText(/manual Pause remains until you explicitly resume it/i)).toBeInTheDocument();
+    expect(screen.getByText(/usage credits run out/i)).toBeInTheDocument();
+    expect(screen.getByText(/applications close until Resume or Turn on/i)).toBeInTheDocument();
+  });
+
+  it('labels the role cap as AI usage and separates operational costs', () => {
+    render(<RoleAgentSettingsTab {...baseProps()} />);
+    expect(screen.getByText(/ROLE AI-USAGE BUDGET/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sandbox runtime, email, storage, and repository hosting are separate/i)).toBeInTheDocument();
+    expect(screen.getByText(/Settings → Billing/i)).toBeInTheDocument();
   });
 });
 
@@ -71,7 +146,7 @@ describe('RoleAgentSettingsTab assessment task', () => {
     );
     expect(screen.getByText('No assessment task assigned')).toBeInTheDocument();
     expect(
-      screen.getByText(/nothing to send when a candidate passes screening/i),
+      screen.getByText(/Turn on will generate and validate a role-specific task automatically/i),
     ).toBeInTheDocument();
   });
 

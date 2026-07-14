@@ -10,8 +10,17 @@ warnings.filterwarnings(
 )
 
 # Override DATABASE_URL before any app imports. Shared in-memory avoids disk I/O
-# and locking when sync + async engines both access the DB.
-os.environ["DATABASE_URL"] = "sqlite:///file:taalitest?mode=memory&cache=shared"
+# and locking when sync + async engines both access the DB. Parallel verification
+# processes can opt into a distinct, still-test-only database name without ever
+# inheriting the application's normal DATABASE_URL.
+os.environ["DATABASE_URL"] = os.environ.get(
+    "TALI_TEST_DATABASE_URL",
+    # ``uri=true`` is required for SQLAlchemy to pass ``mode=memory`` and
+    # ``cache=shared`` to SQLite.  Without it this URL silently creates a
+    # persistent file literally named ``file:taalitest``; concurrent pytest
+    # processes then drop each other's tables despite the in-memory comment.
+    "sqlite:///file:taalitest?mode=memory&cache=shared&uri=true",
+)
 # Keep external integrations disabled by default for unit/API tests. Individual
 # tests can opt-in by monkeypatching settings.
 os.environ["MVP_DISABLE_WORKABLE"] = "true"

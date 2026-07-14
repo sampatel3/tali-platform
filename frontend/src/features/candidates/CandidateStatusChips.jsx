@@ -102,10 +102,15 @@ export function AssessmentInviteChip({ status, tracking, compact = false }) {
 
   // Delivery chip — only while the invite is the active concern, or on failure.
   const es = (t.email_status || '').toLowerCase();
-  // 'failed' = the send itself never succeeded (e.g. Resend rate-limited a
-  // bulk-invite burst); 'bounced'/'complained' = accepted then rejected. All
-  // three mean the candidate never got the invite — surface them so a recruiter
-  // can resend instead of waiting on someone who never heard from us.
+  const isAutoRecovering = ['pending_dispatch', 'dispatching', 'queued', 'retrying', 'retry_wait'].includes(es);
+  if (isAutoRecovering && s !== 'in_progress' && s !== 'completed' && s !== 'completed_due_to_timeout') {
+    lifeCls = 'asmt-chip asmt-chip--progress';
+    lifeLabel = compact ? 'Sending' : 'Sending automatically';
+  }
+  // 'failed' = a permanent provider refusal that needs intervention;
+  // transient/rate-limit failures stay in the automatic recovery states above.
+  // 'bounced'/'complained' = accepted then rejected. All three mean the
+  // candidate never got the invite, so surface a recruiter resend action.
   const isSendFailure = es === 'failed' || es === 'bounced' || es === 'complained';
   const showDelivery = !s || s === 'pending' || s === 'in_progress' || isSendFailure;
   let deliv = null;
@@ -118,6 +123,14 @@ export function AssessmentInviteChip({ status, tracking, compact = false }) {
           ? `Email ${es}: ${_fmtTs(t.bounced_at)}`
           : `Email ${es} — invite did not reach the candidate`;
       deliv = { cls: 'asmt-chip asmt-chip--bounced', label: failLabel, title: failTitle };
+    } else if (isAutoRecovering) {
+      deliv = {
+        cls: 'asmt-chip asmt-chip--progress',
+        label: es === 'retry_wait' ? 'Auto-retrying' : 'Sending',
+        title: es === 'retry_wait'
+          ? 'Delivery is delayed; the agent will retry automatically when the provider is healthy'
+          : 'The agent is delivering this invite automatically',
+      };
     } else if (t.opened_at || es === 'opened' || es === 'clicked') {
       deliv = { cls: 'asmt-chip asmt-chip--opened', label: 'Opened', title: t.opened_at ? `Email opened: ${_fmtTs(t.opened_at)}` : 'Email opened' };
     } else if (t.delivered_at || es === 'delivered') {

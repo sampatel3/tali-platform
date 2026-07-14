@@ -65,7 +65,8 @@ def _make_role(
         name=name,
         source="manual",
         agentic_mode_enabled=agentic,
-        monthly_usd_budget_cents=0,
+        monthly_usd_budget_cents=5000,
+        job_spec_text="Backend role\n\nRequirements\n- Python\n",
     )
     if paused:
         role.agent_paused_at = datetime.now(timezone.utc)

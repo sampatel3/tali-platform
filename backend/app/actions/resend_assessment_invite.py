@@ -14,16 +14,10 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
-from ..domains.assessments_runtime.pipeline_service import (
-    append_application_event,
-    ensure_pipeline_fields,
-    initialize_pipeline_event_if_missing,
-)
 from ..domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ..models.assessment import Assessment
-from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from .types import Actor
+from .types import ACTOR_AGENT, ACTOR_SYSTEM, Actor
 
 
 logger = logging.getLogger("taali.actions.resend_assessment_invite")
@@ -32,7 +26,7 @@ logger = logging.getLogger("taali.actions.resend_assessment_invite")
 @dataclass(frozen=True)
 class ResendAssessmentInviteResult:
     assessment_id: int
-    status: str  # "resent" | "voided" | "no_candidate"
+    status: str  # "queued" | "voided" | "no_candidate" | "blocked"
     detail: Optional[str] = None
 
     def as_dict(self) -> dict:
@@ -67,6 +61,42 @@ def run(
             status="voided",
             detail="Voided assessments cannot be resent",
         )
+    if actor.type in {ACTOR_AGENT, ACTOR_SYSTEM}:
+        from ..services.role_execution_guard import (
+            assessment_task_is_current,
+            automatic_role_action_block_reason,
+            lock_live_role,
+        )
+
+        if assessment.role_id is None:
+            return ResendAssessmentInviteResult(
+                assessment_id=int(assessment.id),
+                status="blocked",
+                detail="Automatic invite resend held: assessment has no role",
+            )
+        role = lock_live_role(
+            db,
+            role_id=int(assessment.role_id),
+            organization_id=int(organization_id),
+        )
+        block_reason = automatic_role_action_block_reason(role)
+        if block_reason:
+            return ResendAssessmentInviteResult(
+                assessment_id=int(assessment.id),
+                status="blocked",
+                detail=f"Automatic invite resend held: {block_reason}",
+            )
+        if role is None or not assessment_task_is_current(
+            db, assessment=assessment, role=role
+        ):
+            return ResendAssessmentInviteResult(
+                assessment_id=int(assessment.id),
+                status="blocked",
+                detail=(
+                    "Automatic invite resend held: the assessment task was "
+                    "superseded or is no longer assignable for this role"
+                ),
+            )
     candidate = assessment.candidate
     if candidate is None or not (candidate.email or "").strip():
         return ResendAssessmentInviteResult(
@@ -83,42 +113,29 @@ def run(
     if org is None:
         raise HTTPException(status_code=404, detail="Organization not found")
 
+    # Automatic recovery must retain one stable provider idempotency key, but
+    # an explicit resend is a new logical candidate email.  Advance the durable
+    # generation before registering the outbox intent so every retry of this
+    # resend shares a new key without being collapsed into the original send.
+    assessment.invite_email_send_generation = (
+        int(assessment.invite_email_send_generation or 0) + 1
+    )
     dispatch_assessment_invite(
         assessment=assessment,
         org=org,
         candidate_email=candidate.email,
         candidate_name=candidate.full_name or candidate.email,
         position=(assessment.task.name if assessment.task else "Technical assessment"),
+        pipeline_source=(
+            actor.type if actor.type in {"agent", "recruiter"} else "agent"
+        ),
+        pipeline_actor_type=actor.type,
+        pipeline_actor_id=actor.event_actor_id,
+        pipeline_reason="Task invite resent",
+        pipeline_metadata={"assessment_id": int(assessment.id)},
+        pipeline_event_type="assessment_invite_resent",
     )
 
-    if assessment.application_id:
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == assessment.application_id,
-                CandidateApplication.organization_id == organization_id,
-            )
-            .first()
-        )
-        if app is not None:
-            ensure_pipeline_fields(app)
-            initialize_pipeline_event_if_missing(
-                db,
-                app=app,
-                actor_type="system",
-                actor_id=actor.event_actor_id,
-                reason="Pipeline initialized before invite resend",
-            )
-            append_application_event(
-                db,
-                app=app,
-                event_type="assessment_invite_resent",
-                actor_type=actor.type,
-                actor_id=actor.event_actor_id,
-                reason="Task invite resent",
-                metadata={"assessment_id": int(assessment.id)},
-            )
-
     return ResendAssessmentInviteResult(
-        assessment_id=int(assessment.id), status="resent"
+        assessment_id=int(assessment.id), status="queued"
     )

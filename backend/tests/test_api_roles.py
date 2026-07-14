@@ -17,7 +17,15 @@ from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
 
 
-def test_role_application_assessment_lifecycle(client):
+def test_role_application_assessment_lifecycle(client, db, monkeypatch):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+
+    kicked: list[int] = []
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda assessment_id, reply_to=None: kicked.append(int(assessment_id)),
+    )
     headers, _ = auth_headers(client)
     task_resp = create_task_via_api(client, headers, name="Role linked task")
     assert task_resp.status_code == 201
@@ -76,6 +84,10 @@ def test_role_application_assessment_lifecycle(client):
     assert assessment["task_id"] == task["id"]
     assert assessment["role_id"] == role["id"]
     assert assessment["application_id"] == app_payload["id"]
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == assessment["id"]).one()
+    assert row.invite_email_status == "pending_dispatch"
+    assert kicked == [int(assessment["id"])]
 
 
 def test_role_star_unstar_toggles_auto_sync_flag(client):
@@ -454,6 +466,31 @@ def test_role_application_summary_uses_role_fit_before_completion_and_hierarchic
     assert post_item["score_summary"]["cv_fit_score"] == 82.0
     assert post_item["score_summary"]["role_fit_score"] == 78.0
     assert post_item["score_summary"]["taali_score"] == 74.0
+
+    # A failed rubric dimension invalidates every headline score even if an
+    # older cache still held a strong result. The UI receives an honest pending
+    # state until the automatic grader retry completes.
+    assessment_row.scoring_partial = True
+    assessment_row.score_breakdown = {
+        "rubric_grading": {
+            "status": "partial",
+            "fully_graded": False,
+            "failed_dimension_ids": ["quality"],
+            "dimensions": [{"id": "quality", "error": "provider unavailable"}],
+        }
+    }
+    refresh_application_score_cache(app_row, db=db)
+    db.commit()
+    pending = client.get(
+        f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score",
+        headers=headers,
+    )
+    assert pending.status_code == 200, pending.text
+    pending_item = pending.json()[0]
+    assert pending_item["taali_score"] is None
+    assert pending_item["score_mode"] == "rubric_grading_pending"
+    assert pending_item["score_summary"]["assessment_score"] is None
+    assert pending_item["score_summary"]["assessment_grading_pending"] is True
 
 
 def test_application_interview_debrief_and_client_report_work_before_completion(client, db):
@@ -1771,7 +1808,22 @@ def test_pipeline_endpoints_validate_min_taali_threshold_range(client):
     assert pipeline_invalid.status_code == 422, pipeline_invalid.text
 
 
-def test_assessment_invite_event_is_logged_when_stage_is_unchanged(client):
+def test_assessment_invite_event_is_logged_when_stage_is_unchanged(
+    client, db, monkeypatch
+):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+
+    # Queue acceptance is intentionally not treated as candidate contact. Keep
+    # the worker out of this API-level test, then cross the truthful delivery
+    # boundary explicitly with a provider message id below.
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda assessment_id, reply_to=None: None,
+    )
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Timeline invite task").json()
     role = _create_role_with_spec(client, headers, name="Timeline invite role")
@@ -1804,6 +1856,28 @@ def test_assessment_invite_event_is_logged_when_stage_is_unchanged(client):
         headers=headers,
     )
     assert invite_resp.status_code == 201, invite_resp.text
+
+    pending_events_resp = client.get(
+        f"/api/v1/applications/{app['id']}/events", headers=headers
+    )
+    assert pending_events_resp.status_code == 200, pending_events_resp.text
+    pending_event_types = [
+        event["event_type"] for event in pending_events_resp.json()
+    ]
+    assert "assessment_invite_sent" not in pending_event_types
+
+    assessment = (
+        db.query(Assessment)
+        .filter(Assessment.id == int(invite_resp.json()["id"]))
+        .one()
+    )
+    confirmed = confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-stage-unchanged",
+        expected_generation=int(assessment.invite_email_send_generation or 0),
+    )
+    assert confirmed["confirmed"] is True
 
     events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
     assert events_resp.status_code == 200, events_resp.text

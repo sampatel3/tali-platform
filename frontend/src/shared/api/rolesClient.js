@@ -37,6 +37,19 @@ export const roles = {
   listFeedbackNotes: (roleId) => api.get(`/roles/${roleId}/feedback-notes`),
   createFeedbackNote: (roleId, note) =>
     api.post(`/roles/${roleId}/feedback-notes`, { note }),
+  // Public-application screening questions. The authenticated management
+  // payload includes deterministic knockout configuration; the public job
+  // payload deliberately strips the expected answers.
+  listScreeningQuestions: (roleId, { includeInactive = false } = {}) =>
+    api.get(`/roles/${roleId}/screening-questions`, {
+      params: { include_inactive: includeInactive || undefined },
+    }),
+  createScreeningQuestion: (roleId, data) =>
+    api.post(`/roles/${roleId}/screening-questions`, data),
+  updateScreeningQuestion: (roleId, questionId, data) =>
+    api.patch(`/roles/${roleId}/screening-questions/${questionId}`, data),
+  deleteScreeningQuestion: (roleId, questionId) =>
+    api.delete(`/roles/${roleId}/screening-questions/${questionId}`),
   uploadJobSpec: (roleId, file) => {
     const form = new FormData();
     form.append('file', file);

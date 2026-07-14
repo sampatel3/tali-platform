@@ -18,6 +18,11 @@ from app.services.task_spec_generator import (
     generate_task_spec,
     _extract_json,
 )
+from app.services.usage_credit_reservations import (
+    CreditReservation,
+    InsufficientRoleBudgetError,
+)
+from app.services.usage_metering_service import InsufficientCreditsError
 
 
 def _valid_spec() -> dict:
@@ -123,13 +128,23 @@ class TestGenerateTaskSpec:
 
     @patch("app.services.task_spec_generator.Anthropic")
     @patch("app.services.task_spec_generator.MeteredAnthropicClient")
-    def test_valid_first_try_passes_through(self, mock_client_cls, _a):
+    @patch("app.services.task_spec_generator._reserve_generation_attempt")
+    def test_valid_first_try_passes_through(
+        self, reserve_attempt, mock_client_cls, _a
+    ):
+        reserve_attempt.return_value = CreditReservation(
+            organization_id=2,
+            feature="assessment",
+            amount=1_440_000,
+            external_ref="usage-reservation:task-spec:test",
+            live=False,
+        )
         client = mock_client_cls.return_value
         client.messages.create.return_value = _resp(json.dumps(_valid_spec()))
         res = generate_task_spec(
             role_name="Specialist - Vulnerability Management",
             role_slug="specialist_vulnerability_management",
-            jd_text="triage vulns", api_key="sk-x", organization_id=2,
+            jd_text="triage vulns", api_key="sk-x", organization_id=2, role_id=7,
         )
         assert res.valid is True
         assert res.attempts == 1
@@ -137,6 +152,13 @@ class TestGenerateTaskSpec:
         # Metering shape pinned.
         kw = client.messages.create.call_args.kwargs
         assert kw["metering"]["metadata"]["sub_feature"] == "task_spec_generation"
+        assert kw["metering"]["role_id"] == 7
+        assert kw["metering"]["entity_id"] == "role:7"
+        assert kw["metering"]["trace_id"].startswith("task-spec-")
+        assert kw["metering"]["metadata"]["trace_id"] == kw["metering"]["trace_id"]
+        assert kw["metering"]["credit_reservation"]["organization_id"] == 2
+        assert kw["metering"]["credit_reservation"]["feature"] == "assessment"
+        assert kw["metering"]["credit_reservation"]["amount"] > 0
 
     @patch("app.services.task_spec_generator.Anthropic")
     @patch("app.services.task_spec_generator.MeteredAnthropicClient")
@@ -189,3 +211,87 @@ class TestGenerateTaskSpec:
         )
         assert res.valid is False
         assert any("network down" in e for e in res.errors)
+
+    @patch("app.services.task_spec_generator.Anthropic")
+    @patch("app.services.task_spec_generator.MeteredAnthropicClient")
+    @patch("app.services.task_spec_generator._reserve_generation_attempt")
+    def test_insufficient_reservation_blocks_before_provider(
+        self, reserve_attempt, mock_client_cls, _a
+    ):
+        reserve_attempt.side_effect = InsufficientCreditsError(
+            organization_id=2,
+            required=1_000_000,
+            available=999_999,
+        )
+
+        res = generate_task_spec(
+            role_name="x",
+            role_slug="x",
+            jd_text="x",
+            api_key="sk-x",
+            organization_id=2,
+            role_id=7,
+        )
+
+        assert res.valid is False
+        assert res.attempts == 0
+        assert "insufficient usage credits" in res.errors[0]
+        assert not mock_client_cls.return_value.messages.create.called
+
+    @patch("app.services.task_spec_generator.Anthropic")
+    @patch("app.services.task_spec_generator.MeteredAnthropicClient")
+    @patch("app.services.task_spec_generator._reserve_generation_attempt")
+    def test_role_cap_blocks_before_provider(
+        self, reserve_attempt, mock_client_cls, _a
+    ):
+        reserve_attempt.side_effect = InsufficientRoleBudgetError(
+            role_id=7,
+            required=1_440_000,
+            available=1_000_000,
+        )
+
+        res = generate_task_spec(
+            role_name="x",
+            role_slug="x",
+            jd_text="x",
+            api_key="sk-x",
+            organization_id=2,
+            role_id=7,
+        )
+
+        assert res.valid is False
+        assert res.attempts == 0
+        assert "insufficient role monthly budget" in res.errors[0]
+        assert not mock_client_cls.return_value.messages.create.called
+
+    @patch("app.services.task_spec_generator.Anthropic")
+    @patch("app.services.task_spec_generator.MeteredAnthropicClient")
+    @patch("app.services.task_spec_generator._release_generation_attempt")
+    @patch("app.services.task_spec_generator._reserve_generation_attempt")
+    def test_provider_failure_releases_hard_reservation(
+        self, reserve_attempt, release_attempt, mock_client_cls, _a
+    ):
+        held = CreditReservation(
+            organization_id=2,
+            feature="assessment",
+            amount=1_000_000,
+            external_ref="usage-reservation:test",
+            live=True,
+        )
+        reserve_attempt.return_value = held
+        mock_client_cls.return_value.messages.create.side_effect = RuntimeError(
+            "network down"
+        )
+
+        res = generate_task_spec(
+            role_name="x",
+            role_slug="x",
+            jd_text="x",
+            api_key="sk-x",
+            organization_id=2,
+            role_id=7,
+        )
+
+        assert res.valid is False
+        release_attempt.assert_called_once()
+        assert release_attempt.call_args.args[0] == held

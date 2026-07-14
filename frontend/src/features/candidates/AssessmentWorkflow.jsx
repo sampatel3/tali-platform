@@ -54,6 +54,16 @@ export function deriveAssessmentWorkflow(status, tracking) {
   if (es === 'bounced' || es === 'complained') {
     return build('DETTT', es === 'complained' ? 'Marked as spam — invite blocked' : 'Bounced — never reached inbox', 'err', 'resend');
   }
+  if (['pending_dispatch', 'dispatching', 'queued', 'retrying', 'retry_wait'].includes(es)) {
+    const coolingDown = es === 'retry_wait';
+    return build(
+      'CTTTT',
+      coolingDown ? 'Delivery delayed — retrying automatically' : 'Sending invite automatically',
+      coolingDown ? 'warn' : 'live',
+      null,
+      true,
+    );
+  }
   if (s === 'completed' || s === 'completed_due_to_timeout') {
     return build('DDDDD', 'Completed', 'ok', 'view');
   }

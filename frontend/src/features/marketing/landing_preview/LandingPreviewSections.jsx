@@ -48,7 +48,7 @@ const PILLARS = [
   {
     Motif: PillarPipeline,
     title: 'An agent that works the pipeline',
-    body: 'A governed hiring agent screens, assesses and decides across your funnel, and keeps it moving. Every consequential call is deterministic and evidence-linked, and you approve it.',
+    body: 'A governed hiring agent screens, assesses, and moves on-policy reversible steps automatically. Ambiguous, off-policy, and irreversible outcomes come to you with deterministic, evidence-linked recommendations.',
   },
   {
     Motif: PillarProof,

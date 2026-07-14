@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -46,6 +46,12 @@ vi.mock('../../shared/api', () => ({
     deleteCriterion: vi.fn(),
     syncCriteriaWithWorkspace: vi.fn(),
     resetCriteriaToWorkspace: vi.fn(),
+    listFeedbackNotes: vi.fn(),
+    createFeedbackNote: vi.fn(),
+    listScreeningQuestions: vi.fn(),
+    createScreeningQuestion: vi.fn(),
+    updateScreeningQuestion: vi.fn(),
+    deleteScreeningQuestion: vi.fn(),
   },
   tasks: {
     list: vi.fn(),
@@ -72,6 +78,12 @@ vi.mock('../candidates/CandidateSheet', () => ({
   CandidateSheet: () => null,
 }));
 
+// CRUD behavior has its own focused test. Keep this large pipeline suite from
+// scheduling a second independent settings fetch on every Agent settings case.
+vi.mock('./RoleScreeningQuestions', () => ({
+  default: () => <div data-testid="screening-question-editor" />,
+}));
+
 import * as apiClient from '../../shared/api';
 import { JobPipelinePage } from './JobPipelinePage';
 
@@ -88,6 +100,7 @@ const baseRole = {
     review: 1,
   },
   interview_focus: { questions: [] },
+  auto_promote: true,
 };
 
 const baseApplications = [
@@ -149,6 +162,8 @@ describe('JobPipelinePage', () => {
     apiClient.roles.batchScoreStatus.mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0 } });
     apiClient.roles.fetchCvsStatus.mockResolvedValue({ data: { status: 'idle', total: 0, fetched: 0, errors: 0 } });
     apiClient.roles.batchPreScreenStatus.mockResolvedValue({ data: { status: 'idle', total: 0, processed: 0, errors: 0 } });
+    apiClient.roles.listFeedbackNotes.mockResolvedValue({ data: [] });
+    apiClient.roles.listScreeningQuestions.mockResolvedValue({ data: [] });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
@@ -166,6 +181,12 @@ describe('JobPipelinePage', () => {
     fireEvent.click(await screen.findByRole('link', { name: /^Agent settings$/i }));
   };
 
+  const confirmTurnOnPolicy = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByRole('heading', { name: /Turn on this role’s agent/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+  };
+
   it('renders the reject-threshold slider on the Agent settings tab without a spinbutton', async () => {
     renderPipeline();
     await openAgentSettingsTab();
@@ -178,6 +199,52 @@ describe('JobPipelinePage', () => {
     const settingsRegion = document.querySelector('.mc-agent-settings');
     expect(settingsRegion).toBeInTheDocument();
     expect(within(settingsRegion).queryByRole('spinbutton')).not.toBeInTheDocument();
+  });
+
+  it('keeps legacy reject flags aligned behind the single deterministic control', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: { ...baseRole, auto_reject: true, auto_reject_pre_screen: true },
+    });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Reject deterministic screening failures automatically',
+    }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      auto_reject: false,
+      auto_reject_pre_screen: false,
+    }));
+  });
+
+  it('materializes the complete visible policy when one untouched-role setting changes', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        auto_promote: false,
+        auto_send_assessment: null,
+        auto_resend_assessment: null,
+        auto_advance: null,
+        agent_effective_policy: {
+          auto_send_assessment: false,
+          auto_resend_assessment: false,
+          auto_advance: false,
+        },
+      },
+    });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    const send = await screen.findByRole('button', { name: 'Send assessments automatically' });
+    expect(send).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(send);
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      auto_send_assessment: false,
+      auto_resend_assessment: true,
+      auto_advance: true,
+      auto_promote: false,
+    }));
   });
 
   it('marks the pipeline header with the role ATS mode', async () => {
@@ -205,6 +272,280 @@ describe('JobPipelinePage', () => {
     const processBtn = await screen.findByRole('button', { name: /Process \d+ candidate/i });
     expect(processBtn).toHaveClass('btn-purple');
     expect(screen.queryByText(/Agent is running this role/i)).not.toBeInTheDocument();
+  });
+
+  it('previews the effective policy and preserves configured autonomy on Turn on', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        source: 'manual',
+        auto_promote: false,
+        auto_send_assessment: false,
+        auto_resend_assessment: true,
+        auto_advance: false,
+        agent_effective_policy: {
+          auto_send_assessment: false,
+          auto_resend_assessment: true,
+          auto_advance: false,
+          auto_reject_pre_screen: false,
+          auto_skip_assessment: false,
+        },
+      },
+    });
+    apiClient.roles.listTasks.mockResolvedValue({ data: [{ id: 700, name: 'Approved task', is_active: true }] });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByText(/one human authorization step/i)).toBeInTheDocument();
+    expect(screen.getByText(/native job page opens for applications/i)).toBeInTheDocument();
+    expect(screen.getByText(/Full-score, assessment, ambiguous, interview, offer, and hire decisions remain human-controlled/i)).toBeInTheDocument();
+    expect(apiClient.roles.update).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
+      agentic_mode_enabled: true,
+      auto_promote: false,
+      auto_send_assessment: false,
+      auto_resend_assessment: true,
+      auto_advance: false,
+    })));
+  });
+
+  it('keeps an untouched first Turn on fully autonomous instead of sending the DB-default legacy false', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        auto_promote: false,
+        auto_send_assessment: null,
+        auto_resend_assessment: null,
+        auto_advance: null,
+        agent_effective_policy: {
+          auto_send_assessment: false,
+          auto_resend_assessment: false,
+          auto_advance: false,
+        },
+      },
+    });
+    apiClient.roles.listTasks.mockResolvedValue({ data: [{ id: 701, name: 'Approved task', is_active: true }] });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByText(/Initial assessments send automatically; resends run automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/Qualified candidates advance automatically to recruiter handoff/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(activationPayload).toEqual(expect.objectContaining({
+      agentic_mode_enabled: true,
+      monthly_usd_budget_cents: 5000,
+    }));
+    expect(activationPayload).not.toHaveProperty('auto_promote');
+    expect(activationPayload).not.toHaveProperty('auto_send_assessment');
+    expect(activationPayload).not.toHaveProperty('auto_resend_assessment');
+    expect(activationPayload).not.toHaveProperty('auto_advance');
+  });
+
+  it('uses a validated generated assessment from the single Turn on authorization', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({ data: [{
+      id: 707,
+      name: 'Generated debugging exercise',
+      description: 'Repair the supplied service and explain the trade-offs.',
+      scenario: 'Repair the supplied service and explain the trade-offs.',
+      duration_minutes: 45,
+      is_active: false,
+      generated: true,
+      needs_review: true,
+      battle_test: { verdict: 'pass', failed_checks: [] },
+    }] });
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
+      101,
+      expect.objectContaining({
+        agentic_mode_enabled: true,
+        monthly_usd_budget_cents: 5000,
+        activation_assessment_action: 'approve_when_ready',
+      }),
+    ));
+    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps first activation OFF when the authoritative PATCH is pending or rejected', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({ data: [{
+      id: 706,
+      name: 'Active assessment',
+      is_active: true,
+    }] });
+    let rejectActivation;
+    apiClient.roles.update.mockReturnValue(new Promise((resolve, reject) => {
+      void resolve;
+      rejectActivation = reject;
+    }));
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
+      101,
+      expect.objectContaining({ agentic_mode_enabled: true }),
+    ));
+
+    // A slow server response is not an ON state, and the status payload must
+    // not be optimistically rewritten to the bootstrap "starting" state.
+    expect(screen.getByText('Agent off')).toBeInTheDocument();
+    expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
+
+    await act(async () => {
+      rejectActivation({
+        response: { data: { detail: 'Activation rejected by readiness gate.' } },
+      });
+    });
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'Activation rejected by readiness gate.',
+      'error',
+    ));
+    expect(screen.getByText('Agent off')).toBeInTheDocument();
+    expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
+  });
+
+  it('can explicitly skip a pending generated assessment in the same Turn on action', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({ data: [{
+      id: 708,
+      name: 'Pending generated exercise',
+      description: 'Still validating.',
+      duration_minutes: 30,
+      is_active: false,
+      generated: true,
+      needs_review: true,
+      battle_test: null,
+    }] });
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+    expect(await screen.findByText(/battle test is still pending/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Skip assessment & turn on/i }));
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
+      101,
+      expect.objectContaining({
+        agentic_mode_enabled: true,
+        auto_skip_assessment: true,
+        activation_assessment_action: 'skip_assessment',
+      }),
+    ));
+  });
+
+  it('persists pending activation immediately without relying on later polling', async () => {
+    const pendingDraft = {
+      id: 709,
+      name: 'Generated systems exercise',
+      description: 'Design and repair a queue worker.',
+      duration_minutes: 45,
+      is_active: false,
+      generated: true,
+      needs_review: true,
+      battle_test: null,
+    };
+    apiClient.roles.listTasks.mockResolvedValue({ data: [pendingDraft] });
+    let resolveActivation;
+    apiClient.roles.update.mockReturnValue(new Promise((resolve) => {
+      resolveActivation = resolve;
+    }));
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+    expect(await screen.findByText(/battle test is still pending/i)).toBeInTheDocument();
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
+      101,
+      expect.objectContaining({
+        agentic_mode_enabled: true,
+        activation_assessment_action: 'approve_when_ready',
+      }),
+    ));
+    expect(screen.getAllByText(/Saving Turn-on…/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Your Turn-on request is saved/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveActivation({
+        data: {
+          ...baseRole,
+          agentic_mode_enabled: false,
+          assessment_task_provisioning: {
+            activation_intent: { status: 'pending', last_error: null },
+          },
+        },
+      });
+    });
+    expect(await screen.findByText(/Your Turn-on request is saved/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^close$/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
+  });
+
+  it('shows a failed durable Turn-on as unsaved and leaves retry available', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({ data: [{
+      id: 710,
+      name: 'Pending generated exercise',
+      is_active: false,
+      generated: true,
+      needs_review: true,
+      battle_test: null,
+    }] });
+    apiClient.roles.update.mockRejectedValue({
+      response: { data: { detail: 'Activation authorization could not be persisted.' } },
+    });
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+
+    expect(await screen.findByText(/The Turn-on request was not saved/i)).toBeInTheDocument();
+    expect(screen.getByText('Turn-on request failed')).toBeInTheDocument();
+    expect(screen.getByText('Activation authorization could not be persisted.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Retry request/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Your Turn-on request is saved/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Agent off')).toBeInTheDocument();
+  });
+
+  it('shows a persisted queued activation after page reload', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        agentic_mode_enabled: false,
+        assessment_task_provisioning: {
+          status: 'succeeded',
+          activation_intent: { status: 'pending', last_error: null },
+        },
+      },
+    });
+    renderPipeline();
+
+    expect(await screen.findByText('Agent turn-on is queued')).toBeInTheDocument();
+    expect(screen.getByText(/You can leave this page/i)).toBeInTheDocument();
+  });
+
+  it('shows an honest blocked activation after page reload', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        agentic_mode_enabled: false,
+        assessment_task_provisioning: {
+          status: 'blocked',
+          activation_intent: {
+            status: 'blocked',
+            last_error: 'Assessment task provisioning is blocked: job description is too thin',
+          },
+        },
+      },
+    });
+    renderPipeline();
+
+    expect(await screen.findByText('Agent turn-on needs input')).toBeInTheDocument();
+    expect(screen.getByText(/job description is too thin/i)).toBeInTheDocument();
   });
 
   it('shows stage-aware card signals instead of pre-screen scores in early stages', async () => {

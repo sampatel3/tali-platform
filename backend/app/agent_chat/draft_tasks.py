@@ -7,6 +7,8 @@ the draft. This module brings that review into the role agent's world:
 
   * ``draft_review_card`` — the agent surfaces the role's pending drafts as a
     ``draft_task_review`` card (read-only summary + the reject question set).
+    While a durable Turn-on intent owns a draft, the card is progress-only and
+    explicitly says no second approval click is needed.
   * ``approve_draft`` — activate a draft (deterministic; reuses the repo
     provisioning the Tasks-page approve does).
   * ``revise_draft`` — the structured-reject path: instead of deleting, take
@@ -160,11 +162,21 @@ def draft_review_card(db: Session, role: Role) -> dict[str, Any]:
     drafts + the reject question set so the dock can render review + structured
     reject without a second round-trip."""
     drafts = _role_draft_tasks(db, role)
+    from ..services.role_activation_intent import (
+        ACTIVATION_ACTIVE_STATUSES,
+        activation_intent_state,
+    )
+
+    activation = activation_intent_state(role)
+    activation_status = str(activation.get("status") or "")
+    automatic_activation = activation_status in ACTIVATION_ACTIVE_STATUSES
     return {
         "type": "draft_task_review",
         "role_id": int(role.id),
         "drafts": [draft_summary(t) for t in drafts],
         "reject_questions": REJECT_QUESTIONS,
+        "automatic_activation": automatic_activation,
+        "activation_status": activation_status or None,
     }
 
 
@@ -190,33 +202,41 @@ def _fetch_role_draft(db: Session, role: Role, task_id: int) -> Task | None:
 
 
 def approve_draft(db: Session, role: Role, task_id: int, *, user_id: int) -> dict[str, Any]:
-    """Activate a draft so it's assignable. Best-effort repo provisioning,
-    mirroring the Tasks-page approve. Returns {ok, summary} or {ok: False}."""
+    """Activate a draft only after its candidate repo is proven usable."""
+    from ..services.role_activation_intent import (
+        ACTIVATION_ACTIVE_STATUSES,
+        activation_intent_state,
+    )
+
+    if str(activation_intent_state(role).get("status") or "") in ACTIVATION_ACTIVE_STATUSES:
+        return {
+            "ok": False,
+            "error": (
+                "Turn on is already validating and approving this task automatically; "
+                "no separate approval is needed."
+            ),
+        }
     task = _fetch_role_draft(db, role, task_id)
     if task is None:
         return {"ok": False, "error": "Draft not found or already approved."}
-    extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
-    task.is_active = True
-    extra["needs_review"] = False
-    extra["approved_by_user_id"] = int(user_id)
-    task.extra_data = extra
     try:
-        db.flush()
-        try:
-            from ..services.task_repo_service import recreate_task_main_repo
-            from ..services.assessment_repository_service import AssessmentRepositoryService
+        from ..services.task_approval_service import approve_task_for_use
 
-            recreate_task_main_repo(task)
-            AssessmentRepositoryService(
-                settings.GITHUB_ORG, settings.GITHUB_TOKEN
-            ).create_template_repo(task)
-        except Exception:
-            logger.warning("repo (re)provision failed on approve for task %s", task.id, exc_info=True)
+        approve_task_for_use(db, task, user_id=int(user_id))
         db.commit()
         db.refresh(task)
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        return {"ok": False, "error": "Failed to approve the draft."}
+        logger.warning(
+            "draft approval blocked task_id=%s: %s", task.id, exc, exc_info=True
+        )
+        return {
+            "ok": False,
+            "error": (
+                "The task repository could not be provisioned and verified, so "
+                "the draft remains inactive. Retry after repository access recovers."
+            ),
+        }
     return {"ok": True, "summary": draft_summary(task)}
 
 
@@ -295,6 +315,19 @@ def revise_draft(
     """Structured-reject → revise: re-author the draft from the recruiter's
     feedback instead of deleting it. Returns {ok, summary, feedback} or
     {ok: False, error, errors}."""
+    from ..services.role_activation_intent import (
+        ACTIVATION_ACTIVE_STATUSES,
+        activation_intent_state,
+    )
+
+    if str(activation_intent_state(role).get("status") or "") in ACTIVATION_ACTIVE_STATUSES:
+        return {
+            "ok": False,
+            "error": (
+                "Turn on is already validating this task automatically. Wait for it "
+                "to finish, or update and re-publish the requisition to replace it."
+            ),
+        }
     task = _fetch_role_draft(db, role, task_id)
     if task is None:
         return {"ok": False, "error": "Draft not found or already approved."}
@@ -316,6 +349,7 @@ def revise_draft(
             jd_text=_role_jd_text(role),
             api_key=api_key,
             organization_id=int(role.organization_id),
+            role_id=int(role.id),
         )
     except Exception:
         logger.exception("revise_task_spec raised for task %s", task_id)

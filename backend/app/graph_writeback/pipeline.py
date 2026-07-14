@@ -27,6 +27,13 @@ from .sensitivity import classify_hint, load_blocklist
 logger = logging.getLogger("taali.graph_writeback.pipeline")
 
 
+def _feedback_role_id(feedback: DecisionFeedback) -> int | None:
+    raw = feedback.role_id
+    if raw is None:
+        raw = getattr(getattr(feedback, "decision", None), "role_id", None)
+    return int(raw) if raw is not None else None
+
+
 def _write_feedback_episode(feedback: DecisionFeedback) -> str | None:
     """Anchor episode for the writeback. Returns episode uuid or None."""
     if not graph_client.is_configured():
@@ -34,6 +41,7 @@ def _write_feedback_episode(feedback: DecisionFeedback) -> str | None:
     try:
         ok = agent_episodes.emit_recruiter_action_event(
             organization_id=int(feedback.organization_id),
+            role_id=_feedback_role_id(feedback),
             decision_id=int(feedback.decision_id),
             recruiter_id=int(feedback.reviewer_id),
             action="teach",
@@ -106,7 +114,17 @@ def _commit_low_risk_hint(
             reference_time=feedback.created_at or datetime.now(timezone.utc),
             group_id=group_id,
         )
-        dispatch([episode])
+        role_id = _feedback_role_id(feedback)
+        dispatch(
+            [episode],
+            bill_organization_id=int(feedback.organization_id),
+            bill_role_id=role_id,
+            bill_user_id=int(feedback.reviewer_id),
+            bill_trace_id=f"graph-writeback:{int(feedback.id)}:{hint.action}",
+            require_hard_admission=True,
+            require_role_admission=role_id is not None,
+            raise_on_error=True,
+        )
         return True
     except Exception as exc:
         logger.warning("low-risk hint commit failed: %s", exc)

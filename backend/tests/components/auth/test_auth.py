@@ -1,10 +1,12 @@
 from tests.conftest import verify_user
 
+TEST_PASSWORD = "Secur3-Horse-Battery!"
+
 
 def test_register(client):
     response = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
         "organization_name": "Test Org",
     })
@@ -16,28 +18,30 @@ def test_register(client):
     assert "id" in data
 
 def test_register_duplicate(client):
-    client.post("/api/v1/auth/register", json={
+    first = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
+    assert first.status_code == 201, first.text
     response = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
     assert response.status_code == 400
 
 def test_login_unverified_blocked(client):
     """Unverified user should receive 403 on login."""
-    client.post("/api/v1/auth/register", json={
+    registration = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
+    assert registration.status_code == 201, registration.text
     response = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
     })
     assert response.status_code in (200, 403)
     if response.status_code == 403:
@@ -45,16 +49,17 @@ def test_login_unverified_blocked(client):
 
 def test_login(client):
     # Register first
-    client.post("/api/v1/auth/register", json={
+    registration = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
+    assert registration.status_code == 201, registration.text
     verify_user("test@example.com")
     # Login
     response = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
     })
     assert response.status_code == 200
     data = response.json()
@@ -62,11 +67,12 @@ def test_login(client):
     assert data["token_type"] == "bearer"
 
 def test_login_wrong_password(client):
-    client.post("/api/v1/auth/register", json={
+    registration = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
+    assert registration.status_code == 201, registration.text
     verify_user("test@example.com")
     response = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
@@ -78,25 +84,26 @@ def test_verify_email(client):
     """After register, verify_user in DB then login works (FastAPI-Users uses JWT verify; we set is_verified in test)."""
     resp = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
     assert resp.status_code == 201
     verify_user("test@example.com")
     lr = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
     })
     assert lr.status_code == 200
     assert "access_token" in lr.json()
 
 def test_resend_verification(client):
     """Request-verify (resend) returns 200/202/404."""
-    client.post("/api/v1/auth/register", json={
+    registration = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
+    assert registration.status_code == 201, registration.text
     resp = client.post("/api/v1/auth/request-verify", json={"email": "test@example.com"})
     assert resp.status_code in (200, 202, 404)
     resp2 = client.post("/api/v1/auth/request-verify", json={"email": "nonexistent@example.com"})
@@ -104,16 +111,17 @@ def test_resend_verification(client):
 
 def test_me(client):
     # Register
-    client.post("/api/v1/auth/register", json={
+    registration = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
     })
+    assert registration.status_code == 201, registration.text
     verify_user("test@example.com")
     # Login
     login_resp = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
     })
     token = login_resp.json()["access_token"]
     

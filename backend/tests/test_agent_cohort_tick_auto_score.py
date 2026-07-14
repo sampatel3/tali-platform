@@ -7,15 +7,25 @@ of plumbing that's orthogonal to the auto-enqueue we're verifying.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
-from app.tasks.agent_tasks import _auto_enqueue_scoring
+from app.models.usage_event import UsageEvent
+from app.services.usage_metering_service import InsufficientCreditsError
+from app.tasks.agent_tasks import (
+    ACTIVATION_AUTO_SCORE_CAP,
+    _auto_enqueue_scoring,
+    _mark_agent_tick_ready,
+    _retry_or_fail_cohort_bootstrap,
+    agent_cohort_tick_role,
+)
 
 
 def _seed_role(db, *, agentic_mode_enabled: bool = True) -> tuple[Organization, Role]:
@@ -156,3 +166,144 @@ def test_auto_enqueue_swallows_individual_failures(db):
     # 2 successful enqueues, 1 swallowed exception — count reflects successes only.
     assert count == 2
     assert calls["n"] == 3
+
+
+def test_auto_enqueue_pauses_when_live_usage_credits_are_exhausted(db):
+    org, role = _seed_role(db)
+    _seed_app(db, org=org, role=role)
+    role.agent_bootstrap_status = "starting"
+    db.flush()
+
+    depleted = InsufficientCreditsError(
+        organization_id=int(org.id), required=30_000, available=0
+    )
+    with patch(
+        "app.services.usage_metering_service.reserve", side_effect=depleted
+    ), patch("app.services.cv_score_orchestrator.enqueue_score") as enqueue:
+        count = _auto_enqueue_scoring(db, role=role)
+
+    assert count == 0
+    assert not enqueue.called
+    assert role.agent_paused_at is not None
+    assert "top up to resume" in role.agent_paused_reason
+    assert role.agent_bootstrap_status == "failed"
+
+
+def test_live_activation_scoring_burst_is_capped_by_credit_capacity(db):
+    org, role = _seed_role(db)
+    org.credits_balance = 60_000  # exactly two conservative SCORE reservations
+    for _ in range(5):
+        _seed_app(db, org=org, role=role)
+    db.flush()
+
+    with patch(
+        "app.platform.config.settings.USAGE_METER_LIVE", True
+    ), patch(
+        "app.services.cv_score_orchestrator.enqueue_score", return_value=object()
+    ) as enqueue:
+        count = _auto_enqueue_scoring(db, role=role, limit=500)
+
+    assert count == 2
+    assert enqueue.call_count == 2
+
+
+def test_500_job_activation_is_capped_by_remaining_role_budget(db):
+    """Projected jobs consume the remaining cap before workers record spend."""
+    org, role = _seed_role(db)
+    org.credits_balance = 100_000_000
+    role.monthly_usd_budget_cents = 300  # $3.00 = 100 SCORE reservations total
+    db.add(
+        UsageEvent(
+            organization_id=org.id,
+            role_id=role.id,
+            feature="score",
+            model="claude-haiku-4-5-20251001",
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd_micro=200_000,
+            markup_multiplier=3,
+            credits_charged=600_000,  # $0.60 spent; $2.40 / $0.03 = 80 jobs
+            cache_hit=0,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    for _ in range(500):
+        _seed_app(db, org=org, role=role)
+    db.flush()
+
+    with patch(
+        "app.platform.config.settings.USAGE_METER_LIVE", True
+    ), patch(
+        "app.services.cv_score_orchestrator.enqueue_score", return_value=object()
+    ) as enqueue:
+        count = _auto_enqueue_scoring(db, role=role, limit=500)
+
+    assert count == 80
+    assert enqueue.call_count == 80
+
+
+def test_activation_runs_large_phase_one_even_with_old_agent_run_in_flight(db):
+    org, role = _seed_role(db)
+    role.agent_bootstrap_status = "starting"
+    in_flight = AgentRun(
+        id=9_000_000 + int(role.id),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        trigger="cron",
+        status="running",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(in_flight)
+    db.commit()
+
+    with patch(
+        "app.tasks.agent_tasks._auto_enqueue_scoring", return_value=17
+    ) as score_phase:
+        result = agent_cohort_tick_role.run(int(role.id), activation=True)
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "already_running"
+    assert result["auto_scored_enqueued"] == 17
+    assert result["in_flight_run_id"] == int(in_flight.id)
+    assert score_phase.call_args.kwargs["limit"] == ACTIVATION_AUTO_SCORE_CAP
+    assert score_phase.call_args.kwargs["strict"] is True
+    db.expire_all()
+    refreshed = db.query(Role).filter(Role.id == role.id).one()
+    assert refreshed.agent_bootstrap_status == "ready"
+
+
+def test_successful_tick_persists_bootstrap_acknowledgement(db):
+    _org, role = _seed_role(db)
+    role.agent_bootstrap_status = "starting"
+    db.flush()
+
+    _mark_agent_tick_ready(db, role=role)
+
+    assert role.agent_bootstrap_status == "ready"
+    assert role.agent_bootstrap_error is None
+    assert role.agent_bootstrap_completed_at is not None
+    assert role.agent_last_run_at is not None
+
+
+def test_exhausted_resume_bootstrap_is_failed_and_paused(db):
+    _org, role = _seed_role(db)
+    role.agent_bootstrap_status = "starting"
+    db.commit()
+
+    class _Request:
+        retries = 3
+
+    class _Task:
+        request = _Request()
+        max_retries = 3
+
+    failure = RuntimeError("scoring worker unavailable")
+    with pytest.raises(RuntimeError, match="scoring worker unavailable"):
+        _retry_or_fail_cohort_bootstrap(
+            _Task(), db=db, role=role, exc=failure, activation=True
+        )
+
+    db.refresh(role)
+    assert role.agent_bootstrap_status == "failed"
+    assert role.agent_paused_at is not None
+    assert "after retries" in role.agent_paused_reason

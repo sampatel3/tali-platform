@@ -36,6 +36,8 @@ backend/uploads/
 test.db
 test_mig.db
 file:taalitest*
+file:probe*
+file:score-*
 backend/.env
 backend/test.db-*
 frontend/test-results/

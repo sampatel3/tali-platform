@@ -52,6 +52,103 @@ def _no_assessment_note(role, has_task: bool) -> str:
     return "; role has no assessment task, advancing directly"
 
 
+def _assessment_inputs(app: CandidateApplication) -> tuple[dict[str, float], dict[str, bool]]:
+    """Return the persisted assessment result + lifecycle flags for ``app``.
+
+    The score-time and cohort paths deliberately avoid sub-agent/LLM work, but
+    that does not mean they can ignore an assessment that already completed.
+    Completion refreshes the application score cache before waking the role
+    agent; use those canonical cached values first and fall back to the active
+    assessment row for legacy records whose cache was never refreshed.
+
+    A terminal timeout is still a completed attempt.  Even when scoring failed
+    and no numeric result exists, ``assessment_completed`` must suppress a
+    second invite; the later decision points (or the agent's HITL fallback) own
+    what happens next.
+    """
+    assessments = [
+        row
+        for row in (getattr(app, "assessments", None) or [])
+        if not bool(getattr(row, "is_voided", False))
+    ]
+
+    def _status(row) -> str:
+        raw = getattr(getattr(row, "status", None), "value", getattr(row, "status", None))
+        return str(raw or "").strip().lower()
+
+    terminal_statuses = {"completed", "completed_due_to_timeout"}
+    pending_statuses = {"pending", "in_progress"}
+    completed_rows = [
+        row
+        for row in assessments
+        if _status(row) in terminal_statuses
+        or bool(getattr(row, "completed_due_to_timeout", False))
+    ]
+    # The DB invariant permits only one non-voided assessment per candidate and
+    # role.  Sorting by id is a defensive legacy fallback without mixing naive
+    # and timezone-aware datetimes from old rows.
+    completed_rows.sort(
+        key=lambda row: int(getattr(row, "id", 0) or 0), reverse=True
+    )
+    completed = bool(
+        completed_rows
+        or getattr(app, "assessment_score_cache_100", None) is not None
+    )
+    pending = any(_status(row) in pending_statuses for row in assessments)
+
+    def _numeric(value) -> float | None:
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    result_scores: dict[str, float] = {}
+    assessment_score = _numeric(
+        getattr(app, "assessment_score_cache_100", None)
+    )
+    taali_score = _numeric(getattr(app, "taali_score_cache_100", None))
+    latest = completed_rows[0] if completed_rows else None
+    grading_incomplete = bool(
+        latest
+        and (
+            getattr(latest, "scoring_partial", False)
+            or getattr(latest, "scoring_failed", False)
+        )
+    )
+    if latest is not None:
+        if assessment_score is None:
+            assessment_score = _numeric(getattr(latest, "assessment_score", None))
+        if assessment_score is None:
+            assessment_score = _numeric(getattr(latest, "final_score", None))
+        if assessment_score is None:
+            legacy_score = _numeric(getattr(latest, "score", None))
+            assessment_score = legacy_score * 10.0 if legacy_score is not None else None
+        if taali_score is None:
+            taali_score = _numeric(getattr(latest, "taali_score", None))
+        # A legacy completed row may only carry the assessment result.  That is
+        # still the best available post-assessment headline and mirrors the
+        # role-support cache fallback when no separate role-fit blend exists.
+        if taali_score is None:
+            taali_score = assessment_score
+
+    if grading_incomplete:
+        # Never let a stale cache or heuristic fallback become a verdict while
+        # the authoritative rubric is incomplete.
+        assessment_score = None
+        taali_score = None
+    if assessment_score is not None:
+        result_scores["assessment_score"] = max(0.0, min(100.0, assessment_score))
+    if taali_score is not None:
+        result_scores["taali_score"] = max(0.0, min(100.0, taali_score))
+
+    return result_scores, {
+        "has_pending_assessment": pending,
+        "no_pending_assessment": not pending,
+        "assessment_completed": completed,
+        "assessment_grading_incomplete": grading_incomplete,
+    }
+
+
 def _inputs_for(app, *, role_id, org_id, eff, has_task):
     """Build the deterministic DecisionInputs from an application's stored
     scores — no sub-agents, no LLM. Shared by the decide loop and the
@@ -73,18 +170,20 @@ def _inputs_for(app, *, role_id, org_id, eff, has_task):
         if app.pre_screen_score_100 is not None
         else role_fit
     )
+    assessment_scores, assessment_flags = _assessment_inputs(app)
+    if assessment_flags.get("assessment_grading_incomplete"):
+        return None
     return DecisionInputs(
         application_id=int(app.id),
         role_id=int(role_id),
         organization_id=int(org_id),
-        scores={"role_fit_score": role_fit, "pre_screen_score": pre_screen},
+        scores={
+            "role_fit_score": role_fit,
+            "pre_screen_score": pre_screen,
+            **assessment_scores,
+        },
         flags={
-            # applied/review + open => no assessment in flight, so the
-            # assessment-gate rules (priority 90/85) don't fire and we reach
-            # the threshold band.
-            "no_pending_assessment": True,
-            "has_pending_assessment": False,
-            "assessment_completed": False,
+            **assessment_flags,
             "must_have_blocked": must_have_blocked(app),
             "has_assessment_task": has_task,
         },

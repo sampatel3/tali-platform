@@ -74,8 +74,9 @@ def _send_with_resend_capture(**kwargs) -> dict:
     return the dict that was passed to ``resend.Emails.send``."""
     captured: dict = {}
 
-    def _capture(payload):
+    def _capture(payload, options=None):
         captured.update(payload)
+        captured["_send_options"] = options
         return {"id": "fake-id"}
 
     svc = EmailService(api_key="rk_test", from_email="TAALI <noreply@taali.ai>")
@@ -156,6 +157,13 @@ def test_reply_to_defaults_to_support_when_blank():
     assert payload["reply_to"] == "support@taali.ai"
 
 
+def test_invite_send_uses_stable_provider_idempotency_key():
+    payload = _send_with_resend_capture(**_base_kwargs())
+    assert payload["_send_options"] == {
+        "idempotency_key": "assessment-invite/42"
+    }
+
+
 def test_html_body_uses_resolved_brand_in_header_and_body():
     """The visible header should be the org brand, not 'TAALI', and the
     body should reference the candidate's application context.
@@ -231,7 +239,9 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
     """End-to-end: dispatch_assessment_invite should pull
     candidate_facing_brand from org.workspace_settings JSON and pass it
     down to the email send."""
-    from app.domains.integrations_notifications.invite_flow import dispatch_assessment_invite
+    from app.domains.integrations_notifications.invite_flow import (
+        dispatch_assessment_invite_now as dispatch_assessment_invite,
+    )
     from app.models.assessment import Assessment
     from app.models.candidate import Candidate
     from app.models.organization import Organization
@@ -300,7 +310,9 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
 def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypatch):
     """Org with no workspace_settings → candidate_facing_brand=None,
     EmailService falls back to org.name."""
-    from app.domains.integrations_notifications.invite_flow import dispatch_assessment_invite
+    from app.domains.integrations_notifications.invite_flow import (
+        dispatch_assessment_invite_now as dispatch_assessment_invite,
+    )
     from app.models.assessment import Assessment
     from app.models.candidate import Candidate
     from app.models.organization import Organization

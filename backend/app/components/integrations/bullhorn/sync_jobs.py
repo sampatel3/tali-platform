@@ -26,6 +26,7 @@ from ....services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
 )
+from ....services.agent_policy_settings import apply_workspace_agent_defaults
 from ....services.s3_service import generate_s3_key, upload_bytes_to_s3
 
 logger = logging.getLogger(__name__)
@@ -136,22 +137,13 @@ def upsert_role_from_job_order(
     )
     created = False
     if not role:
-        # Seed budget + threshold from workspace defaults, exactly like the
-        # Workable arm. Bullhorn supplies no scoring criteria, so a new role's
-        # chip set is snapshotted from ``org_criteria`` below via
-        # ``sync_all_criteria``.
-        org_budget = getattr(org, "default_role_budget_cents", None)
-        org_threshold = getattr(org, "default_score_threshold", None)
         role = Role(
             organization_id=org.id,
             source="bullhorn",
             bullhorn_job_order_id=job_id,
             name=title,
-            monthly_usd_budget_cents=int(org_budget) if org_budget is not None else None,
-            score_threshold=(
-                max(0, min(100, int(org_threshold))) if org_threshold is not None else None
-            ),
         )
+        apply_workspace_agent_defaults(role, org)
         db.add(role)
         created = True
 
@@ -172,6 +164,20 @@ def upsert_role_from_job_order(
     if (created or spec_changed) and (role.job_spec_text or "").strip():
         _store_job_spec_attachment(role)
         _sync_role_criteria(db, role, created=created, spec_changed=spec_changed)
+        from ....platform.config import settings
+
+        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+            from ....services.task_provisioning_service import (
+                request_assessment_task_provisioning,
+            )
+
+            # The enclosing Bullhorn sync owns the commit. Beat is the durable
+            # dispatcher, so this path needs no best-effort broker side effect.
+            request_assessment_task_provisioning(
+                role,
+                reason="bullhorn_role_spec",
+                supersede_generated_drafts=bool(spec_changed),
+            )
 
     return role, created
 

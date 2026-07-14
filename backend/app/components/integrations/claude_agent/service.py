@@ -41,11 +41,27 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from typing import Any, Callable, Optional
 
 from ....platform.config import settings
+from ....services.pricing_service import credits_charged
+from ....services.provider_usage_admission import (
+    mark_provider_attempt_started,
+    mark_provider_usage_succeeded,
+    release_provider_usage,
+)
+from ....services.usage_credit_reservations import (
+    CreditReservation,
+    InsufficientRoleBudgetError,
+    reserve_credits,
+)
+from ....services.usage_metering_service import InsufficientCreditsError
 from .types import ChatTurn
-from .usage_reconciler import write_aggregated_usage_event
+from .usage_reconciler import (
+    write_aggregated_usage_event,
+    write_incomplete_call_evidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +144,8 @@ class AgentSDKChatService:
         organization_id: int,
         assessment_id: int,
         executor: Any,
+        role_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
         model: Optional[str] = None,
         feature: str = "assessment",
         sub_feature: str = "agent_sdk_chat",
@@ -148,6 +166,11 @@ class AgentSDKChatService:
             executor: Leaf A's ``AssessmentToolExecutor`` instance.
                 Passed verbatim to the MCP server factory; the SDK
                 doesn't see it.
+            role_id: Optional hiring-role attribution for the canonical usage
+                event and role budget.
+            trace_id: Stable logical-call identifier shared by the usage event
+                and reconciliation evidence. Candidate routes derive this from
+                ``assessment_id`` plus the client request id.
             model: Optional override. ``None`` → falls back to the
                 explicitly-set ``CLAUDE_CHAT_MODEL`` env var if present,
                 else ``claude-sonnet-4-5`` (see module docstring).
@@ -169,6 +192,12 @@ class AgentSDKChatService:
         self._api_key = api_key
         self._organization_id = int(organization_id)
         self._assessment_id = int(assessment_id)
+        self._role_id = int(role_id) if role_id is not None else None
+        self._trace_id = (
+            str(trace_id).strip()
+            if trace_id is not None and str(trace_id).strip()
+            else f"assessment:{self._assessment_id}:agent_sdk"
+        )
         self._executor = executor
         self._model = (model or "").strip() or self._resolve_default_model()
         self._feature = feature
@@ -222,6 +251,52 @@ class AgentSDKChatService:
                 "for tests."
             ) from exc
         return build_sandbox_mcp_server
+
+    def _reserve_paid_sdk_call(
+        self,
+        *,
+        capped_budget_usd: float,
+    ) -> Optional[CreditReservation]:
+        """Hold the SDK turn's worst-case charged cost when role is known.
+
+        ``max_budget_usd`` is enforced inside the provider-owned subprocess,
+        so applying the feature markup to that ceiling gives us a bounded,
+        concurrency-safe admission amount. Calls without role attribution
+        retain the legacy org-only route gate.
+        """
+        if self._role_id is None:
+            return None
+        from ....platform.database import SessionLocal  # noqa: WPS433
+
+        raw_ceiling_micro = max(
+            int(round(float(capped_budget_usd or 0.0) * 1_000_000)),
+            0,
+        )
+        held = credits_charged(
+            feature=self._feature,
+            cost_usd_micro=raw_ceiling_micro,
+        )
+        with SessionLocal() as meter_db:
+            reservation = reserve_credits(
+                meter_db,
+                organization_id=self._organization_id,
+                feature=self._feature,
+                amount=held,
+                external_ref=(
+                    f"usage-hold:{self._trace_id}:{uuid.uuid4().hex}"
+                ),
+                metadata={
+                    "source": "claude_agent_sdk_aggregated",
+                    "sub_feature": self._sub_feature,
+                    "assessment_id": self._assessment_id,
+                    "trace_id": self._trace_id,
+                    "provider_budget_usd": float(capped_budget_usd),
+                },
+                role_id=self._role_id,
+                enforce_role_budget=True,
+            )
+            meter_db.commit()
+            return reservation
 
     async def run(
         self,
@@ -344,6 +419,63 @@ class AgentSDKChatService:
             stderr=_on_stderr,
         )
 
+        # Reserve immediately before entering the provider-owned stream.  The
+        # role row + org ledger locks serialize concurrent candidate turns;
+        # no SDK subprocess is spawned when either budget rail cannot fund the
+        # turn ceiling.
+        try:
+            credit_reservation = self._reserve_paid_sdk_call(
+                capped_budget_usd=capped_budget,
+            )
+            if credit_reservation is not None and not mark_provider_attempt_started(
+                credit_reservation,
+                provider="claude_agent_sdk",
+            ):
+                release_provider_usage(
+                    credit_reservation,
+                    reason="claude_agent_sdk_attempt_marker_failed",
+                )
+                raise RuntimeError(
+                    "could not durably mark Claude Agent SDK provider attempt"
+                )
+        except (InsufficientCreditsError, InsufficientRoleBudgetError) as exc:
+            logger.info(
+                "AgentSDKChatService budget admission blocked org=%s role=%s "
+                "assessment=%s err=%s",
+                self._organization_id,
+                self._role_id,
+                self._assessment_id,
+                exc,
+            )
+            return ChatTurn(
+                success=False,
+                content=_BUDGET_EXHAUSTED_TEXT,
+                tool_calls_made=[],
+                input_tokens=0,
+                output_tokens=0,
+                total_cost_usd=0.0,
+                num_turns=0,
+                stop_reason="role_budget_exhausted",
+            )
+        except Exception as exc:  # fail closed on an indeterminate meter rail
+            logger.exception(
+                "AgentSDKChatService metering admission failed org=%s role=%s "
+                "assessment=%s",
+                self._organization_id,
+                self._role_id,
+                self._assessment_id,
+            )
+            return ChatTurn(
+                success=False,
+                content=_BUDGET_EXHAUSTED_TEXT,
+                tool_calls_made=[],
+                input_tokens=0,
+                output_tokens=0,
+                total_cost_usd=0.0,
+                num_turns=0,
+                stop_reason="metering_admission_failed",
+            )
+
         # 4. Drive the stream -------------------------------------------------
         content_parts: list[str] = []
         tool_calls: list[dict] = []
@@ -386,7 +518,29 @@ class AgentSDKChatService:
             log("AgentSDKChatService exception org=%s assessment=%s stop=%s stderr=%s",
                 self._organization_id, self._assessment_id, recovered.stop_reason,
                 ("\n".join(stderr_lines[-12:]))[:2000] or "<empty>")
-            # Skip UsageEvent — no ResultMessage means no token totals.
+            # No ResultMessage means no trustworthy token totals.  Persist an
+            # explicit reconciliation gap without inventing a zero-cost usage
+            # event or debiting the customer.
+            mark_provider_usage_succeeded(
+                credit_reservation,
+                deferred_usage_event=None,
+                provider="claude_agent_sdk",
+            )
+            write_incomplete_call_evidence(
+                organization_id=self._organization_id,
+                assessment_id=self._assessment_id,
+                feature=self._feature,
+                sub_feature=self._sub_feature,
+                model=self._model,
+                status=(
+                    "sdk_incomplete_recovered"
+                    if recovered.success
+                    else "sdk_error_no_usage"
+                ),
+                error_reason=f"{recovered.stop_reason}: {exc}",
+                trace_id=self._trace_id,
+                error_class="other",
+            )
             return ChatTurn(
                 success=recovered.success,
                 content=recovered.content,
@@ -410,6 +564,24 @@ class AgentSDKChatService:
                 self._assessment_id,
                 len(tool_calls),
                 len(content_parts),
+            )
+            mark_provider_usage_succeeded(
+                credit_reservation,
+                deferred_usage_event=None,
+                provider="claude_agent_sdk",
+            )
+            write_incomplete_call_evidence(
+                organization_id=self._organization_id,
+                assessment_id=self._assessment_id,
+                feature=self._feature,
+                sub_feature=self._sub_feature,
+                model=self._model,
+                status="no_result_message",
+                error_reason=(
+                    "query stream closed without ResultMessage; usage totals unavailable"
+                ),
+                trace_id=self._trace_id,
+                error_class="validation",
             )
             return ChatTurn(
                 success=False,
@@ -455,11 +627,19 @@ class AgentSDKChatService:
                 cache_creation_input_tokens=cache_creation,
                 total_cost_usd=total_cost,
                 num_turns=num_turns,
+                role_id=self._role_id,
+                trace_id=self._trace_id,
+                call_status=("sdk_result_error" if not success else "ok"),
                 extra_metadata={
                     "stop_reason": stop_reason,
                     "is_error": bool(getattr(final, "is_error", False)),
                     "tool_calls": len(tool_calls),
                 },
+                credit_reservation=(
+                    credit_reservation.as_metering_payload()
+                    if credit_reservation is not None
+                    else None
+                ),
             )
         except Exception:
             # ``write_aggregated_usage_event`` already swallows + logs,

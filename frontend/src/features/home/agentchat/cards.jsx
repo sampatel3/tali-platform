@@ -232,11 +232,13 @@ function RejectQuestionnaire({ questions = [], onSubmit, onCancel, busy }) {
 }
 
 // The draft_task_review card — the agent surfaces this role's generated
-// assessment-task drafts. Approve activates one; Reject opens the structured
-// questionnaire that re-authors (not deletes) it.
+// assessment-task drafts. Manual review can approve or revise a draft; once a
+// durable Turn-on intent owns it, the card is progress-only so no second human
+// approval can race the automatic activation flow.
 export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
   const [rejectingId, setRejectingId] = useState(null);
   const drafts = card?.drafts || [];
+  const automaticActivation = Boolean(card?.automatic_activation);
   if (!drafts.length) return null;
 
   return (
@@ -244,7 +246,9 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
       <div className="ac-card-head">
         <FileText size={14} />
         <span>
-          {drafts.length} task draft{drafts.length === 1 ? '' : 's'} awaiting review
+          {automaticActivation
+            ? `${drafts.length} assessment${drafts.length === 1 ? '' : 's'} being validated for Turn on`
+            : `${drafts.length} task draft${drafts.length === 1 ? '' : 's'} available for optional review`}
         </span>
       </div>
       {drafts.map((d) => (
@@ -263,7 +267,11 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
               ))}
             </ul>
           )}
-          {rejectingId === d.task_id ? (
+          {automaticActivation ? (
+            <div className="ac-draft-auto" role="status">
+              Turn on is saved. The agent will battle-test, verify, and approve this task automatically; you can leave this page and no second click is needed.
+            </div>
+          ) : rejectingId === d.task_id ? (
             <RejectQuestionnaire
               questions={card.reject_questions}
               busy={busy}

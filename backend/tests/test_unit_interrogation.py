@@ -328,9 +328,15 @@ class TestClassifyResponse:
         assert outcome.error == "missing api_key"
         assert outcome.by_dp == {}
 
+    @patch("app.components.assessments.interrogation._reserve_classifier_call")
     @patch("app.components.assessments.interrogation.Anthropic")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
-    def test_parses_well_formed_response(self, mock_client_cls, _mock_anthropic):
+    def test_parses_well_formed_response(
+        self, mock_client_cls, _mock_anthropic, mock_reserve
+    ):
+        mock_reserve.return_value.as_metering_payload.return_value = {
+            "external_ref": "usage-hold:test",
+        }
         client = mock_client_cls.return_value
         client.messages.create.return_value = self._stub_response(
             '{"by_dp": {"shape": {"status": "commit", "rationale": "named airflow"}, '
@@ -342,6 +348,9 @@ class TestClassifyResponse:
             prior_state={"shape": "unaddressed", "severity": "unaddressed"},
             api_key="sk-x",
             organization_id=42,
+            assessment_id=99,
+            role_id=17,
+            trace_id="assessment:99:chat:req-1:classifier",
         )
         assert outcome.by_dp == {
             "shape": {"status": "commit", "rationale": "named airflow"},
@@ -355,7 +364,43 @@ class TestClassifyResponse:
         # 2026-06-01).
         call_kwargs = client.messages.create.call_args.kwargs
         assert call_kwargs["metering"]["organization_id"] == 42
+        assert call_kwargs["metering"]["role_id"] == 17
+        assert call_kwargs["metering"]["trace_id"] == "assessment:99:chat:req-1:classifier"
+        assert call_kwargs["metering"]["entity_id"] == "assessment:99"
         assert call_kwargs["metering"]["metadata"]["sub_feature"] == "interrogation_classifier"
+        assert call_kwargs["metering"]["metadata"]["trace_id"] == "assessment:99:chat:req-1:classifier"
+        assert call_kwargs["metering"]["credit_reservation"] == {
+            "external_ref": "usage-hold:test",
+        }
+        mock_reserve.assert_called_once_with(
+            organization_id=42,
+            assessment_id=99,
+            role_id=17,
+            trace_id="assessment:99:chat:req-1:classifier",
+        )
+
+    @patch("app.components.assessments.interrogation._reserve_classifier_call")
+    @patch("app.components.assessments.interrogation.Anthropic")
+    @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
+    def test_role_budget_admission_failure_skips_provider(
+        self, mock_client_cls, _mock_anthropic, mock_reserve
+    ):
+        mock_reserve.side_effect = RuntimeError("role cap exhausted")
+
+        outcome = classify_response(
+            decision_points=_two_dp_block(),
+            candidate_message="pick airflow",
+            prior_state={},
+            api_key="sk-x",
+            organization_id=42,
+            assessment_id=99,
+            role_id=17,
+            trace_id="assessment:99:chat:req-cap:classifier",
+        )
+
+        assert outcome.by_dp == {}
+        assert "budget_admission_failed" in (outcome.error or "")
+        mock_client_cls.return_value.messages.create.assert_not_called()
 
     @patch("app.components.assessments.interrogation.Anthropic")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")

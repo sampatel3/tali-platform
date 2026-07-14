@@ -236,6 +236,30 @@ def test_resume_clears_pause_when_cap_raised_above_spend(db):
     assert resume_if_under_budget(db, role=role) is True
     assert role.agent_paused_at is None
     assert role.agent_paused_reason is None
+    assert role.agent_bootstrap_status == "starting"
+    assert role.agent_bootstrap_started_at is not None
+
+
+def test_resume_stays_paused_when_production_runtime_is_unready(db):
+    from unittest.mock import patch
+
+    from app.agent_runtime.budget_guard import resume_if_under_budget
+
+    role = _paused_role_at_cap(db, cap_cents=5000, spend_cents=5000)
+    role.monthly_usd_budget_cents = 10_000
+    db.commit()
+
+    with (
+        patch("app.platform.startup_validation.is_production_like", return_value=True),
+        patch(
+            "app.services.agent_worker_health.worker_beat_status",
+            return_value={"ready": False, "reason": "heartbeat_stale"},
+        ),
+    ):
+        assert resume_if_under_budget(db, role=role) is False
+
+    assert role.agent_paused_at is not None
+    assert role.agent_bootstrap_status is None
 
 
 def test_resume_is_noop_while_still_over_cap(db):
@@ -337,7 +361,7 @@ def test_patch_raising_budget_resumes_paused_role_via_route(client):
 
     # Raise the cap above spend via the API. Mock the kicked task so we
     # assert dispatch without running a real cycle.
-    with _patch("app.tasks.agent_tasks.agent_daily_review_role.delay") as mock_delay:
+    with _patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as mock_delay:
         resp = client.patch(
             f"/api/v1/roles/{role_id}",
             json={"monthly_usd_budget_cents": 10000},
@@ -347,7 +371,83 @@ def test_patch_raising_budget_resumes_paused_role_via_route(client):
     body = resp.json()
     assert body["agent_paused_at"] is None
     assert body.get("agent_paused_reason") in (None, "")
-    mock_delay.assert_called_once_with(role_id)
+    mock_delay.assert_called_once_with(role_id, activation=False)
+
+
+def test_patch_budget_edit_does_not_clear_recruiter_pause(client):
+    """A field edit is not implicit consent to undo a manual soft pause."""
+    from unittest.mock import patch as _patch
+
+    from app.models.role import Role
+    from app.models.user import User
+
+    headers, email = auth_headers(client)
+    sess = TestingSessionLocal()
+    try:
+        user = sess.query(User).filter(User.email == email).one()
+        role = Role(
+            organization_id=int(user.organization_id),
+            name="Manually Paused Budget Edit",
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=100,
+            agent_paused_at=datetime.now(timezone.utc),
+            agent_paused_reason="paused by recruiter",
+        )
+        sess.add(role)
+        sess.commit()
+        role_id = int(role.id)
+    finally:
+        sess.close()
+
+    with _patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as kick:
+        response = client.patch(
+            f"/api/v1/roles/{role_id}",
+            json={"monthly_usd_budget_cents": 10_000},
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["agent_paused_at"] is not None
+    assert response.json()["agent_paused_reason"] == "paused by recruiter"
+    assert not kick.called
+
+
+def test_patch_explicit_true_resumes_through_guard_and_wakes_role(client):
+    """The explicit toggle may clear a manual pause, but only via the guard."""
+    from unittest.mock import patch as _patch
+
+    from app.models.role import Role
+    from app.models.user import User
+
+    headers, email = auth_headers(client)
+    sess = TestingSessionLocal()
+    try:
+        user = sess.query(User).filter(User.email == email).one()
+        role = Role(
+            organization_id=int(user.organization_id),
+            name="Explicit Guarded Resume",
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=5000,
+            agent_paused_at=datetime.now(timezone.utc),
+            agent_paused_reason="paused by recruiter",
+        )
+        sess.add(role)
+        sess.commit()
+        role_id = int(role.id)
+    finally:
+        sess.close()
+
+    with _patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as kick:
+        response = client.patch(
+            f"/api/v1/roles/{role_id}",
+            json={"agentic_mode_enabled": True},
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["agent_paused_at"] is None
+    assert response.json()["agent_bootstrap_status"] == "starting"
+    kick.assert_called_once_with(role_id, activation=False)
 
 
 # ---------------------------------------------------------------------------

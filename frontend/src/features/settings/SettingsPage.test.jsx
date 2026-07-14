@@ -80,6 +80,20 @@ const baseOrgData = {
   default_role_requirements: ['5+ years backend', 'Strong SQL'],
   default_role_budget_cents: 20000,
   default_score_threshold: 70,
+  ai_tooling_config: {
+    provider_setting: 'keep-me',
+    agent_defaults: {
+      enabled: false,
+      budget_cents: 20000,
+      threshold_mode: 'manual',
+      auto_send_assessment: false,
+      auto_resend_assessment: true,
+      auto_advance: false,
+      auto_reject_pre_screen: false,
+      auto_skip_assessment: false,
+      agent_token_budget_per_cycle: 12000,
+    },
+  },
   monthly_spend_cap_cents: null,
   notification_preferences: {
     candidate_updates: true,
@@ -149,17 +163,52 @@ describe('SettingsPage recruiter surface', () => {
     expect(screen.getByRole('button', { name: 'Save invite template' })).toBeInTheDocument();
   });
 
-  it('saves budget + threshold from the AI agent tab (chips save inline)', async () => {
-    // The textarea was replaced with a chip composer. Workspace chips load
-    // from /organizations/me/criteria and CRUD inline; only budget +
-    // threshold are batched behind the "Save budget & threshold" button.
+  it('separates operational assessment estimates from the AI credit ledger', async () => {
+    billingApi.costs.mockResolvedValue({
+      data: {
+        costs: [
+          { cost_usd: { e2b: 0.75, email: 0.10, storage: 0.05, claude: 0.40 } },
+          { cost_usd: { e2b: 0.25, email: 0.02, storage: 0.03, claude: 0.20 } },
+        ],
+        summary: { tenant_total_usd: 1.8, completed_assessments: 2 },
+      },
+    });
+
+    renderSettingsRoute('/settings/billing');
+
+    // The billing panel exists for one render before its load effect raises the
+    // spinner. Wait for the mocked values too, so we assert the stable loaded
+    // panel rather than retaining a heading element that was just unmounted.
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Operational assessment estimates/i })).toBeInTheDocument();
+      expect(screen.getByText('Sandbox runtime').parentElement).toHaveTextContent('$1.00');
+      expect(screen.getByText('Delivery email').parentElement).toHaveTextContent('$0.12');
+      expect(screen.getByText('Retained data').parentElement).toHaveTextContent('$0.08');
+      expect(screen.getByText(/not usage charges/i)).toBeInTheDocument();
+      expect(screen.getByText(/do not debit a role's AI-usage cap/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/^Monthly spend cap$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save spend cap/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Spend over budget$/i)).not.toBeInTheDocument();
+  });
+
+  it('saves the complete workspace automation policy without turning roles on', async () => {
+    // Criteria chips save inline; the metered budget, threshold strategy, and
+    // action-level autonomy defaults are one auditable policy save.
     renderSettingsRoute('/settings/agent');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Default role criteria/i })).toBeInTheDocument();
     });
 
-    const saveButton = await screen.findByRole('button', { name: 'Save budget & threshold' });
+    expect(screen.getByText(/never turn an agent on by themselves/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resend assessment invites automatically' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.change(screen.getByLabelText('Default threshold strategy'), { target: { value: 'auto' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send assessments automatically' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance on-policy candidates automatically' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject deterministic screening failures automatically' }));
+
+    const saveButton = await screen.findByRole('button', { name: 'Save agent defaults' });
     expect(saveButton).toBeEnabled();
     fireEvent.click(saveButton);
 
@@ -167,9 +216,45 @@ describe('SettingsPage recruiter surface', () => {
       expect(orgsApi.update).toHaveBeenCalledWith({
         default_role_budget_cents: 20000,
         default_score_threshold: 70,
+        ai_tooling_config: {
+          provider_setting: 'keep-me',
+          agent_defaults: {
+            enabled: false,
+            budget_cents: 20000,
+            threshold_mode: 'auto',
+            auto_send_assessment: true,
+            auto_resend_assessment: true,
+            auto_advance: true,
+            auto_reject_pre_screen: true,
+            auto_skip_assessment: false,
+            agent_token_budget_per_cycle: 12000,
+          },
+        },
       });
     });
     expect(showToast).toHaveBeenCalledWith('Agent defaults saved.', 'success');
+  });
+
+  it('shows the complete reversible platform policy when a workspace has no saved agent defaults', async () => {
+    orgsApi.get.mockResolvedValueOnce({
+      data: {
+        ...baseOrgData,
+        ai_tooling_config: { provider_setting: 'keep-me' },
+      },
+    });
+
+    renderSettingsRoute('/settings/agent');
+
+    expect(await screen.findByRole('button', { name: 'Send assessments automatically' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Resend assessment invites automatically' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Advance on-policy candidates automatically' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Reject deterministic screening failures automatically' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Skip the assessment stage' }))
+      .toHaveAttribute('aria-pressed', 'false');
   });
 
   it('legacy /settings/ai and /settings/scoring deep links land on the agent tab', async () => {
@@ -434,11 +519,50 @@ describe('SettingsPage recruiter surface', () => {
 
     await waitFor(() => {
       expect(showToast).toHaveBeenCalledWith(
-        'Choose the Workable member account that should perform Workable invite, reject, and reopen actions.',
+        'Choose the Workable member account that should perform Workable invite, advance, reject, and reopen actions.',
         'error'
       );
     });
     expect(orgsApi.update).not.toHaveBeenCalled();
+  });
+
+  it('saves the Workable interview handoff stage used by autonomous advances', async () => {
+    orgsApi.get.mockResolvedValueOnce({
+      data: {
+        ...baseOrgData,
+        workable_connected: true,
+        workable_subdomain: 'acme',
+        workable_config: {
+          workable_writeback: true,
+          default_sync_mode: 'full',
+          granted_scopes: ['r_jobs', 'r_candidates', 'w_candidates'],
+          invite_stage_name: 'Assessment invited',
+          interview_stage_name: 'Hiring manager interview',
+          workable_actor_member_id: 'member-1',
+          workable_disqualify_reason_id: '',
+          auto_reject_enabled: false,
+          auto_reject_note_template: '',
+        },
+      },
+    });
+    orgsApi.getWorkableMembers.mockResolvedValueOnce({
+      data: { members: [{ id: 'member-1', name: 'Hiring Lead' }] },
+    });
+    renderSettingsRoute('/settings/workable');
+
+    const handoffInput = await screen.findByLabelText(/Interview handoff stage name/i);
+    await waitFor(() => expect(handoffInput).toHaveValue('Hiring manager interview'));
+    expect(screen.getByText(/agent-driven advances land in the correct Workable stage/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save Workable Settings' }));
+
+    await waitFor(() => expect(orgsApi.update).toHaveBeenCalledWith({
+      workable_config: expect.objectContaining({
+        workable_writeback: true,
+        invite_stage_name: 'Assessment invited',
+        interview_stage_name: 'Hiring manager interview',
+        workable_actor_member_id: 'member-1',
+      }),
+    }));
   });
 
   it('blocks two-way Workable mode when w_candidates scope is not granted', async () => {
@@ -471,7 +595,7 @@ describe('SettingsPage recruiter surface', () => {
 
     await waitFor(() => {
       expect(showToast).toHaveBeenCalledWith(
-        'Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, reject, and reopen actions.',
+        'Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, advance, reject, and reopen actions.',
         'error'
       );
     });

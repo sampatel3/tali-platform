@@ -33,12 +33,6 @@ from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
 )
-from .pipeline_service import (
-    append_application_event,
-    ensure_pipeline_fields,
-    initialize_pipeline_event_if_missing,
-    transition_stage,
-)
 from .role_support import latest_valid_role_assessment
 
 router = APIRouter()
@@ -99,6 +93,7 @@ def create_assessment(
         creation_gate = get_assessment_creation_gate(
             current_user.organization_id,
             db,
+            role_id=int(resolved_role_id) if resolved_role_id is not None else None,
             lock_organization=True,
         )
         if not creation_gate.get("can_create"):
@@ -169,13 +164,29 @@ def create_assessment(
             candidate_email = candidate.email
             candidate_name = candidate.full_name or candidate.email
 
+        # application_id can supply the role after the initial org gate. Run
+        # the role-cap rail once the role is known so that path cannot invite
+        # a candidate into an assessment the role budget cannot execute.
+        if resolved_role_id is not None and data.role_id is None:
+            role_creation_gate = get_assessment_creation_gate(
+                current_user.organization_id,
+                db,
+                role_id=int(resolved_role_id),
+                lock_organization=False,
+            )
+            if not role_creation_gate.get("can_create"):
+                raise HTTPException(
+                    status_code=402,
+                    detail=role_creation_gate.get("message"),
+                )
+
         # No explicit task picked → route through the shared experiment
         # chokepoint so an active A/B on the role assigns the arm
         # (deterministic + stable per candidate). Mirrors the agent send path.
         if task is None:
             if resolved_role is None:
                 raise HTTPException(
-                    status_code=400,
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="task_id is required when the assessment is not tied to a role",
                 )
             try:
@@ -199,26 +210,6 @@ def create_assessment(
             )
             if existing is not None:
                 raise _assessment_create_conflict(existing)
-
-        if application is not None:
-            ensure_pipeline_fields(application)
-            initialize_pipeline_event_if_missing(
-                db,
-                app=application,
-                actor_type="system",
-                actor_id=current_user.id,
-                reason="Pipeline initialized before recruiter assessment create",
-            )
-            transition_stage(
-                db,
-                app=application,
-                to_stage="invited",
-                source="recruiter",
-                actor_type="recruiter",
-                actor_id=current_user.id,
-                reason="Assessment invite created",
-                metadata={"assessment_mode": "recruiter_management"},
-            )
 
         token = secrets.token_urlsafe(32)
         assessment = Assessment(
@@ -251,6 +242,28 @@ def create_assessment(
         assessment.assessment_branch = branch_ctx.branch_name
         assessment.clone_command = branch_ctx.clone_command
 
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == current_user.organization_id)
+            .first()
+        )
+        if org:
+            # Record delivery intent in the SAME transaction as assessment +
+            # pipeline creation. The dispatcher performs no external work here;
+            # its outer-commit hook kicks the durable Assessment outbox worker.
+            dispatch_assessment_invite(
+                assessment=assessment,
+                org=org,
+                candidate_email=candidate_email,
+                candidate_name=candidate_name,
+                position=task.name or "Technical assessment",
+                reply_to=current_user.email,
+                pipeline_source="recruiter",
+                pipeline_actor_type="recruiter",
+                pipeline_actor_id=current_user.id,
+                pipeline_reason="Assessment invite created",
+                pipeline_metadata={"assessment_mode": "recruiter_management"},
+            )
         db.commit()
         db.refresh(assessment)
     except AssessmentRepositoryError:
@@ -286,23 +299,6 @@ def create_assessment(
         .first()
     )
 
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if org:
-        dispatch_assessment_invite(
-            assessment=assessment,
-            org=org,
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            position=task.name or "Technical assessment",
-            # Route candidate replies to the recruiter who triggered the
-            # send rather than the platform's no-reply address.
-            reply_to=current_user.email,
-        )
-        try:
-            db.commit()
-            db.refresh(assessment)
-        except Exception:
-            db.rollback()
     return assessment_to_response(assessment, db)
 
 

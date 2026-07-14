@@ -235,7 +235,7 @@ def update_my_org(
     # on every role that inherits it (no per-role score_threshold override, in
     # manual mode). Re-apply the deterministic decisions for each such role
     # right away — retract advances now below the cutoff, then emit the matching
-    # reject cards — instead of waiting up to 30 min for the next cohort tick.
+    # reject cards — instead of waiting up to an hour for the next cohort tick.
     # Agent-off / paused / auto_reject roles are skipped by the helpers. This is
     # pure DB (no LLM); failures never fail the settings save — the beat sweep
     # reconciles regardless.

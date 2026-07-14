@@ -3,9 +3,12 @@ on the single role threshold, with no LLM calls and full dedup.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import event
 
 from app.decision_policy.bootstrap import bootstrap_org
+from app.models.assessment import Assessment, AssessmentStatus
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
@@ -87,6 +90,40 @@ def _pending(db, role):
     )
 
 
+def _attach_completed_assessment(
+    db,
+    *,
+    app,
+    role,
+    status=AssessmentStatus.COMPLETED,
+    assessment_score=80.0,
+    taali_score=82.0,
+):
+    task = role.tasks[0]
+    row = Assessment(
+        organization_id=app.organization_id,
+        candidate_id=app.candidate_id,
+        application_id=app.id,
+        role_id=role.id,
+        task_id=task.id,
+        token=f"completed-{app.id}-{status.value}",
+        status=status,
+        completed_at=datetime.now(timezone.utc),
+        completed_due_to_timeout=(
+            status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        ),
+        assessment_score=assessment_score,
+        taali_score=taali_score,
+    )
+    db.add(row)
+    app.pipeline_stage = "review"
+    app.pipeline_stage_source = "system"
+    app.assessment_score_cache_100 = assessment_score
+    app.taali_score_cache_100 = taali_score
+    db.commit()
+    return row
+
+
 def test_every_candidate_decided_no_task_advances_strong(db):
     org, role = _seed_role(db, score_threshold=50, with_task=False)
     _add_app(db, org, role, role_fit=80.0)  # >= 50 -> advance (no task)
@@ -103,6 +140,49 @@ def test_every_candidate_decided_no_task_advances_strong(db):
     assert summary["created"] == 4
     # No LLM: the deterministic pass writes zero usage_events.
     assert db.query(UsageEvent).count() == 0
+
+
+def test_bulk_auto_promote_executes_positive_and_holds_reject(db):
+    """The deterministic cohort producer shares the same autonomy rail:
+    reversible positives execute, irreversible rejects remain reviewable."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    role.agentic_mode_enabled = True
+    role.auto_promote = True
+    db.commit()
+    strong = _add_app(db, org, role, role_fit=80.0)
+    weak = _add_app(db, org, role, role_fit=20.0)
+
+    summary = decide_role_cohort(db, role=role)
+
+    db.refresh(strong)
+    db.refresh(weak)
+    assert strong.pipeline_stage == "advanced"
+    assert strong.pipeline_stage_source == "agent"
+    assert weak.pipeline_stage == "applied"
+    assert summary["auto_executed"] == 1
+    pending = _pending(db, role)
+    assert len(pending) == 1 and pending[0].decision_type == "reject"
+
+
+def test_activation_recovery_drains_existing_deterministic_positive(db):
+    """A positive card created while autonomy was off cannot block the role
+    forever after Turn on; the next cohort bootstrap revalidates and executes it."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    role.agentic_mode_enabled = False
+    strong = _add_app(db, org, role, role_fit=80.0)
+    first = decide_role_cohort(db, role=role)
+    assert first["created"] == 1
+    assert len(_pending(db, role)) == 1
+
+    role.agentic_mode_enabled = True
+    role.auto_promote = True
+    db.commit()
+    recovered = decide_role_cohort(db, role=role)
+
+    db.refresh(strong)
+    assert recovered["existing_auto_executed"] == 1
+    assert strong.pipeline_stage == "advanced"
+    assert _pending(db, role) == []
 
 
 def test_reasoning_sourced_from_cv_match_summary(db):
@@ -151,6 +231,117 @@ def test_strong_candidate_sends_assessment_when_task_assigned(db):
     decs = _pending(db, role)
     types = sorted(d.decision_type for d in decs)
     assert types == ["reject", "send_assessment"]
+
+
+def test_completed_assessment_advances_or_rejects_instead_of_resending(db):
+    """The post-assessment wake re-enters this bulk path. Persisted completion
+    and result scores must skip send_assessment and drive the downstream points."""
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    strong = _add_app(db, org, role, role_fit=80.0)
+    weak = _add_app(db, org, role, role_fit=20.0)
+    _attach_completed_assessment(
+        db,
+        app=strong,
+        role=role,
+        assessment_score=85.0,
+        taali_score=88.0,
+    )
+    _attach_completed_assessment(
+        db,
+        app=weak,
+        role=role,
+        assessment_score=35.0,
+        taali_score=30.0,
+    )
+
+    decide_role_cohort(db, role=role)
+
+    decisions = {d.application_id: d.decision_type for d in _pending(db, role)}
+    assert decisions == {
+        strong.id: "advance_to_interview",
+        weak.id: "reject",
+    }
+    assert "send_assessment" not in decisions.values()
+
+
+def test_strong_cv_failed_assessment_queues_hitl_reject(db):
+    """Auto-promote cannot advance or auto-reject a completed failed attempt.
+
+    The failed assessment is decisive despite strong CV/TAALI signals, and the
+    irreversible reject remains a pending recruiter-approval card.
+    """
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    role.agentic_mode_enabled = True
+    role.auto_promote = True
+    db.commit()
+    app = _add_app(db, org, role, role_fit=95.0, pre_screen=95.0)
+    _attach_completed_assessment(
+        db,
+        app=app,
+        role=role,
+        assessment_score=20.0,
+        taali_score=90.0,
+    )
+
+    summary = decide_role_cohort(db, role=role)
+
+    db.refresh(app)
+    pending = _pending(db, role)
+    assert len(pending) == 1
+    assert pending[0].decision_type == "reject"
+    assert pending[0].status == "pending"
+    assert app.pipeline_stage == "review"
+    assert summary.get("auto_executed", 0) == 0
+    assert "assessment_score < assessment_score_min" in " | ".join(
+        pending[0].evidence["rule_path"]
+    )
+
+
+def test_timeout_completion_is_terminal_and_never_resends_assessment(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    app = _add_app(db, org, role, role_fit=80.0)
+    _attach_completed_assessment(
+        db,
+        app=app,
+        role=role,
+        status=AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+        assessment_score=76.0,
+        taali_score=79.0,
+    )
+
+    decide_role_cohort(db, role=role)
+
+    decisions = _pending(db, role)
+    assert len(decisions) == 1
+    assert decisions[0].decision_type == "advance_to_interview"
+
+
+def test_incomplete_rubric_blocks_all_autonomous_decisions_with_stale_scores(db):
+    """A provider failure cannot turn a partial zero or stale cache into an
+    advance/reject, and a terminal attempt must not trigger a second invite."""
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    app = _add_app(db, org, role, role_fit=95.0)
+    assessment = _attach_completed_assessment(
+        db,
+        app=app,
+        role=role,
+        assessment_score=92.0,
+        taali_score=94.0,
+    )
+    assessment.scoring_partial = True
+    assessment.score_breakdown = {
+        "rubric_grading": {
+            "status": "partial",
+            "fully_graded": False,
+            "failed_dimension_ids": ["quality"],
+        }
+    }
+    db.commit()
+
+    summary = decide_role_cohort(db, role=role)
+
+    assert _pending(db, role) == []
+    assert summary.get("created", 0) == 0
 
 
 def test_idempotent_no_double_queue(db):

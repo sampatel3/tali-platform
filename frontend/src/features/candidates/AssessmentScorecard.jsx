@@ -24,19 +24,41 @@ export const readGradedRubricDimensions = (assessment) => {
       return [];
     }
   }
-  const dims = sb?.rubric_grading?.dimensions;
-  if (!Array.isArray(dims)) return [];
-  return dims
+  const rubricGrading = sb?.rubric_grading || {};
+  const dims = Array.isArray(rubricGrading?.dimensions)
+    ? rubricGrading.dimensions
+    : [];
+  const parsed = dims
     .map((d) => ({
       id: String(d?.id || '').trim(),
-      score: Number.isFinite(Number(d?.score)) ? Number(d.score) : null,
-      rating: String(d?.rating || '').trim().toLowerCase(),
+      error: String(d?.error || '').trim(),
+      score: !d?.error && d?.score != null && Number.isFinite(Number(d.score))
+        ? Number(d.score)
+        : null,
+      rating: d?.error ? 'error' : String(d?.rating || '').trim().toLowerCase(),
       reasoning: String(d?.reasoning || '').trim(),
       citations: Array.isArray(d?.evidence_citations)
         ? d.evidence_citations.map((c) => String(c).trim()).filter(Boolean)
         : [],
     }))
     .filter((d) => d.id);
+  const known = new Set(parsed.map((dimension) => dimension.id));
+  const sharedError = String(rubricGrading?.error || 'Rubric grading did not complete.').trim();
+  (Array.isArray(rubricGrading?.failed_dimension_ids)
+    ? rubricGrading.failed_dimension_ids
+    : []).forEach((id) => {
+    const normalized = String(id || '').trim();
+    if (!normalized || known.has(normalized)) return;
+    parsed.push({
+      id: normalized,
+      error: sharedError,
+      score: null,
+      rating: 'error',
+      reasoning: '',
+      citations: [],
+    });
+  });
+  return parsed;
 };
 
 // Turn a rubric dimension id ("design_decisions", "release_safety") into a
@@ -77,22 +99,51 @@ const humanizeSourceColumn = (column) => humanizeDimensionId(
 export const AssessmentScorecard = ({ assessment = null }) => {
   const [openAxes, setOpenAxes] = useState(() => new Set());
   const scorecard = computeScorecard(assessment);
+  const graded = readGradedRubricDimensions(assessment);
+  let scoreBreakdown = assessment?.score_breakdown;
+  if (typeof scoreBreakdown === 'string') {
+    try { scoreBreakdown = JSON.parse(scoreBreakdown); } catch { scoreBreakdown = {}; }
+  }
+  const grading = scoreBreakdown?.rubric_grading || {};
+  const gradingPending = Boolean(
+    assessment?.scoring_partial
+    || assessment?.scoring_failed
+    || grading?.fully_graded === false
+    || grading?.status === 'partial'
+    || grading?.status === 'failed',
+  );
+  const dimensionErrors = graded.filter((dimension) => dimension.error);
+  const hasSuccessfulRubricEvidence = graded.some(
+    (dimension) => !dimension.error && dimension.score != null,
+  );
 
-  if (!scorecard) {
+  if (!scorecard || (gradingPending && !hasSuccessfulRubricEvidence)) {
     return (
       <div className="sc5" data-testid="assessment-scorecard-empty">
         <div className="sc5-head">
           <span className="mc-kicker">SCORECARD · THE 5 Ds</span>
         </div>
-        <p className="sc5-empty">
-          The 5-dimension scorecard (Delegation, Description, Discernment, Diligence,
-          Deliverable) appears once the assessment is scored.
-        </p>
+        {gradingPending ? (
+          <div className="sc5-empty" role="status" data-testid="assessment-grading-pending">
+            <strong>Automated grading is still running.</strong>{' '}
+            No TAALI score or agent decision will be produced until every rubric
+            criterion is graded.
+            {dimensionErrors.map((dimension) => (
+              <p key={dimension.id}>
+                {humanizeDimensionId(dimension.id)}: {dimension.error}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <p className="sc5-empty">
+            The 5-dimension scorecard (Delegation, Description, Discernment, Diligence,
+            Deliverable) appears once the assessment is scored.
+          </p>
+        )}
       </div>
     );
   }
 
-  const graded = readGradedRubricDimensions(assessment);
   const rubric = (assessment?.evaluation_rubric && typeof assessment.evaluation_rubric === 'object')
     ? assessment.evaluation_rubric
     : {};
@@ -118,6 +169,18 @@ export const AssessmentScorecard = ({ assessment = null }) => {
         <span className="mc-kicker">SCORECARD · THE 5 Ds</span>
         <span className="sc5-note">each score rolls up from the criteria inside</span>
       </div>
+      {gradingPending ? (
+        <div className="sc5-empty" role="status" data-testid="assessment-grading-pending">
+          <strong>Grading incomplete — automatic retry in progress.</strong>{' '}
+          Partial criterion results below are evidence only; no TAALI score or
+          agent decision is available yet.
+          {dimensionErrors.map((dimension) => (
+            <p key={dimension.id}>
+              {humanizeDimensionId(dimension.id)}: {dimension.error}
+            </p>
+          ))}
+        </div>
+      ) : null}
       {scorecard.map((axis) => {
         const criteria = criteriaByAxis[axis.key] || [];
         const isOpen = openAxes.has(axis.key);
@@ -158,7 +221,11 @@ export const AssessmentScorecard = ({ assessment = null }) => {
                   <div key={item.id} className="sc5-crit">
                     <div className="sc5-crit-row">
                       <span className="sc5-crit-name">{humanizeDimensionId(item.id)}</span>
-                      {item.rating ? (
+                      {item.error ? (
+                        <span className="taali-badge font-mono text-[0.625rem] uppercase">
+                          grading error
+                        </span>
+                      ) : item.rating ? (
                         <span
                           className="taali-badge font-mono text-[0.625rem] uppercase"
                           style={ratingBadgeStyle(item.rating)}
@@ -167,11 +234,15 @@ export const AssessmentScorecard = ({ assessment = null }) => {
                         </span>
                       ) : null}
                       <span className="sc5-crit-score">
-                        {item.score != null ? `${Math.round(item.score * 10)} / 100` : '—'}
+                        {item.error
+                          ? 'pending'
+                          : (item.score != null ? `${Math.round(item.score * 10)} / 100` : '—')}
                       </span>
                     </div>
                     <p className="sc5-crit-why">
-                      {item.reasoning || 'Graded from the completed work sample and AI-collaboration trace.'}
+                      {item.error
+                        ? `This criterion is not graded yet: ${item.error}`
+                        : (item.reasoning || 'Graded from the completed work sample and AI-collaboration trace.')}
                     </p>
                     {item.citations.length > 0 ? (
                       <div className="sc5-crit-cites">

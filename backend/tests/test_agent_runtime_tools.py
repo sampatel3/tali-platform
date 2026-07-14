@@ -1312,6 +1312,210 @@ def test_auto_execute_decision_refuses_irreversible_reject(db):
     assert not mock_reject.called
 
 
+def test_auto_execute_reloads_live_role_and_holds_after_turn_off(db):
+    """A stale in-memory ON role cannot authorize a post-Turn-off side effect."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Concurrent", email="concurrent@x.test"
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Strong fit",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    # Bypass identity-map synchronization so ``role`` still says ON while the
+    # database row already says OFF, matching a queued worker's stale object.
+    db.query(Role).filter(Role.id == role.id).update(
+        {"agentic_mode_enabled": False}, synchronize_session=False
+    )
+    assert role.agentic_mode_enabled is True
+
+    with patch.object(tool_registry.advance_stage, "run") as advance:
+        executed = tool_registry._auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+        )
+
+    assert executed is False
+    advance.assert_not_called()
+    assert decision.status == "pending"
+    assert decision.evidence["auto_execute_hold"]["status"] == "role_not_runnable"
+    assert "disabled" in decision.evidence["auto_execute_hold"]["detail"]
+
+
+def test_superseded_assessment_task_result_cannot_auto_advance(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Old Task", email="old-task@x.test"
+    )
+    old_task = Task(
+        organization_id=org.id,
+        name="Old generated task",
+        is_active=True,
+        extra_data={"generated": True},
+    )
+    replacement = Task(
+        organization_id=org.id,
+        name="Replacement task",
+        is_active=True,
+        extra_data={"generated": True},
+    )
+    db.add_all([old_task, replacement])
+    db.flush()
+    role.tasks.append(old_task)
+    assessment = Assessment(
+        organization_id=org.id,
+        candidate_id=app.candidate_id,
+        application_id=app.id,
+        role_id=role.id,
+        task_id=old_task.id,
+        token="superseded-result",
+        status="completed",
+        assessment_score=92.0,
+    )
+    db.add(assessment)
+    db.flush()
+    old_task.is_active = False
+    role.tasks.remove(old_task)
+    role.tasks.append(replacement)
+    db.flush()
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Old assessment scored highly",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    with patch.object(tool_registry.advance_stage, "run") as advance:
+        executed = tool_registry._auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+        )
+
+    assert executed is False
+    advance.assert_not_called()
+    hold = decision.evidence["auto_execute_hold"]
+    assert hold["status"] == "superseded_assessment_task"
+    assert hold["assessment_id"] == assessment.id
+    assert hold["task_id"] == old_task.id
+
+
+def test_auto_send_noop_stays_pending_instead_of_false_approval(db):
+    """A misconfigured/credit-blocked send result is not an approval: no
+    candidate invite exists, so the deterministic card must remain recoverable."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Strong", email="held@x.test", taali=90.0
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="send_assessment",
+        reasoning="Strong fit",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    blocked = MagicMock(status="misconfigured", detail="no active task")
+    with patch.object(tool_registry.send_assessment, "run", return_value=blocked):
+        outcome = tool_registry.maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="send_assessment",
+        )
+
+    assert outcome["executed"] is False
+    assert outcome["action_held"] is True
+    assert decision.status == "pending"
+    assert decision.human_disposition is None
+    assert decision.evidence["auto_execute_hold"]["status"] == "misconfigured"
+
+
+def test_auto_action_exception_rolls_back_partial_candidate_mutations(db):
+    """A caller may continue/commit the cohort after one action fails.  The
+    shared auto-execute boundary must therefore roll back action-local writes
+    while preserving the queued decision as a retryable hold."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Strong", email="rollback@x.test"
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="send_assessment",
+        reasoning="Strong fit",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    def _partial_send(*_args, **_kwargs):
+        app.pipeline_stage = "invited"
+        db.add(app)
+        db.flush()
+        raise RuntimeError("invite broker unavailable")
+
+    with patch.object(tool_registry.send_assessment, "run", side_effect=_partial_send):
+        outcome = tool_registry.maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="send_assessment",
+        )
+
+    # Mirror the outer cohort's eventual commit boundary; the hold is a normal
+    # pending ORM update while the partial action itself was rolled back.
+    db.flush()
+    db.refresh(app)
+    db.refresh(decision)
+    assert outcome["executed"] is False
+    assert outcome["action_held"] is True
+    assert app.pipeline_stage == "review"
+    assert decision.status == "pending"
+    assert decision.evidence["auto_execute_hold"] == {
+        "status": "action_error",
+        "detail": "invite broker unavailable",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Off-policy auto-execution guard (TAA-22 / AUDIT_02 P2-TALI-01)
 # ---------------------------------------------------------------------------

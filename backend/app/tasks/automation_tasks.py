@@ -15,11 +15,68 @@ starve a recruiter who clicks "Score selected".
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _set_activation_focus_state(
+    role, *, status: str, error: str | None = None, retry_after: timedelta | None = None
+) -> None:
+    """Update the activation-owned interview-focus recovery marker."""
+    provisioning = (
+        dict(role.assessment_task_provisioning)
+        if isinstance(role.assessment_task_provisioning, dict)
+        else {}
+    )
+    now = datetime.now(timezone.utc)
+    state = (
+        dict(provisioning.get("interview_focus_provisioning"))
+        if isinstance(provisioning.get("interview_focus_provisioning"), dict)
+        else {}
+    )
+    state.update(
+        {
+            "status": str(status),
+            "last_error": str(error)[:2000] if error else None,
+            "next_attempt_at": (
+                (now + retry_after).isoformat() if retry_after else None
+            ),
+            "updated_at": now.isoformat(),
+        }
+    )
+    provisioning["interview_focus_provisioning"] = state
+    role.assessment_task_provisioning = provisioning
+
+
+def _set_activation_tech_state(
+    role, *, status: str, error: str | None = None, retry_after: timedelta | None = None
+) -> None:
+    provisioning = (
+        dict(role.assessment_task_provisioning)
+        if isinstance(role.assessment_task_provisioning, dict)
+        else {}
+    )
+    now = datetime.now(timezone.utc)
+    state = (
+        dict(provisioning.get("tech_questions_provisioning"))
+        if isinstance(provisioning.get("tech_questions_provisioning"), dict)
+        else {}
+    )
+    state.update(
+        {
+            "status": str(status),
+            "last_error": str(error)[:2000] if error else None,
+            "next_attempt_at": (
+                (now + retry_after).isoformat() if retry_after else None
+            ),
+            "updated_at": now.isoformat(),
+        }
+    )
+    provisioning["tech_questions_provisioning"] = state
+    role.assessment_task_provisioning = provisioning
 
 
 @celery_app.task(
@@ -41,14 +98,29 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
     """
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.provider_usage_admission import serialize_provider_work
     from ..services.role_tech_questions_service import get_or_regenerate
 
     db = SessionLocal()
     try:
+        serialize_provider_work(
+            db,
+            scope="role_tech_questions",
+            entity_id=int(role_id),
+        )
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
         result = get_or_regenerate(db, role)
+        if role.tech_questions_signature:
+            _set_activation_tech_state(role, status="succeeded")
+        else:
+            _set_activation_tech_state(
+                role,
+                status="retry_wait",
+                error="tech-question generation did not produce a current cache",
+                retry_after=timedelta(minutes=5),
+            )
         try:
             db.commit()
         except Exception:
@@ -81,17 +153,37 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
     from ..platform.database import SessionLocal
     from ..services.interview_focus_service import generate_interview_focus_sync
     from ..services.interview_support_service import build_role_interview_pack_templates
+    from ..services.provider_usage_admission import serialize_provider_work
     from ..services.role_criteria_service import render_role_intent_block
 
     db = SessionLocal()
     try:
+        serialize_provider_work(
+            db,
+            scope="role_interview_focus",
+            entity_id=int(role_id),
+        )
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
         job_spec_text = (role.job_spec_text or "").strip()
         if not job_spec_text:
             return {"status": "skipped", "reason": "no_job_spec", "role_id": role_id}
+        # Publish/spec-update paths clear this cache before dispatch. A duplicate
+        # delivery after the first worker committed is therefore a true no-op,
+        # not a second paid generation.
+        if isinstance(role.interview_focus, dict) and role.interview_focus:
+            _set_activation_focus_state(role, status="succeeded")
+            db.commit()
+            return {"status": "skipped", "reason": "already_generated", "role_id": role_id}
         if not settings.ANTHROPIC_API_KEY:
+            _set_activation_focus_state(
+                role,
+                status="retry_wait",
+                error="ANTHROPIC_API_KEY is not configured",
+                retry_after=timedelta(hours=1),
+            )
+            db.commit()
             return {"status": "skipped", "reason": "no_api_key", "role_id": role_id}
 
         try:
@@ -105,14 +197,32 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
                     "organization_id": getattr(role, "organization_id", None),
                     "role_id": int(role.id),
                     "entity_id": f"role:{role.id}",
+                    "trace_id": f"interview-focus:role:{role.id}",
                     "db": db,
                 },
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("generate_role_interview_focus failed role_id=%s", role_id)
+            db.rollback()
+            role = db.query(Role).filter(Role.id == role_id).first()
+            if role is not None:
+                _set_activation_focus_state(
+                    role,
+                    status="retry_wait",
+                    error=f"{type(exc).__name__}: {exc}",
+                    retry_after=timedelta(minutes=5),
+                )
+                db.commit()
             return {"status": "error", "role_id": role_id}
 
         if not interview_focus:
+            _set_activation_focus_state(
+                role,
+                status="retry_wait",
+                error="provider returned no interview focus",
+                retry_after=timedelta(minutes=5),
+            )
+            db.commit()
             return {"status": "no_output", "role_id": role_id}
 
         role.interview_focus = interview_focus
@@ -120,6 +230,7 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
         templates = build_role_interview_pack_templates(role)
         role.screening_pack_template = templates.get("screening")
         role.tech_interview_pack_template = templates.get("tech_stage_2")
+        _set_activation_focus_state(role, status="succeeded")
         try:
             db.commit()
         except Exception:

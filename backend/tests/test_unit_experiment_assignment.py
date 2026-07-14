@@ -9,6 +9,7 @@ experiment is bypassed. These tests pin that contract.
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 
 from app.models.assessment_experiment import (
     ASSIGNMENT_METHOD_FORCED,
@@ -34,8 +35,14 @@ def _org(db, slug):
     return org
 
 
-def _task(db, org, key):
-    t = Task(organization_id=org.id, name=key, task_key=key, is_template=True, is_active=True)
+def _task(db, org, key, *, active=True):
+    t = Task(
+        organization_id=org.id,
+        name=key,
+        task_key=key,
+        is_template=True,
+        is_active=active,
+    )
     db.add(t)
     db.flush()
     return t
@@ -128,3 +135,56 @@ def test_no_task_id_multiple_tasks_no_experiment_is_misconfigured(db):
 
     with pytest.raises(RoleTaskMisconfigured):
         resolve_task_and_variant(db, role, candidate_id=1, organization_id=org.id, task_id=None)
+
+
+def test_inactive_draft_is_ignored_for_default_selection(db):
+    org = _org(db, "ignore-draft-org")
+    active = _task(db, org, "live_task")
+    draft = _task(db, org, "draft_task", active=False)
+    role = _role_with_tasks(db, org, [active, draft])
+
+    choice = resolve_task_and_variant(
+        db, role, candidate_id=1, organization_id=org.id, task_id=None
+    )
+    assert choice.task.id == active.id
+    assert choice.method == ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT
+
+
+def test_explicit_inactive_task_is_refused(db):
+    org = _org(db, "refuse-draft-org")
+    draft = _task(db, org, "draft_task", active=False)
+    role = _role_with_tasks(db, org, [draft])
+
+    with pytest.raises(HTTPException) as exc_info:
+        resolve_task_and_variant(
+            db, role, candidate_id=1, organization_id=org.id, task_id=draft.id
+        )
+    assert exc_info.value.status_code == 422
+    assert "inactive" in str(exc_info.value.detail).lower()
+
+
+def test_role_with_only_inactive_draft_is_misconfigured(db):
+    org = _org(db, "draft-only-org")
+    draft = _task(db, org, "draft_task", active=False)
+    role = _role_with_tasks(db, org, [draft])
+
+    with pytest.raises(RoleTaskMisconfigured, match="no active tasks"):
+        resolve_task_and_variant(
+            db, role, candidate_id=1, organization_id=org.id, task_id=None
+        )
+
+
+def test_experiment_ignores_arm_whose_task_is_inactive(db):
+    org = _org(db, "inactive-arm-org")
+    active = _task(db, org, "live_task")
+    draft = _task(db, org, "draft_task", active=False)
+    role = _role_with_tasks(db, org, [active, draft])
+    _experiment(db, org, role, [("live", active), ("draft", draft)])
+
+    choices = {
+        resolve_task_and_variant(
+            db, role, candidate_id=i, organization_id=org.id, task_id=None
+        ).task.id
+        for i in range(1, 20)
+    }
+    assert choices == {active.id}

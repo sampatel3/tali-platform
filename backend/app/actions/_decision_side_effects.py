@@ -42,14 +42,15 @@ VERDICT_BY_DECISION_TYPE = {
     "advance_to_interview": "advanced",
     "reject": "rejected",
     "skip_assessment_reject": "rejected",
-    "send_assessment": "assessment_sent",
-    "resend_assessment_invite": "invite_resent",
+    # Invite decisions commit a durable *delivery intent*, not a confirmed
+    # candidate contact. Their Workable stage/note is owned exclusively by the
+    # provider-success handoff outbox; posting a decision summary here would
+    # falsely claim a send when Resend later rejects it.
 }
 VERDICT_BY_OVERRIDE_ACTION = {
     "reject": "rejected",
     "advance": "advanced",
     "skip_assessment_advance": "skip_advanced",
-    "send_assessment": "assessment_sent",
 }
 
 
@@ -170,6 +171,7 @@ def apply_decision_side_effects(
                 reason_parts.append(note)
             agent_episodes.emit_recruiter_action_event(
                 organization_id=int(decision.organization_id),
+                role_id=int(decision.role_id),
                 decision_id=int(decision.id),
                 recruiter_id=recruiter_id,
                 action="override",
@@ -179,6 +181,7 @@ def apply_decision_side_effects(
         else:
             agent_episodes.emit_recruiter_action_event(
                 organization_id=int(decision.organization_id),
+                role_id=int(decision.role_id),
                 decision_id=int(decision.id),
                 recruiter_id=recruiter_id,
                 action="approve",

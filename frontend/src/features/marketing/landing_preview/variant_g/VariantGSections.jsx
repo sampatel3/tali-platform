@@ -47,8 +47,9 @@ export const FunnelSection = ({ reduced }) => (
         <span className="eyebrow">AGENTIC HIRING</span>
         <h2 className="display">One agent, <span className="grad-text">your whole funnel.</span></h2>
         <p className="lede">
-          It sources, reads every CV, runs the assessment, and puts a decision in front of you with
-          the evidence attached. You approve. It executes.
+          Applicants arrive through your live job page and connected ATS. The agent reads every CV,
+          runs the assessment, and moves on-policy reversible steps automatically; ambiguous,
+          off-policy, and irreversible outcomes come to you with evidence.
         </p>
       </Reveal>
 

@@ -5,6 +5,7 @@ import { Check, Edit3, X } from 'lucide-react';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
 import RoleFeedbackNotes from './RoleFeedbackNotes';
+import RoleScreeningQuestions from './RoleScreeningQuestions';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 
 // RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
@@ -67,15 +68,38 @@ const RoleAgentSettingsTab = ({
   const dayOfMonth = new Date().getDate();
   const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const projectedCents = dayOfMonth ? Math.round((monthlySpentCents * daysInMonth) / dayOfMonth) : monthlySpentCents;
-  // Three real HITL toggles, persisted on the role record. Default off
-  // (= every candidate-affecting decision goes to the Decision Hub for
-  // human approval). Auto-reject/auto-promote let the agent execute that
-  // family of actions immediately; auto-skip-assessment reroutes strong
-  // candidates past the assessment stage into the advance queue.
+  // Role-level autonomy controls. Granular positive-action fields fall back to
+  // the legacy auto_promote umbrella until a role has an explicit override.
+  // agent_effective_policy is the backend-resolved workspace→role view when
+  // available; keeping the local fallback makes old cached role payloads safe.
   const autoReject = Boolean(role?.auto_reject);
   const autoRejectPreScreen = Boolean(role?.auto_reject_pre_screen);
   const autoPromote = Boolean(role?.auto_promote);
   const autoSkipAssessment = Boolean(role?.auto_skip_assessment);
+  const effectivePolicy = role?.agent_effective_policy || {};
+  const hasGranularAutomation = [
+    role?.auto_send_assessment,
+    role?.auto_resend_assessment,
+    role?.auto_advance,
+  ].some((value) => value != null);
+  // Untouched roles have nullable granular fields and the historical database
+  // default auto_promote=false. First Turn on deliberately materializes the
+  // platform default of all reversible actions ON, so settings must preview
+  // that policy before activation rather than displaying a false opt-out.
+  const autoSendAssessment = hasGranularAutomation
+    ? Boolean(effectivePolicy.auto_send_assessment ?? role?.auto_send_assessment ?? autoPromote)
+    : true;
+  const autoResendAssessment = hasGranularAutomation
+    ? Boolean(effectivePolicy.auto_resend_assessment ?? role?.auto_resend_assessment ?? autoPromote)
+    : true;
+  const autoAdvance = hasGranularAutomation
+    ? Boolean(effectivePolicy.auto_advance ?? role?.auto_advance ?? autoPromote)
+    : true;
+  const deterministicReject = Boolean(
+    effectivePolicy.auto_reject_pre_screen
+    ?? autoRejectPreScreen
+    ?? autoReject
+  ) || autoReject;
   // When the linked Workable req is archived/closed/draft, Workable refuses
   // candidate write-backs (disqualify/move) with a 403 — so Taali acts locally
   // instead (rejects still complete here, just not synced upstream). The agent
@@ -93,8 +117,12 @@ const RoleAgentSettingsTab = ({
   // recruiter manages on the Job spec tab, so we don't offer the single-select
   // there (it would silently drop one arm of the A/B).
   const assignedTasks = Array.isArray(roleTasks) ? roleTasks : [];
-  const isAbTest = assignedTasks.length > 1;
-  const primaryAssignedTask = assignedTasks[0] || null;
+  const activeAssignedTasks = assignedTasks.filter((task) => task?.is_active !== false);
+  const generatedDraft = assignedTasks.find((task) => (
+    task?.is_active === false && task?.generated && task?.needs_review !== false
+  )) || null;
+  const isAbTest = activeAssignedTasks.length > 1;
+  const primaryAssignedTask = activeAssignedTasks[0] || null;
   const assignedTaskId = primaryAssignedTask?.id != null ? String(primaryAssignedTask.id) : '';
   // Merge the catalogue with the assigned task(s) so the current selection
   // always shows even before the org-wide task list finishes loading.
@@ -103,7 +131,7 @@ const RoleAgentSettingsTab = ({
     for (const task of (Array.isArray(allTasks) ? allTasks : [])) {
       if (task?.id != null) byId.set(String(task.id), task);
     }
-    for (const task of assignedTasks) {
+    for (const task of activeAssignedTasks) {
       if (task?.id != null) byId.set(String(task.id), task);
     }
     return [...byId.values()];
@@ -158,7 +186,7 @@ const RoleAgentSettingsTab = ({
         <section className="mc-agent-settings-intro">
           <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
           <p className="mc-agent-settings-intro-help">
-            Overrides your <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a> for this role only. Configure scoring, threshold, autonomy, and budget here. To turn the agent on, off, or pause it, use the agent panel at the top of this page.
+            Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. Configure screening, scoring, assessment flow, autonomy, and budget here. Turn on uses the effective policy shown below without silently changing it.
           </p>
         </section>
 
@@ -200,6 +228,8 @@ const RoleAgentSettingsTab = ({
             entirely when there's no history. */}
         <RecruiterAnswersLog roleId={role?.id} />
 
+        {role?.id ? <RoleScreeningQuestions roleId={role.id} /> : null}
+
         {/* Reject threshold */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
@@ -208,7 +238,7 @@ const RoleAgentSettingsTab = ({
                 Reject <em>threshold</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Below this CV score, candidates are flagged for bulk reject. Nothing auto-rejects without your approval unless autonomy is enabled below.
+                Below this CV score, candidates are flagged for reject review. Full-score and assessment reject recommendations always need human confirmation. Only a deterministic pre-screen failure can auto-reject, and only when explicitly enabled below.
               </p>
             </div>
           </div>
@@ -304,14 +334,14 @@ const RoleAgentSettingsTab = ({
                 Assessment <em>task</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Which skills assessment the agent sends to candidates who pass screening. Auto-promote (below) needs a task assigned here before it can send anything.
+                Which skills assessment qualified candidates receive. If none is assigned, Turn on generates, repairs, battle-tests, and approves one automatically; choosing a library task or A/B set is an optional override.
               </p>
             </div>
           </div>
           {isAbTest ? (
             <>
               <div className="mc-agent-settings-threshold-current" style={{ marginBottom: 8 }}>
-                A/B test · <b>{assignedTasks.map((task) => task.name).join(' · ')}</b>
+                A/B test · <b>{activeAssignedTasks.map((task) => task.name).join(' · ')}</b>
               </div>
               <p className="mc-agent-settings-card-help">
                 More than one task is linked, so each candidate is assigned one automatically (split evenly, stable per candidate). Manage the A/B set on the <a href="?view=activity" style={{ color: 'var(--purple)' }}>Job spec tab</a>.
@@ -340,9 +370,13 @@ const RoleAgentSettingsTab = ({
                     />
                   </svg>
                   <div>
-                    <div className="mc-agent-warn-title">No assessment task assigned</div>
+                    <div className="mc-agent-warn-title">
+                      {generatedDraft ? 'Generated assessment awaiting Turn on validation' : 'No assessment task assigned'}
+                    </div>
                     <div className="mc-agent-warn-body">
-                      The agent has nothing to send when a candidate passes screening. Pick a task below to enable assessment invites — and auto-promote.
+                      {generatedDraft
+                        ? `${generatedDraft.name} is still a draft. Turn on once and the agent will validate and approve it automatically, or explicitly skip the assessment stage.`
+                        : 'No manual task setup is required. Turn on will generate and validate a role-specific task automatically, or you can choose a library task or explicitly skip the stage.'}
                     </div>
                   </div>
                 </div>
@@ -364,7 +398,7 @@ const RoleAgentSettingsTab = ({
               </label>
               {assessmentTaskOptions.length === 0 ? (
                 <p className="mc-agent-settings-card-help" style={{ marginTop: 8 }}>
-                  No assessment tasks in your library yet. Create one from the Tasks page, then assign it here.
+                  No reusable tasks in the library yet. Turn on will generate and validate one for this role automatically.
                 </p>
               ) : null}
             </>
@@ -377,7 +411,7 @@ const RoleAgentSettingsTab = ({
             Autonomy <em>rules</em>
           </h2>
           <p className="mc-agent-settings-card-help" style={{ marginBottom: 14 }}>
-            By default every candidate-affecting decision the agent makes goes to your Decision Hub for approval. Flip these on to let the agent act without asking.
+            These are the exact reversible actions Turn on will authorize. Screening and scoring always run while the agent is on; irreversible full-score and assessment rejections always wait for you.
           </p>
           {!workableJobLive && (
             <div className="mc-agent-warn" role="alert">
@@ -409,24 +443,36 @@ const RoleAgentSettingsTab = ({
               </div>
             </div>
           )}
+          <div className="mc-agent-settings-card-help" style={{ marginBottom: 8 }}>
+            Effective policy: assessments <strong>{autoSendAssessment ? 'send automatically' : 'wait for approval'}</strong>
+            {' · '}resends <strong>{autoResendAssessment ? 'run automatically' : 'wait for approval'}</strong>
+            {' · '}advances <strong>{autoAdvance ? 'run automatically' : 'wait for approval'}</strong>
+            {' · '}deterministic screening rejects <strong>{deterministicReject ? 'may execute under safeguards' : 'wait for approval'}</strong>.
+          </div>
           {[
             {
-              key: 'auto_reject',
-              value: autoReject,
-              title: 'Auto-reject',
-              sub: 'Below-threshold candidates are rejected immediately (pre-screen, scoring, and assessment stages). Off: every reject lands in the Decision Hub for one-click approval.',
+              key: 'auto_send_assessment',
+              value: autoSendAssessment,
+              title: 'Send assessments automatically',
+              sub: 'Send the approved assessment immediately when a candidate passes the role policy. Off: each initial invite waits in the Decision Hub.',
             },
             {
-              key: 'auto_reject_pre_screen',
-              value: autoRejectPreScreen,
-              title: 'Auto-reject pre-screen only',
-              sub: 'Only candidates failing the initial pre-screen are rejected immediately. Rejects of fully-scored candidates still queue in the Decision Hub. Auto-reject above covers this and more.',
+              key: 'auto_resend_assessment',
+              value: autoResendAssessment,
+              title: 'Resend assessment invites automatically',
+              sub: 'Retry an existing assessment invitation when the delivery policy calls for it. Off: each resend waits for approval.',
             },
             {
-              key: 'auto_promote',
-              value: autoPromote,
-              title: 'Auto-promote',
-              sub: 'The agent sends assessments automatically to candidates who pass screening, and advances them to interview — no per-candidate approval. It still holds a batch for your review in the Decision Hub if it hits this role’s daily send limit or budget cap. Off: each invite and advance queues as a Decision Hub card.',
+              key: 'auto_advance',
+              value: autoAdvance,
+              title: 'Advance on-policy candidates automatically',
+              sub: 'Move qualified candidates into the recruiter handoff without a routine click. Interviews, offers, and hiring remain human decisions.',
+            },
+            {
+              key: 'deterministic_pre_screen_reject',
+              value: deterministicReject,
+              title: 'Reject deterministic screening failures automatically',
+              sub: 'One explicit opt-in for rules-based pre-screen failures when policy and ATS safeguards pass. Full-score, assessment, ambiguous, and off-policy rejections always remain in the Decision Hub for human confirmation.',
             },
             {
               key: 'auto_skip_assessment',
@@ -455,10 +501,10 @@ const RoleAgentSettingsTab = ({
         <div className="mc-agent-settings-savebar">
           <span>
             Changes apply to this role only. Org defaults stay intact —{' '}
-            <a href="#org-defaults" style={{ color: 'var(--purple)' }}>edit org defaults →</a>
+            <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
           </span>
           <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={savingRoleConfig}>
-            {savingRoleConfig ? 'Saving…' : 'Save role settings'}
+            {savingRoleConfig ? 'Saving…' : 'Save threshold'}
           </button>
         </div>
       </div>
@@ -466,9 +512,9 @@ const RoleAgentSettingsTab = ({
       {/* Sidebar */}
       <aside className="mc-agent-settings-side">
         <div className="mc-agent-settings-side-card">
-          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>ROLE BUDGET · THIS MONTH</div>
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>ROLE AI-USAGE BUDGET · THIS MONTH</div>
           <p className="mc-agent-settings-card-help" style={{ marginTop: 0, marginBottom: 10 }}>
-            One pot for everything we do on this role: pre-screen, scoring, semantic search, assessments, and the agent.
+            Covers model-backed pre-screening, scoring, semantic search, assessment grading, and agent reasoning. Sandbox runtime, email, storage, and repository hosting are separate; see Settings → Billing for available operational estimates.
           </p>
           <div className="mc-agent-settings-budget-amount">
             <span className="big">{fmtUsd(monthlySpentCents)}</span>
@@ -572,12 +618,14 @@ const RoleAgentSettingsTab = ({
             must-have card here, so there's one source of truth. */}
 
         <div className="mc-agent-settings-side-card">
-          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE THRESHOLD</div>
-          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>The agent pauses itself when spend reaches 80% of the monthly cap.</p>
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AUTOMATIC HOLDS</div>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
+            The agent pauses at the monthly cap, when usage credits run out, or when startup cannot complete. System holds recover and retry automatically after the dependency clears; a manual Pause remains until you explicitly resume it. Pause or Turn off stops autonomous processing and AI spend. The native job page remains viewable, but applications close until Resume or Turn on; Workable intake follows its provider-side publish state.
+          </p>
         </div>
 
         <div className="mc-agent-settings-audit-callout">
-          Inherits from <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a>. Changes here apply to this role only.
+          Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.
         </div>
       </aside>
     </div>

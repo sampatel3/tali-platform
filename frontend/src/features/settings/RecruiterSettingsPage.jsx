@@ -211,6 +211,12 @@ const AgentDefaultsForm = ({
   onDeleteCriterion,
   budgetUsd,
   threshold,
+  thresholdMode,
+  autoSendAssessment,
+  autoResendAssessment,
+  autoAdvance,
+  autoRejectPreScreen,
+  autoSkipAssessment,
   onChange,
 }) => {
   const thresholdDisplay = Math.max(0, Math.min(100, Number(threshold) || 0));
@@ -275,11 +281,65 @@ const AgentDefaultsForm = ({
               aria-label="Default score threshold"
             />
           </label>
+          <label className="field" style={{ marginTop: 12 }}>
+            <span className="k">Threshold strategy</span>
+            <select
+              value={thresholdMode}
+              aria-label="Default threshold strategy"
+              onChange={(event) => onChange({ thresholdMode: event.target.value })}
+            >
+              <option value="manual">Fixed workspace threshold</option>
+              <option value="auto">Adaptive threshold from outcomes</option>
+            </select>
+          </label>
           <div className="settings-summary-note" style={{ marginTop: 8 }}>
             {activeCount
               ? `${activeCount} default ${activeCount === 1 ? 'criterion' : 'criteria'} will be copied into each new role.`
               : 'No default criteria set yet.'}
           </div>
+        </div>
+      </div>
+
+      <div className="settings-subcard settings-top-gap">
+        <div className="settings-subcard-head">
+          <div>
+            <h3>Default autonomy policy</h3>
+            <p>
+              The exact reversible actions a new role inherits. Screening, parsing, scoring, monitoring, and metering run whenever that role&apos;s agent is on. These defaults never turn an agent on by themselves; a recruiter still reviews the effective role policy and chooses Turn on once.
+            </p>
+          </div>
+        </div>
+        <div className="settings-toggle-list">
+          <ToggleCard
+            title="Send assessments automatically"
+            description="Send the approved first assessment invite when the candidate passes policy. Off: the invite waits in the Decision Hub."
+            checked={autoSendAssessment}
+            onChange={(value) => onChange({ autoSendAssessment: value })}
+          />
+          <ToggleCard
+            title="Resend assessment invites automatically"
+            description="Retry an existing assessment invitation when delivery policy calls for it. Off: each resend waits for approval."
+            checked={autoResendAssessment}
+            onChange={(value) => onChange({ autoResendAssessment: value })}
+          />
+          <ToggleCard
+            title="Advance on-policy candidates automatically"
+            description="Move qualified candidates into recruiter handoff. Interviews, offers, and hiring remain human decisions."
+            checked={autoAdvance}
+            onChange={(value) => onChange({ autoAdvance: value })}
+          />
+          <ToggleCard
+            title="Reject deterministic screening failures automatically"
+            description="Only explicit rules-based pre-screen failures may reject under safeguards. Full-score, assessment, ambiguous, and off-policy rejections always require human confirmation."
+            checked={autoRejectPreScreen}
+            onChange={(value) => onChange({ autoRejectPreScreen: value })}
+          />
+          <ToggleCard
+            title="Skip the assessment stage"
+            description="Strong candidates bypass assessment and follow the configured advancement policy. This takes precedence over assessment send and resend defaults."
+            checked={autoSkipAssessment}
+            onChange={(value) => onChange({ autoSkipAssessment: value })}
+          />
         </div>
       </div>
     </>
@@ -384,14 +444,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [agentDefaultsForm, setAgentDefaultsForm] = useState({
     budgetUsd: '',
     threshold: 70,
+    thresholdMode: 'manual',
+    // Platform defaults make the first Turn on a complete reversible funnel.
+    // Rejection and assessment skipping remain explicit opt-ins below.
+    autoSendAssessment: true,
+    autoResendAssessment: true,
+    autoAdvance: true,
+    autoRejectPreScreen: false,
+    autoSkipAssessment: false,
   });
   const [agentDefaultsSaving, setAgentDefaultsSaving] = useState(false);
   const [orgCriteria, setOrgCriteria] = useState([]);
   const [orgCriteriaBusy, setOrgCriteriaBusy] = useState(false);
-  // Workspace spend cap (cents). Lives on the Billing tab and is enforced
-  // by the agent before it sends new invites.
-  const [spendCapForm, setSpendCapForm] = useState({ usd: '' });
-  const [spendCapSaving, setSpendCapSaving] = useState(false);
   const [firefliesForm, setFirefliesForm] = useState(DEFAULT_FIRELIES_FORM);
   const [firefliesSaving, setFirefliesSaving] = useState(false);
   const [firefliesHasApiKey, setFirefliesHasApiKey] = useState(false);
@@ -433,6 +497,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     workableWriteback: false,
     defaultSyncMode: 'full',
     inviteStageName: '',
+    interviewStageName: '',
     autoRejectEnabled: false,
     workableActorMemberId: '',
     workableDisqualifyReasonId: '',
@@ -736,15 +801,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const seedThreshold = Number.isFinite(Number(orgData.default_score_threshold))
       ? Number(orgData.default_score_threshold)
       : 70;
+    const agentDefaults = orgData.ai_tooling_config?.agent_defaults || {};
     setAgentDefaultsForm({
       budgetUsd: seedBudgetCents != null ? String((seedBudgetCents / 100).toFixed(2)) : '',
       threshold: Math.max(0, Math.min(100, seedThreshold)),
-    });
-    const seedCapCents = Number.isFinite(Number(orgData.monthly_spend_cap_cents))
-      ? Number(orgData.monthly_spend_cap_cents)
-      : null;
-    setSpendCapForm({
-      usd: seedCapCents != null ? String((seedCapCents / 100).toFixed(2)) : '',
+      thresholdMode: agentDefaults.threshold_mode === 'auto' ? 'auto' : 'manual',
+      autoSendAssessment: agentDefaults.auto_send_assessment !== false,
+      autoResendAssessment: agentDefaults.auto_resend_assessment !== false,
+      autoAdvance: agentDefaults.auto_advance !== false,
+      autoRejectPreScreen: Boolean(agentDefaults.auto_reject_pre_screen),
+      autoSkipAssessment: Boolean(agentDefaults.auto_skip_assessment),
     });
     const firefliesConfig = orgData.fireflies_config || {};
     setFirefliesForm({
@@ -764,6 +830,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       workableWriteback: Boolean(workableConfig.workable_writeback),
       defaultSyncMode: workableConfig.default_sync_mode || 'full',
       inviteStageName: workableConfig.invite_stage_name || '',
+      interviewStageName: workableConfig.interview_stage_name || '',
       autoRejectEnabled: Boolean(workableConfig.auto_reject_enabled),
       workableActorMemberId: workableConfig.workable_actor_member_id || '',
       workableDisqualifyReasonId: workableConfig.workable_disqualify_reason_id || '',
@@ -903,10 +970,29 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       ? Math.round(budgetUsd * 100)
       : null;
     const threshold = Math.max(0, Math.min(100, Number(agentDefaultsForm.threshold) || 0));
+    const currentAiTooling = orgData?.ai_tooling_config || {};
+    const currentAgentDefaults = currentAiTooling.agent_defaults || {};
+    const agentDefaults = {
+      ...currentAgentDefaults,
+      // `enabled` is retained for compatibility but never treated as an
+      // implicit role activation grant. New roles always start OFF.
+      enabled: currentAgentDefaults.enabled !== false,
+      budget_cents: budgetCents == null ? 0 : budgetCents,
+      threshold_mode: agentDefaultsForm.thresholdMode === 'auto' ? 'auto' : 'manual',
+      auto_send_assessment: Boolean(agentDefaultsForm.autoSendAssessment),
+      auto_resend_assessment: Boolean(agentDefaultsForm.autoResendAssessment),
+      auto_advance: Boolean(agentDefaultsForm.autoAdvance),
+      auto_reject_pre_screen: Boolean(agentDefaultsForm.autoRejectPreScreen),
+      auto_skip_assessment: Boolean(agentDefaultsForm.autoSkipAssessment),
+    };
     try {
       const res = await orgsApi.update({
         default_role_budget_cents: budgetCents == null ? 0 : budgetCents,
         default_score_threshold: threshold,
+        ai_tooling_config: {
+          ...currentAiTooling,
+          agent_defaults: agentDefaults,
+        },
       });
       setOrgData(res?.data || null);
       showToast('Agent defaults saved.', 'success');
@@ -972,25 +1058,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       void loadOrgCriteria();
     }
   }, [activeSection, loadOrgCriteria]);
-
-  const handleSaveSpendCap = async () => {
-    setSpendCapSaving(true);
-    // A blank input means "no cap" (Number('') === 0 would otherwise send a
-    // hard $0 cap). Send null to clear the cap; only send cents for a real
-    // value entered.
-    const raw = String(spendCapForm.usd ?? '').trim();
-    const usd = Number(raw);
-    const cents = raw !== '' && Number.isFinite(usd) && usd >= 0 ? Math.round(usd * 100) : null;
-    try {
-      const res = await orgsApi.update({ monthly_spend_cap_cents: cents });
-      setOrgData(res?.data || null);
-      showToast('Spend cap saved.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save spend cap.'), 'error');
-    } finally {
-      setSpendCapSaving(false);
-    }
-  };
 
   const handleSaveFireflies = async () => {
     setFirefliesSaving(true);
@@ -1149,6 +1216,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const workableWriteback = Boolean(workableForm.workableWriteback);
     const defaultSyncMode = workableForm.defaultSyncMode || 'full';
     const inviteStageName = String(workableForm.inviteStageName || '').trim();
+    const interviewStageName = String(workableForm.interviewStageName || '').trim();
     const autoRejectEnabled = Boolean(workableForm.autoRejectEnabled);
     // Validate against the scopes the stored token ACTUALLY has, not a
     // page-local checkbox — otherwise auto-reject could be enabled against a
@@ -1159,15 +1227,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const autoRejectNoteTemplate = String(workableForm.autoRejectNoteTemplate || '').trim();
 
     if ((workableWriteback || autoRejectEnabled) && !hasWriteScope) {
-      showToast('Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, reject, and reopen actions.', 'error');
+      showToast('Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, advance, reject, and reopen actions.', 'error');
       return;
     }
     if (workableWriteback && !inviteStageName) {
       showToast('Enter the exact Workable stage name for automated invite mode.', 'error');
       return;
     }
+    if (workableWriteback && !interviewStageName) {
+      showToast('Enter the exact Workable stage name for agent-driven interview handoff.', 'error');
+      return;
+    }
     if (hasWriteScope && !workableActorMemberId) {
-      showToast('Choose the Workable member account that should perform Workable invite, reject, and reopen actions.', 'error');
+      showToast('Choose the Workable member account that should perform Workable invite, advance, reject, and reopen actions.', 'error');
       return;
     }
 
@@ -1181,6 +1253,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           score_precedence: 'workable_first',
           default_sync_mode: defaultSyncMode,
           invite_stage_name: workableWriteback ? inviteStageName : '',
+          interview_stage_name: workableWriteback ? interviewStageName : '',
           auto_reject_enabled: autoRejectEnabled,
           workable_actor_member_id: workableActorMemberId || null,
           workable_disqualify_reason_id: workableDisqualifyReasonId || null,
@@ -1308,6 +1381,23 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const breakdownTotalEvents = featureBreakdown.reduce(
     (sum, row) => sum + Number(row.event_count || 0), 0,
   );
+  // `/billing/costs` is an observability estimate, deliberately separate from
+  // the AI credit ledger above. Surface the provider/runtime costs we can infer
+  // from recorded assessments without implying they debit role AI caps.
+  const operationalCostRows = Array.isArray(billingCosts?.costs) ? billingCosts.costs : [];
+  const operationalEstimates = operationalCostRows.reduce(
+    (totals, row) => {
+      const cost = row?.cost_usd || {};
+      totals.sandbox += Number(cost.e2b || 0);
+      totals.email += Number(cost.email || 0);
+      totals.storage += Number(cost.storage || 0);
+      return totals;
+    },
+    { sandbox: 0, email: 0, storage: 0 },
+  );
+  const operationalEstimateTotal = operationalEstimates.sandbox
+    + operationalEstimates.email
+    + operationalEstimates.storage;
   const FEATURE_LABELS = {
     prescreen: 'Pre-screening',
     score: 'CV scoring',
@@ -1505,11 +1595,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     onDeleteCriterion={handleDeleteOrgCriterion}
                     budgetUsd={agentDefaultsForm.budgetUsd}
                     threshold={agentDefaultsForm.threshold}
+                    thresholdMode={agentDefaultsForm.thresholdMode}
+                    autoSendAssessment={agentDefaultsForm.autoSendAssessment}
+                    autoResendAssessment={agentDefaultsForm.autoResendAssessment}
+                    autoAdvance={agentDefaultsForm.autoAdvance}
+                    autoRejectPreScreen={agentDefaultsForm.autoRejectPreScreen}
+                    autoSkipAssessment={agentDefaultsForm.autoSkipAssessment}
                     onChange={(next) => setAgentDefaultsForm((prev) => ({ ...prev, ...next }))}
                   />
                   <div className="settings-save-row">
                     <div className="settings-inline-note">
-                      Criteria save as you add them. Budget &amp; threshold need a save click.
+                      Criteria save as you add them. Budget, threshold strategy, and autonomy defaults save together.
                     </div>
                     <button
                       type="button"
@@ -1521,7 +1617,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         ? 'Saving...'
                         : formsInitForOrgIdRef.current !== orgData?.id
                           ? 'Loading defaults...'
-                          : 'Save budget & threshold'}
+                          : 'Save agent defaults'}
                     </button>
                   </div>
                 </SectionPanel>
@@ -1680,7 +1776,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         type="button"
                         className={`sw ${workableForm.workableWriteback === false ? 'on' : ''}`}
                         aria-label="Read-only (Taali only)"
-                        onClick={() => setWorkableForm((prev) => ({ ...prev, workableWriteback: false, inviteStageName: '' }))}
+                        onClick={() => setWorkableForm((prev) => ({
+                          ...prev,
+                          workableWriteback: false,
+                          inviteStageName: '',
+                          interviewStageName: '',
+                        }))}
                       />
                     </div>
                   </div>
@@ -1713,6 +1814,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         onChange={(event) => setWorkableForm((prev) => ({ ...prev, inviteStageName: event.target.value }))}
                         placeholder="Assessment invited"
                       />
+                    </label>
+                    <label className="field">
+                      <span className="k">Interview handoff stage name</span>
+                      <input
+                        list="workable-stage-options"
+                        value={workableForm.interviewStageName}
+                        onChange={(event) => setWorkableForm((prev) => ({ ...prev, interviewStageName: event.target.value }))}
+                        placeholder="Interview"
+                      />
+                      <span className="settings-inline-note">Required so agent-driven advances land in the correct Workable stage; an explicit recruiter-selected stage still wins.</span>
                     </label>
                     <label className="field">
                       <span className="k">Workable actor member</span>
@@ -2120,7 +2231,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="billing"
                   title="Billing"
-                  subtitle="Pay-as-you-go via Stripe. Card on file, monthly cap, and recent invoices."
+                  subtitle="Pay-as-you-go AI credits, enforced role caps, and separate operational estimates."
                 >
                   {billingLoading ? (
                     <div className="settings-loading-inline">
@@ -2142,9 +2253,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </div>
                   ) : (
                     <>
-                      {/* HANDOFF settings.md — Plan is hardcoded
-                          "Pay-as-you-go" — no plan picker. Card +
-                          spend cap + invoices are the three surfaces. */}
+                      {/* Plan is hardcoded Pay-as-you-go. Funded workspace
+                          credits and per-role AI caps are the enforced spend
+                          controls; operational estimates stay separate. */}
                       <div className="settings-billing-summary">
                         <div className="settings-billing-card">
                           <div className="settings-summary-label">Plan</div>
@@ -2193,33 +2304,28 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <div className="settings-subcard settings-top-gap">
                         <div className="settings-subcard-head">
                           <div>
-                            <h3>Monthly spend cap</h3>
-                            <p>Hard cap on workspace spend. When the projected month-end total exceeds this number, the agent pauses new invites and a "Spend over budget" notification fires.</p>
+                            <h3>Operational assessment estimates</h3>
+                            <p>
+                              Sandbox runtime, delivery email, and retained assessment data are estimated separately from the AI credit ledger and do not debit a role&apos;s AI-usage cap. Repository hosting is provider-plan infrastructure and is not included here.
+                            </p>
                           </div>
                         </div>
-                        <div className="row-form">
-                          <label className="field">
-                            <span className="k">Cap (USD/month)</span>
-                            <input
-                              type="number"
-                              min={0}
-                              step="10"
-                              value={spendCapForm.usd}
-                              onChange={(event) => setSpendCapForm({ usd: event.target.value })}
-                              placeholder="500"
-                            />
-                          </label>
+                        <div className="settings-billing-summary">
+                          <div className="settings-billing-card">
+                            <div className="settings-summary-label">Sandbox runtime</div>
+                            <div className="settings-summary-value">{formatUsd(operationalEstimates.sandbox)}</div>
+                          </div>
+                          <div className="settings-billing-card">
+                            <div className="settings-summary-label">Delivery email</div>
+                            <div className="settings-summary-value">{formatUsd(operationalEstimates.email)}</div>
+                          </div>
+                          <div className="settings-billing-card">
+                            <div className="settings-summary-label">Retained data</div>
+                            <div className="settings-summary-value">{formatUsd(operationalEstimates.storage)}</div>
+                          </div>
                         </div>
-                        <div className="settings-save-row">
-                          <div className="settings-inline-note">Leave blank to disable the cap.</div>
-                          <button
-                            type="button"
-                            className="btn btn-purple btn-sm"
-                            onClick={handleSaveSpendCap}
-                            disabled={spendCapSaving}
-                          >
-                            {spendCapSaving ? 'Saving...' : 'Save spend cap'}
-                          </button>
+                        <div className="settings-inline-note">
+                          Estimated operational total: {formatUsd(operationalEstimateTotal)} across {operationalCostRows.length} recorded assessment{operationalCostRows.length === 1 ? '' : 's'}. These are observability estimates, not usage charges.
                         </div>
                       </div>
 
@@ -2325,12 +2431,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       description="Alert the workspace if Workable or transcript syncs need attention."
                       checked={notificationPreferencesForm.sync_failures}
                       onChange={(value) => setNotificationPreferencesForm((prev) => ({ ...prev, sync_failures: value }))}
-                    />
-                    <ToggleCard
-                      title="Spend over budget"
-                      description="Fires when projected month-end spend exceeds the workspace cap. Pauses new agent invites until cleared."
-                      checked={notificationPreferencesForm.spend_over_budget}
-                      onChange={(value) => setNotificationPreferencesForm((prev) => ({ ...prev, spend_over_budget: value }))}
                     />
                     <ToggleCard
                       title="Agent paused"

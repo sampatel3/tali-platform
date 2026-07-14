@@ -31,6 +31,7 @@ so results are interchangeable and cache keys match.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Optional
 
 from ..llm import (
@@ -173,6 +174,42 @@ def sweep_pending_applications(
     from . import cache as cache_module
     from .apply import parse_and_store_cv_sections
 
+    summary = {
+        "scanned": 0,
+        "in_flight": 0,
+        "cache_applied": 0,
+        "cache_failed_skip": 0,
+        "render_failed": 0,
+        "admission_blocked": 0,
+        "admission_failed": 0,
+        "lock_contended": False,
+        "batches": [],
+    }
+
+    # Beat should be singleton, but deploy overlap and manual invocations can
+    # race. Serialize the scan→reserve→submit window in Postgres so one CV is
+    # never admitted into two batches before either anchor row becomes visible.
+    bind = getattr(db, "bind", None)
+    if bind is not None and getattr(bind.dialect, "name", None) == "postgresql":
+        from sqlalchemy import text
+
+        try:
+            acquired = bool(
+                db.execute(
+                    text(
+                        "SELECT pg_try_advisory_xact_lock("
+                        "hashtext('cv_parse_batch_sweep'), 0)"
+                    )
+                ).scalar()
+            )
+        except Exception:
+            logger.exception("cv_parse batch sweep lock failed")
+            summary["admission_failed"] = 1
+            return summary
+        if not acquired:
+            summary["lock_contended"] = True
+            return summary
+
     in_flight = in_flight_application_ids(db)
 
     apps = (
@@ -208,14 +245,7 @@ def sweep_pending_applications(
         .all()
     )
 
-    summary = {
-        "scanned": len(apps),
-        "in_flight": 0,
-        "cache_applied": 0,
-        "cache_failed_skip": 0,
-        "render_failed": 0,
-        "batches": [],
-    }
+    summary["scanned"] = len(apps)
     requests_by_org: dict[int, list[dict]] = {}
     context_by_org: dict[int, dict[str, dict]] = {}
     actionable = 0
@@ -282,35 +312,126 @@ def sweep_pending_applications(
         actionable += 1
 
     for org_id, requests in requests_by_org.items():
+        # Hold one CV_PARSE estimate per request before the batch reaches
+        # Anthropic. A dedicated transaction makes the holds visible to the
+        # results poller's independent settlement sessions. Expected balance/
+        # role-cap refusals skip only that application; an admission-system
+        # error fails the whole org batch closed.
+        from ..platform.database import SessionLocal
+        from ..services.usage_credit_reservations import (
+            InsufficientRoleBudgetError,
+            release_credit_reservation,
+            reserve_credits,
+        )
+        from ..services.usage_metering_service import InsufficientCreditsError
+
+        admitted_requests: list[dict] = []
+        reservations: dict[str, Any] = {}
+        meter_db = SessionLocal()
+        admission_error = False
+        try:
+            for request in requests:
+                custom_id = str(request.get("custom_id") or "")
+                per = context_by_org[org_id].get(custom_id) or {}
+                role_id = per.get("role_id")
+                if role_id is None:
+                    summary["admission_blocked"] += 1
+                    continue
+                try:
+                    reservation = reserve_credits(
+                        meter_db,
+                        organization_id=int(org_id),
+                        feature=Feature.CV_PARSE,
+                        external_ref=(
+                            f"usage-hold:cv-parse-batch:{custom_id}:"
+                            f"{uuid.uuid4().hex}"
+                        ),
+                        metadata={
+                            "sub_feature": "application_cv_parse_batch",
+                            "role_id": int(role_id),
+                            "entity_id": per.get("entity_id"),
+                            "custom_id": custom_id,
+                        },
+                        role_id=int(role_id),
+                        enforce_role_budget=True,
+                    )
+                except (InsufficientCreditsError, InsufficientRoleBudgetError):
+                    summary["admission_blocked"] += 1
+                    continue
+                reservations[custom_id] = reservation
+                admitted_requests.append(request)
+            meter_db.commit()
+        except Exception:
+            meter_db.rollback()
+            admission_error = True
+            summary["admission_failed"] += len(requests)
+            logger.exception(
+                "cv_parse batch admission failed org=%s; provider submit skipped",
+                org_id,
+            )
+        finally:
+            meter_db.close()
+
+        if admission_error or not admitted_requests:
+            continue
+        admitted_context: dict[str, dict] = {}
+        for request in admitted_requests:
+            custom_id = str(request.get("custom_id") or "")
+            admitted_context[custom_id] = {
+                **context_by_org[org_id][custom_id],
+                "credit_reservation": reservations[
+                    custom_id
+                ].as_metering_payload(),
+            }
         try:
             client = get_metered_client(organization_id=org_id)
             batch = client.messages.batches.create(
-                requests=requests,
+                requests=admitted_requests,
                 metering={
                     "feature": Feature.CV_PARSE,
                     "organization_id": org_id,
-                    "by_custom_id": context_by_org[org_id],
+                    "by_custom_id": admitted_context,
                 },
             )
             summary["batches"].append(
                 {
                     "batch_id": str(getattr(batch, "id", "")),
                     "organization_id": org_id,
-                    "requests": len(requests),
+                    "requests": len(admitted_requests),
                 }
             )
             logger.info(
                 "cv_parse batch submitted org=%s batch_id=%s requests=%d",
                 org_id,
                 getattr(batch, "id", None),
-                len(requests),
+                len(admitted_requests),
             )
         except Exception:
-            # Leave these rows pending — the next sweep retries them.
+            # Leave these rows pending for a later sweep and immediately return
+            # every committed hold. The metered wrapper performs the same
+            # release on SDK failure for single-message calls; batch submit has
+            # one hold per request, so compensate them together here.
+            release_db = SessionLocal()
+            try:
+                for reservation in reservations.values():
+                    release_credit_reservation(
+                        release_db,
+                        reservation=reservation,
+                        reason="cv_parse_batch_submit_failed",
+                    )
+                release_db.commit()
+            except Exception:
+                release_db.rollback()
+                logger.exception(
+                    "cv_parse batch reservation release failed org=%s",
+                    org_id,
+                )
+            finally:
+                release_db.close()
             logger.exception(
                 "cv_parse batch submission failed org=%s (%d requests)",
                 org_id,
-                len(requests),
+                len(admitted_requests),
             )
 
     return summary

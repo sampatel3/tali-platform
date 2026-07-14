@@ -198,7 +198,7 @@ export const LandingVariantB = ({ onNavigate }) => (
     <NarrativeArtifact
       kicker="YOUR MORNING QUEUE"
       title="You open Taali. The agent has already worked your pipeline."
-      blurb="This is the real decision card from the Home queue — every call the agent made overnight, waiting for your approval. Nothing moves without you."
+      blurb="This is the real decision card from the Home queue. On-policy reversible work has already moved; ambiguous, off-policy, and irreversible outcomes wait here for you."
       browserPath="app.taali.ai/home"
       callouts={[
         { label: 'Evidence-linked reasoning', body: 'One or two honest sentences, tied to the must-haves and the assessment behind them.' },
@@ -213,7 +213,7 @@ export const LandingVariantB = ({ onNavigate }) => (
         onNavigate={() => {}}
         kicker="AWAITING YOU · 1 DECISION"
         title="Your morning queue"
-        subtitle="The agent advanced Maya Chen to interview overnight. Approve, override, or teach it back in one click."
+        subtitle="The agent recommended Maya Chen for interview overnight. Approve, override, or teach it back in one click."
       />
     </NarrativeArtifact>
 

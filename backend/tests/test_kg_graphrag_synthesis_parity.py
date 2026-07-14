@@ -12,9 +12,10 @@ the same graph they return identical priors by construction. This test proves
 both halves of that claim:
 
 1. ``test_cypher_query_source_is_char_identical`` / ``test_synthesise_prior_source_*``
-   — the vendored ``graphrag_queries`` module source is byte-identical to tali's
-   ``app/candidate_graph/graphrag_queries.py`` (whitespace-normalised diff is
-   empty). Same query STRINGS + same synthesis CODE.
+   — every function on the shared GraphRAG-prior surface is byte-identical
+   between the vendored ``graphrag_queries`` module and tali's
+   ``app/candidate_graph/graphrag_queries.py``. Same query STRINGS + same
+   synthesis CODE; additive tali-only graph helpers are outside this contract.
 
 2. ``test_synthesis_identical_over_corpus`` — feed IDENTICAL fabricated query-row
    inputs to BOTH tali's ``synthesise_prior`` and the vendored one and assert
@@ -31,8 +32,6 @@ Any future drift in the vendored port fails CI here.
 """
 from __future__ import annotations
 
-import re
-
 import pytest
 
 # tali's ORIGINAL working synthesis (the reference).
@@ -48,32 +47,30 @@ from vendor.mainspring_kg.base import Priors
 # 1. Source char-identity: the vendored Cypher + synthesis code IS tali's.
 # ---------------------------------------------------------------------------
 
-def _source_without_logger_line(module) -> str:
-    """Module source with the (cosmetic) logger-name line dropped.
-
-    The ONLY intended difference between tali's and the vendored module is the
-    ``logging.getLogger("<name>")`` line — neither a Cypher query STRING nor any
-    synthesis MATH. Everything else (every query string, every weight, the
-    p_advance / confidence formulas) must be character-identical.
-    """
-    import inspect
-
-    src = inspect.getsource(module)
-    return "".join(
-        line for line in src.splitlines(keepends=True)
-        if "logging.getLogger(" not in line
-    )
-
-
-def _normalise_ws(text: str) -> str:
-    return re.sub(r"[ \t]+\n", "\n", text).strip()
+_PARITY_FUNCTIONS = (
+    "role_must_haves",
+    "candidate_claimed_skills",
+    "role_requirements_weighted",
+    "successful_skill_patterns",
+    "referrer_signal",
+    "company_overlap_with_top_performers",
+    "similar_past_candidates",
+    "skill_to_outcome_paths",
+    "synthesise_prior",
+)
 
 
 def test_cypher_and_synthesis_source_is_char_identical():
-    tali_src = _normalise_ws(_source_without_logger_line(tali_q))
-    ms_src = _normalise_ws(_source_without_logger_line(ms_q))
+    import inspect
+
+    tali_src = "".join(
+        inspect.getsource(getattr(tali_q, name)) for name in _PARITY_FUNCTIONS
+    )
+    ms_src = "".join(
+        inspect.getsource(getattr(ms_q, name)) for name in _PARITY_FUNCTIONS
+    )
     assert ms_src == tali_src, (
-        "vendored graphrag_queries source diverged from tali's — the Cypher "
+        "vendored GraphRAG-prior functions diverged from tali's — the Cypher "
         "and/or synthesis math is no longer character-identical"
     )
 
@@ -83,18 +80,7 @@ def test_every_query_function_string_is_identical():
     diff localises to a function, and assert the literal Cypher strings match."""
     import inspect
 
-    fn_names = [
-        "role_must_haves",
-        "candidate_claimed_skills",
-        "role_requirements_weighted",
-        "successful_skill_patterns",
-        "referrer_signal",
-        "company_overlap_with_top_performers",
-        "similar_past_candidates",
-        "skill_to_outcome_paths",
-        "synthesise_prior",
-    ]
-    for name in fn_names:
+    for name in _PARITY_FUNCTIONS:
         tali_fn = getattr(tali_q, name)
         ms_fn = getattr(ms_q, name)
         assert inspect.getsource(ms_fn) == inspect.getsource(tali_fn), (

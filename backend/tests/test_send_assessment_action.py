@@ -12,6 +12,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import event
 
 from app.actions import send_assessment as send_assessment_module
@@ -185,7 +186,7 @@ def _silence_invite_dispatch():
 # ---------------------------------------------------------------------------
 
 
-def test_send_assessment_happy_path_creates_assessment_and_advances_to_invited(db):
+def test_send_assessment_happy_path_creates_assessment_and_queues_delivery(db):
     org = _make_org(db)
     task = _make_task(db, org)
     role = _make_role(db, org, tasks=[task])
@@ -200,7 +201,7 @@ def test_send_assessment_happy_path_creates_assessment_and_advances_to_invited(d
     )
     db.commit()
 
-    assert result.status == "sent"
+    assert result.status == "queued"
     assert result.assessment is not None
     assert result.assessment.candidate_id == app.candidate_id
     assert result.assessment.role_id == role.id
@@ -210,9 +211,72 @@ def test_send_assessment_happy_path_creates_assessment_and_advances_to_invited(d
     # dry-run. Explicit override + experiment-knob still take precedence.
     assert result.assessment.duration_minutes == 30
 
-    # Application moved to invited.
+    # Queue acceptance is not candidate contact. Provider confirmation owns the
+    # later atomic transition to invited.
     db.refresh(app)
-    assert app.pipeline_stage == "invited"
+    assert app.pipeline_stage == "review"
+
+
+def test_send_assessment_does_not_claim_sent_when_queue_rejects_invite(db):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="queue-down")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    run_id = int(run.id)
+    with patch(
+        "app.domains.integrations_notifications.invite_flow.dispatch_assessment_invite",
+        side_effect=RuntimeError("broker down"),
+    ), pytest.raises(HTTPException) as exc:
+        # Mirrors maybe_auto_execute_decision: the decision/run is flushed in
+        # the outer transaction and the action runs inside a caller savepoint.
+        with db.begin_nested():
+            send_assessment_run(
+                db,
+                Actor.agent(run_id),
+                organization_id=int(org.id),
+                application_id=int(app.id),
+            )
+
+    assert exc.value.status_code == 503
+    assert "no send was confirmed" in str(exc.value.detail).lower()
+    assert db.query(AgentRun).filter(AgentRun.id == run_id).one_or_none() is not None
+    db.refresh(app)
+    assert app.pipeline_stage == "review"
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
+    db.commit()
+
+
+def test_send_assessment_repo_failure_preserves_callers_outer_transaction(db):
+    """Repository failure must roll back only the action, not its decision/run."""
+    from app.services.assessment_repository_service import AssessmentRepositoryError
+
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="repo-down")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+    run_id = int(run.id)
+
+    with patch(
+        "app.actions.send_assessment.AssessmentRepositoryService.create_assessment_branch",
+        side_effect=AssessmentRepositoryError("github down"),
+    ), pytest.raises(HTTPException) as exc:
+        with db.begin_nested():
+            send_assessment_run(
+                db,
+                Actor.agent(run_id),
+                organization_id=int(org.id),
+                application_id=int(app.id),
+            )
+
+    assert exc.value.status_code == 500
+    assert db.query(AgentRun).filter(AgentRun.id == run_id).one_or_none() is not None
+    db.refresh(app)
+    assert app.pipeline_stage == "review"
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
+    db.commit()
 
 
 def test_send_assessment_idempotent_when_active_assessment_exists(db):
@@ -232,9 +296,31 @@ def test_send_assessment_idempotent_when_active_assessment_exists(db):
         db, Actor.agent(int(run.id)),
         organization_id=int(org.id), application_id=int(app.id),
     )
-    assert first.status == "sent"
+    assert first.status == "queued"
     assert second.status == "already_exists"
     assert second.assessment.id == first.assessment.id
+
+
+def test_automatic_send_is_held_when_live_role_is_disabled(db):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="disabled-send")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+    role.agentic_mode_enabled = False
+    db.flush()
+
+    result = send_assessment_run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        application_id=int(app.id),
+    )
+
+    assert result.status == "blocked"
+    assert result.assessment is None
+    assert "disabled" in (result.detail or "")
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +344,7 @@ def test_send_assessment_returns_misconfigured_when_role_has_no_tasks(db):
     )
     assert result.status == "misconfigured"
     assert result.assessment is None
-    assert "no tasks linked" in (result.detail or "").lower()
+    assert "no active tasks linked" in (result.detail or "").lower()
 
 
 def test_send_assessment_returns_misconfigured_when_role_has_multiple_tasks(db):
@@ -293,7 +379,7 @@ def test_send_assessment_picks_specific_task_when_id_passed(db):
         task_id=int(t2.id),
     )
     db.commit()
-    assert result.status == "sent"
+    assert result.status == "queued"
     assert result.assessment.task_id == t2.id
 
 
@@ -393,7 +479,7 @@ def test_send_assessment_legacy_single_task_records_method(db):
         organization_id=int(org.id), application_id=int(app.id),
     )
     db.commit()
-    assert result.status == "sent"
+    assert result.status == "queued"
     assert result.assessment.assignment_method == ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT
     assert result.assessment.experiment_id is None
     assert result.assessment.experiment_arm_id is None
@@ -413,7 +499,7 @@ def test_send_assessment_random_assignment_records_arm_metadata(db):
         organization_id=int(org.id), application_id=int(app.id),
     )
     db.commit()
-    assert result.status == "sent"
+    assert result.status == "queued"
     a = result.assessment
     assert a.assignment_method == ASSIGNMENT_METHOD_RANDOM
     assert a.experiment_id == exp.id
@@ -439,7 +525,7 @@ def test_send_assessment_random_split_uses_both_arms(db):
             organization_id=int(org.id), application_id=int(app.id),
         )
         db.commit()
-        assert result.status == "sent"
+        assert result.status == "queued"
         seen.add(result.assessment.task_id)
     assert seen == {t1.id, t2.id}
 
@@ -460,7 +546,7 @@ def test_send_assessment_forced_task_id_under_active_experiment(db):
         task_id=int(t1.id),
     )
     db.commit()
-    assert result.status == "sent"
+    assert result.status == "queued"
     assert result.assessment.assignment_method == ASSIGNMENT_METHOD_FORCED
     assert result.assessment.task_id == t1.id
 
@@ -516,7 +602,7 @@ def test_send_assessment_arm_stable_across_void_and_reinvite(db):
         organization_id=int(org.id), application_id=int(app.id),
     )
     db.commit()
-    assert second.status == "sent"
+    assert second.status == "queued"
     assert second.assessment.id != first.assessment.id
     assert second.assessment.experiment_arm_id == first_arm
 

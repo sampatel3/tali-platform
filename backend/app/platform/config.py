@@ -45,14 +45,14 @@ class Settings(BaseSettings):
     # NOTE: claude-3-5-haiku-latest was RETIRED by Anthropic (404) and is NOT in
     # the pricing _MODEL_RATES table (a `-latest` alias isn't snapshot-stripped),
     # so it would mis-price to env-var defaults. Pin the valid Haiku 4.5 id that
-    # the pricing table rates. Prod overrides CLAUDE_MODEL to Sonnet via env.
+    # the pricing table rates. Production should keep an explicit snapshot id;
+    # the documented/default deployment pins this same Haiku 4.5 version.
     CLAUDE_MODEL: str = "claude-haiku-4-5-20251001"
     # Legacy compatibility only: when set, must match CLAUDE_MODEL.
     CLAUDE_SCORING_MODEL: str = ""
     # Batch-scoring override (cost optimized). If empty, falls back to CLAUDE_MODEL.
     CLAUDE_SCORING_BATCH_MODEL: str = "claude-haiku-4-5-20251001"
-    # Candidate-facing agentic chat model. Independent of CLAUDE_MODEL (which
-    # the recruitment agent overrides to Sonnet on prod for reasoning quality).
+    # Candidate-facing agentic chat model. Independent of CLAUDE_MODEL.
     # Defaults to Haiku because: (a) ~5× faster round-trip — candidate UX gets
     # ~30s → ~5s per tool-using prompt; (b) ~10× cheaper inside the $5/assessment
     # budget; (c) Haiku is fully capable for the read/edit-file tool-use shape
@@ -132,11 +132,14 @@ class Settings(BaseSettings):
     CLAUDE_CACHE_CREATION_COST_PER_MILLION_USD: float = 1.25
 
     # Usage-based pricing (2026-04-29 cutover from Lemon Squeezy).
-    # When False, every Claude call writes a usage_events row but the
-    # ledger is NOT debited and gates do NOT block — shadow mode for
-    # validating attribution numbers against Anthropic's dashboard. Flip
-    # to True (Phase 6) once shadow data confirms the meter is accurate.
+    # Local development may run in shadow mode, but production startup
+    # validation requires this to be True so credit debits and spend gates
+    # cannot be silently disabled by a missing environment variable.
     USAGE_METER_LIVE: bool = False
+    # Emergency-only production escape hatch. When True, production may boot
+    # with the usage meter in shadow mode, but /health reports the meter as
+    # unready/degraded. Keep False outside a time-bounded metering incident.
+    USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY: bool = False
     # Anthropic Admin API key for provisioning per-org workspace keys.
     # Empty = workspace provisioning disabled, all calls fall back to
     # ANTHROPIC_API_KEY (the shared Taali key).
@@ -596,10 +599,11 @@ class Settings(BaseSettings):
 
     # When a new role is created (in Taali or via Workable sync), auto-generate
     # a DRAFT assessment task from its JD (JD→spec generator) and link it,
-    # pending recruiter review. Default OFF: generation is a paid Sonnet
-    # operation, so an org opts in before its whole role catalog gets
-    # auto-authored. Generated tasks are is_active=False until approved.
-    AUTO_GENERATE_ASSESSMENT_TASKS: bool = False
+    # pending recruiter review. Default ON for the one-switch workflow: job
+    # creation authors the draft automatically, while the genuinely necessary
+    # HITL boundary remains approving candidate-facing task content. Generated
+    # tasks are is_active=False until approved.
+    AUTO_GENERATE_ASSESSMENT_TASKS: bool = True
 
     # Mid-window assessment nudges (delivered-not-opened / opened-not-started
     # at 48h, max one per assessment). Default OFF: turning the sequence on is
