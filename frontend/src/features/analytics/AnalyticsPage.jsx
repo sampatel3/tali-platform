@@ -1,5 +1,5 @@
 // AnalyticsPage — the dedicated /analytics route. Outcomes owns the scoped
-// reporting pulse; Agent fleet is a live workspace view; the remaining tabs
+// reporting pulse; Agents is a live workspace view; the remaining tabs
 // keep their focused teaching, experiment, and decision-log workflows.
 //
 // EVERY value is real. The page owns the role + window scope and threads it
@@ -15,14 +15,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import '../../styles/25-analytics.css';
-import {
-  Bot,
-  Brain,
-  Download,
-  FlaskConical,
-  History,
-  TrendingUp,
-} from 'lucide-react';
+import { Download } from 'lucide-react';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
@@ -46,20 +39,13 @@ import { FleetTab } from './FleetTab';
 import { TeachingTab } from './TeachingTab';
 import { ExperimentsTab } from './ExperimentsTab';
 import { DecisionLogTab, outcomeOf } from './DecisionLogTab';
+import { ANALYTICS_TABS } from './analyticsTabs';
 
 const WINDOWS = [
   { key: '7d', label: '7d', days: 7 },
   { key: '30d', label: '30d', days: 30 },
   { key: '90d', label: '90d', days: 90 },
   { key: 'all', label: 'All', days: null },
-];
-
-const TABS = [
-  { key: 'outcomes', label: 'Outcomes', Icon: TrendingUp },
-  { key: 'fleet', label: 'Agent fleet', Icon: Bot },
-  { key: 'teaching', label: 'Teaching history', Icon: Brain },
-  { key: 'ab', label: 'A·B tasks', Icon: FlaskConical },
-  { key: 'log', label: 'Decision log', Icon: History },
 ];
 
 const windowLabel = (key) => {
@@ -254,14 +240,14 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
       <AgentHeader
         breadcrumbs={[{
           label: tab === 'fleet'
-            ? 'Analytics · agent fleet'
+            ? 'Analytics · agents'
             : `Analytics · ${windowLabel(windowKey).toLowerCase()}`,
         }]}
         kicker={tab === 'fleet'
           ? 'ANALYTICS · LIVE WORKSPACE'
           : `ANALYTICS · ${windowLabel(windowKey).toUpperCase()}${roleId ? '' : ' · ALL ROLES'}`}
         title="Analytics"
-        subtitle="Outcomes, your agent fleet, and the teaching history that keeps the agent calibrated."
+        subtitle="Outcomes, your agents, and the teaching history that keeps them calibrated."
         actions={tab === 'fleet' ? null : headerActions}
       />
       <div className="an-page">
@@ -318,24 +304,20 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
           </MotionStagger>
         ) : null}
 
-        {/* Underline tabs — shared .vtabs/.vtab vocabulary. */}
+        {/* The same text-only underline tabs used on Job pages. */}
         <MotionTabs value={tab} onValueChange={setTab} className="vtabs" aria-label="Analytics views">
-          {TABS.map((t) => {
-            const { Icon } = t;
-            return (
-              <MotionTab
-                key={t.key}
-                value={t.key}
-                id={`analytics-tab-${t.key}`}
-                aria-controls={`analytics-panel-${t.key}`}
-                className={`vtab${tab === t.key ? ' on' : ''}`}
-                indicatorClassName="vtab-motion-indicator"
-              >
-                <Icon size={16} aria-hidden="true" />
-                {t.label}
-              </MotionTab>
-            );
-          })}
+          {ANALYTICS_TABS.map((t) => (
+            <MotionTab
+              key={t.key}
+              value={t.key}
+              id={`analytics-tab-${t.key}`}
+              aria-controls={`analytics-panel-${t.key}`}
+              className={`vtab${tab === t.key ? ' on' : ''}`}
+              indicatorClassName="vtab-motion-indicator"
+            >
+              {t.label}
+            </MotionTab>
+          ))}
         </MotionTabs>
 
         <PresenceSwap

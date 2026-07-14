@@ -26,8 +26,6 @@
   margin: 0 auto;
   padding: var(--page-pad-y-top, 28px) var(--page-pad-x, 32px) var(--page-pad-y-bottom, 48px);
 }
-.an-page .vtab { font-size: var(--an-body-lg); }
-
 /* header controls (role + window + export) — sit in AgentHeader actions zone */
 .an-controls {
   display: flex;

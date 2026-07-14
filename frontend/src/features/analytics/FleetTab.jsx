@@ -1,4 +1,4 @@
-// Agent Fleet is split into a pure, prop-driven view and a small polling
+// The Agents view is split into a pure, prop-driven view and a small polling
 // wrapper. The view deliberately shares the same KPI and role-first language
 // as the rest of the product; the wrapper owns all network lifecycle state.
 
@@ -396,7 +396,7 @@ export const FleetTab = ({ onOpenDecisionLog }) => {
           setError(null);
         }
       } catch {
-        if (!cancelledRef.current) setError('Could not load the agent fleet.');
+        if (!cancelledRef.current) setError('Could not load agents.');
       } finally {
         if (!cancelledRef.current) {
           setLoaded(true);
@@ -428,7 +428,7 @@ export const FleetTab = ({ onOpenDecisionLog }) => {
   if (!loaded && !panel) {
     return (
       <div className="an-tabpanel">
-        <div className="an-empty"><Spinner size={14} className="!text-current" /> Loading agent fleet…</div>
+        <div className="an-empty"><Spinner size={14} className="!text-current" /> Loading agents…</div>
       </div>
     );
   }

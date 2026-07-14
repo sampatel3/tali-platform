@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,6 +36,25 @@ afterEach(() => {
 });
 
 describe('AnalyticsMotionPreview (/analytics-preview)', () => {
+  it('previews the same shared text-only tabs as the live Analytics page', () => {
+    setReducedMotion(true);
+    renderPreview();
+
+    const tablist = screen.getByRole('tablist', { name: 'Analytics views' });
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tablist).toHaveClass('vtabs');
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      'Outcomes',
+      'Agents',
+      'Teaching history',
+      'Experiments',
+      'Decision log',
+    ]);
+    expect(tabs.every((tab) => tab.classList.contains('vtab'))).toBe(true);
+    expect(tablist.querySelector('svg')).not.toBeInTheDocument();
+    expect(tabs[0].querySelector('.vtab-motion-indicator')).toBeInTheDocument();
+  });
+
   it('renders logged-out with the pulse band and the real Outcomes view', () => {
     setReducedMotion(false);
     renderPreview();
@@ -63,7 +82,7 @@ describe('AnalyticsMotionPreview (/analytics-preview)', () => {
     setReducedMotion(true);
     renderPreview();
 
-    fireEvent.click(screen.getByRole('tab', { name: /Agent fleet/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
 
     expect(screen.getByText('Active agents')).toBeInTheDocument();
     expect(screen.getByText('Needs review')).toBeInTheDocument();
