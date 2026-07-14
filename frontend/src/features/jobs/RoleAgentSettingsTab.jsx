@@ -1,11 +1,12 @@
 import React from 'react';
 import '../../styles/20-role-agent-tab.css';
-import { Check, Edit3, X } from 'lucide-react';
+import { Check, Edit3, Search, X } from 'lucide-react';
 
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
 import RoleFeedbackNotes from './RoleFeedbackNotes';
 import RoleScreeningQuestions from './RoleScreeningQuestions';
+import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 
 // RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
@@ -44,7 +45,7 @@ const RoleAgentSettingsTab = ({
   savingThresholdMode,
   roleTasks = [],
   allTasks = [],
-  onAssignAssessmentTask,
+  onAssignAssessmentTasks,
   savingAssessmentTask = false,
 }) => {
   const total = activeApplications.length;
@@ -110,22 +111,32 @@ const RoleAgentSettingsTab = ({
     if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
   };
 
-  // Assessment task — the skills assessment the agent sends to candidates who
-  // pass screening. Reuses the same role↔task link the Job spec tab writes
-  // (rolesApi.addTask/removeTask), just surfaced here so the whole role config
-  // lives in one place. One task is the norm; more than one is an A/B set the
-  // recruiter manages on the Job spec tab, so we don't offer the single-select
-  // there (it would silently drop one arm of the A/B).
+  // Assessment tasks live with the rest of the agent configuration. A role may
+  // have none, one, or an A/B set; the parent persists the complete ID array so
+  // changing one checkbox never silently drops another linked task.
   const assignedTasks = Array.isArray(roleTasks) ? roleTasks : [];
   const activeAssignedTasks = assignedTasks.filter((task) => task?.is_active !== false);
   const generatedDraft = assignedTasks.find((task) => (
     task?.is_active === false && task?.generated && task?.needs_review !== false
   )) || null;
-  const isAbTest = activeAssignedTasks.length > 1;
-  const primaryAssignedTask = activeAssignedTasks[0] || null;
-  const assignedTaskId = primaryAssignedTask?.id != null ? String(primaryAssignedTask.id) : '';
-  // Merge the catalogue with the assigned task(s) so the current selection
-  // always shows even before the org-wide task list finishes loading.
+  const assignedTaskIdsFromProps = activeAssignedTasks
+    .map((task) => Number(task?.id))
+    .filter(Number.isFinite);
+  const assignedTaskSignature = [...assignedTaskIdsFromProps].sort((a, b) => a - b).join(',');
+  const [selectedAssessmentTaskIds, setSelectedAssessmentTaskIds] = React.useState(assignedTaskIdsFromProps);
+  const [assessmentTaskSearch, setAssessmentTaskSearch] = React.useState('');
+  const [assessmentChangePending, setAssessmentChangePending] = React.useState(false);
+
+  React.useEffect(() => {
+    setSelectedAssessmentTaskIds(assignedTaskIdsFromProps);
+    setAssessmentTaskSearch('');
+    // The signature is deliberately stable when a parent reload returns new
+    // task objects with the same IDs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role?.id, assignedTaskSignature]);
+
+  // Merge the catalogue with assigned tasks so a linked task remains visible
+  // while the organisation-wide task library is still loading.
   const assessmentTaskOptions = (() => {
     const byId = new Map();
     for (const task of (Array.isArray(allTasks) ? allTasks : [])) {
@@ -136,11 +147,37 @@ const RoleAgentSettingsTab = ({
     }
     return [...byId.values()];
   })();
-  const handleAssessmentSelect = (value) => {
-    if (typeof onAssignAssessmentTask !== 'function') return;
-    const next = value ? Number(value) : null;
-    if (next != null && String(next) === assignedTaskId) return;
-    onAssignAssessmentTask(next);
+  const selectedAssessmentTaskIdSet = new Set(selectedAssessmentTaskIds);
+  const selectedAssessmentTasks = assessmentTaskOptions.filter((task) => (
+    selectedAssessmentTaskIdSet.has(Number(task.id))
+  ));
+  const normalizedAssessmentSearch = assessmentTaskSearch.trim().toLowerCase();
+  const filteredAssessmentTaskOptions = normalizedAssessmentSearch
+    ? assessmentTaskOptions.filter((task) => {
+        const haystack = `${task?.name || ''} ${task?.description || ''}`.toLowerCase();
+        return haystack.includes(normalizedAssessmentSearch);
+      })
+    : assessmentTaskOptions;
+  const assessmentBusy = savingAssessmentTask || assessmentChangePending;
+  const handleAssessmentToggle = async (taskId) => {
+    if (assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
+    const id = Number(taskId);
+    if (!Number.isFinite(id)) return;
+    const previous = selectedAssessmentTaskIds;
+    const next = selectedAssessmentTaskIdSet.has(id)
+      ? previous.filter((currentId) => currentId !== id)
+      : [...previous, id];
+    setSelectedAssessmentTaskIds(next);
+    setAssessmentChangePending(true);
+    try {
+      await onAssignAssessmentTasks(next);
+    } catch {
+      // The parent owns the error toast. Restore the visible selection so the
+      // manager never claims a failed change was saved.
+      setSelectedAssessmentTaskIds(previous);
+    } finally {
+      setAssessmentChangePending(false);
+    }
   };
 
   // Per-role monthly budget editor — HANDOFF v2 §4.3 wants
@@ -325,87 +362,139 @@ const RoleAgentSettingsTab = ({
           )}
         </section>
 
-        {/* Assessment task — which skills assessment the agent sends. Ties
-            into the auto-promote toggle below (auto-send needs a task here). */}
+        {/* Assessment tasks — managed here alongside the behaviour that sends
+            them. One selected task is the default; 2+ creates a stable A/B
+            rotation without sending the recruiter to another tab. */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                Assessment <em>task</em>
+                Assessment <em>tasks</em>
               </h2>
               <p className="mc-agent-settings-card-help">
                 Which skills assessment qualified candidates receive. If none is assigned, Turn on generates, repairs, battle-tests, and approves one automatically; choosing a library task or A/B set is an optional override.
               </p>
             </div>
           </div>
-          {isAbTest ? (
-            <>
-              <div className="mc-agent-settings-threshold-current" style={{ marginBottom: 8 }}>
-                A/B test · <b>{activeAssignedTasks.map((task) => task.name).join(' · ')}</b>
-              </div>
-              <p className="mc-agent-settings-card-help">
-                More than one task is linked, so each candidate is assigned one automatically (split evenly, stable per candidate). Manage the A/B set on the <a href="?view=activity" style={{ color: 'var(--purple)' }}>Job spec tab</a>.
-              </p>
-            </>
-          ) : (
-            <>
-              {assignedTaskId ? (
-                <div className="mc-agent-settings-threshold-current" style={{ marginBottom: 12 }}>
-                  Sending <b>{primaryAssignedTask.name}</b> to candidates who pass screening.
+          <PresenceSwap
+            presenceKey={`assessment-count-${selectedAssessmentTasks.length}`}
+            className="mc-agent-settings-task-status"
+            aria-live="polite"
+          >
+            {selectedAssessmentTasks.length ? (
+              <div className="mc-agent-settings-task-summary">
+                <span className="mc-agent-settings-task-summary-icon" aria-hidden="true">
+                  <Check size={14} strokeWidth={2.5} />
+                </span>
+                <div className="mc-agent-settings-task-summary-copy">
+                  <strong>
+                    {selectedAssessmentTasks.length === 1
+                      ? '1 task assigned'
+                      : `${selectedAssessmentTasks.length} tasks in A/B rotation`}
+                  </strong>
+                  <span>{selectedAssessmentTasks.map((task) => task.name).join(' · ')}</span>
                 </div>
-              ) : (
-                <div className="mc-agent-warn" role="alert" style={{ marginBottom: 12 }}>
-                  <svg
-                    className="mc-agent-warn-icon"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z M12 9v4 M12 17h.01"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  <div>
-                    <div className="mc-agent-warn-title">
-                      {generatedDraft ? 'Generated assessment awaiting Turn on validation' : 'No assessment task assigned'}
-                    </div>
-                    <div className="mc-agent-warn-body">
-                      {generatedDraft
-                        ? `${generatedDraft.name} is still a draft. Turn on once and the agent will validate and approve it automatically, or explicitly skip the assessment stage.`
-                        : (role?.agentic_mode_enabled
-                          ? 'This running role is skipping the assessment stage. Choose an active task before turning assessment skipping off.'
-                          : 'No manual task setup is required. Turn on will generate and validate a role-specific task automatically, or you can choose a library task or explicitly skip the stage.')}
-                    </div>
+                {selectedAssessmentTasks.length > 1 ? (
+                  <span className="mc-agent-settings-task-ab-badge">A/B</span>
+                ) : null}
+              </div>
+            ) : (
+              <div className="mc-agent-warn mc-agent-settings-task-warning" role="status">
+                <svg
+                  className="mc-agent-warn-icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z M12 9v4 M12 17h.01"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                <div>
+                  <div className="mc-agent-warn-title">
+                    {generatedDraft ? 'Generated assessment awaiting Turn on validation' : 'No assessment task assigned'}
+                  </div>
+                  <div className="mc-agent-warn-body">
+                    {generatedDraft
+                      ? `${generatedDraft.name} is still a draft. Turn on once and the agent will validate and approve it automatically, or explicitly skip the assessment stage.`
+                      : (role?.agentic_mode_enabled
+                        ? 'This running role is skipping the assessment stage. Choose an active task before turning assessment skipping off.'
+                        : 'The agent has nothing to send after screening yet. No manual task setup is required: Turn on will generate and validate a role-specific task automatically, or you can choose a library task or explicitly skip the stage.')}
                   </div>
                 </div>
-              )}
-              <label className="mc-agent-settings-threshold-mode">
-                <span className="kicker mute">ASSESSMENT TASK</span>
-                <Select
-                  inline
-                  value={assignedTaskId}
-                  onChange={(event) => handleAssessmentSelect(event.target.value)}
-                  aria-label="Assessment task"
-                  disabled={savingAssessmentTask}
-                >
-                  <option value="">
-                    {role?.agentic_mode_enabled ? 'No assessment task (skip stage)' : 'No assessment task'}
-                  </option>
-                  {assessmentTaskOptions.map((task) => (
-                    <option key={task.id} value={String(task.id)}>{task.name}</option>
-                  ))}
-                </Select>
-              </label>
-              {assessmentTaskOptions.length === 0 ? (
-                <p className="mc-agent-settings-card-help" style={{ marginTop: 8 }}>
-                  No reusable tasks in the library yet. Turn on will generate and validate one for this role automatically.
-                </p>
-              ) : null}
-            </>
+              </div>
+            )}
+          </PresenceSwap>
+
+          {assessmentTaskOptions.length > 6 ? (
+            <label className="mc-agent-settings-task-search">
+              <span className="sr-only">Search assessment tasks</span>
+              <Search size={15} aria-hidden="true" />
+              <input
+                type="search"
+                value={assessmentTaskSearch}
+                onChange={(event) => setAssessmentTaskSearch(event.target.value)}
+                placeholder="Search assessment tasks"
+              />
+            </label>
+          ) : null}
+
+          {assessmentTaskOptions.length ? (
+            <fieldset
+              className="mc-agent-settings-task-picker"
+              aria-busy={assessmentBusy ? 'true' : 'false'}
+            >
+              <legend className="sr-only">Tasks assigned to this role</legend>
+              <MotionList className="mc-agent-settings-task-list">
+                {filteredAssessmentTaskOptions.map((task, index) => {
+                  const taskId = Number(task.id);
+                  const checked = selectedAssessmentTaskIdSet.has(taskId);
+                  return (
+                    <MotionListItem
+                      key={task.id}
+                      index={index}
+                      density="compact"
+                      className="mc-agent-settings-task-option-wrap"
+                    >
+                      <label className={`mc-agent-settings-task-option ${checked ? 'is-selected' : ''}`}>
+                        <input
+                          className="mc-agent-settings-task-checkbox"
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => handleAssessmentToggle(taskId)}
+                          disabled={assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
+                        />
+                        <span className="mc-agent-settings-task-option-copy">
+                          <strong>{task.name}</strong>
+                          {task.description ? <span>{task.description}</span> : null}
+                        </span>
+                      </label>
+                    </MotionListItem>
+                  );
+                })}
+                {filteredAssessmentTaskOptions.length === 0 ? (
+                  <div className="mc-agent-settings-task-empty">
+                    No tasks match “{assessmentTaskSearch.trim()}”.
+                  </div>
+                ) : null}
+              </MotionList>
+              <div className="mc-agent-settings-task-picker-foot" aria-live="polite">
+                <span>
+                  {selectedAssessmentTasks.length > 1
+                    ? 'A/B rotation is split evenly and stays stable for each candidate.'
+                    : 'Select multiple tasks to create an A/B rotation.'}
+                </span>
+                {assessmentBusy ? <span className="mc-agent-settings-task-saving">Saving…</span> : null}
+              </div>
+            </fieldset>
+          ) : (
+            <p className="mc-agent-settings-card-help mc-agent-settings-task-library-empty">
+              No reusable tasks in the library yet. Turn on will generate and validate one for this role automatically.
+            </p>
           )}
         </section>
 

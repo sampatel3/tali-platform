@@ -255,7 +255,90 @@ class TestUpsertRoleFromJobOrder:
         assert created2 is False
         assert role2.id == role_id
         assert role2.name == "Staff Data Engineer"
+        assert "# Staff Data Engineer" in role2.job_spec_text
+        assert role2.job_spec_manually_edited_at is None
         assert db.query(Role).filter(Role.organization_id == org.id).count() == 1
+
+    def test_manual_spec_override_survives_resync_while_metadata_refreshes(self, db):
+        org = _org(db)
+        manual_spec = "Recruiter-authored Bullhorn role specification remains authoritative."
+        role = Role(
+            organization_id=org.id,
+            source="bullhorn",
+            bullhorn_job_order_id="778",
+            name="Old Bullhorn title",
+            description=manual_spec,
+            job_spec_text=manual_spec,
+            job_spec_manually_edited_at=_now(),
+        )
+        db.add(role)
+        db.commit()
+
+        synced, created = sync_jobs.upsert_role_from_job_order(
+            db,
+            org,
+            {
+                "id": 778,
+                "title": "Fresh Bullhorn title",
+                "status": "Accepting Candidates",
+                "description": "Fresh ATS text must not replace the manual override.",
+            },
+        )
+        db.commit()
+
+        assert created is False
+        assert synced.id == role.id
+        assert synced.name == "Fresh Bullhorn title"
+        assert synced.bullhorn_job_data["status"] == "Accepting Candidates"
+        assert synced.job_spec_text == manual_spec
+        assert synced.description == manual_spec
+
+    def test_legacy_taali_override_is_inferred_before_bullhorn_payload_replacement(
+        self, db
+    ):
+        org = _org(db)
+        cached_job_order = {
+            "id": 779,
+            "title": "Old Bullhorn title",
+            "status": "Accepting Candidates",
+            "description": "The previous Bullhorn-owned description.",
+        }
+        previous_ats_spec = sync_jobs.format_job_spec_from_job_order(cached_job_order)
+        manual_spec = (
+            "Legacy recruiter-authored Bullhorn role specification with requirements "
+            "that must remain authoritative."
+        )
+        role = Role(
+            organization_id=org.id,
+            source="bullhorn",
+            bullhorn_job_order_id="779",
+            name="Old Bullhorn title",
+            description=previous_ats_spec,
+            job_spec_text=manual_spec,
+            job_spec_uploaded_at=_now(),
+            bullhorn_job_data=cached_job_order,
+        )
+        db.add(role)
+        db.commit()
+
+        synced, created = sync_jobs.upsert_role_from_job_order(
+            db,
+            org,
+            {
+                "id": 779,
+                "title": "Fresh Bullhorn title",
+                "status": "Closed",
+                "description": "Fresh Bullhorn text must not replace the legacy edit.",
+            },
+        )
+        db.commit()
+
+        assert created is False
+        assert synced.name == "Fresh Bullhorn title"
+        assert synced.bullhorn_job_data["status"] == "Closed"
+        assert synced.job_spec_text == manual_spec
+        assert synced.description == manual_spec
+        assert synced.job_spec_manually_edited_at is not None
 
     def test_no_id_returns_none(self, db):
         org = _org(db)

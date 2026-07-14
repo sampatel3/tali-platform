@@ -298,6 +298,223 @@
   min-width: 0;
 }
 
+/* Assessment task manager. Task assignment belongs with the agent behaviour
+   that consumes it; compact checkbox rows support a single task or a stable
+   A/B set without turning this settings card into a second Tasks page. */
+.mc-agent-settings-task-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 12px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in oklab, var(--purple) 24%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg-2));
+}
+
+.mc-agent-settings-task-summary-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 13%, var(--bg-2));
+}
+
+.mc-agent-settings-task-summary-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mc-agent-settings-task-summary-copy strong {
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.mc-agent-settings-task-summary-copy span {
+  overflow: hidden;
+  color: var(--mute);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-agent-settings-task-ab-badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--purple);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.mc-agent-settings-task-warning {
+  margin-bottom: 12px;
+}
+
+.mc-agent-settings-task-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--mute);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.mc-agent-settings-task-search:focus-within {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 14%, transparent);
+}
+
+.mc-agent-settings-task-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
+.mc-agent-settings-task-search input::placeholder {
+  color: var(--mute);
+}
+
+.mc-agent-settings-task-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.mc-agent-settings-task-list {
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mc-agent-settings-task-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.mc-agent-settings-task-option-wrap {
+  border-bottom: 1px solid var(--line-2);
+}
+
+.mc-agent-settings-task-option-wrap:last-child {
+  border-bottom: 0;
+}
+
+.mc-agent-settings-task-option:hover {
+  background: color-mix(in oklab, var(--purple) 4%, var(--bg));
+}
+
+.mc-agent-settings-task-option.is-selected {
+  background: color-mix(in oklab, var(--purple) 7%, var(--bg));
+}
+
+.mc-agent-settings-task-option:has(.mc-agent-settings-task-checkbox:focus-visible) {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--purple);
+  outline-offset: -2px;
+}
+
+.mc-agent-settings-task-option:has(.mc-agent-settings-task-checkbox:disabled) {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.mc-agent-settings-task-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--purple);
+  cursor: inherit;
+}
+
+.mc-agent-settings-task-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mc-agent-settings-task-option-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-agent-settings-task-option-copy span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--mute);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.mc-agent-settings-task-empty {
+  padding: 22px 14px;
+  color: var(--mute);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.mc-agent-settings-task-picker-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--mute);
+  font-size: 0.71875rem;
+  line-height: 1.45;
+}
+
+.mc-agent-settings-task-saving {
+  flex-shrink: 0;
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  letter-spacing: 0.04em;
+}
+
+.mc-agent-settings-task-library-empty {
+  margin-top: 4px;
+}
+
 .mc-agent-settings-slider {
   position: relative;
   margin-top: 8px;
@@ -634,3 +851,16 @@
   color: var(--ink-2);
 }
 
+@media (max-width: 600px) {
+  .mc-agent-settings-card {
+    padding: 20px 18px;
+  }
+
+  .mc-agent-settings-task-picker-foot {
+    align-items: flex-start;
+  }
+
+  .mc-agent-settings-task-summary-copy span {
+    white-space: normal;
+  }
+}

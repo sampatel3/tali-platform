@@ -60,6 +60,8 @@ def test_update_job_spec_applies_rederives_and_estimates(db):
     assert "count" in res["would_rescreen"] and "est_cost_usd" in res["would_rescreen"]
     db.refresh(role)
     assert role.job_spec_text.startswith("Senior AI Engineer")
+    assert role.description == role.job_spec_text
+    assert role.job_spec_manually_edited_at is not None
 
 
 def test_update_job_spec_rejects_too_short(db):

@@ -37,6 +37,8 @@ from ...schemas.role import (
     RoleCriterionUpdate,
     RoleFeedbackNoteCreate,
     RoleFeedbackNoteResponse,
+    RoleJobSpecUpdate,
+    RoleJobSpecUpdateResponse,
     RoleResponse,
     RoleTaskLinkRequest,
     RoleUpdate,
@@ -1634,6 +1636,143 @@ def delete_role(
     return None
 
 
+@router.put("/roles/{role_id}/job-spec", response_model=RoleJobSpecUpdateResponse)
+def update_role_job_spec(
+    role_id: int,
+    data: RoleJobSpecUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Atomically save the recruiter-authored role spec and assessment tasks.
+
+    The text is applied through the same deterministic criteria derivation used
+    by the role agent. This reports the candidate re-screen scope and cost but
+    deliberately does not start paid scoring work.
+    """
+    role = (
+        db.query(Role)
+        .options(selectinload(Role.tasks))
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .with_for_update(of=Role)
+        .first()
+    )
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if str(getattr(role, "role_kind", "") or "") == "sister":
+        raise HTTPException(
+            status_code=409,
+            detail="Sister roles are score-only views. Edit the original ATS role's job spec.",
+        )
+
+    tasks: list[Task] | None = None
+    if data.task_ids is not None:
+        requested_task_ids = list(
+            dict.fromkeys(int(task_id) for task_id in data.task_ids)
+        )
+        tasks = []
+        if requested_task_ids:
+            tasks = (
+                db.query(Task)
+                .filter(
+                    Task.id.in_(requested_task_ids),
+                    (Task.organization_id == current_user.organization_id)
+                    | (Task.organization_id.is_(None)),
+                )
+                .all()
+            )
+            tasks_by_id = {int(task.id): task for task in tasks}
+            if len(tasks_by_id) != len(requested_task_ids):
+                raise HTTPException(
+                    status_code=422,
+                    detail="One or more selected tasks are unavailable in this organization.",
+                )
+            tasks = [tasks_by_id[task_id] for task_id in requested_task_ids]
+
+        # Validate the destructive half of an explicit task replacement before
+        # changing the spec, criteria, title or relationship. When task_ids is
+        # omitted, task configuration is deliberately outside this request and
+        # no validation/replacement query should run.
+        current_task_ids = {int(task.id) for task in (role.tasks or [])}
+        removed_task_ids = current_task_ids - set(requested_task_ids)
+        if removed_task_ids:
+            used_task = (
+                db.query(Assessment.task_id)
+                .filter(
+                    Assessment.role_id == role.id,
+                    Assessment.task_id.in_(removed_task_ids),
+                )
+                .first()
+            )
+            if used_task:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A linked task already has assessments and cannot be removed.",
+                )
+
+    name = data.name.strip() if data.name is not None else None
+    if data.name is not None and not name:
+        raise HTTPException(status_code=422, detail="Role name cannot be blank")
+
+    from ...agent_chat.constraints import update_job_spec as apply_job_spec
+
+    try:
+        result = apply_job_spec(db, role, job_spec_text=data.job_spec_text)
+        if not result.get("applied"):
+            # The helper has already rolled back if criteria derivation failed.
+            raise HTTPException(
+                status_code=422 if result.get("ok") is False else 500,
+                detail=result.get("error") or "Failed to update job spec",
+            )
+        if name is not None:
+            role.name = name
+        if tasks is not None:
+            role.tasks = tasks
+        # ``apply_job_spec`` owns these fields too so agent-chat edits receive
+        # the same truthful override semantics. Assign explicitly here to keep
+        # this endpoint's atomic contract obvious and future-proof.
+        role.description = (data.job_spec_text or "").strip()
+        if role.job_spec_manually_edited_at is None:
+            role.job_spec_manually_edited_at = datetime.now(timezone.utc)
+        role.interview_focus = None
+        role.interview_focus_generated_at = None
+        db.commit()
+        db.refresh(role)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to update job spec for role_id=%s", role_id)
+        raise HTTPException(status_code=500, detail="Failed to update job spec")
+
+    # Regeneration is asynchronous and best-effort. The recruiter-authored spec
+    # is already durable even if the worker/broker is temporarily unavailable.
+    try:
+        on_role_jd_attached(role)
+    except Exception:  # pragma: no cover - persistence must remain successful
+        logger.exception(
+            "Failed to dispatch interview-focus generation for role_id=%s", role.id
+        )
+
+    return {
+        "applied": True,
+        "role": _serialize_role_detail(db, role, current_user.organization_id),
+        "diff": {
+            "added": list(result.get("added") or []),
+            "removed": list(result.get("removed") or []),
+            "criteria_count": int(result.get("criteria_count") or 0),
+        },
+        "would_rescreen": result.get("would_rescreen") or {
+            "count": 0,
+            "est_cost_usd": 0.0,
+        },
+    }
+
+
 @router.post("/roles/{role_id}/upload-job-spec")
 def upload_role_job_spec(
     role_id: int,
@@ -1654,6 +1793,7 @@ def upload_role_job_spec(
     role.job_spec_text = result["extracted_text"]
     role.description = (result.get("extracted_text") or "").strip() or role.description
     role.job_spec_uploaded_at = now
+    role.job_spec_manually_edited_at = now
     role.interview_focus = None
     role.interview_focus_generated_at = None
 

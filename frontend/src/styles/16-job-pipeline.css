@@ -301,9 +301,13 @@
   padding-bottom: 28px;
 }
 
+.role-spec-layout.is-editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .role-spec-document {
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -454,12 +458,322 @@
   line-height: var(--lh-normal);
 }
 
-.role-spec-document .role-edit-inline {
-  margin: 0;
-  padding: 22px 24px 24px;
+.role-spec-editor {
+  min-width: 0;
+}
+
+.role-spec-editor-intro,
+.role-spec-editor-field {
+  padding-right: 24px;
+  padding-left: 24px;
+}
+
+.role-spec-editor-intro {
+  padding-top: 20px;
+}
+
+.role-spec-editor-source-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in oklab, var(--purple) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+}
+
+.role-spec-editor-source-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--purple) 10%, var(--bg-2));
+  color: var(--purple);
+}
+
+.role-spec-editor-source-note strong,
+.role-spec-editor-source-note span {
+  display: block;
+}
+
+.role-spec-editor-source-note strong {
+  margin-top: 1px;
+  font-size: var(--fs-body);
+  line-height: var(--lh-label);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.role-spec-editor-source-note div > span {
+  margin-top: 4px;
+  max-width: 72ch;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-normal);
+  color: var(--ink-2);
+}
+
+.role-spec-editor-error {
+  margin: 14px 24px 0;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in oklab, var(--red) 30%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--red-deep);
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+}
+
+.role-spec-editor-field {
+  padding-top: 20px;
+}
+
+.role-spec-editor-field label,
+.role-spec-editor-label,
+.role-spec-editor-document-head label {
+  display: block;
+  font-size: var(--fs-body);
+  line-height: var(--lh-label);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.role-spec-editor-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.role-spec-editor-managed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  line-height: var(--lh-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.role-spec-editor-readonly {
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--bg) 72%, var(--bg-2));
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+  color: var(--ink-2);
+}
+
+.role-spec-editor-document {
+  min-width: 0;
+  margin: 20px 24px 0;
+  overflow: clip;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--ink) 2%, transparent);
+}
+
+.role-spec-editor-document-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in oklab, var(--bg) 52%, var(--bg-2));
+}
+
+.role-spec-editor-document-head p {
+  margin: 5px 0 0;
+  max-width: 58ch;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-normal);
+  color: var(--mute);
+}
+
+.role-spec-editor-tabs {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-2);
+}
+
+.role-spec-editor-tab {
+  position: relative;
+  z-index: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 10px;
   border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--mute);
+  cursor: pointer;
+}
+
+.role-spec-editor-tab[aria-selected="true"] {
+  color: var(--purple-2);
+}
+
+.role-spec-editor-tab:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+
+.role-spec-editor-tab > :not(.role-spec-editor-tab-indicator) {
+  position: relative;
+  z-index: 1;
+}
+
+.role-spec-editor-tab-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--purple) 9%, var(--bg-2));
+}
+
+.role-spec-editor-mode {
+  min-width: 0;
+}
+
+.role-spec-editor-write {
+  min-width: 0;
+  padding: 14px 16px 12px;
+}
+
+.role-spec-editor-write .taali-textarea {
+  min-height: clamp(360px, 48vh, 560px);
+  padding: 16px 18px;
+  border-color: var(--line-2);
+  border-radius: 10px;
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+.role-spec-editor-write .taali-textarea::placeholder {
+  color: color-mix(in oklab, var(--mute) 72%, transparent);
+}
+
+.role-spec-editor-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-label);
+  color: var(--mute);
+}
+
+.role-spec-editor-meta .near-limit {
+  color: var(--amber);
+}
+
+.role-spec-editor-field-error {
+  margin: 8px 0 0;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-normal);
+  color: var(--red-deep);
+}
+
+.role-spec-editor-preview {
+  min-height: clamp(410px, 52vh, 610px);
+  padding: 4px 22px 22px;
+  background: var(--bg-2);
+}
+
+.role-spec-editor-preview .role-sections {
+  gap: 0;
+}
+
+.role-spec-editor-preview-empty {
+  display: flex;
+  min-height: 400px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--mute);
+  text-align: center;
+}
+
+.role-spec-editor-preview-empty strong {
+  margin-top: 5px;
+  font-size: var(--fs-body);
+  color: var(--ink-2);
+}
+
+.role-spec-editor-preview-empty span {
+  font-size: var(--fs-caption);
+}
+
+.role-spec-editor-actions {
+  position: sticky;
+  top: 124px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in oklab, var(--bg-2) 94%, transparent);
+  box-shadow: 0 12px 24px -24px color-mix(in oklab, var(--ink) 45%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.role-spec-editor-action-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.role-spec-editor-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-caption);
+  color: var(--mute);
+}
+
+.role-spec-editor-save-state > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.role-spec-editor-save-state.is-dirty {
+  color: var(--ink-2);
+}
+
+.role-spec-editor-save-state.is-dirty > span {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--amber) 12%, transparent);
 }
 
 .role-spec-layout .role-highlights {
@@ -551,9 +865,59 @@
 @media (max-width: 720px) {
   .role-spec-document-head,
   .role-spec-read,
-  .role-spec-document .role-edit-inline {
+  .role-spec-editor-intro,
+  .role-spec-editor-field {
     padding-right: 18px;
     padding-left: 18px;
+  }
+
+  .role-spec-editor-error,
+  .role-spec-editor-document {
+    margin-right: 18px;
+    margin-left: 18px;
+  }
+
+  .role-spec-editor-document-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .role-spec-editor-tabs {
+    align-self: flex-start;
+  }
+
+  .role-spec-editor-write {
+    padding: 10px;
+  }
+
+  .role-spec-editor-write .taali-textarea {
+    min-height: 420px;
+    padding: 13px;
+  }
+
+  .role-spec-editor-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .role-spec-editor-preview {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .role-spec-editor-actions {
+    align-items: stretch;
+    flex-direction: column;
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .role-spec-editor-action-buttons {
+    width: 100%;
+  }
+
+  .role-spec-editor-action-buttons .taali-btn-primary {
+    flex: 1;
   }
 
   .role-spec-controls {

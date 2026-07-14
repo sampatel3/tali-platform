@@ -1108,6 +1108,7 @@ def test_job_spec_upload_generates_interview_focus(client, db, monkeypatch):
     detail = client.get(f"/api/v1/roles/{role['id']}", headers=headers)
     assert detail.status_code == 200, detail.text
     assert detail.json()["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
+    assert detail.json()["job_spec_manually_edited_at"] is not None
 
 
 def test_job_spec_upload_succeeds_when_interview_focus_cannot_run(client, monkeypatch):

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, PositiveInt
 
 ROLE_DESCRIPTION_MAX_LENGTH = 20000
 
@@ -211,6 +211,7 @@ class RoleResponse(BaseModel):
     job_spec_filename: Optional[str] = None
     job_spec_text: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None
+    job_spec_manually_edited_at: Optional[datetime] = None
     job_spec_present: bool = False
     interview_focus: Optional[InterviewFocus] = None
     interview_focus_generated_at: Optional[datetime] = None
@@ -283,6 +284,40 @@ class RoleClientUpdate(BaseModel):
 
 class RoleTaskLinkRequest(BaseModel):
     task_id: int = Field(gt=0)
+
+
+class RoleJobSpecUpdate(BaseModel):
+    """One truthful save contract for the role title, spec and linked tasks.
+
+    ``task_ids`` is a PATCH-like optional field even though the endpoint is a
+    PUT: older/editor-only clients can update the spec without accidentally
+    clearing assessment configuration they did not load. An explicitly
+    supplied empty list still means "unlink every removable task".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    job_spec_text: str = Field(min_length=60, max_length=100_000)
+    task_ids: Optional[list[PositiveInt]] = Field(default=None, max_length=100)
+
+
+class JobSpecCriteriaDiff(BaseModel):
+    added: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+    criteria_count: int = 0
+
+
+class JobSpecRescreenEstimate(BaseModel):
+    count: int = 0
+    est_cost_usd: float = 0.0
+
+
+class RoleJobSpecUpdateResponse(BaseModel):
+    applied: bool = True
+    role: RoleResponse
+    diff: JobSpecCriteriaDiff
+    would_rescreen: JobSpecRescreenEstimate
 
 
 class ApplicationCreate(BaseModel):
