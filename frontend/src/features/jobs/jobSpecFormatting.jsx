@@ -24,6 +24,7 @@ const SPEC_META_LABELS = {
 
 const WORKABLE_SECTION_LABELS = [
   'about',
+  'about the role',
   'benefits',
   'benefits & growth opportunities',
   'candidate profile',

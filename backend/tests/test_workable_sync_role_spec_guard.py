@@ -7,6 +7,7 @@ decision for the role. The role-import guard re-derives only on a real change.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.components.integrations.workable.service import WorkableService
@@ -240,3 +241,164 @@ def test_empty_detail_fetch_still_accepts_description_from_list_payload(db):
     assert synced_role.workable_job_data["description"] == list_job["description"]
     upload_mock.assert_called_once()
     derive_mock.assert_called_once()
+
+
+def test_manual_spec_override_survives_workable_sync_while_metadata_refreshes(db):
+    org = Organization(name="O", slug="o-manual-workable-spec")
+    db.add(org)
+    db.flush()
+    edited_at = datetime.now(timezone.utc)
+    manual_spec = "Recruiter-authored role specification that must remain authoritative."
+    role = Role(
+        organization_id=org.id,
+        source="workable",
+        workable_job_id="JOBMANUAL",
+        name="Old ATS title",
+        description=manual_spec,
+        job_spec_text=manual_spec,
+        job_spec_manually_edited_at=edited_at,
+        workable_job_data={"shortcode": "JOBMANUAL", "state": "published"},
+        screening_pack_template={},
+        tech_interview_pack_template={},
+    )
+    db.add(role)
+    db.flush()
+
+    svc = WorkableSyncService(WorkableService(access_token="x", subdomain="t"))
+    job = {
+        "shortcode": "JOBMANUAL",
+        "title": "Fresh ATS title",
+        "state": "closed",
+        "description": "Fresh external description that must not replace the override.",
+    }
+    with patch.object(
+        svc,
+        "_job_details_for_role",
+        return_value={"description": job["description"]},
+    ), patch.object(svc, "_refresh_role_stages"), patch(
+        "app.components.integrations.workable.sync_service.upload_bytes_to_s3"
+    ) as upload_mock, patch(
+        "app.services.role_criteria_service.sync_derived_criteria"
+    ) as derive_mock:
+        synced_role, created = svc._upsert_role(db, org, job)
+
+    assert created is False
+    assert synced_role.name == "Fresh ATS title"
+    assert synced_role.workable_job_data["state"] == "closed"
+    assert synced_role.job_spec_text == manual_spec
+    assert synced_role.description == manual_spec
+    assert synced_role.job_spec_manually_edited_at == edited_at
+    upload_mock.assert_not_called()
+    derive_mock.assert_not_called()
+
+
+def test_legacy_taali_override_is_inferred_before_workable_payload_replacement(db):
+    org = Organization(name="O", slug="o-legacy-manual-workable-spec")
+    db.add(org)
+    db.flush()
+    cached_job_data = {
+        "shortcode": "JOBLEGACYMANUAL",
+        "title": "Old ATS title",
+        "state": "published",
+        "details": {"description": "The previous ATS-owned description."},
+    }
+    previous_ats_spec = _format_job_spec_from_api(cached_job_data)
+    manual_spec = (
+        "Legacy recruiter-authored specification with authoritative requirements "
+        "that differ from the cached Workable description."
+    )
+    role = Role(
+        organization_id=org.id,
+        source="workable",
+        workable_job_id="JOBLEGACYMANUAL",
+        name="Old ATS title",
+        # Before migration 161 uploads/agent edits changed job_spec_text but
+        # left description at its last ATS-synced value.
+        description=previous_ats_spec,
+        job_spec_text=manual_spec,
+        job_spec_uploaded_at=datetime.now(timezone.utc),
+        workable_job_data=cached_job_data,
+        screening_pack_template={},
+        tech_interview_pack_template={},
+    )
+    db.add(role)
+    db.flush()
+
+    svc = WorkableSyncService(WorkableService(access_token="x", subdomain="t"))
+    job = {
+        "shortcode": "JOBLEGACYMANUAL",
+        "title": "Fresh ATS title",
+        "state": "closed",
+        "description": "Fresh external text that must not overwrite the legacy edit.",
+    }
+    with patch.object(
+        svc,
+        "_job_details_for_role",
+        return_value={"description": job["description"]},
+    ), patch.object(svc, "_refresh_role_stages"), patch(
+        "app.components.integrations.workable.sync_service.upload_bytes_to_s3"
+    ) as upload_mock, patch(
+        "app.services.role_criteria_service.sync_derived_criteria"
+    ) as derive_mock:
+        synced_role, created = svc._upsert_role(db, org, job)
+
+    assert created is False
+    assert synced_role.name == "Fresh ATS title"
+    assert synced_role.workable_job_data["state"] == "closed"
+    assert synced_role.job_spec_text == manual_spec
+    assert synced_role.description == manual_spec
+    assert synced_role.job_spec_manually_edited_at is not None
+    upload_mock.assert_not_called()
+    derive_mock.assert_not_called()
+
+
+def test_legacy_unmarked_workable_owned_spec_still_refreshes(db):
+    org = Organization(name="O", slug="o-legacy-workable-owned-spec")
+    db.add(org)
+    db.flush()
+    cached_job_data = {
+        "shortcode": "JOBLEGACYATS",
+        "title": "ATS-owned role",
+        "state": "published",
+        "details": {"description": "The previous ATS-owned description."},
+    }
+    previous_ats_spec = _format_job_spec_from_api(cached_job_data)
+    role = Role(
+        organization_id=org.id,
+        source="workable",
+        workable_job_id="JOBLEGACYATS",
+        name="ATS-owned role",
+        description=previous_ats_spec,
+        job_spec_text=previous_ats_spec,
+        workable_job_data=cached_job_data,
+        screening_pack_template={},
+        tech_interview_pack_template={},
+    )
+    db.add(role)
+    db.flush()
+
+    svc = WorkableSyncService(WorkableService(access_token="x", subdomain="t"))
+    job = {
+        "shortcode": "JOBLEGACYATS",
+        "title": "Renamed ATS-owned role",
+        "state": "closed",
+        "description": "A fresh ATS-owned description.",
+    }
+    with patch.object(
+        svc,
+        "_job_details_for_role",
+        return_value={"description": job["description"]},
+    ), patch.object(svc, "_refresh_role_stages"), patch(
+        "app.components.integrations.workable.sync_service.upload_bytes_to_s3",
+        return_value="s3://fake/job-spec.txt",
+    ), patch(
+        "app.services.role_criteria_service.sync_derived_criteria"
+    ):
+        synced_role, created = svc._upsert_role(db, org, job)
+
+    assert created is False
+    assert synced_role.name == "Renamed ATS-owned role"
+    assert "A fresh ATS-owned description." in synced_role.job_spec_text
+    assert synced_role.job_spec_text != previous_ats_spec
+    assert synced_role.description == synced_role.job_spec_text
+    assert synced_role.job_spec_manually_edited_at is None

@@ -29,6 +29,17 @@ Develop and maintain ontologies and taxonomies across domains.
 Keep snake_case_field names stable across integrations.`;
 
 describe('job spec formatting', () => {
+  it('treats “About the role” as one heading instead of leaking “the role” into the copy', () => {
+    const parsed = parseJobSpec(`## About the role
+Build reliable data products for the business.
+
+## Requirements
+- AWS Glue experience`);
+
+    const description = parsed.sections.find((section) => section.title === 'Description');
+    expect(description.lines).toEqual(['Build reliable data products for the business.']);
+  });
+
   it('renders nested and single emphasis without leaking markdown markers', () => {
     const parsed = parseJobSpec(DATA_MODELER_SPEC, 'Data Modeler');
     const description = parsed.sections.find((section) => section.title === 'Description');

@@ -49,6 +49,7 @@ from ....services.fit_matching_service import (
 )
 from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import build_role_interview_pack_templates
+from ....services.job_spec_override_service import has_manual_job_spec_override
 from ....services.pre_screening_service import refresh_pre_screening_fields
 from ....services.taali_scoring import normalize_score_100
 from .service import WorkableRateLimitError, WorkableService
@@ -261,6 +262,25 @@ def _merge_cached_workable_job_data(cached: dict | None, current: dict) -> dict:
             if isinstance(wrapper, dict):
                 merged[wrapper_key] = _without_stale_spec_keys(wrapper)
     return merged
+
+
+def _workable_payload_has_spec_content(value: object) -> bool:
+    """Whether a cached Workable payload is rich enough for provenance checks."""
+
+    if not isinstance(value, dict):
+        return False
+    for key, item in value.items():
+        if key in ("description", "full_description", "requirements", "benefits"):
+            if isinstance(item, str) and item.strip():
+                return True
+            if isinstance(item, dict) and any(
+                isinstance(item.get(part), str) and item.get(part).strip()
+                for part in ("text", "html", "content")
+            ):
+                return True
+        if key in ("job", "details") and _workable_payload_has_spec_content(item):
+            return True
+    return False
 
 
 def _format_job_spec_from_api(job_data: dict) -> str:
@@ -1754,6 +1774,21 @@ class WorkableSyncService:
             )
             db.add(role)
             created = True
+        previous_job_data = (
+            role.workable_job_data
+            if isinstance(role.workable_job_data, dict)
+            else None
+        )
+        previous_ats_spec = (
+            _format_job_spec_from_api(previous_job_data)
+            if _workable_payload_has_spec_content(previous_job_data)
+            else None
+        )
+        manual_spec_override = has_manual_job_spec_override(
+            role,
+            ats_source="workable",
+            cached_ats_spec=previous_ats_spec,
+        )
         role.deleted_at = None  # restore if was soft-deleted
         role.source = "workable"
         role.workable_job_id = job_id or role.workable_job_id
@@ -1769,7 +1804,7 @@ class WorkableSyncService:
             next_job_data = {**job, "details": details}
         else:
             next_job_data = _merge_cached_workable_job_data(
-                role.workable_job_data if isinstance(role.workable_job_data, dict) else None,
+                previous_job_data,
                 job,
             )
         role.workable_job_data = sanitize_json_for_storage(next_job_data)
@@ -1788,7 +1823,14 @@ class WorkableSyncService:
         preserve_existing_spec_after_empty_detail = bool(
             not details and not list_description and prev_job_spec.strip()
         )
-        if formatted_spec and not preserve_existing_spec_after_empty_detail:
+        if manual_spec_override:
+            logger.info(
+                "Preserving recruiter-edited job spec during Workable sync "
+                "role_id=%s workable_job_id=%s",
+                role.id,
+                role.workable_job_id,
+            )
+        elif formatted_spec and not preserve_existing_spec_after_empty_detail:
             safe_spec = sanitize_text_for_storage(formatted_spec)
             role.job_spec_text = safe_spec
             role.description = safe_spec

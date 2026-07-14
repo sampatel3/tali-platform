@@ -100,6 +100,10 @@ class Role(Base):
     job_spec_filename = Column(String, nullable=True)
     job_spec_text = Column(Text, nullable=True)
     job_spec_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    # Once a recruiter edits/uploads the job spec in Taali, that text is the
+    # deliberate source of truth. ATS syncs may still refresh title and source
+    # metadata, but must not silently replace the recruiter's edited spec.
+    job_spec_manually_edited_at = Column(DateTime(timezone=True), nullable=True)
     # Recruiter intent lives in ``role_criteria`` rows now (see alembic
     # 066 + 068). The legacy ``additional_requirements`` text column was
     # dropped in 068; readers consume :func:`render_role_intent_block`

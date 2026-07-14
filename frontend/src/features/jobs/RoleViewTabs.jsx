@@ -28,7 +28,7 @@ export function useRoleView() {
   return [activeView, setActiveView];
 }
 
-export const RoleViewTabs = ({ activeView }) => {
+export const RoleViewTabs = ({ activeView, onBeforeNavigate }) => {
   const location = useLocation();
   const reduced = useReducedMotionSync();
   const layoutId = `role-view-tab-${useId().replace(/:/g, '')}`;
@@ -50,6 +50,7 @@ export const RoleViewTabs = ({ activeView }) => {
               to={hrefFor(tab.id)}
               className={`vtab ${active ? 'on' : ''}`.trim()}
               aria-current={active ? 'page' : undefined}
+              onClick={(event) => onBeforeNavigate?.(event, tab.id)}
             >
               {tab.label}
               {active ? (
