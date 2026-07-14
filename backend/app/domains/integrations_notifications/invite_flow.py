@@ -354,7 +354,9 @@ def deliver_pending_assessment_invite(
             joinedload(Assessment.organization),
         )
         .filter(Assessment.id == int(assessment_id))
-        .with_for_update()
+        # joinedload emits nullable outer joins. PostgreSQL must be told to
+        # lock only the Assessment outbox row, not the related payload rows.
+        .with_for_update(of=Assessment)
         .one_or_none()
     )
     if assessment is None:

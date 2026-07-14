@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Query
 
 from app.models.assessment import Assessment
 from app.models.agent_needs_input import AgentNeedsInput
@@ -15,6 +17,22 @@ from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
+
+
+def _capture_postgres_lock_sql(monkeypatch) -> list[str]:
+    """Compile production ORM lock queries with PostgreSQL, not test SQLite."""
+    compiled: list[str] = []
+    original = Query.with_for_update
+
+    def _record(query, *args, **kwargs):
+        locked = original(query, *args, **kwargs)
+        compiled.append(
+            str(locked.statement.compile(dialect=postgresql.dialect()))
+        )
+        return locked
+
+    monkeypatch.setattr(Query, "with_for_update", _record)
+    return compiled
 
 
 def _make_org(
@@ -170,7 +188,9 @@ def test_nested_rollback_discards_invite_intent_and_never_kicks_worker(db):
     assert assessment.invite_email_status is None
 
 
-def test_broker_queue_is_idempotent_and_does_not_claim_candidate_contact(db):
+def test_broker_queue_is_idempotent_and_does_not_claim_candidate_contact(
+    db, monkeypatch
+):
     from app.domains.integrations_notifications.invite_flow import (
         INVITE_PENDING_DISPATCH,
         INVITE_QUEUED,
@@ -182,6 +202,7 @@ def test_broker_queue_is_idempotent_and_does_not_claim_candidate_contact(db):
     assessment.invite_email_status = INVITE_PENDING_DISPATCH
     assessment.invite_email_reply_to = "recruiter@acme.test"
     db.commit()
+    lock_sql = _capture_postgres_lock_sql(monkeypatch)
     with patch(
         "app.domains.integrations_notifications.invite_flow._send_taali_invite_email"
     ) as email:
@@ -202,6 +223,12 @@ def test_broker_queue_is_idempotent_and_does_not_claim_candidate_contact(db):
     assert assessment.invite_email_status == INVITE_QUEUED
     assert assessment.invite_sent_at is None
     assert assessment.application.pipeline_stage == "review"
+    assert len(lock_sql) == 2
+    assert all("LEFT OUTER JOIN" in statement for statement in lock_sql)
+    assert all(
+        statement.rsplit("FOR UPDATE", 1)[-1].strip() == "OF assessments"
+        for statement in lock_sql
+    )
     assert (
         db.query(CandidateApplicationEvent)
         .filter(
@@ -232,6 +259,48 @@ def test_pending_dispatch_sweep_recovers_lost_postcommit_kick(db):
         "recovered_claims": 0,
     }
     kick.assert_called_once_with(int(assessment.id))
+
+
+def test_retryable_invite_sweep_scopes_postgres_lock_and_recovers_due_row(
+    db, monkeypatch
+):
+    from app.components.notifications import tasks as notification_tasks
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.invite_email_status = "retry_wait"
+    assessment.invite_email_next_attempt_at = datetime.now(
+        timezone.utc
+    ) - timedelta(seconds=1)
+    db.commit()
+
+    lock_sql = _capture_postgres_lock_sql(monkeypatch)
+    monkeypatch.setattr(
+        notification_tasks,
+        "_default_worker_resend_ready",
+        lambda: (True, None),
+    )
+    monkeypatch.setattr("app.platform.database.SessionLocal", lambda: db)
+    with patch.object(notification_tasks.send_assessment_email, "delay") as send:
+        result = notification_tasks.sweep_retryable_assessment_invites.run(
+            limit=10
+        )
+
+    assert result == {
+        "gated": False,
+        "reason": None,
+        "scanned": 1,
+        "leased": 1,
+        "dispatched": 1,
+        "failed": 0,
+    }
+    send.assert_called_once()
+    assert len(lock_sql) == 1
+    assert "LEFT OUTER JOIN" in lock_sql[0]
+    assert (
+        lock_sql[0].rsplit("FOR UPDATE", 1)[-1].strip()
+        == "OF assessments SKIP LOCKED"
+    )
 
 
 def test_provider_success_atomically_confirms_pipeline_and_handoff_outbox(

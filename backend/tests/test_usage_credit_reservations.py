@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Query
+
 from app.models.billing_credit_ledger import BillingCreditLedger
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -33,6 +36,22 @@ from app.services.usage_credit_reservation_recovery import (
 from app.services.usage_metering_service import record_event
 
 
+def _capture_postgres_lock_sql(monkeypatch) -> list[str]:
+    """Compile production ORM lock queries with PostgreSQL, not test SQLite."""
+    compiled: list[str] = []
+    original = Query.with_for_update
+
+    def _record(query, *args, **kwargs):
+        locked = original(query, *args, **kwargs)
+        compiled.append(
+            str(locked.statement.compile(dialect=postgresql.dialect()))
+        )
+        return locked
+
+    monkeypatch.setattr(Query, "with_for_update", _record)
+    return compiled
+
+
 def _org(db, *, balance: int) -> Organization:
     row = Organization(
         name="Reserved Org",
@@ -42,6 +61,68 @@ def _org(db, *, balance: int) -> Organization:
     db.add(row)
     db.commit()
     return row
+
+
+def test_stale_reaper_scopes_postgres_lock_to_hold_rows(db, monkeypatch):
+    lock_sql = _capture_postgres_lock_sql(monkeypatch)
+
+    result = release_stale_credit_reservations(
+        db,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert result["scanned"] == 0
+    assert len(lock_sql) == 1
+    assert "LEFT OUTER JOIN" in lock_sql[0]
+    assert (
+        lock_sql[0].rsplit("FOR UPDATE", 1)[-1].strip()
+        == "OF billing_credit_ledger SKIP LOCKED"
+    )
+
+
+def test_stale_reaper_acquires_organization_locks_in_global_order(
+    db, monkeypatch
+):
+    from app.services import usage_credit_reservation_recovery as recovery
+
+    first_org = _org(db, balance=100)
+    second_org = _org(db, balance=101)
+    now = datetime.now(timezone.utc)
+    # The newer low-ID organization is deliberately second in query order.
+    db.add_all(
+        [
+            BillingCreditLedger(
+                organization_id=second_org.id,
+                delta=-10,
+                balance_after=90,
+                reason="reservation:assessment",
+                external_ref="usage-reservation:deadlock-order:second",
+                created_at=now - timedelta(hours=4),
+            ),
+            BillingCreditLedger(
+                organization_id=first_org.id,
+                delta=-10,
+                balance_after=90,
+                reason="reservation:assessment",
+                external_ref="usage-reservation:deadlock-order:first",
+                created_at=now - timedelta(hours=3),
+            ),
+        ]
+    )
+    db.commit()
+    lock_order: list[int] = []
+
+    def _record_release(_db, *, reservation, reason):
+        lock_order.append(int(reservation.organization_id))
+        return 0
+
+    monkeypatch.setattr(recovery, "release_credit_reservation", _record_release)
+
+    result = recovery.release_stale_credit_reservations(db, now=now)
+
+    assert result["scanned"] == 2
+    assert lock_order == sorted(lock_order)
+    assert lock_order == [int(first_org.id), int(second_org.id)]
 
 
 def test_hard_reservation_settles_to_actual_charge(db, monkeypatch):

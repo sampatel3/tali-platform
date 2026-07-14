@@ -939,7 +939,10 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
             )
             .order_by(Assessment.updated_at.asc(), Assessment.id.asc())
             .limit(bounded_limit)
-            .with_for_update(skip_locked=True)
+            # PostgreSQL rejects an unscoped FOR UPDATE when joinedload adds
+            # nullable outer-join relations.  Only the durable outbox row is
+            # part of the lease; candidate/task/org are read-only payloads.
+            .with_for_update(of=Assessment, skip_locked=True)
             .all()
         )
         for row in rows:
