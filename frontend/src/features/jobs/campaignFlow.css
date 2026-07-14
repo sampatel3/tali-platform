@@ -1,0 +1,247 @@
+/* Reach-out wizard (ReachOutDialog) + in-context campaign monitor
+   (CampaignsMonitorPanel). Purple tokens only — no red/amber/green. */
+
+/* ---------- Reach-out dialog ---------- */
+.rc-dialog { max-width: 520px; }
+
+.rc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: var(--fs-sm, 0.875rem);
+  color: var(--text, inherit);
+}
+
+.rc-center {
+  align-items: center;
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.rc-lead {
+  margin: 0;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.rc-recipients {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.rc-recipients li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--purple-soft, rgba(124, 92, 255, 0.08));
+}
+
+.rc-recipient-name { font-weight: 600; }
+.rc-recipient-email { opacity: 0.6; font-size: 0.8125rem; }
+.rc-recipient-more { justify-content: center; opacity: 0.6; background: transparent; }
+
+.rc-audience {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.rc-audience-added {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--purple-soft, rgba(124, 92, 255, 0.12));
+  color: var(--purple, #7c5cff);
+}
+
+.rc-audience-skip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  opacity: 0.7;
+  font-size: 0.8125rem;
+}
+
+.rc-send-headline {
+  margin: 0;
+  font-size: var(--fs-md, 1rem);
+  line-height: 1.4;
+}
+
+.rc-exclusions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8125rem;
+  opacity: 0.7;
+}
+
+.rc-error {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--purple, #7c5cff);
+  background: var(--purple-soft, rgba(124, 92, 255, 0.08));
+  color: var(--purple-2, var(--purple, #7c5cff));
+  font-size: 0.8125rem;
+}
+
+.rc-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.rc-done-check {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--purple-soft, rgba(124, 92, 255, 0.12));
+  color: var(--purple, #7c5cff);
+}
+
+/* ---------- Campaign monitor panel ---------- */
+.cmp-panel-body { padding: 12px 0 4px; }
+
+.cmp-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.cmp-help {
+  margin: 0;
+  font-size: 0.8125rem;
+  opacity: 0.7;
+  line-height: 1.45;
+}
+
+.cmp-count {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: var(--purple-soft, rgba(124, 92, 255, 0.12));
+  color: var(--purple, #7c5cff);
+}
+
+.cmp-empty {
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px dashed var(--border, rgba(0, 0, 0, 0.12));
+  font-size: 0.8125rem;
+  opacity: 0.75;
+}
+
+.cmp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cmp-item {
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.cmp-item-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.cmp-item-head:hover { background: var(--purple-soft, rgba(124, 92, 255, 0.06)); }
+
+.cmp-item-name { font-weight: 600; }
+
+.cmp-item-summary {
+  margin-left: auto;
+  font-size: 0.8125rem;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.cmp-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  text-transform: capitalize;
+  background: var(--purple-soft, rgba(124, 92, 255, 0.12));
+  color: var(--purple, #7c5cff);
+}
+
+.cmp-chip-sending,
+.cmp-chip-generating { background: var(--purple, #7c5cff); color: #fff; }
+
+.caret.open { transform: rotate(180deg); }
+
+.cmp-funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 14px;
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+
+.cmp-funnel-row {
+  display: grid;
+  grid-template-columns: 78px 1fr 32px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8125rem;
+}
+
+.cmp-funnel-label { opacity: 0.7; }
+
+.cmp-funnel-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--purple-soft, rgba(124, 92, 255, 0.12));
+  overflow: hidden;
+}
+
+.cmp-funnel-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--purple, #7c5cff);
+  transition: width 0.3s ease;
+}
+
+.cmp-funnel-value { text-align: right; font-variant-numeric: tabular-nums; }
+
+.cmp-funnel-foot {
+  display: flex;
+  gap: 12px;
+  font-size: 0.75rem;
+  opacity: 0.6;
+  padding-top: 2px;
+}
