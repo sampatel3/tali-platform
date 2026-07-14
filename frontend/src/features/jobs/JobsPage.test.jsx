@@ -383,6 +383,21 @@ describe('JobsPage entrance motion', () => {
     expect(within(rejectedCell).getByText('4')).toBeInTheDocument();
   });
 
+  it('shows a "Live" badge only on roles with a live public job page', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        { ...baseRoles[0], id: 101, name: 'Published Role', is_published: true },
+        { ...baseRoles[0], id: 102, name: 'Unpublished Role', is_published: false },
+      ],
+    });
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const liveCard = (await screen.findByText('Published Role')).closest('.job-card');
+    const draftCard = screen.getByText('Unpublished Role').closest('.job-card');
+    expect(within(liveCard).getByText('Live')).toBeInTheDocument();
+    expect(within(draftCard).queryByText('Live')).not.toBeInTheDocument();
+  });
+
   it('does not re-fire the card stagger when a filter changes', async () => {
     setReducedMotion(false);
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);

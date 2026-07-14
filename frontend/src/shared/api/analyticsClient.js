@@ -9,6 +9,10 @@ export const analytics = {
   // All-time decisions + Workable-stage outcomes grouped by role — backs the
   // by-role breakdown rendered inside the Hub's funnel accordion.
   decisionsBreakdown: (params = {}) => api.get('/analytics/decisions-breakdown', { params }),
+  // BILLED spend per funnel outcome ($ per pre-screen / score / advanced / hire)
+  // over the selected window — the unit-economics view next to the Outcomes
+  // funnel. Role/window scoped like the rest of the Analytics feeds.
+  costPerOutcome: (params = {}) => api.get('/analytics/cost-per-outcome', { params }),
   // Daily decisions + notification-backlog curve (role-filterable) plus the
   // current Workable-error requeue callout — backs the Home activity-trends section.
   activityTimeseries: (params = {}) => api.get('/analytics/activity-timeseries', { params }),

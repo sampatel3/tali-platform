@@ -179,6 +179,11 @@ class RoleResponse(BaseModel):
     # locally only (no sync). True for published jobs and manual roles. The UI
     # uses this to grey out the role + disable Workable-write toggles.
     workable_job_live: bool = True
+    # True when the role has an OPEN public job page (Taali's own /job/{token}
+    # apply page) — i.e. candidates can apply and the careers feed carries it.
+    # Distinct from ``workable_job_state`` (the external ATS). Drives the Jobs
+    # list "Live" badge. List path only; detail responses leave it False.
+    is_published: bool = False
     job_spec_filename: Optional[str] = None
     job_spec_text: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None

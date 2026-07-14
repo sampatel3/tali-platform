@@ -8,9 +8,64 @@
 
 import React, { useMemo } from 'react';
 
-import { safeNum, pct, fmtUsd, monthShort } from './analyticsFormat';
+import { safeNum, pct, fmtUsd, fmtUsdFine, monthShort } from './analyticsFormat';
 import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { MotionProgress, cappedStaggerDelay } from '../../shared/motion';
+
+// Cost-per-outcome: BILLED spend per funnel unit (never raw model cost). Four
+// tiles — direct unit cost (per pre-screen, per score) and fully-loaded cost
+// per outcome (per advanced, per hire). A unit is "—" (proper empty state) when
+// no candidates hit that stage in the window, so we never divide by zero.
+const CPO_TILES = [
+  { key: 'pre_screen', label: 'Per pre-screen', noun: 'pre-screened' },
+  { key: 'score', label: 'Per score', noun: 'scored' },
+  { key: 'advanced', label: 'Per advanced', noun: 'advanced' },
+  { key: 'hired', label: 'Per hire', noun: 'hired' },
+];
+
+const CostPerOutcome = ({ cost }) => {
+  const per = cost?.per_outcome || {};
+  const billed = safeNum(cost?.billed_spend_cents);
+  const anyData = CPO_TILES.some((t) => safeNum(per[t.key]?.count) > 0) || billed > 0;
+  return (
+    <div className="an-card">
+      <div className="ch">
+        <div>
+          <div className="ct2">Cost per outcome</div>
+          <div className="cd">What your billed agent spend buys, per funnel unit — over this window</div>
+        </div>
+      </div>
+      {anyData ? (
+        <>
+          <div className="an-cpo">
+            {CPO_TILES.map((t) => {
+              const cell = per[t.key] || {};
+              const count = safeNum(cell.count);
+              const hasUnit = cell.cost_cents != null && count > 0;
+              return (
+                <div className="an-cpo-cell" key={t.key}>
+                  <div className="k">{t.label}</div>
+                  <div className={`v${hasUnit ? '' : ' muted'}`}>
+                    {hasUnit ? fmtUsdFine(cell.cost_cents) : '—'}
+                  </div>
+                  <div className="s">{count.toLocaleString()} {t.noun}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="an-cpo-foot">
+            {fmtUsd(billed)} billed this window. Per pre-screen and per score are direct
+            unit costs; per advanced and per hire load all spend over the outcome.
+          </div>
+        </>
+      ) : (
+        <div className="an-empty">
+          No billed agent spend in this window yet — cost-per-outcome appears once the agent scores candidates.
+        </div>
+      )}
+    </div>
+  );
+};
 
 const FunnelRow = ({ stage, prev, isLast, index }) => {
   const ofApplied = Math.max(0, Math.min(100, safeNum(stage.percentage)));
@@ -82,7 +137,7 @@ const TrendBars = ({ months, valueKey, height = 150 }) => {
   );
 };
 
-export const OutcomesTab = ({ summary, breakdown, trend, rolesBreakdown }) => {
+export const OutcomesTab = ({ summary, breakdown, trend, rolesBreakdown, cost }) => {
   const funnel = useMemo(() => (
     Array.isArray(summary?.funnel) && summary.funnel.length
       ? summary.funnel
@@ -157,6 +212,9 @@ export const OutcomesTab = ({ summary, breakdown, trend, rolesBreakdown }) => {
           <div className="an-narrator">{summary.narrator.paragraph}</div>
         ) : null}
       </div>
+
+      {/* Cost per outcome — unit economics, the funnel's natural neighbour. */}
+      <CostPerOutcome cost={cost} />
 
       {/* Advance→hire bigstat + override-rate-over-time bars. */}
       <div className="an-grid2">

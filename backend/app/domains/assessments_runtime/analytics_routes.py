@@ -27,7 +27,9 @@ from ...components.scoring.assessment_metrics import (
 from ...models.assessment_experiment import AssessmentExperiment
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
+from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
+from ...models.usage_event import UsageEvent
 from ...models.user import User
 from .pipeline_service import (
     FUNNEL_BUCKETS,
@@ -882,6 +884,149 @@ def get_reporting_summary(
         "anomalies": anomalies,
         "funnel": funnel,
         "score_buckets": score_buckets,
+    }
+
+
+# ----------------------------------------------------------------------------
+# Cost-per-outcome — unit economics that sit next to the Outcomes funnel.
+# Answers "what does our agent spend buy, per funnel unit" using the same
+# BILLED-spend basis the Fleet tab shows (credits_charged, never raw Anthropic
+# cost / model names). Two kinds, kept distinct exactly like
+# scripts/cost_per_outcome.py:
+#   DIRECT  (pre-screen, score) = billed spend on THAT feature ÷ the candidates
+#           it billed for, in-window. Cost + count share one source
+#           (usage_events) so they reconcile by construction.
+#   LOADED  (advanced, hire)    = TOTAL billed spend in the window ÷ the
+#           timestamped stage/outcome transitions in the window — advancing and
+#           hiring burn no tokens themselves, so this amortises ALL spend over
+#           the funnel result (the classic "$ per hire").
+# Org-scoped + authed; role/window scoped to match the Analytics controls.
+# ----------------------------------------------------------------------------
+
+
+@router.get("/cost-per-outcome")
+def get_cost_per_outcome(
+    role_id: Optional[int] = Query(default=None),
+    date_from: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
+    date_to: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """BILLED spend per funnel outcome over the selected window.
+
+    Per-unit is ``null`` (never a crash) when the denominator count is 0.
+    """
+    org_id = current_user.organization_id
+    parsed_from = _parse_filter_datetime(date_from, end_of_day=False)
+    parsed_to = _parse_filter_datetime(date_to, end_of_day=True)
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise HTTPException(status_code=400, detail="date_from must be before date_to")
+    window_label = "All time"
+    if parsed_from is not None:
+        days = max(1, int(((parsed_to or datetime.now(timezone.utc)) - parsed_from).total_seconds() / 86400))
+        window_label = f"Last {days} days"
+    window = {
+        "label": window_label,
+        "from": parsed_from.isoformat() if parsed_from else None,
+        "to": parsed_to.isoformat() if parsed_to else None,
+    }
+
+    def _unit(cost_micro: int, count: int) -> Optional[float]:
+        # Per-unit BILLED cost in CENTS (fractional). None when count == 0 so a
+        # division-by-zero surfaces as an empty state, not a 500. 1c = 10_000 micro.
+        if not count:
+            return None
+        return round((int(cost_micro or 0) / 10_000) / count, 4)
+
+    empty = {
+        "window": window,
+        "currency": "usd_cents",
+        "billed_spend_cents": 0,
+        "counts": {"pre_screened": 0, "scored": 0, "advanced": 0, "hired": 0},
+        "per_outcome": {
+            "pre_screen": {"cost_cents": None, "count": 0},
+            "score": {"cost_cents": None, "count": 0},
+            "advanced": {"cost_cents": None, "count": 0},
+            "hired": {"cost_cents": None, "count": 0},
+        },
+    }
+    if not org_id:
+        return empty
+
+    # ── BILLED spend + billed-for candidate count, by feature ──────────────
+    # One GROUP BY over usage_events. credits_charged is the marked-up billed
+    # figure the cap is denominated in; distinct entity_id is the candidates the
+    # feature actually billed for (the direct-cost denominator).
+    spend_q = db.query(
+        UsageEvent.feature,
+        func.coalesce(func.sum(UsageEvent.credits_charged), 0),
+        func.count(func.distinct(UsageEvent.entity_id)),
+    ).filter(UsageEvent.organization_id == org_id)
+    if role_id is not None:
+        spend_q = spend_q.filter(UsageEvent.role_id == role_id)
+    if parsed_from is not None:
+        spend_q = spend_q.filter(UsageEvent.created_at >= parsed_from)
+    if parsed_to is not None:
+        spend_q = spend_q.filter(UsageEvent.created_at <= parsed_to)
+    spend_rows = spend_q.group_by(UsageEvent.feature).all()
+
+    total_micro = 0
+    feat_micro: Dict[str, int] = {}
+    feat_entities: Dict[str, int] = {}
+    for feature, micro, entities in spend_rows:
+        micro = int(micro or 0)
+        total_micro += micro
+        feat_micro[str(feature)] = micro
+        feat_entities[str(feature)] = int(entities or 0)
+
+    pre_micro = feat_micro.get("prescreen", 0)
+    score_micro = feat_micro.get("score", 0)
+    pre_n = feat_entities.get("prescreen", 0)
+    score_n = feat_entities.get("score", 0)
+
+    # ── Fully-loaded outcomes — timestamped transitions in-window ──────────
+    # Distinct application_id on the transition events (a candidate that flips to
+    # 'advanced' twice counts once). Constant two queries — never per-role N+1.
+    def _transition_count(event_type: str, column, value: str) -> int:
+        q = db.query(
+            func.count(func.distinct(CandidateApplicationEvent.application_id))
+        ).filter(
+            CandidateApplicationEvent.organization_id == org_id,
+            CandidateApplicationEvent.event_type == event_type,
+            column == value,
+        )
+        if role_id is not None:
+            q = q.join(
+                CandidateApplication,
+                CandidateApplication.id == CandidateApplicationEvent.application_id,
+            ).filter(CandidateApplication.role_id == role_id)
+        if parsed_from is not None:
+            q = q.filter(CandidateApplicationEvent.created_at >= parsed_from)
+        if parsed_to is not None:
+            q = q.filter(CandidateApplicationEvent.created_at <= parsed_to)
+        return int(q.scalar() or 0)
+
+    advanced = _transition_count("pipeline_stage_changed", CandidateApplicationEvent.to_stage, "advanced")
+    hired = _transition_count("application_outcome_changed", CandidateApplicationEvent.to_outcome, "hired")
+
+    return {
+        "window": window,
+        "currency": "usd_cents",
+        "billed_spend_cents": budget_guard.micro_to_cents(total_micro),
+        "counts": {
+            "pre_screened": pre_n,
+            "scored": score_n,
+            "advanced": advanced,
+            "hired": hired,
+        },
+        "per_outcome": {
+            # DIRECT: feature billed spend ÷ candidates the feature billed for.
+            "pre_screen": {"cost_cents": _unit(pre_micro, pre_n), "count": pre_n},
+            "score": {"cost_cents": _unit(score_micro, score_n), "count": score_n},
+            # FULLY-LOADED: total window billed spend ÷ outcomes in window.
+            "advanced": {"cost_cents": _unit(total_micro, advanced), "count": advanced},
+            "hired": {"cost_cents": _unit(total_micro, hired), "count": hired},
+        },
     }
 
 

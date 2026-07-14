@@ -83,6 +83,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
 
   const [summary, setSummary] = useState(null);
   const [breakdown, setBreakdown] = useState(null);
+  const [cost, setCost] = useState(null);
   const [trend, setTrend] = useState(null);
   const [rolesBreakdown, setRolesBreakdown] = useState([]);
   const [feedback, setFeedback] = useState([]);
@@ -130,14 +131,16 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
       analyticsApi.decisionsBreakdown(scope),
       analyticsApi.decisionTrend(roleId ? { role_id: roleId } : {}),
       agentApi.listFeedback({ limit: 30, ...(roleId ? { role_id: roleId } : {}) }),
+      analyticsApi.costPerOutcome(scope),
     ])
-      .then(([s, b, t, f]) => {
+      .then(([s, b, t, f, c]) => {
         if (cancelled) return;
         const summaryOk = s.status === 'fulfilled';
         if (summaryOk) setSummary(s.value?.data || null);
         if (b.status === 'fulfilled') setBreakdown(b.value?.data || null);
         if (t.status === 'fulfilled') setTrend(t.value?.data || null);
         if (f.status === 'fulfilled') setFeedback(Array.isArray(f.value?.data) ? f.value.data : []);
+        if (c.status === 'fulfilled') setCost(c.value?.data || null);
         setLoadError(!summaryOk);
         if (summaryOk) setHasLoaded(true);
       })
@@ -343,7 +346,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
               </div>
             )
             : (
-              <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} />
+              <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} cost={cost} />
             )
         ) : tab === 'fleet' ? (
           <FleetTab />

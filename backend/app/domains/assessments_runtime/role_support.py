@@ -262,6 +262,7 @@ def role_to_response(
     last_candidate_activity_at: datetime | None = None,
     requisition: dict | None = None,
     client: dict | None = None,
+    is_published: bool = False,
 ) -> RoleResponse:
     # ``summary`` is the list serialization: the /roles list carries dozens of
     # roles, and no list consumer (Jobs, Dashboard, AgentBar, GlobalSearch) reads
@@ -324,6 +325,7 @@ def role_to_response(
             else None
         ),
         workable_job_live=workable_job_syncable(role),
+        is_published=bool(is_published),
         job_spec_filename=role.job_spec_filename,
         job_spec_text=None if summary else role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,
