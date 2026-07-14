@@ -8,9 +8,11 @@ import {
 import { FunnelBoard } from '../shared/ui/FunnelBoard';
 
 describe('funnel: Invited subsumes Completed', () => {
-  it('drops Completed as a top-level tile', () => {
+  it('drops Completed as a top-level tile, leads with Sourced', () => {
+    // `sourced` (Phase 3b) leads the funnel; `completed` is folded into Invited
+    // and is not a top-level tile.
     const keys = PIPELINE_FUNNEL_STAGES.map((s) => s.key);
-    expect(keys).toEqual(['applied', 'scored', 'invited', 'advanced', 'rejected']);
+    expect(keys).toEqual(['sourced', 'applied', 'scored', 'invited', 'advanced', 'rejected']);
   });
 
   it('Invited value = invited + completed', () => {

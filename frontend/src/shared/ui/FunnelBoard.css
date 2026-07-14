@@ -125,7 +125,7 @@
     overflow-x: auto;
   }
   .fb-flat .fb-stages {
-    min-width: 560px;
+    min-width: 660px;
   }
   .fb-flat .fb-v {
     font-size: var(--fs-subtitle);
@@ -160,10 +160,10 @@
 
 .fb-grid {
   display: grid;
-  /* One column per PIPELINE_FUNNEL_STAGES entry (Applied · Scored · Invited ·
-     Advanced · Rejected). `completed` is no longer a top-level tile, so this is
-     5 — a 6th column left an empty cell (dead space) after Rejected. */
-  grid-template-columns: repeat(5, 1fr);
+  /* One column per PIPELINE_FUNNEL_STAGES entry (Sourced · Applied · Scored ·
+     Invited · Advanced · Rejected). `completed` is folded into Invited, and
+     `sourced` (Phase 3a prospects) leads the funnel — 6 stages. */
+  grid-template-columns: repeat(6, 1fr);
   gap: 4px;
 }
 
@@ -283,7 +283,7 @@
     padding: 12px 14px;
   }
   .fb-grid {
-    min-width: 460px;
+    min-width: 552px;
   }
   .fb-v {
     font-size: var(--fs-h3);
