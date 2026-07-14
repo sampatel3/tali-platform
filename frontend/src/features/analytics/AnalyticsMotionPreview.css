@@ -20,17 +20,4 @@
   overflow: visible;
 }
 
-/* The active-tab underline that slides between tabs (Motion layout). Sits at
-   the bottom edge of the vtab so it reads as the tab indicator. */
-.amp-vtab { position: relative; }
-.amp-underline {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--purple);
-}
-
 .amp-tab-placeholder { margin-top: 16px; }

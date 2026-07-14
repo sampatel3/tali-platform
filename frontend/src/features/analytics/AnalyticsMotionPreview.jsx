@@ -12,12 +12,19 @@
 // final state via the shared MotionSystemProvider + the reduced flag.
 
 import React, { useState } from 'react';
-import { MotionSystemProvider, Reveal, m, useReducedMotionSync } from '../../shared/motion';
-import { Bot, Brain, FlaskConical, History, TrendingUp } from 'lucide-react';
+import {
+  MotionSystemProvider,
+  MotionTab,
+  MotionTabs,
+  Reveal,
+  m,
+  useReducedMotionSync,
+} from '../../shared/motion';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { FleetView } from './FleetTab';
 import { OutcomesTab } from './OutcomesTab';
+import { ANALYTICS_TABS } from './analyticsTabs';
 import {
   EASE_OUT,
   NumberTicker,
@@ -235,14 +242,6 @@ export const ANALYTICS_SHOWCASE = {
 // Decisions per day for the bespoke SVG chart (last 14 days).
 const DECISIONS_PER_DAY = [8, 11, 9, 14, 12, 18, 15, 21, 17, 24, 19, 26, 23, 31];
 
-const TABS = [
-  { key: 'outcomes', label: 'Outcomes', Icon: TrendingUp },
-  { key: 'fleet', label: 'Agent fleet', Icon: Bot },
-  { key: 'teaching', label: 'Teaching history', Icon: Brain },
-  { key: 'ab', label: 'A·B tasks', Icon: FlaskConical },
-  { key: 'log', label: 'Decision log', Icon: History },
-];
-
 const usd = (cents) => `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
 // Bespoke Motion + SVG line/area chart — no chart lib. The line draws in via
@@ -319,10 +318,10 @@ export const AnalyticsMotionPreview = () => {
         <div data-brand="taali" className="amp-root">
           <Reveal reduced={reduced}>
             <AgentHeader
-              breadcrumbs={[{ label: fleetSelected ? 'Analytics · agent fleet' : 'Analytics · last 30 days' }]}
+              breadcrumbs={[{ label: fleetSelected ? 'Analytics · agents' : 'Analytics · last 30 days' }]}
               kicker={fleetSelected ? 'ANALYTICS · LIVE WORKSPACE' : 'ANALYTICS · LAST 30 DAYS · ALL ROLES'}
               title="Analytics"
-              subtitle="Outcomes, your agent fleet, and the teaching history that keeps the agent calibrated."
+              subtitle="Outcomes, your agents, and the teaching history that keeps them calibrated."
             />
           </Reveal>
 
@@ -349,27 +348,19 @@ export const AnalyticsMotionPreview = () => {
               </div>
             ) : null}
 
-            {/* Underline tabs — the active underline slides between tabs (layout). */}
-            <div className="vtabs" role="tablist" aria-label="Analytics sections">
-              {TABS.map((t) => {
-                const { Icon } = t;
-                const on = tab === t.key;
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={on}
-                    className={`vtab${on ? ' on' : ''} amp-vtab`}
-                    onClick={() => setTab(t.key)}
-                  >
-                    <Icon size={16} aria-hidden="true" />
-                    {t.label}
-                    {on ? <m.span layoutId="ampTabUnderline" className="amp-underline" transition={{ duration: 0.32, ease: EASE_OUT }} /> : null}
-                  </button>
-                );
-              })}
-            </div>
+            {/* Reuse the live page's Job-style tabs and keyboard behavior. */}
+            <MotionTabs value={tab} onValueChange={setTab} className="vtabs" aria-label="Analytics views">
+              {ANALYTICS_TABS.map((t) => (
+                <MotionTab
+                  key={t.key}
+                  value={t.key}
+                  className={`vtab${tab === t.key ? ' on' : ''}`}
+                  indicatorClassName="vtab-motion-indicator"
+                >
+                  {t.label}
+                </MotionTab>
+              ))}
+            </MotionTabs>
 
             {tab === 'outcomes' ? (
               <>

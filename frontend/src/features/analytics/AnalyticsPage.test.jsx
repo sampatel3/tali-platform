@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
@@ -74,6 +74,34 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('AnalyticsPage pulse band', () => {
+  it('uses the shared text-only Job-page tab style without weakening tab semantics', async () => {
+    setReducedMotion(true);
+    const { container } = render(<AnalyticsPage />);
+    await screen.findByText('1,240');
+
+    const tablist = screen.getByRole('tablist', { name: 'Analytics views' });
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tablist).toHaveClass('vtabs');
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      'Outcomes',
+      'Agents',
+      'Teaching history',
+      'Experiments',
+      'Decision log',
+    ]);
+    expect(tabs.every((tab) => tab.classList.contains('vtab'))).toBe(true);
+    expect(tablist.querySelector('svg')).not.toBeInTheDocument();
+
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+    expect(tabs[0]).toHaveAttribute('tabindex', '0');
+    expect(tabs[1]).toHaveAttribute('tabindex', '-1');
+    expect(tabs[0].querySelector('.vtab-motion-indicator')).toBeInTheDocument();
+
+    const panel = container.querySelector('#analytics-panel-outcomes');
+    expect(tabs[0]).toHaveAttribute('aria-controls', panel.id);
+    expect(panel).toHaveAttribute('aria-labelledby', tabs[0].id);
+  });
+
   it('uses the shared Motion stagger for the pulse band', async () => {
     setReducedMotion(false);
     const { container } = render(<AnalyticsPage />);
@@ -108,12 +136,12 @@ describe('AnalyticsPage pulse band', () => {
     setReducedMotion(true);
     const { container } = render(<AnalyticsPage />);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Agent fleet' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
 
-    expect(screen.getByRole('tab', { name: 'Agent fleet' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true');
     expect(container.querySelector('.an-pulse')).not.toBeInTheDocument();
     expect(screen.getByText('ANALYTICS · LIVE WORKSPACE')).toBeInTheDocument();
-    expect(screen.getByText('Analytics · agent fleet')).toBeInTheDocument();
+    expect(screen.getByText('Analytics · agents')).toBeInTheDocument();
     expect(screen.queryByLabelText('Role filter')).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Time window' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
