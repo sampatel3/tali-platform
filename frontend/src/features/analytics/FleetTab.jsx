@@ -1,22 +1,20 @@
-// AGENT FLEET — the live operational lens. Self-fetches + polls /agent/panel
-// (pulse, KPIs, per-agent cards, recent decisions) and /agent/activity (the
-// org-wide merged feed). This is a now-state view (ignores the page's
-// role/window scope, same as the preview). Recoloured to the in-scheme
-// purple / amber / grey: WORKING = purple, PAUSED/budget = amber, IDLE = grey.
-//
-// Privacy: shows agent state, activity, decision outcomes, cycles/errors, and
-// billed spend vs cap — never raw model cost, model names, or reasoning labels.
+// Agent Fleet is split into a pure, prop-driven view and a small polling
+// wrapper. The view deliberately shares the same KPI and role-first language
+// as the rest of the product; the wrapper owns all network lifecycle state.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowUpRight,
+  Circle,
   FilterX,
   Loader2,
   Lock,
+  Pause,
+  Sparkles,
 } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
-import { AgentLoop } from '../../shared/motion';
+import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import {
   safeNum,
@@ -24,11 +22,7 @@ import {
   fmtUsdFine,
   fmtRelShort,
   fmtRelAgo,
-  fmtClock,
-  decisionTypeLabel,
-  decisionChipClass,
 } from './analyticsFormat';
-import { outcomeOf } from './DecisionLogTab';
 
 const PANEL_POLL_MS = 5000;
 const ACTIVITY_POLL_MS = 15000;
@@ -43,7 +37,6 @@ const nextCycleLabel = (lastCycleAt) => {
   return `${Math.ceil(remaining / 60)}m`;
 };
 
-// lucide glyph per activity kind (the preview used tabler webfont icons).
 const ActivityGlyph = ({ kind }) => {
   const map = {
     run: <Loader2 size={13} aria-hidden="true" />,
@@ -54,46 +47,202 @@ const ActivityGlyph = ({ kind }) => {
   return <span className="gl">{map[kind] || <ArrowUpRight size={13} aria-hidden="true" />}</span>;
 };
 
-const AgentCard = ({ a }) => {
-  const spent = safeNum(a.budget_spent_cents);
-  const cap = safeNum(a.budget_cap_cents);
-  const p = cap > 0 ? Math.min(100, Math.round((100 * spent) / cap)) : 0;
-  const act = a.activity || { label: 'IDLE', text: 'idle' };
-  const actCls = act.label === 'WORKING' ? 'work' : act.label === 'PAUSED' ? 'paused' : 'idle';
-  const badgeText = act.label === 'WORKING'
-    ? 'WORKING'
-    : act.label === 'PAUSED'
-      ? `PAUSED · ${act.text || 'budget'}`
-      : `IDLE · next ${a.running ? nextCycleLabel(a.last_run_at) : '—'}`;
-  // Budget bar turns amber only at the caution threshold (>=90%), matching the
-  // paused-card visual; otherwise lavender.
-  const barHi = p >= 90;
+const statusFor = (agent) => {
+  const activity = agent?.activity || {};
+  const label = String(activity.label || '').toUpperCase();
+  const detail = String(activity.text || '').trim();
+
+  if (agent?.running === false || label === 'PAUSED') {
+    const reason = String(agent?.paused_reason || detail || '').trim().replace(/_/g, ' ');
+    return {
+      kind: 'paused',
+      text: `Paused · ${reason && reason.toLowerCase() !== 'paused' ? reason : 'reason not provided'}`,
+    };
+  }
+  if (label === 'WORKING') {
+    return {
+      kind: 'work',
+      text: `Working${detail && detail.toLowerCase() !== 'working' ? ` · ${detail}` : ''}`,
+    };
+  }
+  return {
+    kind: 'idle',
+    text: `Idle · next run ${nextCycleLabel(agent?.last_run_at)}`,
+  };
+};
+
+const StatusGlyph = ({ kind }) => (
+  <span className={`an-agent-glyph ${kind}`} aria-hidden="true">
+    {kind === 'work' ? <Sparkles size={15} /> : kind === 'paused' ? <Pause size={14} /> : <Circle size={13} />}
+  </span>
+);
+
+const AgentCard = ({ agent }) => {
+  const spent = safeNum(agent.budget_spent_cents);
+  const cap = safeNum(agent.budget_cap_cents);
+  const rawPct = cap > 0 ? Math.round((100 * spent) / cap) : 0;
+  const barPct = Math.min(100, Math.max(0, rawPct));
+  const barHi = rawPct >= 90;
+  const status = statusFor(agent);
+  const name = agent.name || `Role #${agent.role_id}`;
+
   return (
-    <div className={`an-acard ${a.running ? 'run' : 'paused'}`}>
-      <div className="at">
-        <span className="an-name" title={a.name}>{a.name}</span>
-        {a.running ? (
-          <AgentLoop kind="flow" className="an-apill on">ON</AgentLoop>
-        ) : (
-          <span className="an-apill off">PAUSED</span>
-        )}
+    <article className="an-agent-card">
+      <header className="an-agent-card-head">
+        <StatusGlyph kind={status.kind} />
+        <div className="an-agent-identity">
+          <h3 className="an-agent-name" title={name}>{name}</h3>
+          <p className={`an-agent-status ${status.kind}`}>{status.text}</p>
+        </div>
+      </header>
+
+      <div className="an-agent-budget">
+        <div className="an-agent-budget-head">
+          <span>Monthly budget</span>
+          <strong>{fmtUsdFine(spent)} / {cap > 0 ? fmtUsdFine(cap) : 'No cap'}</strong>
+        </div>
+        <div
+          className="an-agent-budget-track"
+          role="progressbar"
+          aria-label={`${name} monthly budget used`}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={barPct}
+          aria-valuetext={cap > 0 ? `${rawPct}% used` : 'No monthly cap set'}
+        >
+          <span
+            className={`an-agent-budget-fill${barHi ? ' hi' : ''}`}
+            style={{ width: `${barPct}%` }}
+          />
+        </div>
       </div>
-      <span className={`an-actbadge ${actCls}`}>
-        {actCls === 'work' ? <AgentLoop kind="pulse" className="pd" /> : null}
-        {badgeText}
-      </span>
-      <div className="an-abar"><i className={barHi ? 'hi' : ''} style={{ width: `${p}%` }} /></div>
-      <div className="an-astats">
-        <div className="sr"><span>Budget</span><b>{fmtUsdFine(spent)}/{fmtUsdFine(cap)}</b></div>
-        <div className="sr"><span>Cycles 24h</span><b>{safeNum(a.cycles_24h)}</b></div>
-        <div className="sr"><span>Pending</span><b>{safeNum(a.pending)}</b></div>
-        <div className="sr"><span>Last run</span><b>{a.last_run_at ? fmtRelAgo(a.last_run_at) : '—'}</b></div>
+
+      <div className="an-agent-meta">
+        <div className="an-agent-meta-item"><span>Pending</span><strong>{safeNum(agent.pending)}</strong></div>
+        <div className="an-agent-meta-item"><span>Last run</span><strong>{agent.last_run_at ? fmtRelAgo(agent.last_run_at) : '—'}</strong></div>
+        <div className="an-agent-meta-item"><span>Cycles · 24h</span><strong>{safeNum(agent.cycles_24h)}</strong></div>
+      </div>
+    </article>
+  );
+};
+
+export const FleetView = ({ panel, activity = [], onOpenDecisionLog }) => {
+  const kpis = panel?.kpis || {};
+  const pulse = panel?.pulse || {};
+  const agents = Array.isArray(panel?.agents) ? panel.agents : [];
+  const entries = Array.isArray(activity) ? activity : [];
+
+  const activeCount = kpis.agents_running == null
+    ? agents.filter((agent) => agent.running !== false).length
+    : safeNum(kpis.agents_running);
+  const pausedCount = kpis.agents_paused == null
+    ? agents.filter((agent) => agent.running === false).length
+    : safeNum(kpis.agents_paused);
+  const reviewCount = safeNum(kpis.pending_decisions ?? kpis.pending);
+  const oldestHint = kpis.oldest_pending_age_seconds != null
+    ? `Oldest waiting ${fmtRelShort(new Date(Date.now() - safeNum(kpis.oldest_pending_age_seconds) * 1000).toISOString())}`
+    : (reviewCount > 0 ? 'Ready for your review' : 'Nothing waiting');
+  const spent = safeNum(kpis.budget_spent_cents);
+  const cap = safeNum(kpis.budget_cap_cents);
+  const budgetPct = cap > 0 ? Math.round((100 * spent) / cap) : 0;
+  const errors = safeNum(kpis.errors_24h);
+  const cycles = safeNum(kpis.cycles_24h);
+
+  const summaryTiles = [
+    {
+      key: 'active-agents',
+      label: 'Active agents',
+      value: activeCount,
+      sub: `${pausedCount} paused`,
+    },
+    {
+      key: 'needs-review',
+      label: 'Needs review',
+      value: reviewCount,
+      emph: reviewCount > 0,
+      sub: oldestHint,
+    },
+    {
+      key: 'workspace-spend',
+      label: 'Workspace spend',
+      value: fmtUsd(spent),
+      unit: cap > 0 ? `/ ${fmtUsd(cap)}` : null,
+      bar: { pct: Math.min(100, Math.max(0, budgetPct)), over: budgetPct > 100 },
+      sub: cap > 0 ? `${budgetPct}% of monthly budget` : 'No monthly cap set',
+    },
+    {
+      key: 'fleet-health',
+      label: 'Fleet health',
+      value: errors > 0 ? `${errors} issue${errors === 1 ? '' : 's'}` : 'Healthy',
+      sub: `${cycles} cycle${cycles === 1 ? '' : 's'} in 24h`,
+    },
+  ];
+
+  return (
+    <div className="an-tabpanel">
+      <div className="an-fleet-status">
+        <span className="gp" aria-hidden="true" />
+        <span>Review cycle</span>
+        <span>Last run <strong>{pulse.last_cycle_at ? fmtRelAgo(pulse.last_cycle_at) : '—'}</strong></span>
+        <span>Next <strong>{nextCycleLabel(pulse.last_cycle_at)}</strong></span>
+        <span>Last activity <strong>{pulse.last_activity_at ? fmtRelAgo(pulse.last_activity_at) : '—'}</strong></span>
+      </div>
+
+      <div className="an-fleet-summary">
+        <KpiStrip columns={4} tiles={summaryTiles} />
+      </div>
+
+      <section aria-labelledby="fleet-agents-heading">
+        <h2 className="an-kicker an-fleet-heading" id="fleet-agents-heading">Agents</h2>
+        {agents.length === 0 ? (
+          <div className="an-card"><div className="an-empty">No agent-enabled roles yet.</div></div>
+        ) : (
+          <div className="an-fleet-agents">
+            {agents.map((agent) => <AgentCard key={agent.role_id} agent={agent} />)}
+          </div>
+        )}
+      </section>
+
+      <article className="an-card an-fleet-activity">
+        <header className="ch">
+          <h3 className="ct2">Recent activity</h3>
+          <button
+            type="button"
+            className="an-fleet-log-link"
+            onClick={onOpenDecisionLog}
+            aria-label="View decision log"
+          >
+            View decision log <ArrowUpRight size={13} aria-hidden="true" />
+          </button>
+        </header>
+        {entries.length === 0 ? (
+          <div className="an-empty">No agent activity yet.</div>
+        ) : (
+          <div className="an-feed" role="list">
+            {entries.map((entry, index) => (
+              <div className="fi" role="listitem" key={`${entry.kind || 'activity'}-${entry.id ?? entry.created_at ?? index}`}>
+                <ActivityGlyph kind={entry.kind} />
+                <span>
+                  {entry.role_name ? <span className="rc">{entry.role_name}</span> : null}
+                  <span className="fbody">{entry.title || 'Agent activity'}</span>
+                  <span className="ft">{fmtRelShort(entry.created_at)}</span>
+                  {entry.detail ? <span className="fdetail">{entry.detail}</span> : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </article>
+
+      <div className="an-privacy">
+        <Lock size={14} className="ti" aria-hidden="true" />
+        <span>Agent activity and billed spend are visible here. Internal system details stay private.</span>
       </div>
     </div>
   );
 };
 
-export const FleetTab = () => {
+export const FleetTab = ({ onOpenDecisionLog }) => {
   const [panel, setPanel] = useState(null);
   const [activity, setActivity] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -103,11 +252,15 @@ export const FleetTab = () => {
   useEffect(() => {
     cancelledRef.current = false;
     let panelTimer = null;
-    let actTimer = null;
+    let activityTimer = null;
+
     const loadPanel = async () => {
       try {
-        const res = await agentApi.panel();
-        if (!cancelledRef.current) { setPanel(res?.data || null); setError(null); }
+        const response = await agentApi.panel();
+        if (!cancelledRef.current) {
+          setPanel(response?.data || null);
+          setError(null);
+        }
       } catch {
         if (!cancelledRef.current) setError('Could not load the agent fleet.');
       } finally {
@@ -117,28 +270,26 @@ export const FleetTab = () => {
         }
       }
     };
+
     const loadActivity = async () => {
       try {
-        const res = await agentApi.orgActivity({ limit: 12 });
-        if (!cancelledRef.current) setActivity(res?.data?.entries || []);
-      } catch { /* best-effort feed */ }
-      finally {
-        if (!cancelledRef.current) actTimer = setTimeout(loadActivity, ACTIVITY_POLL_MS);
+        const response = await agentApi.orgActivity({ limit: 12 });
+        if (!cancelledRef.current) setActivity(response?.data?.entries || []);
+      } catch {
+        // Activity is best-effort; the fleet summary remains useful without it.
+      } finally {
+        if (!cancelledRef.current) activityTimer = setTimeout(loadActivity, ACTIVITY_POLL_MS);
       }
     };
+
     loadPanel();
     loadActivity();
     return () => {
       cancelledRef.current = true;
       if (panelTimer) clearTimeout(panelTimer);
-      if (actTimer) clearTimeout(actTimer);
+      if (activityTimer) clearTimeout(activityTimer);
     };
   }, []);
-
-  const k = panel?.kpis || {};
-  const pulse = panel?.pulse || {};
-  const agents = useMemo(() => (Array.isArray(panel?.agents) ? panel.agents : []), [panel]);
-  const recent = useMemo(() => (Array.isArray(panel?.recent_decisions) ? panel.recent_decisions : []), [panel]);
 
   if (!loaded && !panel) {
     return (
@@ -151,127 +302,7 @@ export const FleetTab = () => {
     return <div className="an-tabpanel"><div className="an-empty">{error}</div></div>;
   }
 
-  const oldestHint = k.oldest_pending_age_seconds != null
-    ? `oldest ${fmtRelShort(new Date(Date.now() - k.oldest_pending_age_seconds * 1000).toISOString())}`
-    : null;
-  const lastActivity = pulse.last_activity_at ? fmtRelAgo(pulse.last_activity_at) : '—';
-
-  return (
-    <div className="an-tabpanel">
-      {/* Cohort cycle banner. */}
-      <div className="an-cohort">
-        <span className="gp" aria-hidden="true" />
-        Agent review cycle · last run <b>{pulse.last_cycle_at ? fmtRelAgo(pulse.last_cycle_at) : '—'}</b>
-        {' · '}next <b>{nextCycleLabel(pulse.last_cycle_at)}</b>
-        {' · '}last activity <b>{lastActivity}</b>
-      </div>
-
-      {/* 6 fleet KPIs. */}
-      <div className="an-fkpis">
-        <div className="an-fkpi">
-          <div className="k">Agents</div>
-          <div className="v">{safeNum(k.agents_running)} <small>running</small></div>
-          <div className="s">{safeNum(k.agents_paused)} paused</div>
-        </div>
-        <div className={`an-fkpi${safeNum(k.pending_decisions) > 0 ? ' attn' : ''}`}>
-          <div className="k">Pending decisions</div>
-          <div className="v">{safeNum(k.pending_decisions)}</div>
-          <div className="s">{oldestHint || 'none waiting'}</div>
-        </div>
-        <div className="an-fkpi">
-          <div className="k">Decisions today</div>
-          <div className="v">{safeNum(k.decisions_today)}</div>
-          <div className="s">across the fleet</div>
-        </div>
-        <div className="an-fkpi">
-          <div className="k">Cycles · 24h</div>
-          <div className="v">{safeNum(k.cycles_24h)}</div>
-          <div className="s">~every 30m</div>
-        </div>
-        <div className={`an-fkpi${safeNum(k.errors_24h) > 0 ? ' attn' : ''}`}>
-          <div className="k">Errors · 24h</div>
-          <div className="v">{safeNum(k.errors_24h)}</div>
-          <div className="s">{safeNum(k.errors_24h) > 0 ? 'see activity log' : 'all clear'}</div>
-        </div>
-        <div className="an-fkpi">
-          <div className="k">Workspace budget</div>
-          <div className="v">{fmtUsd(k.budget_spent_cents)}<small> / {fmtUsd(k.budget_cap_cents)}</small></div>
-          <div className="s">{safeNum(k.budget_cap_cents) > 0 ? `${Math.round((100 * safeNum(k.budget_spent_cents)) / safeNum(k.budget_cap_cents))}%` : 'no cap set'}</div>
-        </div>
-      </div>
-
-      {/* Per-agent cards. */}
-      <div className="an-kicker">Agents on this workspace</div>
-      {agents.length === 0 ? (
-        <div className="an-card"><div className="an-empty">No agent-enabled roles yet. Turn on the agent for a role to see it here.</div></div>
-      ) : (
-        <div className="an-agrid">
-          {agents.map((a) => <AgentCard key={a.role_id} a={a} />)}
-        </div>
-      )}
-
-      {/* Activity log + decision log. */}
-      <div className="an-grid2">
-        <div className="an-card">
-          <div className="ch"><div className="ct2">Activity log</div></div>
-          {activity.length === 0 ? (
-            <div className="an-empty">No agent activity yet.</div>
-          ) : (
-            <div className="an-feed">
-              {activity.map((e) => (
-                <div className="fi" key={`${e.kind}-${e.id}`}>
-                  <ActivityGlyph kind={e.kind} />
-                  <span>
-                    {e.role_name ? <span className="rc">{e.role_name}</span> : null}
-                    <span className="fbody">{e.title}</span>
-                    <span className="ft">{fmtRelShort(e.created_at)}</span>
-                    {e.detail ? <div className="fdetail">{e.detail}</div> : null}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="an-card">
-          <div className="ch"><div className="ct2">Decision log</div></div>
-          {recent.length === 0 ? (
-            <div className="an-empty">No decisions yet.</div>
-          ) : (
-            <div className="an-table-scroll">
-              <table className="an-table">
-                <thead>
-                  <tr><th>Time</th><th>Role</th><th>Decision</th><th>Status</th></tr>
-                </thead>
-                <tbody>
-                  {recent.map((d) => {
-                    const s = String(d.status || '').toLowerCase();
-                    const tone = s === 'overridden' || s === 'reverted_for_feedback' ? 'warn' : 'ok';
-                    return (
-                      <tr key={d.id}>
-                        <td className="an-stt ok">{fmtRelShort(d.created_at)}</td>
-                        <td>{d.role_name || `Role #${d.role_id}`}</td>
-                        <td><span className={`an-dchip ${decisionChipClass(d.decision_type)}`}>{decisionTypeLabel(d.decision_type)}</span></td>
-                        <td><span className={`an-stt ${tone}`}>{outcomeOf(d).text}</span></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Privacy note. */}
-      <div className="an-privacy">
-        <Lock size={14} className="ti" aria-hidden="true" />
-        <span>
-          <b>Shown:</b> agent state, live activity, decision outcomes, cycles &amp; errors, and your billed
-          spend vs. cap. <b>Hidden by design:</b> internal system details.
-        </span>
-      </div>
-    </div>
-  );
+  return <FleetView panel={panel} activity={activity} onOpenDecisionLog={onOpenDecisionLog} />;
 };
 
 export default FleetTab;

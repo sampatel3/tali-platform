@@ -1,11 +1,10 @@
-// PUBLIC, auth-free PREVIEW of the real /analytics Outcomes view with the
+// PUBLIC, auth-free PREVIEW of the real /analytics Outcomes + Fleet views with
 // Motion library applied. The live AnalyticsPage self-fetches every feed, so
 // there's no auth-free fixture; this preview reproduces the real page shell —
-// the AgentHeader, the 6-stat pulse band and the underline tabs — and REUSES
-// the real, prop-driven OutcomesTab (funnel conversion + advance→hire +
-// override-rate bars + by-role table) fed by an authored ANALYTICS_SHOWCASE
-// fixture with realistic Taali numbers. A bespoke Motion + SVG chart (decisions
-// per day, no chart lib) draws in beside it.
+// the AgentHeader, Outcomes-only 6-stat pulse band and underline tabs — and
+// REUSES the real, prop-driven OutcomesTab and FleetView fed by an authored
+// ANALYTICS_SHOWCASE fixture with realistic Taali numbers. A bespoke Motion +
+// SVG chart (decisions per day, no chart lib) draws in beside Outcomes.
 //
 // Motion: the pulse KPIs tick up, the tab underline slides between tabs
 // (layout), the funnel + override bars grow on enter (scoped CSS), and the
@@ -17,6 +16,7 @@ import { MotionSystemProvider, Reveal, m, useReducedMotionSync } from '../../sha
 import { Bot, Brain, FlaskConical, History, TrendingUp } from 'lucide-react';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { FleetView } from './FleetTab';
 import { OutcomesTab } from './OutcomesTab';
 import {
   EASE_OUT,
@@ -82,6 +82,152 @@ export const ANALYTICS_SHOWCASE = {
     { role_id: 7002, name: 'Senior Data Engineer', override_rate_pct: 11, budget_cents: 96000 },
     { role_id: 7003, name: 'Frontend Engineer', override_rate_pct: 14, budget_cents: 41000 },
   ],
+  fleet: {
+    panel: {
+      pulse: {
+        last_cycle_at: '2026-07-14T08:49:00Z',
+        last_activity_at: '2026-07-14T08:52:00Z',
+      },
+      kpis: {
+        agents_running: 3,
+        agents_paused: 1,
+        pending: 14,
+        pending_decisions: 12,
+        decisions_today: 47,
+        cycles_24h: 38,
+        errors_24h: 0,
+        budget_spent_cents: 6120,
+        budget_cap_cents: 18000,
+        oldest_pending_age_seconds: 4380,
+      },
+      agents: [
+        {
+          role_id: 7001,
+          name: 'AI Engineer',
+          running: true,
+          paused_reason: null,
+          paused_at: null,
+          budget_spent_cents: 2460,
+          budget_cap_cents: 7000,
+          last_run_at: '2026-07-14T08:49:00Z',
+          pending: 6,
+          cycles_24h: 14,
+          activity: { label: 'WORKING', text: 'scoring 3 candidates' },
+        },
+        {
+          role_id: 7002,
+          name: 'Senior Data Engineer',
+          running: true,
+          paused_reason: null,
+          paused_at: null,
+          budget_spent_cents: 1380,
+          budget_cap_cents: 4500,
+          last_run_at: '2026-07-14T08:41:00Z',
+          pending: 4,
+          cycles_24h: 11,
+          activity: { label: 'IDLE', text: 'up to date' },
+        },
+        {
+          role_id: 7003,
+          name: 'Frontend Engineer',
+          running: false,
+          paused_reason: 'monthly budget reached',
+          paused_at: '2026-07-14T07:58:00Z',
+          budget_spent_cents: 1800,
+          budget_cap_cents: 1800,
+          last_run_at: '2026-07-14T07:57:00Z',
+          pending: 2,
+          cycles_24h: 7,
+          activity: { label: 'PAUSED', text: 'monthly budget reached' },
+        },
+        {
+          role_id: 7004,
+          name: 'Product Designer',
+          running: true,
+          paused_reason: null,
+          paused_at: null,
+          budget_spent_cents: 480,
+          budget_cap_cents: 4700,
+          last_run_at: '2026-07-14T08:36:00Z',
+          pending: 0,
+          cycles_24h: 6,
+          activity: { label: 'IDLE', text: 'waiting for new candidates' },
+        },
+      ],
+      timeseries: {
+        labels: [],
+        cycles: [],
+        decisions: [],
+        errors: [],
+      },
+      decisions_by_type: [
+        { decision_type: 'advance_to_interview', count: 18 },
+        { decision_type: 'reject', count: 16 },
+        { decision_type: 'send_assessment', count: 13 },
+      ],
+      recent_decisions: [
+        {
+          id: 9101,
+          created_at: '2026-07-14T08:52:00Z',
+          role_id: 7002,
+          role_name: 'Senior Data Engineer',
+          decision_type: 'advance_to_interview',
+          recommendation: 'advance',
+          status: 'approved',
+          candidate_name: 'Nadia Rahman',
+        },
+        {
+          id: 9102,
+          created_at: '2026-07-14T08:44:00Z',
+          role_id: 7001,
+          role_name: 'AI Engineer',
+          decision_type: 'send_assessment',
+          recommendation: 'assessment',
+          status: 'pending',
+          candidate_name: 'Omar Aziz',
+        },
+      ],
+    },
+    activity: [
+      {
+        kind: 'decision',
+        id: 9201,
+        role_id: 7002,
+        role_name: 'Senior Data Engineer',
+        title: 'Recommended advance',
+        detail: 'Nadia Rahman · strong systems design evidence',
+        candidate_name: 'Nadia Rahman',
+        created_at: '2026-07-14T08:52:00Z',
+      },
+      {
+        kind: 'run',
+        id: 9202,
+        role_id: 7001,
+        role_name: 'AI Engineer',
+        title: 'Review cycle completed',
+        detail: '18 applications reviewed · 6 need your decision',
+        created_at: '2026-07-14T08:49:00Z',
+      },
+      {
+        kind: 'needs_input',
+        id: 9203,
+        role_id: 7003,
+        role_name: 'Frontend Engineer',
+        title: 'Monthly budget reached',
+        detail: 'Paused until the cap is raised or the next billing cycle begins',
+        created_at: '2026-07-14T07:58:00Z',
+      },
+      {
+        kind: 'event',
+        id: 9204,
+        role_id: 7004,
+        role_name: 'Product Designer',
+        title: 'Moved candidate to assessment',
+        detail: 'Leila Haddad · portfolio review passed',
+        created_at: '2026-07-14T07:43:00Z',
+      },
+    ],
+  },
 };
 
 // Decisions per day for the bespoke SVG chart (last 14 days).
@@ -157,7 +303,8 @@ export const AnalyticsMotionPreview = () => {
   const reduced = useReducedMotionSync();
   const [tab, setTab] = useState('outcomes');
 
-  const { summary, breakdown, trend, rolesBreakdown } = ANALYTICS_SHOWCASE;
+  const { summary, breakdown, trend, rolesBreakdown, fleet } = ANALYTICS_SHOWCASE;
+  const fleetSelected = tab === 'fleet';
   const k = summary.kpis;
   const hr = k.human_review;
   const spend = k.org_spend;
@@ -170,8 +317,8 @@ export const AnalyticsMotionPreview = () => {
         <div data-brand="taali" className="amp-root">
           <Reveal reduced={reduced}>
             <AgentHeader
-              breadcrumbs={[{ label: 'Analytics · last 30 days' }]}
-              kicker="ANALYTICS · LAST 30 DAYS · ALL ROLES"
+              breadcrumbs={[{ label: fleetSelected ? 'Analytics · agent fleet' : 'Analytics · last 30 days' }]}
+              kicker={fleetSelected ? 'ANALYTICS · LIVE WORKSPACE' : 'ANALYTICS · LAST 30 DAYS · ALL ROLES'}
               title="Analytics"
               subtitle="Outcomes, your agent fleet, and the teaching history that keeps the agent calibrated."
             />
@@ -181,22 +328,24 @@ export const AnalyticsMotionPreview = () => {
             {/* 6-stat pulse band — reproduced markup, values tick up. Gated on
                 the shared reveal trigger so it fills on mount (above the fold),
                 never only on scroll. */}
-            <div className={reduced ? 'an-pulse' : 'an-pulse pv-reveal'}>
-              {[
-                { k: 'Decisions', v: <NumberTicker to={k.decisions_made.current} reduced={reduced} />, s: `${hr.approved.toLocaleString()} approved` },
-                { k: 'Auto-advanced', v: <NumberTicker to={k.auto_advanced.current} reduced={reduced} />, s: `${k.auto_rejected.current.toLocaleString()} auto-rejected` },
-                { k: 'Advance → hire', v: <NumberTicker to={advanceHirePct} reduced={reduced} format={(n) => `${Math.round(n)}%`} />, s: `${conv.hired} of ${conv.advanced_total} advanced`, attn: true },
-                { k: 'Override rate', v: <NumberTicker to={hr.override_rate_pct} reduced={reduced} format={(n) => `${Math.round(n)}%`} />, s: `${hr.overridden} overrides` },
-                { k: 'Taught', v: <NumberTicker to={hr.teach_rate_pct} reduced={reduced} format={(n) => `${Math.round(n)}%`} />, s: `${hr.taught} teaching events` },
-                { k: 'Spend · MTD', v: <NumberTicker to={spend.spent_cents} reduced={reduced} format={(n) => usd(n)} />, s: budgetPct != null ? `${budgetPct}% of ${usd(spend.budget_cents)}` : 'no cap set' },
-              ].map((cell) => (
-                <div key={cell.k} className="an-pcell">
-                  <div className="k">{cell.k}</div>
-                  <div className={`v${cell.attn ? ' attn' : ''}`}>{cell.v}</div>
-                  <div className="s">{cell.s}</div>
-                </div>
-              ))}
-            </div>
+            {tab === 'outcomes' ? (
+              <div className={reduced ? 'an-pulse' : 'an-pulse pv-reveal'}>
+                {[
+                  { k: 'Decisions', v: <NumberTicker to={k.decisions_made.current} reduced={reduced} />, s: `${hr.approved.toLocaleString()} approved` },
+                  { k: 'Auto-advanced', v: <NumberTicker to={k.auto_advanced.current} reduced={reduced} />, s: `${k.auto_rejected.current.toLocaleString()} auto-rejected` },
+                  { k: 'Advance → hire', v: <NumberTicker to={advanceHirePct} reduced={reduced} format={(n) => `${Math.round(n)}%`} />, s: `${conv.hired} of ${conv.advanced_total} advanced`, attn: true },
+                  { k: 'Override rate', v: <NumberTicker to={hr.override_rate_pct} reduced={reduced} format={(n) => `${Math.round(n)}%`} />, s: `${hr.overridden} overrides` },
+                  { k: 'Taught', v: <NumberTicker to={hr.teach_rate_pct} reduced={reduced} format={(n) => `${Math.round(n)}%`} />, s: `${hr.taught} teaching events` },
+                  { k: 'Spend · MTD', v: <NumberTicker to={spend.spent_cents} reduced={reduced} format={(n) => usd(n)} />, s: budgetPct != null ? `${budgetPct}% of ${usd(spend.budget_cents)}` : 'no cap set' },
+                ].map((cell) => (
+                  <div key={cell.k} className="an-pcell">
+                    <div className="k">{cell.k}</div>
+                    <div className={`v${cell.attn ? ' attn' : ''}`}>{cell.v}</div>
+                    <div className="s">{cell.s}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {/* Underline tabs — the active underline slides between tabs (layout). */}
             <div className="vtabs" role="tablist" aria-label="Analytics sections">
@@ -244,10 +393,16 @@ export const AnalyticsMotionPreview = () => {
                   />
                 </Reveal>
               </>
+            ) : tab === 'fleet' ? (
+              <FleetView
+                panel={fleet.panel}
+                activity={fleet.activity}
+                onOpenDecisionLog={() => setTab('log')}
+              />
             ) : (
               <div className="an-empty amp-tab-placeholder">
-                This tab self-fetches live agent data in the app. The Outcomes tab
-                above is the fixture-driven preview.
+                This tab self-fetches live data in the app. Outcomes and Agent
+                fleet are fixture-driven in this preview.
               </div>
             )}
           </div>
