@@ -14,6 +14,8 @@ import {
   X,
 } from 'lucide-react';
 
+import { getAgentPauseCopy } from '../../shared/agentPauseCopy';
+
 // Decision-outcome vocabulary is purple (positive / action you take) vs grey
 // (terminal / already-resolved) — NOT traffic-light green/red. Matches the
 // design system (purple variations, not brights) and the FunnelBoard chips.
@@ -339,11 +341,8 @@ export const TeachIcon = Brain;
 // rail) so the two surfaces can't drift.
 export const humanizePausedReason = (reason) => {
   if (!reason) return null;
-  const r = String(reason).toLowerCase();
-  if (r.startsWith('monthly usd cap')) return 'monthly budget reached';
-  if (r.startsWith('role paused')) return null;
-  if (r.includes('decision budget')) return 'cycle limit reached';
-  return null;
+  const copy = getAgentPauseCopy(reason);
+  return copy.kind === 'unknown' ? null : copy.label;
 };
 
 // Turn a raw backend decision status into recruiter-readable copy. Known

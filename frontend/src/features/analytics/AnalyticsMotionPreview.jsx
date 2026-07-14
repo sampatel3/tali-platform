@@ -131,7 +131,9 @@ export const ANALYTICS_SHOWCASE = {
           role_id: 7003,
           name: 'Frontend Engineer',
           running: false,
-          paused_reason: 'monthly budget reached',
+          // Exercise the real persisted machine value. FleetView must turn it
+          // into product copy rather than exposing cents or comparison syntax.
+          paused_reason: 'monthly USD cap reached: 1800c >= 1800c',
           paused_at: '2026-07-14T07:58:00Z',
           budget_spent_cents: 1800,
           budget_cap_cents: 1800,
@@ -194,7 +196,7 @@ export const ANALYTICS_SHOWCASE = {
         id: 9201,
         role_id: 7002,
         role_name: 'Senior Data Engineer',
-        title: 'Recommended advance',
+        title: 'Recommended an interview',
         detail: 'Nadia Rahman · strong systems design evidence',
         candidate_name: 'Nadia Rahman',
         created_at: '2026-07-14T08:52:00Z',
@@ -204,8 +206,8 @@ export const ANALYTICS_SHOWCASE = {
         id: 9202,
         role_id: 7001,
         role_name: 'AI Engineer',
-        title: 'Review cycle completed',
-        detail: '18 applications reviewed · 6 need your decision',
+        title: 'Automatic review completed',
+        detail: '18 applications reviewed · 6 decisions need your review',
         created_at: '2026-07-14T08:49:00Z',
       },
       {
@@ -214,7 +216,7 @@ export const ANALYTICS_SHOWCASE = {
         role_id: 7003,
         role_name: 'Frontend Engineer',
         title: 'Monthly budget reached',
-        detail: 'Paused until the cap is raised or the next billing cycle begins',
+        detail: 'Paused until the budget is increased or next month begins',
         created_at: '2026-07-14T07:58:00Z',
       },
       {

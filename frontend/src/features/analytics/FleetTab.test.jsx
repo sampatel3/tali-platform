@@ -49,7 +49,7 @@ const panel = {
       role_id: 3,
       name: 'Platform Engineer',
       running: false,
-      paused_reason: 'monthly_budget_reached',
+      paused_reason: 'monthly USD cap reached: 5157c >= 5000c',
       budget_spent_cents: 4900,
       budget_cap_cents: 5000,
       last_run_at: minutesAgo(45),
@@ -89,7 +89,9 @@ describe('FleetView', () => {
     expect(within(summary).getByText('Active agents')).toBeInTheDocument();
     expect(within(summary).getByText('Needs review')).toBeInTheDocument();
     expect(within(summary).getByText('Workspace spend')).toBeInTheDocument();
-    expect(within(summary).getByText('Fleet health')).toBeInTheDocument();
+    expect(within(summary).getByText('Agent status')).toBeInTheDocument();
+    expect(within(summary).getByText('1 issue')).toBeInTheDocument();
+    expect(within(summary).getByText('31 runs in the past 24 hours')).toBeInTheDocument();
     expect(summary.querySelector('.kpi-bar')).toBeTruthy();
   });
 
@@ -99,9 +101,10 @@ describe('FleetView', () => {
     const idleCard = screen.getByRole('heading', { name: 'Product Designer' }).closest('article');
     const pausedCard = screen.getByRole('heading', { name: 'Platform Engineer' }).closest('article');
 
-    expect(within(workingCard).getByText('Working · scoring 3 candidates')).toHaveClass('an-agent-status', 'work');
-    expect(within(idleCard).getByText(/Idle · next run/)).toHaveClass('an-agent-status', 'idle');
-    expect(within(pausedCard).getByText('Paused · monthly budget reached')).toHaveClass('an-agent-status', 'paused');
+    expect(within(workingCard).getByText('Working · Reviewing 3 candidates')).toHaveClass('an-agent-status', 'work');
+    expect(within(idleCard).getByText(/Idle · Next run in \d+ minutes/)).toHaveClass('an-agent-status', 'idle');
+    expect(within(pausedCard).getByText('Paused · Monthly budget reached')).toHaveClass('an-agent-status', 'paused');
+    expect(within(pausedCard).getByText('$49 of $50 used')).toBeInTheDocument();
 
     for (const card of [workingCard, idleCard, pausedCard]) {
       expect(card.querySelectorAll('.an-agent-glyph')).toHaveLength(1);
@@ -111,6 +114,10 @@ describe('FleetView', () => {
     expect(container.querySelector('.an-actbadge')).toBeNull();
     expect(screen.queryByText(/^ON$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^WORKING$/)).not.toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/5157c|5000c|>=|monthly USD cap/i);
+    expect(screen.getAllByText('Decisions waiting')).toHaveLength(3);
+    expect(screen.getAllByText('Runs in 24 hours')).toHaveLength(3);
+    expect(screen.getByText('Agent schedule')).toBeInTheDocument();
   });
 
   it('shows recent activity without embedding another decision-log table', () => {
@@ -120,6 +127,33 @@ describe('FleetView', () => {
     expect(screen.getByText('Recommended an interview')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     expect(screen.queryByText('Hidden Candidate')).not.toBeInTheDocument();
+  });
+
+  it('does not expose unknown machine statuses or role identifiers', () => {
+    const unknownPanel = {
+      ...panel,
+      agents: [{
+        ...panel.agents[2],
+        name: '',
+        paused_reason: 'worker_guard_code_17: role_id=42',
+        activity: { label: 'PAUSED', text: 'worker_guard_code_17: role_id=42' },
+      }],
+    };
+    const codedActivity = [{
+      id: 21,
+      kind: 'event',
+      title: 'workable_writeback_failed',
+      detail: 'role_id=42',
+      created_at: minutesAgo(3),
+    }];
+    const { container } = render(
+      <FleetView panel={unknownPanel} activity={codedActivity} />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Unnamed role' })).toBeInTheDocument();
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.getByText('Could not update Workable')).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/worker_guard|role_id|#42|writeback_failed/i);
   });
 
   it('opens the dedicated decision log from the activity card', () => {
