@@ -653,9 +653,9 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
         status_list=["New Lead", "Interview Scheduled", "Placed", "Client Rejected", "Bespoke Stage"],
     )
 
-    # JobOrder 1 — starred-for-auto-sync so a fresh candidate is scored via the
-    # shared gated path. JobOrder 2 — not starred (no scoring), holds the mixed +
-    # needs-mapping statuses.
+    # JobOrder 1 — adopted and agent-on so a fresh candidate is scored via the
+    # shared running-agent gate. JobOrder 2 — agent-off (no scoring), holds the
+    # mixed + needs-mapping statuses.
     job1 = state.make_job_order(bh, title="Senior Engineer", is_open=True)
     job2 = state.make_job_order(bh, title="Data Analyst", is_open=True)
 
@@ -697,9 +697,29 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
     score_calls: list[dict] = []
     orig_on_created = sync_candidates.on_application_created
 
-    def _spy_on_created(app, *, score=False, score_force=False):
-        score_calls.append({"app_id": getattr(app, "id", None), "score": score})
-        return orig_on_created(app, score=score, score_force=score_force)
+    def _spy_on_created(
+        app,
+        *,
+        score=False,
+        score_force=False,
+        allow_paid_work=True,
+        parse_origin=None,
+    ):
+        score_calls.append(
+            {
+                "app_id": getattr(app, "id", None),
+                "score": score,
+                "allow_paid_work": allow_paid_work,
+                "parse_origin": parse_origin,
+            }
+        )
+        return orig_on_created(
+            app,
+            score=score,
+            score_force=score_force,
+            allow_paid_work=allow_paid_work,
+            parse_origin=parse_origin,
+        )
 
     monkeypatch.setattr(sync_candidates, "on_application_created", _spy_on_created)
     # Spy on the async CV-section parse enqueue (proves the CV pipeline fired).
@@ -723,14 +743,16 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
         sm.seed_stage_map_from_categorization(db, org, categorization=status_list["categorization"])
         db.commit()
 
-        # Star JobOrder 1's local role AFTER the first upsert would create it — so
-        # we instead pre-create the role starred, and the importer adopts it.
+        # Pre-create JobOrder 1 as an adopted, running role. The sticky star
+        # controls sync cadence; enabled + unpaused controls paid intake work.
         role1 = Role(
             organization_id=org.id,
             name="Senior Engineer",
             source="bullhorn",
             bullhorn_job_order_id=str(job1["id"]),
             starred_for_auto_sync=True,
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=5000,
         )
         db.add(role1)
         db.commit()
@@ -795,8 +817,8 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
     assert ada_app.id in parse_calls
 
     # COST SAFETY: the shared scoring entry point was called for EVERY imported
-    # application, but ``score=True`` ONLY for the fresh candidate on the starred
-    # role (job1/s1). Everything on the un-starred job2 is score=False.
+    # application, but ``score=True`` ONLY for the fresh candidate on the
+    # running role (job1/s1). Everything on the agent-off job2 is held.
     assert len(score_calls) == 5
     starred_true = [c for c in score_calls if c["score"] is True]
     assert len(starred_true) == 1

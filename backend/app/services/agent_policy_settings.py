@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..models.organization import Organization
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 
 
 GRANULAR_AUTOMATION_FIELDS = (
@@ -33,7 +33,10 @@ PLATFORM_AGENT_DEFAULTS: dict[str, Any] = {
     "auto_reject_pre_screen": False,
     "auto_skip_assessment": False,
     "threshold_mode": None,
-    "budget_cents": None,
+    # A new role is immediately activatable without a separate budget setup
+    # step. Turn on still displays and confirms this cap, and recruiters can
+    # override it per role before granting autonomy.
+    "budget_cents": 5_000,
     "agent_action_allowlist": None,
     "agent_token_budget_per_cycle": None,
     "agent_decision_budget_per_cycle": None,
@@ -47,6 +50,22 @@ FIXED_HUMAN_REVIEW_ACTIONS = (
     "offer",
     "hire",
 )
+
+SCORE_ONLY_ROLE_AUTOMATION_MESSAGE = (
+    "Sister roles are score-only views. Automation remains on the original "
+    "ATS role."
+)
+
+
+def role_is_score_only(role: Role) -> bool:
+    """Return whether ``role`` is prohibited from owning agent automation.
+
+    Sister roles deliberately share the owner role's candidate roster while
+    keeping only an alternate job specification and score set.  Centralising
+    this invariant keeps HTTP and chat control surfaces from drifting into a
+    state where a sister role can write candidate actions independently.
+    """
+    return str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
 
 
 def _dict(value: object) -> dict[str, Any]:
@@ -116,10 +135,9 @@ def apply_workspace_agent_defaults(
     budget = explicit_budget_cents
     if budget is None and org is not None:
         budget = getattr(org, "default_role_budget_cents", None)
-    if budget is None:
-        budget = defaults.get("budget_cents")
-    if budget is not None:
-        role.monthly_usd_budget_cents = max(0, int(budget))
+    if budget is None or int(budget) <= 0:
+        budget = defaults.get("budget_cents") or 5_000
+    role.monthly_usd_budget_cents = max(1, int(budget))
 
     threshold = explicit_score_threshold
     if threshold is None and org is not None:

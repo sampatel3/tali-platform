@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import asc, desc, func, or_
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 from typing import Any, Dict, Optional
 
@@ -21,6 +21,7 @@ from ...actions import advance_stage as advance_stage_action
 from ...actions.types import Actor
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
+from ...cv_parsing.origins import CV_PARSE_ORIGIN_RECRUITER_UPLOAD
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
 from ...deps import get_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
@@ -32,6 +33,7 @@ from ...models.application_interview import ApplicationInterview
 from ...models.cv_score_job import CvScoreJob, SCORE_JOB_DONE, SCORE_JOB_ERROR, SCORE_JOB_PENDING, SCORE_JOB_RUNNING
 from ...models.organization import Organization
 from ...models.role import Role
+from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
@@ -101,6 +103,7 @@ from ...services.cv_score_orchestrator import (
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
 from ...services.taali_scoring import normalize_score_100
+from ...services.sister_role_service import project_sister_application
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     move_candidate_in_workable,
@@ -136,7 +139,11 @@ from .pipeline_service import (
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
 
-PIPELINE_STAGE_VALUES = {"applied", "invited", "in_assessment", "review"}
+# `sourced` is a valid filterable stage (Phase 3a prospects) so the Home hub's
+# Sourced tracker can request pipeline_stage=sourced without a 422. It stays a
+# read-only filter here — sourced apps are un-scored and never in the decision
+# queue (see pipeline_service.PIPELINE_STAGES).
+PIPELINE_STAGE_VALUES = {"sourced", "applied", "invited", "in_assessment", "review"}
 APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
 
 
@@ -616,6 +623,159 @@ def create_application(
     return application_to_response(app)
 
 
+class SourcedCandidateCreate(BaseModel):
+    """Add a SOURCED prospect (a pre-applied lead) to a role. At least one of
+    email / phone is required (the identity key). ``linkedin`` is stored on the
+    candidate profile. No CV, never scored, never in the decision queue — the
+    application lands at the ``sourced`` stage and only advances (and gets
+    scored) when the person engages / applies."""
+
+    name: Optional[str] = Field(default=None, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=64)
+    linkedin: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post(
+    "/roles/{role_id}/sourced-candidates",
+    response_model=ApplicationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_sourced_candidate(
+    role_id: int,
+    data: SourcedCandidateCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add a candidate to a role at the ``sourced`` stage (Phase 3a).
+
+    Resolve-or-create the candidate by identity keys, then create (idempotent per
+    candidate+role) a ``CandidateApplication`` at ``pipeline_stage='sourced'`` via
+    ``on_application_created(score=False)`` — so it is NEVER auto-scored and NEVER
+    enters the decision queue. Returns the (existing or new) application.
+    """
+    from ...services.candidate_identity_service import normalize_phone, resolve_candidate
+
+    org_id = int(current_user.organization_id)
+    role = get_role(role_id, org_id, db)
+
+    email = (data.email or "").strip().lower() or None
+    phone = (data.phone or "").strip() or None
+    if not email and not phone:
+        raise HTTPException(
+            status_code=422, detail="Provide an email address or phone number."
+        )
+
+    candidate = resolve_candidate(db, org_id, email=email, phone=phone)
+    if candidate is None:
+        candidate = Candidate(
+            organization_id=org_id,
+            email=email,
+            full_name=(data.name or "").strip() or None,
+            phone=phone,
+            phone_normalized=normalize_phone(phone),
+            profile_url=(data.linkedin or "").strip() or None,
+            lead_source="sourced",
+        )
+        db.add(candidate)
+        db.flush()
+    else:
+        # Backfill only EMPTY identity fields — never clobber existing values.
+        if not candidate.full_name and (data.name or "").strip():
+            candidate.full_name = data.name.strip()
+        if not candidate.profile_url and (data.linkedin or "").strip():
+            candidate.profile_url = data.linkedin.strip()
+
+    # Idempotent per (candidate, role). The unique constraint spans soft-deletes,
+    # so match regardless of deleted_at and reuse the row.
+    existing = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.candidate_id == candidate.id,
+            CandidateApplication.role_id == role.id,
+        )
+        .first()
+    )
+    if existing is not None and existing.deleted_at is None:
+        # Already on the role (sourced or further along) — idempotent no-op.
+        db.commit()
+        app = get_application(existing.id, org_id, db)
+        return application_to_response(app)
+
+    if existing is not None:
+        # Reactivate a soft-deleted row as a fresh sourced prospect.
+        existing.deleted_at = None
+        existing.status = "sourced"
+        existing.pipeline_stage = "sourced"
+        existing.pipeline_stage_source = "recruiter"
+        existing.pipeline_stage_updated_at = utcnow()
+        existing.application_outcome = "open"
+        existing.application_outcome_updated_at = utcnow()
+        existing.source = "sourced"
+        existing.source_strategy = "sourced"
+        existing.auto_reject_state = None
+        existing.auto_reject_reason = None
+        existing.auto_reject_triggered_at = None
+        app = existing
+    else:
+        app = CandidateApplication(
+            organization_id=org_id,
+            candidate_id=candidate.id,
+            role_id=role.id,
+            status="sourced",
+            pipeline_stage="sourced",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="sourced",
+            source_strategy="sourced",
+        )
+        db.add(app)
+
+    try:
+        db.flush()
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="recruiter",
+            actor_id=int(current_user.id),
+            reason="Sourced candidate added to role",
+        )
+        db.commit()
+    except IntegrityError:
+        # Concurrent add for the same (candidate, role): adopt the winning row.
+        db.rollback()
+        winner = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.organization_id == org_id,
+                CandidateApplication.candidate_id == candidate.id,
+                CandidateApplication.role_id == role.id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if winner is None:
+            raise HTTPException(status_code=409, detail="Could not add sourced candidate")
+        app = winner
+
+    # score=False — a sourced prospect is un-scored; this only schedules the
+    # cheap, no-Claude bookkeeping. The auto-reject task itself hard-skips a
+    # sourced stage (automation_tasks.run_application_auto_reject), and the
+    # decision-creation emitters refuse a sourced app, so no card is ever made.
+    # Sourced prospects authorize no paid parse work. This also protects a
+    # reactivated legacy row that happens to retain old CV text.
+    on_application_created(
+        app,
+        score=False,
+        allow_paid_work=False,
+        parse_origin=None,
+    )
+
+    app = get_application(app.id, org_id, db)
+    return application_to_response(app)
+
+
 _SORT_COLUMN_MAP = {
     "pre_screen_score": CandidateApplication.pre_screen_score_100,
     "rank_score": CandidateApplication.rank_score,
@@ -747,7 +907,9 @@ def list_role_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    get_role(role_id, current_user.organization_id, db)
+    role = get_role(role_id, current_user.organization_id, db)
+    is_sister = bool(getattr(role, "ats_owner_role_id", None))
+    applications_role_id = int(role.ats_owner_role_id or role.id)
     query = (
         db.query(CandidateApplication)
         .options(
@@ -773,10 +935,18 @@ def list_role_applications(
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role_id,
+            CandidateApplication.role_id == applications_role_id,
             CandidateApplication.deleted_at.is_(None),
         )
     )
+    if is_sister:
+        query = query.outerjoin(
+            SisterRoleEvaluation,
+            and_(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
+            ),
+        )
     if source:
         query = query.filter(CandidateApplication.source == source)
     if status and status.strip().lower() != "all":
@@ -788,7 +958,11 @@ def list_role_applications(
     if min_pre_screen_score is not None:
         threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
         if threshold is not None:
-            query = query.filter(CandidateApplication.pre_screen_score_100 >= threshold)
+            score_column = (
+                SisterRoleEvaluation.role_fit_score
+                if is_sister else CandidateApplication.pre_screen_score_100
+            )
+            query = query.filter(score_column >= threshold)
     if min_rank_score is not None:
         query = query.filter(CandidateApplication.rank_score >= min_rank_score)
     if min_workable_score is not None:
@@ -797,9 +971,19 @@ def list_role_applications(
         threshold = float(min_cv_match_score)
         if 0 <= threshold <= 10:
             threshold *= 10.0
-        query = query.filter(CandidateApplication.cv_match_score >= threshold)
+        score_column = (
+            SisterRoleEvaluation.role_fit_score
+            if is_sister else CandidateApplication.cv_match_score
+        )
+        query = query.filter(score_column >= threshold)
 
-    sort_col = _SORT_COLUMN_MAP.get(sort_by, CandidateApplication.created_at)
+    sort_col = (
+        SisterRoleEvaluation.role_fit_score
+        if is_sister and sort_by in {
+            "pre_screen_score", "rank_score", "cv_match_score", "taali_score"
+        }
+        else _SORT_COLUMN_MAP.get(sort_by, CandidateApplication.created_at)
+    )
     direction = desc if sort_order != "asc" else asc
     # NULLS LAST so unscored apps don't dominate the top of a desc sort.
     query = query.order_by(
@@ -815,6 +999,17 @@ def list_role_applications(
     # replaces eager-loading the whole score_jobs collection — the list only
     # needs each row's latest status, not its full job history.
     status_map = _latest_score_status_map(db, [app.id for app in apps])
+    evaluation_map: dict[int, SisterRoleEvaluation] = {}
+    owner_role = None
+    if is_sister:
+        owner_role = db.query(Role).filter(Role.id == applications_role_id).first()
+        evaluation_map = {
+            int(item.source_application_id): item
+            for item in db.query(SisterRoleEvaluation).filter(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id.in_([app.id for app in apps]),
+            ).all()
+        }
 
     # List context: use the cached-score payload to avoid per-row Anthropic
     # calls (interview-pack regeneration). Detail-only fields (cv_sections,
@@ -826,29 +1021,67 @@ def list_role_applications(
     # caps at 200 and left rows beyond the cap showing blank).
     decision_map = _pending_decision_map(db, [app.id for app in apps])
 
-    return [
-        ApplicationDetailResponse(
-            **application_list_payload(
-                app,
-                include_cv_text=include_cv_text,
-                score_status=status_map.get(app.id),
-                pending_decision=decision_map.get(app.id),
-            )
+    response: list[ApplicationDetailResponse] = []
+    for app in apps:
+        payload = application_list_payload(
+            app,
+            include_cv_text=include_cv_text,
+            score_status=status_map.get(app.id),
+            pending_decision=decision_map.get(app.id),
         )
-        for app in apps
-    ]
+        if is_sister and owner_role is not None:
+            payload = project_sister_application(
+                payload,
+                sister_role=role,
+                owner_role=owner_role,
+                evaluation=evaluation_map.get(int(app.id)),
+            )
+        response.append(ApplicationDetailResponse(**payload))
+    return response
 
 
 @router.get("/applications/{application_id}", response_model=ApplicationDetailResponse)
 def get_application_detail(
     application_id: int,
     include_cv_text: bool = Query(False, description="Include full CV extracted text for viewer"),
+    view_role_id: int | None = Query(
+        default=None,
+        ge=1,
+        description="Project a coupled sister-role score while retaining the source application id",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get a single application; optionally include full cv_text for CV viewer sidebar."""
     app = get_application(application_id, current_user.organization_id, db)
-    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+    payload = application_detail_payload(app, include_cv_text=include_cv_text)
+    if view_role_id is not None:
+        sister = (
+            db.query(Role)
+            .filter(
+                Role.id == view_role_id,
+                Role.organization_id == current_user.organization_id,
+                Role.ats_owner_role_id == app.role_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if sister is not None:
+            evaluation = (
+                db.query(SisterRoleEvaluation)
+                .filter(
+                    SisterRoleEvaluation.role_id == sister.id,
+                    SisterRoleEvaluation.source_application_id == app.id,
+                )
+                .first()
+            )
+            payload = project_sister_application(
+                payload,
+                sister_role=sister,
+                owner_role=app.role,
+                evaluation=evaluation,
+            )
+    return ApplicationDetailResponse(**payload)
 
 
 @router.post("/applications/{application_id}/interview-debrief")
@@ -1366,7 +1599,10 @@ def list_applications_global(
     search: str | None = Query(default=None),
     nl_query: str | None = Query(default=None, max_length=500),
     view: str = Query(default="list", pattern="^(list|graph)$"),
-    rerank: bool = Query(default=True),
+    rerank: bool = Query(
+        default=False,
+        description="Opt in to bounded deep verification of qualitative criteria.",
+    ),
     sort_by: str = Query(
         default="pre_screen_score",
         pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score|cv_match_score|cv_match_scored_at)$",
@@ -1383,6 +1619,15 @@ def list_applications_global(
 ):
     started_at = perf_counter()
 
+    # Parse role scope before any natural-language provider work. Besides
+    # failing malformed filters without spend, this lets a single-role search
+    # consume that role's budget instead of falling through to workspace-only
+    # admission.
+    requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
+    if role_id is not None:
+        requested_role_ids = [int(role_id), *requested_role_ids]
+    unique_role_ids = sorted(set(requested_role_ids))
+
     # Natural-language search: when nl_query is set, the parser drives
     # filtering. The legacy `search` param is ignored (chips are
     # authoritative — see UI). We compute a parsed filter, narrow the
@@ -1393,6 +1638,7 @@ def list_applications_global(
     nl_warnings: list[dict] = []
     nl_subgraph_payload = None
     nl_rerank_applied = False
+    nl_coverage_payload = None
     if nl_query_clean:
         from ...candidate_search import rate_limit as nl_rate_limit
         from ...candidate_search.runner import run_search
@@ -1410,9 +1656,20 @@ def list_applications_global(
                 CandidateApplication.deleted_at.is_(None),
             )
         )
+        if len(unique_role_ids) == 1:
+            nl_base = nl_base.filter(
+                CandidateApplication.role_id == unique_role_ids[0]
+            )
+        elif unique_role_ids:
+            nl_base = nl_base.filter(
+                CandidateApplication.role_id.in_(unique_role_ids)
+            )
         nl_result = run_search(
             db=db,
             organization_id=int(current_user.organization_id),
+            # Only an unambiguous role scope may consume a role allowance.
+            # Multi-role and workspace searches remain workspace-metered.
+            role_id=unique_role_ids[0] if len(unique_role_ids) == 1 else None,
             nl_query=nl_query_clean,
             base_query=nl_base,
             rerank_enabled=bool(rerank),
@@ -1421,6 +1678,17 @@ def list_applications_global(
         parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
         nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
         nl_rerank_applied = nl_result.rerank_applied
+        nl_coverage_payload = {
+            "database_matches": (
+                nl_result.database_matches
+                if nl_result.database_matches is not None
+                else len(nl_result.application_ids)
+            ),
+            "deep_checked": nl_result.deep_checked,
+            "qualified": nl_result.qualified,
+            "capped": nl_result.capped,
+            "exhaustive": nl_result.exhaustive,
+        }
         nl_subgraph_payload = (
             nl_result.subgraph.model_dump(mode="json")
             if nl_result.subgraph is not None
@@ -1442,11 +1710,7 @@ def list_applications_global(
             base_query = base_query.filter(CandidateApplication.id.in_([-1]))
         else:
             base_query = base_query.filter(CandidateApplication.id.in_(nl_ids))
-    requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
-    if role_id is not None:
-        requested_role_ids = [int(role_id), *requested_role_ids]
-    if requested_role_ids:
-        unique_role_ids = sorted(set(requested_role_ids))
+    if unique_role_ids:
         if len(unique_role_ids) == 1:
             base_query = base_query.filter(CandidateApplication.role_id == unique_role_ids[0])
         else:
@@ -1564,17 +1828,31 @@ def list_applications_global(
                 .exists()
             )
 
-    total = filtered_query.order_by(None).count()
-    page_ids = [
-        int(row_id)
-        for (row_id,) in (
-            filtered_query.with_entities(CandidateApplication.id)
-            .order_by(*_application_order_columns(sort_by, sort_order))
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-    ]
+    if nl_query_clean:
+        # Preserve the full-text/structural relevance order produced by the
+        # search runner after applying the standard pipeline filters. This is
+        # also person-deduplicated; do not re-sort it by a stale role-fit score.
+        eligible_ids = {
+            int(row_id)
+            for (row_id,) in filtered_query.with_entities(CandidateApplication.id).all()
+        }
+        ordered_ids = [app_id for app_id in nl_ids if app_id in eligible_ids]
+        total = len(ordered_ids)
+        page_ids = ordered_ids[offset : offset + limit]
+        if nl_coverage_payload is not None:
+            nl_coverage_payload["filtered_matches"] = total
+    else:
+        total = filtered_query.order_by(None).count()
+        page_ids = [
+            int(row_id)
+            for (row_id,) in (
+                filtered_query.with_entities(CandidateApplication.id)
+                .order_by(*_application_order_columns(sort_by, sort_order))
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+        ]
     rows: list[CandidateApplication] = []
     if page_ids:
         fetched = (
@@ -1634,6 +1912,7 @@ def list_applications_global(
         response_payload["parsed_filter"] = parsed_filter_payload
         response_payload["nl_warnings"] = nl_warnings
         response_payload["nl_rerank_applied"] = nl_rerank_applied
+        response_payload["nl_coverage"] = nl_coverage_payload
         if view == "graph" and nl_subgraph_payload is not None:
             response_payload["subgraph"] = nl_subgraph_payload
     return response_payload
@@ -1662,15 +1941,25 @@ def get_role_pipeline(
 ):
     started_at = perf_counter()
     role = get_role(role_id, current_user.organization_id, db)
+    is_sister = bool(getattr(role, "ats_owner_role_id", None))
+    applications_role_id = int(role.ats_owner_role_id or role.id)
     base_query = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
+            CandidateApplication.role_id == applications_role_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
     )
+    if is_sister:
+        base_query = base_query.outerjoin(
+            SisterRoleEvaluation,
+            and_(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
+            ),
+        )
     base_query = _apply_application_source_filter(base_query, source)
     if search:
         term = f"%{search.strip()}%"
@@ -1684,15 +1973,20 @@ def get_role_pipeline(
         )
     threshold = _normalize_taali_score_for_filter(min_taali_score)
     if threshold is not None:
-        base_query = base_query.filter(
-            CandidateApplication.taali_score_cache_100.is_not(None),
-            CandidateApplication.taali_score_cache_100 >= threshold,
+        score_column = (
+            SisterRoleEvaluation.role_fit_score
+            if is_sister else CandidateApplication.taali_score_cache_100
         )
+        base_query = base_query.filter(score_column.is_not(None), score_column >= threshold)
     pre_screen_threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
     if pre_screen_threshold is not None:
+        score_column = (
+            SisterRoleEvaluation.role_fit_score
+            if is_sister else CandidateApplication.pre_screen_score_100
+        )
         base_query = base_query.filter(
-            CandidateApplication.pre_screen_score_100.is_not(None),
-            CandidateApplication.pre_screen_score_100 >= pre_screen_threshold,
+            score_column.is_not(None),
+            score_column >= pre_screen_threshold,
         )
 
     stage_counts = _empty_stage_counts()
@@ -1724,11 +2018,19 @@ def get_role_pipeline(
         filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
 
     total = filtered_query.order_by(None).count()
+    order_columns = (
+        (
+            (asc if sort_order == "asc" else desc)(SisterRoleEvaluation.role_fit_score).nullslast(),
+            (asc if sort_order == "asc" else desc)(CandidateApplication.created_at).nullslast(),
+        )
+        if is_sister and sort_by in {"pre_screen_score", "taali_score", "cv_match_score"}
+        else _application_order_columns(sort_by, sort_order)
+    )
     page_ids = [
         int(row_id)
         for (row_id,) in (
             filtered_query.with_entities(CandidateApplication.id)
-            .order_by(*_application_order_columns(sort_by, sort_order))
+            .order_by(*order_columns)
             .offset(offset)
             .limit(limit)
             .all()
@@ -1755,10 +2057,28 @@ def get_role_pipeline(
         by_id = {int(item.id): item for item in fetched}
         rows = [by_id[row_id] for row_id in page_ids if row_id in by_id]
 
-    items = [
-        application_list_payload(app, include_cv_text=include_cv_text)
-        for app in rows
-    ]
+    evaluation_map: dict[int, SisterRoleEvaluation] = {}
+    owner_role = None
+    if is_sister:
+        owner_role = db.query(Role).filter(Role.id == applications_role_id).first()
+        evaluation_map = {
+            int(item.source_application_id): item
+            for item in db.query(SisterRoleEvaluation).filter(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id.in_([app.id for app in rows]),
+            ).all()
+        }
+    items = []
+    for app in rows:
+        item = application_list_payload(app, include_cv_text=include_cv_text)
+        if is_sister and owner_role is not None:
+            item = project_sister_application(
+                item,
+                sister_role=role,
+                owner_role=owner_role,
+                evaluation=evaluation_map.get(int(app.id)),
+            )
+        items.append(item)
     active_candidates_count = (
         int(stage_counts.get("all", 0))
         if include_stage_counts
@@ -1776,7 +2096,7 @@ def get_role_pipeline(
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
+            CandidateApplication.role_id == applications_role_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
@@ -2129,11 +2449,13 @@ def upload_application_cv(
     app.cv_filename = result["filename"]
     app.cv_text = sanitize_text_for_storage(result["extracted_text"])
     app.cv_uploaded_at = now
+    app.cv_sections = None
     if app.candidate:
         app.candidate.cv_file_url = result["file_url"]
         app.candidate.cv_filename = result["filename"]
         app.candidate.cv_text = sanitize_text_for_storage(result["extracted_text"])
         app.candidate.cv_uploaded_at = now
+        app.candidate.cv_sections = None
     # New CV invalidates the agent's prior view of this candidate. Clear
     # both pre-screen and cv_match scores (the helper enqueues a stale
     # CvScoreJob row too, so the worker picks it back up). Without this
@@ -2151,7 +2473,13 @@ def upload_application_cv(
     # CV upload is a deliberate human action — implicit "score this".
     # Fan out scoring + interview pack + auto-reject pre-screen as
     # background tasks so the recruiter gets the page back immediately.
-    on_application_created(app, score=True, score_force=True)
+    on_application_created(
+        app,
+        score=True,
+        score_force=True,
+        requires_active_agent=False,
+        parse_origin=CV_PARSE_ORIGIN_RECRUITER_UPLOAD,
+    )
     return ApplicationCvUploadResponse(
         application_id=app.id,
         filename=result["filename"],
@@ -2210,7 +2538,12 @@ def generate_taali_cv_ai(
     app.cv_match_details = {PENDING_PDF_HYGIENE_KEY: _pending_pdf} if _pending_pdf else None
     app.cv_match_scored_at = None
     try:
-        job = enqueue_score(db, app, force=True)
+        job = enqueue_score(
+            db,
+            app,
+            force=True,
+            requires_active_agent=False,
+        )
     except Exception as exc:
         logger.exception("Failed to enqueue CV match scoring for application_id=%s", app.id)
         raise HTTPException(status_code=500, detail="Failed to enqueue CV scoring") from exc
@@ -2893,7 +3226,13 @@ def score_selected_applications(
             needs_cv_fetch.append(app.id)
             continue
 
-        job = enqueue_score(db, app, force=force, bypass_pre_screen=bypass_pre_screen)
+        job = enqueue_score(
+            db,
+            app,
+            force=force,
+            bypass_pre_screen=bypass_pre_screen,
+            requires_active_agent=False,
+        )
         if job is None:
             not_eligible += 1
         else:
@@ -3641,7 +3980,13 @@ def _run_fetch_then_score(
                     elif (app.source or "") == "workable":
                         _try_fetch_cv_from_workable(app, app.candidate, db, org)
                 if score_after and (app.cv_text or "").strip():
-                    enqueue_score(db, app, force=force, bypass_pre_screen=bypass_pre_screen)
+                    enqueue_score(
+                        db,
+                        app,
+                        force=force,
+                        bypass_pre_screen=bypass_pre_screen,
+                        requires_active_agent=False,
+                    )
             except Exception:
                 logger.exception(
                     "Background fetch+score failed for application_id=%s", app.id
@@ -4943,7 +5288,12 @@ def _run_process(
                             progress["score"]["scored"] = idx + 1
                             _set_process_progress(role_id, progress)
                             continue
-                    job = enqueue_score(db, app, force=include_scored)
+                    job = enqueue_score(
+                        db,
+                        app,
+                        force=include_scored,
+                        requires_active_agent=False,
+                    )
                     if job is not None and job.status == "error":
                         progress["score"]["errors"] += 1
                     _refresh_rank_score(app)

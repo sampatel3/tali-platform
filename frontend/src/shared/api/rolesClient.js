@@ -4,6 +4,10 @@ export const roles = {
   list: (params = {}) => api.get('/roles', { params }),
   get: (id) => api.get(`/roles/${id}`),
   create: (data) => api.post('/roles', data),
+  previewSister: (sourceRoleId) => api.get(`/roles/${sourceRoleId}/sisters/preview`),
+  createSister: (sourceRoleId, data) => api.post(`/roles/${sourceRoleId}/sisters`, data),
+  rescoreSister: (roleId) => api.post(`/roles/${roleId}/sister-rescore`),
+  sisterScoringStatus: (roleId) => api.get(`/roles/${roleId}/sister-scoring-status`),
   update: (id, data) => api.patch(`/roles/${id}`, data),
   remove: (id) => api.delete(`/roles/${id}`),
   star: (id) => api.post(`/roles/${id}/star`),
@@ -137,6 +141,8 @@ export const roles = {
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
     api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob', ...config }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
+  // Add a SOURCED prospect (pre-applied lead) to a role — un-scored, no decision.
+  createSourcedCandidate: (roleId, data) => api.post(`/roles/${roleId}/sourced-candidates`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),

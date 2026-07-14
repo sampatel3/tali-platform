@@ -25,6 +25,10 @@ def activation_readiness(
     *,
     settings_obj: Any = settings,
     auto_skip_assessment: bool | None = None,
+    monthly_usd_budget_cents: int | None = None,
+    auto_send_assessment: bool | None = None,
+    auto_resend_assessment: bool | None = None,
+    auto_advance: bool | None = None,
 ) -> dict[str, Any]:
     """Return production runtime readiness for this role's actual path.
 
@@ -32,7 +36,9 @@ def activation_readiness(
     activation verifies the Beat→worker canary, live usage metering, a usable
     model credential, native application ingress when no ATS job is linked,
     and the assessment execution/delivery dependencies only when that stage
-    is explicitly enabled.
+    is explicitly enabled. Optional policy arguments are a read-only preview
+    of a role PATCH: Turn on can validate the exact incoming cap and granular
+    policy without mutating the ORM row before every readiness rail passes.
     """
     from ..platform.startup_validation import is_production_like
 
@@ -311,8 +317,13 @@ def activation_readiness(
             if isinstance(getattr(org, "workable_config", None), dict)
             else {}
         )
-        if (
+        effective_auto_advance = (
             role_automation_enabled(role, "auto_advance")
+            if auto_advance is None
+            else bool(auto_advance)
+        )
+        if (
+            effective_auto_advance
             and workable_writeback_enabled(org)
             and not str(
                 workable_config.get("interview_stage_name") or ""
@@ -344,14 +355,33 @@ def activation_readiness(
         # pending/running score jobs have not necessarily written UsageEvents
         # yet, so include their conservative reservations as committed spend.
         from ..agent_runtime.budget_guard import (
+            active_score_commitment_count,
+            month_to_date_spend_microcredits,
             remaining_role_admission_microcredits,
         )
 
-        remaining_role_credits = remaining_role_admission_microcredits(
-            session,
-            role=role,
-            per_active_score_job=estimate_reservation(Feature.SCORE),
-        )
+        per_active_score_job = estimate_reservation(Feature.SCORE)
+        if monthly_usd_budget_cents is None:
+            remaining_role_credits = remaining_role_admission_microcredits(
+                session,
+                role=role,
+                per_active_score_job=per_active_score_job,
+            )
+        else:
+            # Do not temporarily assign the incoming cap to ``role``. A failed
+            # preflight must be rollback-safe even if a caller catches the
+            # response without expiring its identity map.
+            cap_microcredits = max(int(monthly_usd_budget_cents), 0) * 10_000
+            committed_microcredits = month_to_date_spend_microcredits(
+                session, role=role
+            ) + (
+                active_score_commitment_count(session, role=role)
+                * per_active_score_job
+            )
+            remaining_role_credits = max(
+                cap_microcredits - committed_microcredits,
+                0,
+            )
         if (
             remaining_role_credits is not None
             and remaining_role_credits < minimum_credits

@@ -5,18 +5,15 @@ enqueue." Today there are two events:
 
 - ``on_role_jd_attached(role)`` — fires when a JD is attached or
   re-uploaded to a role. Enqueues interview-focus generation.
-- ``on_application_created(app, *, score)`` — fires when an application
-  is ingested from any source (manual upload, Workable sync). Enqueues
-  the per-candidate auto work (interview pack, auto-reject) and, when
-  ``score=True``, the scoring job for ingestion paths that promise immediate
-  evaluation (public requisition apply and recruiter CV upload).
+- ``on_application_created(app, *, score, allow_paid_work)`` — fires when an
+  application is ingested from any source. It enqueues cheap deterministic
+  event work and, when authorized, CV parsing plus the first scoring job.
 
-Policy reminder: Workable bulk sync calls these handlers with ``score=False``
-so one import does not enqueue an unbounded burst. For an enabled role, the
-bounded cohort worker drains that backlog automatically; no recruiter scoring
-click is required. Recruiter uploads and native requisition applications pass
-``score=True`` for the low-latency path; the latter is safe because Turn on is
-credit/budget/readiness gated.
+Policy reminder: Workable/Bullhorn imports pass ``allow_paid_work=True`` only
+for lifecycle-ready roles whose agent is enabled and unpaused; sticky sync
+stars do not authorize spend. Recruiter uploads and native requisition
+applications retain their explicit low-latency scoring path, which is protected
+by their own request/readiness and credit-budget gates.
 
 These helpers must be cheap and synchronous — they only schedule Celery
 tasks via ``.delay()``. The actual Claude work happens on the worker.
@@ -48,7 +45,16 @@ def on_role_jd_attached(role: "Role") -> None:
     try:
         from ..tasks.automation_tasks import generate_role_interview_focus
 
-        generate_role_interview_focus.delay(role_id)
+        # A JD upload while the agent is off is an explicit recruiter action
+        # and remains allowed.  Activation/recovery work is autonomous: carry
+        # that authority bit into the queued task so it re-checks the current
+        # live role after a later Pause or Turn off.
+        generate_role_interview_focus.delay(
+            role_id,
+            requires_running_agent=bool(
+                getattr(role, "agentic_mode_enabled", False)
+            ),
+        )
         logger.info("on_role_jd_attached enqueued role_id=%s", role_id)
     except Exception:  # pragma: no cover — defensive: never let scheduling break the request
         logger.exception("on_role_jd_attached scheduling failed role_id=%s", role_id)
@@ -59,6 +65,9 @@ def on_application_created(
     *,
     score: bool = False,
     score_force: bool = False,
+    allow_paid_work: bool = True,
+    requires_active_agent: bool = True,
+    parse_origin: str | None = None,
 ) -> None:
     """Schedule auto-tasks for a freshly-ingested application.
 
@@ -70,6 +79,14 @@ def on_application_created(
     from ingestion flows that promise immediate evaluation: native public
     applications, manual CV upload endpoints, and explicit Score/Rescore.
 
+    ``allow_paid_work=False`` is the ATS-sync hold used by Pause/Turn off.
+    It suppresses both CV-section parsing and score dispatch while preserving
+    the cheap deterministic event work and the imported application metadata.
+    It does not cancel work already queued before the hold. ``parse_origin``
+    is durable execution authority for CV parsing: autonomous ATS/native work
+    re-checks the live role in the worker, explicit recruiter upload may run
+    while the agent is held, and missing/unknown legacy values fail closed.
+
     Interview-pack regeneration is **not** scheduled here. Generating a
     pack costs ~$0.013 in Haiku 4.5 spend per candidate; doing it for
     every imported candidate (most of whom are never scored) was the
@@ -78,10 +95,9 @@ def on_application_created(
     passes pre-screen and gets a v3 score — the only point at which the
     pack carries useful, candidate-specific signal.
 
-    The Workable bulk sync passes ``score=False`` so importing N candidates
-    doesn't burst-enqueue N scoring jobs. An enabled role's bounded cohort
-    sweep drains them automatically; the explicit scoring controls remain
-    operator recovery/override surfaces.
+    ATS syncs pass ``score=True`` only for a newly-created application whose
+    role passes the shared running-agent gate. Existing applications are never
+    re-scored here; the bounded cohort sweep remains the recovery path.
     """
     if app is None:
         return
@@ -106,19 +122,40 @@ def on_application_created(
     # after the ingest transaction commits.
     try:
         cv_text = (getattr(app, "cv_text", "") or "").strip()
-        if cv_text and getattr(app, "cv_sections", None) is None:
+        if (
+            allow_paid_work
+            and cv_text
+            and getattr(app, "cv_sections", None) is None
+        ):
+            from ..cv_parsing.origins import (
+                AUTONOMOUS_CV_PARSE_ORIGINS,
+                normalize_cv_parse_origin,
+            )
             from ..platform.config import settings
 
-            if settings.CV_PARSE_BATCH_ENABLED:
+            normalized_origin = normalize_cv_parse_origin(parse_origin)
+            if normalized_origin is None:
+                logger.warning(
+                    "cv_parse enqueue blocked: unknown origin "
+                    "application_id=%s origin=%r",
+                    application_id,
+                    parse_origin,
+                )
+            elif (
+                settings.CV_PARSE_BATCH_ENABLED
+                and normalized_origin in AUTONOMOUS_CV_PARSE_ORIGINS
+            ):
                 # The Message Batches sweep (submit_cv_parse_batches beat
-                # task) picks up parse-pending rows every 15 min at 50% of
-                # live pricing — no per-application enqueue needed.
+                # task) picks up autonomous parse-pending rows every 15 min at
+                # 50% of live pricing — no per-application enqueue needed.
                 pass
             else:
                 from ..tasks.automation_tasks import parse_application_cv_sections
 
                 parse_application_cv_sections.apply_async(
-                    (application_id,), countdown=15
+                    (application_id,),
+                    kwargs={"origin": normalized_origin},
+                    countdown=15,
                 )
     except Exception:  # pragma: no cover — defensive
         logger.exception(
@@ -126,7 +163,7 @@ def on_application_created(
             application_id,
         )
 
-    if score:
+    if score and allow_paid_work:
         try:
             # Reuse the orchestrator's enqueue path so caching, job-row
             # bookkeeping, and queue routing stay consistent with the
@@ -146,7 +183,12 @@ def on_application_created(
                     .first()
                 )
                 if live is not None:
-                    enqueue_score(db, live, force=score_force)
+                    enqueue_score(
+                        db,
+                        live,
+                        force=score_force,
+                        requires_active_agent=requires_active_agent,
+                    )
                     db.commit()
             finally:
                 db.close()
@@ -162,7 +204,8 @@ def on_application_created(
     # is rejected during a transient broker outage.
 
     logger.info(
-        "on_application_created enqueued application_id=%s score=%s",
+        "on_application_created enqueued application_id=%s score=%s allow_paid_work=%s",
         application_id,
-        score,
+        bool(score and allow_paid_work),
+        allow_paid_work,
     )

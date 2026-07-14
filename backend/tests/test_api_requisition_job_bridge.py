@@ -22,6 +22,10 @@ from app.models.role import (
 from app.models.role_brief import RoleBrief
 from app.models.task import Task
 from app.services.role_brief_service import find_ref_code
+from app.services.task_provisioning_service import (
+    MIN_ASSESSMENT_INPUT_CHARS,
+    role_assessment_input_text,
+)
 from tests.conftest import auth_headers
 
 
@@ -81,6 +85,18 @@ def test_publish_returns_ref_code_role_and_workable_spec(client):
     assert body["ref_code"] in spec
     # Round-trips: the import-side scanner can recover the code from the spec.
     assert find_ref_code(spec) == body["ref_code"]
+
+
+def test_publish_persists_enough_structured_context_for_one_click_assessment(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    brief_id = _make_requisition(client, headers, title="Structured Role")
+
+    body = _publish(client, headers, brief_id, jd="# Structured Role")
+    role = db.query(Role).filter(Role.id == body["role_id"]).one()
+
+    assert len(role_assessment_input_text(role)) >= MIN_ASSESSMENT_INPUT_CHARS
 
 
 def test_publish_rejects_blank_jd_instead_of_creating_unscoreable_role(client):

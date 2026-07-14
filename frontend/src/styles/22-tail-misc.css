@@ -603,19 +603,6 @@
   flex: 1 1 auto;
 }
 
-/* Shown in the candidates toolbar when the agent is running this role: signals
-   "the agent's got it" so the demoted manual Process / Sync buttons beside it
-   read as a quiet manual override rather than the primary action. */
-.pipeline-agent-running {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-eyebrow);
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--taali-purple, var(--purple));
-}
-
 /* Segmented stage filter — pipeline-preview .seg: a rectangular bordered
    control (9px corners) whose buttons are divided by thin left-borders and
    whose active button fills solid purple edge-to-edge. (Was a rounded pill

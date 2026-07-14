@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..domains.assessments_runtime.role_support import get_application
 from ..models.cv_score_job import CvScoreJob
 from ..services.cv_score_orchestrator import enqueue_score
-from .types import Actor
+from .types import ACTOR_AGENT, Actor
 
 
 def run(
@@ -28,4 +28,10 @@ def run(
     bypass_pre_screen: bool = False,
 ) -> Optional[CvScoreJob]:
     app = get_application(application_id, organization_id, db)
-    return enqueue_score(db, app, force=force, bypass_pre_screen=bypass_pre_screen)
+    return enqueue_score(
+        db,
+        app,
+        force=force,
+        bypass_pre_screen=bypass_pre_screen,
+        requires_active_agent=actor.type == ACTOR_AGENT,
+    )

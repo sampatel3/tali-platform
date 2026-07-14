@@ -14,6 +14,7 @@ These do NOT require a running Graphiti / Neo4j. We mock
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -72,7 +73,8 @@ def test_candidate_ids_matching_all_intersects():
     pred1 = GraphPredicate(type="worked_at", value="Acme")
     pred2 = GraphPredicate(type="worked_at", value="Globex")
 
-    def fake_for_predicate(*, organization_id, predicate):
+    def fake_for_predicate(*, organization_id, predicate, role_id=None):
+        assert role_id is None
         if predicate.value == "Acme":
             return {1, 2, 3}
         return {2, 3, 4}
@@ -89,7 +91,8 @@ def test_candidate_ids_matching_all_short_circuits_on_empty():
     pred2 = GraphPredicate(type="worked_at", value="B")
     calls = []
 
-    def fake(*, organization_id, predicate):
+    def fake(*, organization_id, predicate, role_id=None):
+        assert role_id is None
         calls.append(predicate.value)
         return set() if predicate.value == "A" else {1, 2}
 
@@ -269,6 +272,35 @@ def test_colleague_neighbourhood_groups_by_company():
     assert any(c["name"] == "Acme" for c in out["companies"])
     assert "MIT" in out["schools"]
     assert "Python" in out["skills"]
+
+
+def test_colleague_neighbourhood_threads_role_to_metering():
+    captured = {}
+
+    @contextmanager
+    def _attribute(organization_id, label, *, role_id=None):
+        captured.update(
+            organization_id=organization_id,
+            label=label,
+            role_id=role_id,
+        )
+        yield
+
+    with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
+         patch.object(graph_search.graph_client, "run_async", return_value=[]), \
+         patch.object(graph_search, "_attribute_search", _attribute), \
+         patch.object(graph_search.graph_client, "get_graphiti", return_value=SimpleNamespace(search=lambda **kw: None)):
+        graph_search.colleague_neighbourhood(
+            organization_id=1,
+            candidate_id=99,
+            role_id=77,
+        )
+
+    assert captured == {
+        "organization_id": 1,
+        "label": "neighbourhood",
+        "role_id": 77,
+    }
 
 
 def test_label_for_classifies_job_titles_as_skill_not_company():

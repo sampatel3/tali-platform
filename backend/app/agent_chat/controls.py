@@ -19,8 +19,10 @@ from sqlalchemy.orm import Session
 from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
 from ..services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
+    SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
     activation_policy_values,
     effective_agent_policy,
+    role_is_score_only,
     role_automation_enabled,
 )
 
@@ -187,6 +189,15 @@ def set_agent_state(
     """
     act = (action or "").strip().lower()
 
+    if role_is_score_only(role):
+        return {
+            "type": "agent_state",
+            "ok": False,
+            "reason": "score_only_role",
+            "message": SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+            "agent": _state(role),
+        }
+
     if act in _ACTIVATE:
         # The agent can't run uncapped — activation needs a monthly budget
         # (mirrors the settings UI). Surface a clear ask instead of failing.
@@ -352,9 +363,51 @@ def adjust_agent_settings(
     manual pause. Reject toggles govern deterministic pre-screen execution, not
     the human-confirm rail for full-score/assessment reject recommendations.
     """
+    if role_is_score_only(role):
+        return {
+            "type": "agent_settings",
+            "ok": False,
+            "reason": "score_only_role",
+            "message": SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+            "changed": [],
+            "resumed": False,
+            "resume_error": None,
+            "agent": _state(role),
+        }
+
+    if (
+        auto_skip_assessment is False
+        and bool(role.agentic_mode_enabled)
+        and not any(bool(task.is_active) for task in (role.tasks or []))
+    ):
+        return {
+            "type": "agent_settings",
+            "ok": False,
+            "reason": "assessment_task_required",
+            "message": (
+                "Choose an active assessment task before turning assessment "
+                "skipping off for this running role."
+            ),
+            "changed": [],
+            "resumed": False,
+            "resume_error": None,
+            "agent": _state(role),
+        }
+
     changed: list[str] = []
     if monthly_budget_cents is not None:
-        role.monthly_usd_budget_cents = max(0, int(monthly_budget_cents))
+        if int(monthly_budget_cents) <= 0:
+            return {
+                "type": "agent_settings",
+                "ok": False,
+                "reason": "invalid_budget",
+                "message": "The monthly spend cap must be greater than zero.",
+                "changed": [],
+                "resumed": False,
+                "resume_error": None,
+                "agent": _state(role),
+            }
+        role.monthly_usd_budget_cents = int(monthly_budget_cents)
         changed.append("monthly_budget")
     if auto_reject is not None:
         role.auto_reject = bool(auto_reject)
@@ -404,6 +457,13 @@ def adjust_agent_settings(
     if auto_skip_assessment is not None:
         role.auto_skip_assessment = bool(auto_skip_assessment)
         changed.append("auto_skip_assessment")
+
+    if changed:
+        from ..services.role_activation_intent import (
+            refresh_role_activation_intent_policy,
+        )
+
+        refresh_role_activation_intent_policy(role)
 
     resumed = False
     if monthly_budget_cents is not None:

@@ -37,7 +37,7 @@ def can_spend_on_role(db: Session, *, role: Optional[Role]) -> bool:
     """
     if role is None:
         return True
-    if role.monthly_usd_budget_cents is None or int(role.monthly_usd_budget_cents) <= 0:
+    if role.monthly_usd_budget_cents is None:
         return True
     check = check_monthly_usd(db, role=role)
     if check.ok:

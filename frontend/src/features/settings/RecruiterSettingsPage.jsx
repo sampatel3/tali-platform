@@ -252,7 +252,7 @@ const AgentDefaultsForm = ({
             <span className="k">Default budget (USD/month)</span>
             <input
               type="number"
-              min={0}
+              min={1}
               step="5"
               value={budgetUsd}
               onChange={(event) => onChange({ budgetUsd: event.target.value })}
@@ -795,15 +795,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     );
     // Agent defaults — budget + threshold come off the org record; chips
     // load separately from /organizations/me/criteria.
-    const seedBudgetCents = Number.isFinite(Number(orgData.default_role_budget_cents))
-      ? Number(orgData.default_role_budget_cents)
-      : null;
+    const configuredBudgetCents = Number(orgData.default_role_budget_cents);
     const seedThreshold = Number.isFinite(Number(orgData.default_score_threshold))
       ? Number(orgData.default_score_threshold)
       : 70;
     const agentDefaults = orgData.ai_tooling_config?.agent_defaults || {};
+    const agentDefaultBudgetCents = Number(agentDefaults.budget_cents);
+    const seedBudgetCents = configuredBudgetCents > 0
+      ? configuredBudgetCents
+      : agentDefaultBudgetCents > 0
+        ? agentDefaultBudgetCents
+        : 5_000;
     setAgentDefaultsForm({
-      budgetUsd: seedBudgetCents != null ? String((seedBudgetCents / 100).toFixed(2)) : '',
+      budgetUsd: String((seedBudgetCents / 100).toFixed(2)),
       threshold: Math.max(0, Math.min(100, seedThreshold)),
       thresholdMode: agentDefaults.threshold_mode === 'auto' ? 'auto' : 'manual',
       autoSendAssessment: agentDefaults.auto_send_assessment !== false,
@@ -964,11 +968,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleSaveAgentDefaults = async () => {
-    setAgentDefaultsSaving(true);
     const budgetUsd = Number(agentDefaultsForm.budgetUsd);
-    const budgetCents = Number.isFinite(budgetUsd) && budgetUsd > 0
-      ? Math.round(budgetUsd * 100)
-      : null;
+    if (!Number.isFinite(budgetUsd) || budgetUsd <= 0) {
+      showToast('Set a default monthly cap greater than $0.', 'error');
+      return;
+    }
+    setAgentDefaultsSaving(true);
+    const budgetCents = Math.round(budgetUsd * 100);
     const threshold = Math.max(0, Math.min(100, Number(agentDefaultsForm.threshold) || 0));
     const currentAiTooling = orgData?.ai_tooling_config || {};
     const currentAgentDefaults = currentAiTooling.agent_defaults || {};
@@ -977,7 +983,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       // `enabled` is retained for compatibility but never treated as an
       // implicit role activation grant. New roles always start OFF.
       enabled: currentAgentDefaults.enabled !== false,
-      budget_cents: budgetCents == null ? 0 : budgetCents,
+      budget_cents: budgetCents,
       threshold_mode: agentDefaultsForm.thresholdMode === 'auto' ? 'auto' : 'manual',
       auto_send_assessment: Boolean(agentDefaultsForm.autoSendAssessment),
       auto_resend_assessment: Boolean(agentDefaultsForm.autoResendAssessment),
@@ -987,7 +993,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     };
     try {
       const res = await orgsApi.update({
-        default_role_budget_cents: budgetCents == null ? 0 : budgetCents,
+        default_role_budget_cents: budgetCents,
         default_score_threshold: threshold,
         ai_tooling_config: {
           ...currentAiTooling,

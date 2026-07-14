@@ -197,11 +197,13 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
           {isRediscovery ? 'ranked by fit to your requirement' : `ranked by ${rankLabel}`}
           {isRediscovery
             ? screened
-              ? ` · deep-checked ${screened} of ${data.total_matched} scored${
-                  capped ? ', refine to narrow' : ''
+              ? ` · deep-checked ${screened} of ${data.database_matches ?? data.total_matched} database matches${
+                  capped ? ', partial verification' : ''
                 }`
-              : typeof data.total_matched === 'number'
-              ? ` · ${data.total_matched} scored in pool`
+              : typeof (data.database_matches ?? data.total_matched) === 'number'
+              ? ` · ${data.database_matches ?? data.total_matched} database matches · no deep verification${
+                  typeof data.pool_size === 'number' ? ` across ${data.pool_size} scored applications` : ''
+                }`
               : ''
             : typeof data.total_matched === 'number'
             ? ` · ${data.total_matched} in pool`

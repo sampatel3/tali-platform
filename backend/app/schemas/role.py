@@ -73,7 +73,7 @@ class RoleCreate(BaseModel):
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
-    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=1, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
 
 
@@ -114,7 +114,7 @@ class RoleUpdate(BaseModel):
         Literal["approve_generated_task", "approve_when_ready", "skip_assessment"]
     ] = None
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
-    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=1, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
     # Workspace criterion ids the recruiter has explicitly hidden from
     # this role. Editable via PATCH so the chip editor's "Show hidden →
@@ -174,6 +174,13 @@ class RoleResponse(BaseModel):
     description: Optional[str] = None
     criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
+    role_kind: Literal["standard", "sister"] = "standard"
+    # Sister roles own an alternate job spec + scores, while this role owns the
+    # shared ATS application roster and all Workable write-backs.
+    ats_owner_role_id: Optional[int] = None
+    ats_owner_role_name: Optional[str] = None
+    effective_workable_job_id: Optional[str] = None
+    sister_role_count: int = 0
     workable_job_id: Optional[str] = None
     # Requisition -> Workable job lifecycle: draft | open | filled |
     # filled_external | cancelled. None for legacy / Workable-synced roles
@@ -196,6 +203,11 @@ class RoleResponse(BaseModel):
     # locally only (no sync). True for published jobs and manual roles. The UI
     # uses this to grey out the role + disable Workable-write toggles.
     workable_job_live: bool = True
+    # True only when the role's native /job/{token} page is accepting
+    # applications and eligible for the careers feed. A published-but-inactive
+    # preview deliberately remains False. Distinct from ``workable_job_state``
+    # (the external ATS). Drives the Jobs list "Live" badge.
+    is_published: bool = False
     job_spec_filename: Optional[str] = None
     job_spec_text: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None
@@ -299,7 +311,7 @@ class ApplicationResponse(BaseModel):
     candidate_id: int
     role_id: int
     status: str
-    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "advanced"] = "applied"
+    pipeline_stage: Literal["sourced", "applied", "invited", "in_assessment", "review", "advanced"] = "applied"
     pipeline_stage_updated_at: Optional[datetime] = None
     pipeline_stage_source: Literal["system", "recruiter", "sync", "agent"] = "system"
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"] = "open"
@@ -340,7 +352,14 @@ class ApplicationResponse(BaseModel):
     # invalidation rework (~370 rows across roles 110–113). The writer is
     # gone from current code but the rows remain; rejecting them here
     # 500s every /applications listing that touches them.
-    score_status: Optional[Literal["pending", "running", "done", "error", "stale", "cancelled"]] = None
+    score_status: Optional[Literal["pending", "running", "done", "error", "stale", "cancelled", "unscorable"]] = None
+    # Present when this row is projected into a sister role. ``id`` remains the
+    # canonical source application id so every stage/outcome action routes to
+    # the ATS-owning application rather than a cloned pipeline record.
+    operational_role_id: Optional[int] = None
+    operational_role_name: Optional[str] = None
+    sister_role_id: Optional[int] = None
+    source_role_score: Optional[float] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
     workable_stage: Optional[str] = None

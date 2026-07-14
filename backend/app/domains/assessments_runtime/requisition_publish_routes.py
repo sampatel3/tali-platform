@@ -26,6 +26,10 @@ from ...services.role_brief_service import (
 )
 from ...services.role_criteria_service import sync_derived_criteria
 from ...services.role_intent_fingerprint import role_intent_fingerprint
+from ...services.task_provisioning_service import (
+    MIN_ASSESSMENT_INPUT_CHARS,
+    role_assessment_input_text,
+)
 from .requisition_shared import _get_brief, _job_page_url, _org, _workable_spec
 from .roles_management_routes import (
     _request_autogenerate_assessment_task,
@@ -110,6 +114,24 @@ def publish_requisition(
         job_status=JOB_STATUS_DRAFT,
         job_spec_text=data.jd_markdown,
     )
+    # Publication and autonomous task generation must agree on whether the
+    # persisted role has enough input. Requisition criteria and structured
+    # fields count alongside the rendered Markdown. Fail now—before exposing a
+    # preview—instead of accepting publish and leaving Turn on blocked later.
+    assessment_input_length = len(role_assessment_input_text(role))
+    if (
+        not bool(getattr(role, "auto_skip_assessment", False))
+        and assessment_input_length < MIN_ASSESSMENT_INPUT_CHARS
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This requisition needs a little more role detail before "
+                "publishing so the agent can create its assessment "
+                f"({assessment_input_length}/{MIN_ASSESSMENT_INPUT_CHARS} characters)."
+            ),
+        )
     # Publish is the job-spec/intent mutation boundary. Keep every downstream
     # artifact aligned in the same transaction: derived criteria, score
     # staleness, pending-decision supersession, and tech-question invalidation.

@@ -88,6 +88,7 @@ if [[ -z "$BACKEND_BASE_URL" ]]; then
   fi
 fi
 railway_wait_for_readiness "$BACKEND_BASE_URL"
+railway_validate_default_agent_capabilities "$BACKEND_BASE_URL"
 
 RAILWAY_ENVIRONMENT="$ENV_NAME" \
 RAILWAY_BACKEND_SERVICE="$WEB_SERVICE" \
@@ -96,4 +97,4 @@ RAILWAY_SCORING_WORKER_SERVICE="$SCORING_WORKER_SERVICE" \
 RAILWAY_STATUS_SCOPE=all \
   "$ROOT_DIR/scripts/railway/check_status.sh"
 
-echo "Web deployment succeeded and /ready validated the complete production topology."
+echo "Web deployment succeeded; /ready and the default agent assessment path are production-ready."

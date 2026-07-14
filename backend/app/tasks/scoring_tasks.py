@@ -85,6 +85,8 @@ def recover_stuck_score_jobs(
                 CvScoreJob.id,
                 CvScoreJob.application_id,
                 CvScoreJob.status,
+                CvScoreJob.requires_active_agent,
+                CvScoreJob.force_full_score,
             )
             .filter(
                 or_(
@@ -117,9 +119,15 @@ def recover_stuck_score_jobs(
         # More than one abandoned attempt can exist for the same application.
         # Archive every row we successfully claim, but enqueue at most one
         # replacement score.
-        app_ids: set[int] = set()
+        app_authority: dict[int, tuple[bool, bool]] = {}
         archived = 0
-        for row_id, application_id, status in rows:
+        for (
+            row_id,
+            application_id,
+            status,
+            requires_active_agent,
+            force_full_score,
+        ) in rows:
             if status == SCORE_JOB_ERROR:
                 latest_id = (
                     db.query(CvScoreJob.id)
@@ -129,7 +137,10 @@ def recover_stuck_score_jobs(
                     .scalar()
                 )
                 if latest_id == int(row_id):
-                    app_ids.add(int(application_id))
+                    app_authority[int(application_id)] = (
+                        bool(requires_active_agent),
+                        bool(force_full_score),
+                    )
                 continue
             claim = db.query(CvScoreJob).filter(
                 CvScoreJob.id == int(row_id),
@@ -152,11 +163,14 @@ def recover_stuck_score_jobs(
             )
             if updated == 1:
                 archived += 1
-                app_ids.add(int(application_id))
+                app_authority[int(application_id)] = (
+                    bool(requires_active_agent),
+                    bool(force_full_score),
+                )
         if archived:
             db.commit()
 
-        for application_id in sorted(app_ids):
+        for application_id in sorted(app_authority):
             app = (
                 db.query(CandidateApplication)
                 .filter(CandidateApplication.id == application_id)
@@ -166,7 +180,16 @@ def recover_stuck_score_jobs(
                 skipped += 1
                 continue
             try:
-                if enqueue_score(db, app, force=False) is None:
+                requires_active_agent, force_full_score = app_authority[
+                    application_id
+                ]
+                if enqueue_score(
+                    db,
+                    app,
+                    force=False,
+                    bypass_pre_screen=force_full_score,
+                    requires_active_agent=requires_active_agent,
+                ) is None:
                     skipped += 1
                 else:
                     recovered += 1
@@ -236,6 +259,7 @@ def score_application_job(
         SCORE_JOB_RUNNING,
         SCORE_JOB_STALE,
     )
+    from ..models.role import Role
     from ..platform.database import SessionLocal
     from ..services.cv_score_orchestrator import _execute_scoring, _latest_job
 
@@ -264,6 +288,49 @@ def score_application_job(
         if job.status not in {SCORE_JOB_PENDING, SCORE_JOB_STALE}:
             # Another worker already picked this up — bail out.
             return {"status": "skipped", "application_id": application_id, "job_status": job.status}
+
+        # Autonomous authority is checked against a freshly locked Role in the
+        # same transaction that claims the job. Pause/Turn off therefore wins
+        # over any task that was still waiting in Redis; already-running work
+        # may finish, but no new provider call can start after the hold commits.
+        scoring_role = None
+        if bool(getattr(job, "requires_active_agent", True)):
+            scoring_role = (
+                db.query(Role)
+                .filter(
+                    Role.id == int(application.role_id),
+                    Role.organization_id == int(application.organization_id),
+                )
+                .with_for_update()
+                .populate_existing()
+                .one_or_none()
+                if application.role_id is not None
+                else None
+            )
+            if scoring_role is None:
+                job.status = SCORE_JOB_ERROR
+                job.error_message = "role_missing_before_scoring"
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {"status": "error", "application_id": application_id}
+            if (
+                not bool(scoring_role.agentic_mode_enabled)
+                or scoring_role.agent_paused_at is not None
+            ):
+                reason = (
+                    "deferred_agent_paused"
+                    if scoring_role.agent_paused_at is not None
+                    else "deferred_agent_off"
+                )
+                job.status = SCORE_JOB_STALE
+                job.error_message = reason
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {
+                    "status": reason,
+                    "application_id": application_id,
+                    "role_id": int(scoring_role.id),
+                }
 
         # Cooperative cancel. batch_score_role checks the same Redis flag
         # between fetch/enqueue phases, but once the per-app jobs are
@@ -346,7 +413,6 @@ def score_application_job(
         # Re-publish is allowed while the provider call is in flight; the
         # post-call check below prevents that old-JD output from overwriting the
         # freshly invalidated application score.
-        from ..models.role import Role
         from ..services.role_intent_fingerprint import (
             role_intent_fingerprint,
             role_reconfiguration_is_active,
@@ -386,7 +452,15 @@ def score_application_job(
         db.commit()
 
         try:
-            _execute_scoring(db, application=application, job=job, force_full_score=force_full_score)
+            _execute_scoring(
+                db,
+                application=application,
+                job=job,
+                force_full_score=bool(
+                    force_full_score
+                    or getattr(job, "force_full_score", False)
+                ),
+            )
             # SessionLocal disables autoflush. Materialize the tentative score
             # transaction before reloading the role generation; otherwise
             # ``populate_existing`` can overwrite same-transaction role state
@@ -443,6 +517,13 @@ def score_application_job(
                                 else None
                             ),
                             error_message="rescore_after_role_reconfiguration",
+                            requires_active_agent=bool(
+                                getattr(job, "requires_active_agent", True)
+                            ),
+                            force_full_score=bool(
+                                getattr(job, "force_full_score", False)
+                                or force_full_score
+                            ),
                             queued_at=now,
                         )
                     )
@@ -751,7 +832,12 @@ def batch_score_role(
                     "fetch_failures": fetch_failures,
                     "pre_screened_out": pre_screened_out,
                 }
-            job = enqueue_score(db, app, force=include_scored)
+            job = enqueue_score(
+                db,
+                app,
+                force=include_scored,
+                requires_active_agent=False,
+            )
             if job is not None:
                 enqueued += 1
                 # When inline (no Celery), the job has already run by now —
@@ -788,7 +874,13 @@ def batch_score_role(
     name="app.tasks.scoring_tasks.sweep_stale_scores",
     queue="scoring",
 )
-def sweep_stale_scores(*, limit: int = 500) -> dict:
+def sweep_stale_scores(
+    *,
+    limit: int = 500,
+    role_id: int | None = None,
+    application_ids: list[int] | None = None,
+    explicit: bool = False,
+) -> dict:
     """Find applications whose scores are NULL despite having a CV, and
     enqueue them. Safety net for the hook-based invalidation in
     ``mark_role_scores_stale`` / ``mark_application_scores_stale`` —
@@ -807,7 +899,7 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
 
     Returns a dict with counts for telemetry.
     """
-    from sqlalchemy import and_, exists
+    from sqlalchemy import and_, exists, or_
 
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import CvScoreJob
@@ -837,21 +929,55 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
             .group_by(CvScoreJob.application_id)
             .subquery()
         )
-        latest_jobs = (
+        latest_jobs_query = (
             db.query(CvScoreJob)
             .join(
                 latest_job_subq,
                 (CvScoreJob.application_id == latest_job_subq.c.application_id)
                 & (CvScoreJob.queued_at == latest_job_subq.c.max_queued),
             )
+            .join(Role, Role.id == CvScoreJob.role_id)
             .filter(CvScoreJob.status == "stale")
-            .order_by(desc(CvScoreJob.queued_at))
+        )
+        if explicit and role_id is None:
+            return {
+                "status": "error",
+                "reason": "explicit stale-score sweeps require role_id scope",
+                "examined": 0,
+                "enqueued": 0,
+                "skipped": 0,
+            }
+        if role_id is not None:
+            latest_jobs_query = latest_jobs_query.filter(
+                CvScoreJob.role_id == int(role_id)
+            )
+        if application_ids:
+            latest_jobs_query = latest_jobs_query.filter(
+                CvScoreJob.application_id.in_(
+                    [int(value) for value in application_ids]
+                )
+            )
+        if not explicit:
+            # The periodic global safety net is recovery, not fresh authority.
+            # Autonomous stale work is eligible only for a currently running
+            # role; explicit jobs retain their own recruiter authority.
+            latest_jobs_query = latest_jobs_query.filter(
+                or_(
+                    CvScoreJob.requires_active_agent.is_(False),
+                    and_(
+                        Role.agentic_mode_enabled.is_(True),
+                        Role.agent_paused_at.is_(None),
+                    ),
+                )
+            )
+        latest_jobs = (
+            latest_jobs_query.order_by(desc(CvScoreJob.queued_at))
             .limit(limit)
             .all()
         )
-        stale_app_ids = [j.application_id for j in latest_jobs if j.application_id]
 
-        for app_id in stale_app_ids:
+        for stale_job in latest_jobs:
+            app_id = int(stale_job.application_id)
             examined += 1
             app = (
                 db.query(CandidateApplication)
@@ -865,7 +991,17 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
                 skipped += 1
                 continue
             try:
-                job = enqueue_score(db, app, force=True)
+                job = enqueue_score(
+                    db,
+                    app,
+                    force=True,
+                    bypass_pre_screen=bool(stale_job.force_full_score),
+                    requires_active_agent=(
+                        False
+                        if explicit
+                        else bool(stale_job.requires_active_agent)
+                    ),
+                )
                 if job is not None:
                     enqueued += 1
                 else:
@@ -882,6 +1018,8 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
             "examined": examined,
             "enqueued": enqueued,
             "skipped": skipped,
+            "role_id": int(role_id) if role_id is not None else None,
+            "explicit": bool(explicit),
         }
     finally:
         db.close()

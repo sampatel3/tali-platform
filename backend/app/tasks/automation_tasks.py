@@ -22,6 +22,20 @@ from .celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+def _automatic_role_work_block_reason(role) -> str | None:
+    """Return why queued autonomous role work must not start now.
+
+    A role can be paused or turned off after a broker accepts a task but before
+    the worker begins provider work.  Re-authorize at execution time so Pause
+    and Turn off stop *new* model spend; an already-started provider request is
+    still allowed to settle normally.
+    """
+
+    from ..services.role_execution_guard import automatic_role_action_block_reason
+
+    return automatic_role_action_block_reason(role)
+
+
 def _set_activation_focus_state(
     role, *, status: str, error: str | None = None, retry_after: timedelta | None = None
 ) -> None:
@@ -111,6 +125,14 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        role_block = _automatic_role_work_block_reason(role)
+        if role_block:
+            return {
+                "status": "skipped",
+                "reason": "role_not_runnable",
+                "detail": role_block,
+                "role_id": role_id,
+            }
         result = get_or_regenerate(db, role)
         if role.tech_questions_signature:
             _set_activation_tech_state(role, status="succeeded")
@@ -141,7 +163,9 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
     bind=True,
     max_retries=0,
 )
-def generate_role_interview_focus(self, role_id: int) -> dict:
+def generate_role_interview_focus(
+    self, role_id: int, *, requires_running_agent: bool = False
+) -> dict:
     """Regenerate the interview-focus packet for a role.
 
     Fired when a JD is attached or re-uploaded. Writes the focus blob and
@@ -166,6 +190,15 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        if requires_running_agent:
+            role_block = _automatic_role_work_block_reason(role)
+            if role_block:
+                return {
+                    "status": "skipped",
+                    "reason": "role_not_runnable",
+                    "detail": role_block,
+                    "role_id": role_id,
+                }
         job_spec_text = (role.job_spec_text or "").strip()
         if not job_spec_text:
             return {"status": "skipped", "reason": "no_job_spec", "role_id": role_id}
@@ -315,6 +348,11 @@ def run_application_auto_reject(
         )
         if app is None:
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
+        # HARD GUARD: a `sourced` prospect is pre-applied — un-scored and never in
+        # the decision queue. Skip auto-reject entirely (the decision-creation
+        # emitters also refuse a sourced app; this avoids the wasted evaluation).
+        if (app.pipeline_stage or "").strip().lower() == "sourced":
+            return {"status": "skipped", "reason": "sourced_prospect", "application_id": application_id}
         org = (
             db.query(Organization)
             .filter(Organization.id == app.organization_id)
@@ -373,7 +411,11 @@ def run_application_auto_reject(
     default_retry_delay=30,
 )
 def parse_application_cv_sections(
-    self, application_id: int, *, force: bool = False
+    self,
+    application_id: int,
+    *,
+    force: bool = False,
+    origin: str | None = None,
 ) -> dict:
     """Parse an application's stored CV text into structured ``cv_sections``.
 
@@ -385,6 +427,11 @@ def parse_application_cv_sections(
     blocks structured instead of falling back to a naive split-by-heading
     render of the raw (often column-scrambled) PDF text.
 
+    ``origin`` is required execution authority. Autonomous ATS/native work
+    fresh-checks that the linked role agent is enabled and unpaused before any
+    provider call. Explicit recruiter upload is allowed while the agent is
+    held. Missing/unknown legacy messages fail closed.
+
     Idempotent: no-ops when ``cv_sections`` is already populated (unless
     ``force``). Retries a few times when the row or its ``cv_text`` isn't
     visible yet — the enqueue can race the sync transaction's commit.
@@ -392,14 +439,29 @@ def parse_application_cv_sections(
     from sqlalchemy.orm import joinedload
 
     from ..cv_parsing.apply import parse_and_store_cv_sections
+    from ..cv_parsing.origins import (
+        AUTONOMOUS_CV_PARSE_ORIGINS,
+        normalize_cv_parse_origin,
+    )
     from ..models.candidate_application import CandidateApplication
     from ..platform.database import SessionLocal
+
+    normalized_origin = normalize_cv_parse_origin(origin)
+    if normalized_origin is None:
+        return {
+            "status": "skipped",
+            "reason": "unknown_origin",
+            "application_id": application_id,
+        }
 
     db = SessionLocal()
     try:
         app = (
             db.query(CandidateApplication)
-            .options(joinedload(CandidateApplication.candidate))
+            .options(
+                joinedload(CandidateApplication.candidate),
+                joinedload(CandidateApplication.role),
+            )
             .filter(CandidateApplication.id == application_id)
             .first()
         )
@@ -410,6 +472,28 @@ def parse_application_cv_sections(
             if self.request.retries < self.max_retries:
                 raise self.retry(countdown=30)
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
+
+        if app.deleted_at is not None:
+            return {
+                "status": "skipped",
+                "reason": "application_deleted",
+                "application_id": application_id,
+            }
+
+        if normalized_origin in AUTONOMOUS_CV_PARSE_ORIGINS:
+            role = app.role
+            role_block = (
+                "role is unavailable"
+                if role is None or getattr(role, "deleted_at", None) is not None
+                else _automatic_role_work_block_reason(role)
+            )
+            if role_block:
+                return {
+                    "status": "skipped",
+                    "reason": "role_not_runnable",
+                    "detail": role_block,
+                    "application_id": application_id,
+                }
 
         if app.cv_sections is not None and not force:
             return {"status": "skipped", "reason": "already_parsed", "application_id": application_id}

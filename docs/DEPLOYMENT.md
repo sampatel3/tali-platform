@@ -45,8 +45,9 @@ RAILWAY_SCORING_WORKER_SERVICE=<scoring-worker-service> \
 Why this matters:
 - Deploys are forced from `backend/` so Railway does not attempt a repo-root build.
 - Web, general-worker, and scoring-worker services are validated by exact name.
-- The coordinated wrapper pins live metering, migrates production, deploys both
-  workers, deploys web, and waits for public `/ready`.
+- The coordinated wrapper pins live metering and native apply, migrates
+  production, deploys both workers, deploys web, waits for public `/ready`, and
+  validates the default assessment-provider path.
 - This avoids `Railpack could not determine how to build app` failures caused by wrong root directory detection.
 - Manual Workable sync runs are queued to Celery when enabled, so keep the worker service deployed for durable background execution.
 
@@ -153,8 +154,9 @@ RAILWAY_BACKEND_URL=https://resourceful-adaptation-production.up.railway.app \
 
 The order is enforced:
 
-1. Set `USAGE_METER_LIVE=true` with `--skip-deploys` on web and both workers,
-   then read back and validate all three values.
+1. Set `USAGE_METER_LIVE=true` and `ATS_PUBLIC_APPLY_ENABLED=true` with
+   `--skip-deploys` on web and both workers, then read back and validate all six
+   values.
 2. Resolve the web service's production `DATABASE_PUBLIC_URL`, run
    `python -m alembic upgrade head` separately from service startup, then run
    `python -m alembic current` against the same public database.
@@ -162,8 +164,9 @@ The order is enforced:
    wait for a new `SUCCESS` deployment ID.
 4. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
    deploy it and wait for its own new `SUCCESS` deployment ID.
-5. Deploy web, wait for its new Railway deployment to succeed, then poll public
-   `/ready` until the API confirms both queue canaries and production providers.
+5. Deploy web, wait for its new Railway deployment to succeed, poll public
+   `/ready`, then require the default worker's live Anthropic, E2B, Resend
+   delivery, and GitHub capability checks to pass.
 
 Any missing service, duplicate service name, wrong topology variable, failed
 deployment, migration failure, or readiness timeout makes the wrapper exit
@@ -189,9 +192,10 @@ curl --fail-with-body \
 
 `/health` provides diagnostics; production `/ready` returns success only when
 live usage metering, both `celery` and `scoring` workers, and their live model
-access are healthy. The workers also verify GitHub access and perform
-one daily send to Resend's non-delivering test recipient; an assessment-enabled
-role cannot Turn on until its worker has proved the configured sender/key works.
+access are healthy. The coordinated deployment adds a stricter default-agent
+gate: E2B must be configured, GitHub access must be real and verified, and the
+worker must complete its cached Resend test send. An assessment-free role can
+still use the narrower per-role readiness contract.
 The agent sweep runs hourly, but Turn on and Resume enqueue a complete role pass
 immediately.
 

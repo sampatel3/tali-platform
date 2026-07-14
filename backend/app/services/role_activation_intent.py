@@ -26,6 +26,9 @@ ACTIVATION_CANCELLED = "cancelled"
 ACTIVATION_ACTIVE_STATUSES = frozenset(
     {ACTIVATION_PENDING, ACTIVATION_RETRY_WAIT}
 )
+ACTIVATION_POLICY_MUTABLE_STATUSES = frozenset(
+    {*ACTIVATION_ACTIVE_STATUSES, ACTIVATION_BLOCKED}
+)
 
 
 def _utcnow() -> datetime:
@@ -64,6 +67,75 @@ def _write_intent(role: Role, intent: dict[str, Any]) -> None:
     )
     provisioning["activation_intent"] = intent
     role.assessment_task_provisioning = provisioning
+
+
+def _role_policy_snapshot(role: Role) -> dict[str, Any]:
+    """Capture the role policy an eventual activation worker must preserve."""
+    from .agent_policy_settings import activation_policy_values
+
+    positive = activation_policy_values(role)
+    allowlist = getattr(role, "agent_action_allowlist", None)
+    return {
+        "monthly_usd_budget_cents": getattr(
+            role, "monthly_usd_budget_cents", None
+        ),
+        "auto_promote": positive["auto_promote"],
+        "auto_send_assessment": positive["auto_send_assessment"],
+        "auto_resend_assessment": positive["auto_resend_assessment"],
+        "auto_advance": positive["auto_advance"],
+        "auto_reject": bool(getattr(role, "auto_reject", False)),
+        "auto_reject_pre_screen": bool(
+            getattr(role, "auto_reject_pre_screen", False)
+        ),
+        "auto_skip_assessment": bool(
+            getattr(role, "auto_skip_assessment", False)
+        ),
+        "auto_reject_threshold_mode": getattr(
+            role, "auto_reject_threshold_mode", None
+        ),
+        "score_threshold": getattr(role, "score_threshold", None),
+        "agent_action_allowlist": (
+            list(allowlist) if isinstance(allowlist, (list, tuple)) else None
+        ),
+        "agent_token_budget_per_cycle": getattr(
+            role, "agent_token_budget_per_cycle", None
+        ),
+        "agent_decision_budget_per_cycle": getattr(
+            role, "agent_decision_budget_per_cycle", None
+        ),
+    }
+
+
+def refresh_role_activation_intent_policy(
+    role: Role, *, now: datetime | None = None
+) -> bool:
+    """Amend an unfinished Turn-on command with the newest saved policy.
+
+    The intent is a durable authorization and recovery cursor, not a license
+    to restore old settings. Recruiters may tighten automation while task
+    generation, a readiness retry, or a HITL block is outstanding. Recording
+    the new snapshot makes that ordering explicit for audit/recovery, while
+    the activation worker treats the current locked Role row as authoritative.
+    """
+    intent = activation_intent_state(role)
+    if str(intent.get("status") or "") not in ACTIVATION_POLICY_MUTABLE_STATUSES:
+        return False
+    snapshot = _role_policy_snapshot(role)
+    if intent.get("policy_snapshot") == snapshot:
+        return False
+    current_time = now or _utcnow()
+    revision = int(intent.get("policy_revision") or 0) + 1
+    intent.update(snapshot)
+    intent.update(
+        {
+            "policy_snapshot": snapshot,
+            "policy_revision": revision,
+            "policy_updated_at": _iso(current_time),
+            "updated_at": _iso(current_time),
+        }
+    )
+    _write_intent(role, intent)
+    return True
 
 
 def request_role_activation_intent(
@@ -149,6 +221,16 @@ def request_role_activation_intent(
     advance_enabled = (
         bool(auto_promote) if auto_advance is None else bool(auto_advance)
     )
+    # Save the authorized cap and action policy on the Role immediately. The
+    # role remains powered off, but subsequent settings edits now have one
+    # authoritative row to amend while the durable workflow is pending.
+    role.monthly_usd_budget_cents = budget
+    role.auto_promote = bool(auto_promote)
+    role.auto_send_assessment = send_enabled
+    role.auto_resend_assessment = resend_enabled
+    role.auto_advance = advance_enabled
+    policy_snapshot = _role_policy_snapshot(role)
+    policy_revision = int(existing.get("policy_revision") or 0) + 1
     intent = {
         **existing,
         "command": "approve_when_ready",
@@ -158,11 +240,10 @@ def request_role_activation_intent(
         "request_id": request_id,
         "provisioning_request_id": provisioning.get("request_id"),
         "task_id": exact_task_id,
-        "monthly_usd_budget_cents": budget,
-        "auto_promote": bool(auto_promote),
-        "auto_send_assessment": send_enabled,
-        "auto_resend_assessment": resend_enabled,
-        "auto_advance": advance_enabled,
+        **policy_snapshot,
+        "policy_snapshot": policy_snapshot,
+        "policy_revision": policy_revision,
+        "policy_updated_at": _iso(current_time),
         "requested_by_user_id": int(user_id),
         "requested_at": requested_at,
         "last_requested_at": _iso(current_time),
@@ -195,15 +276,6 @@ def request_role_activation_intent(
             "updated_at": _iso(current_time),
         }
         role.assessment_task_provisioning = provisioning
-    # Persist the authorized cap and policy immediately while leaving runtime
-    # power state untouched until a worker receives the activation task.
-    role.monthly_usd_budget_cents = budget
-    # Policy choices are harmless while the role is off and should read back
-    # immediately even when task generation/worker activation is still pending.
-    role.auto_promote = bool(auto_promote)
-    role.auto_send_assessment = send_enabled
-    role.auto_resend_assessment = resend_enabled
-    role.auto_advance = advance_enabled
     return intent
 
 
@@ -229,6 +301,19 @@ def cancel_role_activation_intent(
         }
     )
     _write_intent(role, intent)
+    # Turn on authorizes the outer paid task-generation outbox. Cancelling only
+    # this nested intent would leave a previously accepted/recoverable broker
+    # delivery free to generate after Turn off. Restore the publish-time hold
+    # and invalidate any running claim; a later Turn on can authorize it again.
+    from .task_provisioning_state import (
+        defer_assessment_task_provisioning_until_activation,
+    )
+
+    defer_assessment_task_provisioning_until_activation(
+        role,
+        reason=str(reason or "activation cancelled"),
+        now=current_time,
+    )
     return True
 
 
@@ -282,6 +367,12 @@ def activation_intent_task_ready(role: Role) -> bool:
     if not activation_intent_is_due(role):
         return False
     intent = activation_intent_state(role)
+    # A recruiter may explicitly bypass the assessment after Turn on was
+    # queued. That newer restriction removes task approval from the runtime
+    # path, so the activation outbox is ready even if generation has not
+    # produced a task yet.
+    if bool(getattr(role, "auto_skip_assessment", False)):
+        return True
     task = _intent_task(role, intent)
     if task is None:
         return False
@@ -419,18 +510,46 @@ def complete_role_activation_intent(
             blocked=True,
         )
 
+    current_budget = getattr(role, "monthly_usd_budget_cents", None)
+    if current_budget is None or int(current_budget) <= 0:
+        return _record_retry(
+            db,
+            role_id=int(role.id),
+            request_id=request_id,
+            error=(
+                "monthly_usd_budget_cents must be greater than zero before "
+                "the agent can turn on"
+            ),
+            now=current_time,
+            blocked=True,
+        )
+
+    skip_assessment = bool(getattr(role, "auto_skip_assessment", False))
     task = _intent_task(role, intent)
-    if task is None:
+    if task is None and not skip_assessment:
         # Generation/battle provisioning owns the next wake. This is not an
         # error and should not introduce a timer that competes with its sweep.
         return {"status": "waiting_for_task"}
-    extra = task.extra_data if isinstance(task.extra_data, dict) else {}
-    battle = extra.get("battle_test") if isinstance(extra.get("battle_test"), dict) else {}
+    extra = (
+        task.extra_data
+        if task is not None and isinstance(task.extra_data, dict)
+        else {}
+    )
+    battle = (
+        extra.get("battle_test")
+        if isinstance(extra.get("battle_test"), dict)
+        else {}
+    )
     # An already-active task was previously approved by a human. In the
     # republish HITL path, the new Turn-on command explicitly confirms that
     # preserved choice; only generated inactive drafts require a battle pass
     # before automatic approval.
-    if not bool(task.is_active) and battle.get("verdict") != "pass":
+    if (
+        not skip_assessment
+        and task is not None
+        and not bool(task.is_active)
+        and battle.get("verdict") != "pass"
+    ):
         battle_state = extra.get("battle_test_provisioning") or {}
         if str(battle_state.get("status") or "") == "repair_exhausted":
             return _record_retry(
@@ -447,7 +566,7 @@ def complete_role_activation_intent(
         from .agent_activation_readiness import activation_readiness, readiness_message
         from .task_approval_service import approve_task_for_use
 
-        if not bool(task.is_active):
+        if not skip_assessment and task is not None and not bool(task.is_active):
             approve_task_for_use(
                 db,
                 task,
@@ -457,9 +576,20 @@ def complete_role_activation_intent(
                     else None
                 ),
             )
-        role.monthly_usd_budget_cents = int(intent["monthly_usd_budget_cents"])
-        role.auto_skip_assessment = False
-        readiness = activation_readiness(role, auto_skip_assessment=False)
+        from .agent_policy_settings import role_automation_enabled
+
+        readiness = activation_readiness(
+            role,
+            auto_skip_assessment=skip_assessment,
+            monthly_usd_budget_cents=int(current_budget),
+            auto_send_assessment=role_automation_enabled(
+                role, "auto_send_assessment"
+            ),
+            auto_resend_assessment=role_automation_enabled(
+                role, "auto_resend_assessment"
+            ),
+            auto_advance=role_automation_enabled(role, "auto_advance"),
+        )
         if not readiness.get("ready"):
             return _record_retry(
                 db,
@@ -472,16 +602,9 @@ def complete_role_activation_intent(
         role.agentic_mode_enabled = True
         role.agent_paused_at = None
         role.agent_paused_reason = None
-        role.auto_promote = bool(intent.get("auto_promote", True))
-        role.auto_send_assessment = bool(
-            intent.get("auto_send_assessment", intent.get("auto_promote", True))
-        )
-        role.auto_resend_assessment = bool(
-            intent.get("auto_resend_assessment", intent.get("auto_promote", True))
-        )
-        role.auto_advance = bool(
-            intent.get("auto_advance", intent.get("auto_promote", True))
-        )
+        # The current locked Role row is authoritative. Never replay the old
+        # intent snapshot here: a recruiter may have lowered the cap, disabled
+        # advance, or chosen assessment skip while provisioning was pending.
         role.starred_for_auto_sync = True
         if (
             role.source == "requisition"
@@ -492,10 +615,13 @@ def complete_role_activation_intent(
         role.agent_bootstrap_error = None
         role.agent_bootstrap_started_at = current_time
         role.agent_bootstrap_completed_at = None
+        refresh_role_activation_intent_policy(role, now=current_time)
+        intent = activation_intent_state(role)
+        activated_task_id = int(task.id) if task is not None else None
         intent.update(
             {
                 "status": ACTIVATION_SUCCEEDED,
-                "task_id": int(task.id),
+                "task_id": activated_task_id,
                 "attempts": int(intent.get("attempts") or 0) + 1,
                 "last_error": None,
                 "next_attempt_at": None,
@@ -514,7 +640,7 @@ def complete_role_activation_intent(
             provisioning["reconfiguration"] = {
                 **reconfiguration,
                 "status": "succeeded",
-                "replacement_task_id": int(task.id),
+                "replacement_task_id": activated_task_id,
                 "last_error": None,
                 "completed_at": _iso(current_time),
                 "updated_at": _iso(current_time),
@@ -562,7 +688,11 @@ def complete_role_activation_intent(
         regenerate_role_tech_questions.delay(int(role.id))
     except Exception:
         pass
-    return {"status": "activated", "role_id": int(role.id), "task_id": int(task.id)}
+    return {
+        "status": "activated",
+        "role_id": int(role.id),
+        "task_id": int(task.id) if task is not None else None,
+    }
 
 
 __all__ = [
@@ -578,5 +708,6 @@ __all__ = [
     "block_activation_intent_if_task_exhausted",
     "cancel_role_activation_intent",
     "complete_role_activation_intent",
+    "refresh_role_activation_intent_policy",
     "request_role_activation_intent",
 ]

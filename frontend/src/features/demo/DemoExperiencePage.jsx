@@ -47,7 +47,6 @@ const REPORT_SHOWCASE_TABS = new Set(['overview', 'cv']);
 
 const PANE_NARRATIVE = {
   jobs: 'See every role you’re hiring for in one place.',
-  candidates: 'Triage your shortlist — every candidate scored and ranked.',
   chat: 'Ask plain-English questions across your whole candidate pool.',
   profile: 'Send your client a clean, shareable verdict in one click.',
   workspace: 'The candidate side — every prompt, edit, and test run captured for scoring.',
@@ -64,14 +63,6 @@ const PANE_VALUE = {
       'See pipeline volume per role at a glance',
       'Spot stalled roles before your client asks',
       'No double-entry — Workable stays the source of truth',
-    ],
-  },
-  candidates: {
-    headline: 'Walk in with a ranked shortlist instead of a CV pile.',
-    outcomes: [
-      'Every CV scored against the role the moment it lands',
-      'Pre-screen weeds out the obvious nos for you',
-      'Search in plain English, not boolean strings',
     ],
   },
   chat: {
@@ -126,12 +117,6 @@ export const DemoExperiencePage = ({ onNavigate }) => {
       urlLabel: 'taali.ai/jobs · your open roles',
       src: '/jobs?demo=1&showcase=1',
     },
-    candidates: {
-      key: 'candidates',
-      label: 'Candidates flowing in',
-      urlLabel: 'taali.ai/candidates · scored & ranked',
-      src: '/candidates?demo=1&showcase=1',
-    },
     chat: {
       key: 'chat',
       label: 'Ask about your candidates',
@@ -183,7 +168,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
         && frameUrl.searchParams.get('showcase') === '1';
     }
 
-    if (pane.key === 'jobs' || pane.key === 'candidates') {
+    if (pane.key === 'jobs') {
       allowed = sameRoute
         && frameUrl.searchParams.get('demo') === '1'
         && frameUrl.searchParams.get('showcase') === '1';
@@ -265,7 +250,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                 See Taali <em>end to end.</em>
               </h1>
               <p className="lede">
-                Walk through what you can do with Taali — see your jobs board, triage your candidates, ask questions in plain English, watch the candidate experience, and send a clean verdict to your client.
+                Walk through what you can do with Taali — see your jobs board, ask questions in plain English, watch the candidate experience, and send a clean verdict to your client.
               </p>
               <p className="lede-sub">
                 Click through it like a customer would. No setup, no fake data screens — just the product.
@@ -364,7 +349,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               <div className="l">
                 <div className="kicker">01 · PRODUCT WALKTHROUGH</div>
                 <h2>
-                  Try the five things <em>you’ll do most.</em>
+                  Try the four things <em>you’ll do most.</em>
                 </h2>
                 <p>
                   Thanks, {submittedLead.fullName.split(/\s+/)[0] || submittedLead.fullName}. Click through each pane below — these are live screens, not videos.
@@ -372,7 +357,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               </div>
               <div className="r">
                 <b>What you can do here</b>
-                Open your jobs board, sort and filter candidates, ask Taali questions in plain English, see the candidate experience, and send your client a clean shareable verdict.
+                Open your jobs board, ask Taali questions in plain English, see the candidate experience, and send your client a clean shareable verdict.
               </div>
             </div>
 

@@ -33,6 +33,7 @@ import './JobsMotionPreview.css';
 
 const STAGES = PIPELINE_FUNNEL_STAGES;
 const ROLE_CARD_DIMMED_OPACITY = 0.55;
+const NON_LIVE_WORKABLE_STATES = new Set(['draft', 'archived', 'closed']);
 
 const JOB_STATUS_META = {
   draft: { label: 'Draft', tone: 'draft' },
@@ -48,7 +49,11 @@ const isRoleDraft = (role) => (
 );
 const isRoleLive = (role) => String(role?.workable_job_state || '').toLowerCase() === 'published';
 const isRoleDimmed = (role) => (
-  String(role?.source || '').toLowerCase() === 'workable' && !isRoleLive(role)
+  role?.workable_job_live != null
+    ? role.workable_job_live === false
+    : NON_LIVE_WORKABLE_STATES.has(
+      String(role?.workable_job_state || '').trim().toLowerCase(),
+    )
 );
 const getRoleBadgeLabel = (role) => {
   if (String(role?.source || '').toLowerCase() === 'workable') return null;
@@ -120,8 +125,6 @@ const RoleCard = ({ role, agentLive, reduced }) => {
   const agentEnabled = Boolean(role?.agentic_mode_enabled);
   const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
   const agentActive = agentEnabled && !agentPaused;
-  const roleActive = agentActive && !lifecycleDimmed;
-  const roleDimmed = !roleActive;
   const agentBudget = Number(agentLive?.monthly_budget_cents ?? 0) / 100;
   const agentSpent = agentLive ? Number(agentLive.monthly_spent_cents || 0) / 100 : null;
   const pendingCount = Number(agentLive?.pending_decisions || 0);
@@ -134,11 +137,11 @@ const RoleCard = ({ role, agentLive, reduced }) => {
         ...staggerItem,
         show: {
           ...staggerItem.show,
-          opacity: roleDimmed ? ROLE_CARD_DIMMED_OPACITY : 1,
+          opacity: lifecycleDimmed ? ROLE_CARD_DIMMED_OPACITY : 1,
         },
       }}
       whileHover={reduced ? undefined : { y: -4, transition: { duration: 0.18, ease: EASE_OUT } }}
-      className={`job-card ${workableRole ? 'from-wk' : ''} ${roleActive ? 'agent-on' : 'agent-inactive'} ${lifecycleDimmed ? 'not-live' : ''}`}
+      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
       style={{ cursor: 'default' }}
     >
       <div className="job-head">

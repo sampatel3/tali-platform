@@ -566,6 +566,76 @@
   flex-shrink: 0;
 }
 
+/* Count badge on the "Sourced" toolbar toggle — surfaces how many prospects are
+   awaiting engagement without opening the tracker. */
+.rq-chiptoggle-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.rq-chiptoggle.on .rq-chiptoggle-count {
+  background: color-mix(in oklab, var(--purple) 18%, transparent);
+}
+
+/* Sourced tracker ("Sourced" view) — a read-only, grouped-by-role list of
+   pre-applied prospects. No score, no decision, no right-pane detail. */
+.rq-sourced-group {
+  padding: 4px 0 8px;
+}
+.rq-sourced-group + .rq-sourced-group {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.rq-sourced-grouphdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px 6px;
+}
+.rq-sourced-groupcount {
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  color: var(--mute);
+  letter-spacing: 0.04em;
+}
+.rq-sourced-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: default;
+}
+.rq-sourced-row:hover {
+  background: var(--bg-3);
+}
+.rq-sourced-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.rq-sourced-name {
+  font-weight: 600;
+  font-size: var(--fs-subtitle);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rq-sourced-sub {
+  font-size: var(--fs-caption);
+  color: var(--mute);
+}
+
 /* Invite-status timeline in the right-pane card */
 .rq-invite-timeline {
   border-top: 1px solid var(--line);

@@ -262,6 +262,7 @@ def role_to_response(
     last_candidate_activity_at: datetime | None = None,
     requisition: dict | None = None,
     client: dict | None = None,
+    is_published: bool = False,
 ) -> RoleResponse:
     # ``summary`` is the list serialization: the /roles list carries dozens of
     # roles, and no list consumer (Jobs, Dashboard, AgentBar, GlobalSearch) reads
@@ -308,6 +309,11 @@ def role_to_response(
         ]
     from ...services.agent_policy_settings import effective_agent_policy
 
+    role_kind = str(getattr(role, "role_kind", None) or "standard")
+    ats_owner = getattr(role, "ats_owner_role", None) if role_kind == "sister" else None
+    operational_role = ats_owner or role
+    loaded_sisters = _loaded_relationship_items(role, "sister_roles")
+    sister_role_count = len(loaded_sisters or [])
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -315,17 +321,23 @@ def role_to_response(
         description=None if summary else role.description,
         criteria=criteria,
         source=role.source,
+        role_kind=role_kind,
+        ats_owner_role_id=getattr(role, "ats_owner_role_id", None),
+        ats_owner_role_name=getattr(ats_owner, "name", None),
+        effective_workable_job_id=getattr(operational_role, "workable_job_id", None),
+        sister_role_count=sister_role_count,
         workable_job_id=role.workable_job_id,
-        job_status=getattr(role, "job_status", None),
+        job_status=getattr(operational_role, "job_status", None),
         requisition=requisition,
         client_id=(client or {}).get("client_id"),
         client_name=(client or {}).get("client_name"),
         workable_job_state=(
-            str(role.workable_job_data.get("state") or "").strip().lower() or None
-            if isinstance(getattr(role, "workable_job_data", None), dict)
+            str(operational_role.workable_job_data.get("state") or "").strip().lower() or None
+            if isinstance(getattr(operational_role, "workable_job_data", None), dict)
             else None
         ),
-        workable_job_live=workable_job_syncable(role),
+        workable_job_live=workable_job_syncable(operational_role),
+        is_published=bool(is_published),
         job_spec_filename=role.job_spec_filename,
         job_spec_text=None if summary else role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,

@@ -2,6 +2,7 @@ import React from 'react';
 import { MessageSquare, Pause, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { AgentLoop } from '../../shared/motion';
 
+import { formatAgentPauseStatus } from '../../shared/agentPauseCopy';
 import { Button } from '../../shared/ui/TaaliPrimitives';
 
 const groupByRecency = (rows) => {
@@ -167,7 +168,7 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
     const decisions = a.pending_decisions || 0;
     const status = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
     const preview = a.agent_paused
-      ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
+      ? formatAgentPauseStatus(a.agent_paused_reason)
       : a.last_message_preview
         || (decisions > 0
           ? `${fmtCount(decisions)} decision${decisions === 1 ? '' : 's'} waiting`

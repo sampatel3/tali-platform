@@ -44,6 +44,7 @@ from .health_tasks import (
     queue_worker_heartbeat,
     release_stale_usage_credit_reservations,
 )
+from .sister_role_tasks import score_sister_evaluation, score_sister_role
 # Eager-import corroboration_tasks so the worker registers the async
 # (shortlist-gated) graph + GitHub enrichment job — same unregistered-drop
 # trap as scoring_tasks if skipped.

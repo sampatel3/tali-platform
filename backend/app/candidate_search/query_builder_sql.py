@@ -14,15 +14,17 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from sqlalchemy import and_, cast, func, or_, text
+from sqlalchemy import Text, and_, bindparam, cast, func, literal_column, or_, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from .prompts import expand_region, normalise_country
 from .schemas import ParsedFilter
+from .skill_aliases import expand_skill_term, normalize_term
 
 logger = logging.getLogger("taali.candidate_search.sql")
+_ENGLISH = literal_column("'english'")
 
 
 def _expand_countries(parsed: ParsedFilter) -> list[str]:
@@ -42,8 +44,61 @@ def _expand_countries(parsed: ParsedFilter) -> list[str]:
     return out
 
 
+def _title_clause(term: str, *, bind_name: str):
+    """Match a parser "skill" against structured current/historical titles.
+
+    Recruiters routinely express occupations ("project manager", "scrum
+    master", "data engineer") in the same grammatical slot as technologies.
+    The parser therefore puts both into ``skills_*``.  Candidate enrichment,
+    however, stores occupations primarily in ``position`` / ``headline`` and
+    ``experience_entries[].title`` rather than the skills array.  Searching
+    those fields here recovers that evidence without another model call or a
+    vector index.
+
+    ``bind_name`` is caller-generated and unique because a query can contain
+    several AND/OR terms.
+    """
+    pattern = f"%{term}%"
+    history = text(
+        "EXISTS (SELECT 1 FROM jsonb_array_elements("
+        "COALESCE(candidates.experience_entries::jsonb, '[]'::jsonb)) e "
+        f"WHERE COALESCE(e->>'title', '') ILIKE :{bind_name})"
+    ).bindparams(bindparam(bind_name, pattern))
+    return or_(
+        Candidate.position.ilike(pattern),
+        Candidate.headline.ilike(pattern),
+        history,
+    )
+
+
+def _skill_or_title_clause(skill: str, *, bind_name: str):
+    """Taxonomy-aware, case-insensitive skill match with title fallback.
+
+    ``skills`` contains labels such as ``Python (Programming Language)`` and
+    ``Amazon Web Services (AWS)``. Exact JSON containment alone misses those
+    when a recruiter types the natural short form. The lower(JSON text) LIKE
+    expression is backed by a trigram GIN index in migration 159.
+    """
+    skills_jsonb = cast(Candidate.skills, JSONB)
+    skill_match = skills_jsonb.op("@>")(func.jsonb_build_array(skill))
+    skills_text = func.lower(func.coalesce(cast(skills_jsonb, Text), ""))
+    variants = expand_skill_term(skill)
+    normalized_matches = []
+    for variant in variants:
+        # Avoid substring false positives for tiny language names (Go, R, C).
+        pattern = f'%"{variant}"%' if len(variant) <= 2 else f"%{variant}%"
+        normalized_matches.append(skills_text.like(pattern))
+    return or_(
+        skill_match,
+        *normalized_matches,
+        # Backward compatibility for older parser results that put occupations
+        # in skills_* before titles_* existed.
+        _title_clause(skill, bind_name=bind_name),
+    )
+
+
 def _skills_all_clause(skills: list[str]):
-    """AND-match: every skill must appear in ``Candidate.skills``.
+    """AND-match: every term must appear as a skill or occupation title.
 
     Builds one ``@>`` containment per skill so the planner can pick a
     GIN index if/when one is added (``CREATE INDEX ... USING gin
@@ -52,25 +107,46 @@ def _skills_all_clause(skills: list[str]):
     """
     if not skills:
         return None
-    skills_jsonb = cast(Candidate.skills, JSONB)
     clauses = []
-    for skill in skills:
-        # ``@>`` containment: ``["AWS Glue"] @> ["AWS Glue"]`` is true.
-        literal = func.jsonb_build_array(skill)
-        clauses.append(skills_jsonb.op("@>")(literal))
+    for index, skill in enumerate(skills):
+        clauses.append(
+            _skill_or_title_clause(skill, bind_name=f"skills_all_title_{index}")
+        )
     return and_(*clauses)
 
 
 def _skills_any_clause(skills: list[str]):
-    """OR-match: at least one skill must appear."""
+    """OR-match: at least one term must appear as a skill or title."""
     if not skills:
         return None
-    skills_jsonb = cast(Candidate.skills, JSONB)
     clauses = []
-    for skill in skills:
-        literal = func.jsonb_build_array(skill)
-        clauses.append(skills_jsonb.op("@>")(literal))
+    for index, skill in enumerate(skills):
+        clauses.append(
+            _skill_or_title_clause(skill, bind_name=f"skills_any_title_{index}")
+        )
     return or_(*clauses)
+
+
+def _titles_all_clause(titles: list[str]):
+    if not titles:
+        return None
+    return and_(
+        *[
+            _title_clause(title, bind_name=f"titles_all_{index}")
+            for index, title in enumerate(titles)
+        ]
+    )
+
+
+def _titles_any_clause(titles: list[str]):
+    if not titles:
+        return None
+    return or_(
+        *[
+            _title_clause(title, bind_name=f"titles_any_{index}")
+            for index, title in enumerate(titles)
+        ]
+    )
 
 
 def _country_clause(countries: list[str]):
@@ -88,14 +164,15 @@ def _country_clause(countries: list[str]):
     # function, so we wrap it in a correlated subquery via ``func.exists``.
     # The pattern uses ``%<country>%`` to tolerate "London, United Kingdom".
     history_clauses = []
-    for country in countries:
+    for index, country in enumerate(countries):
         pattern = f"%{country}%"
+        bind_name = f"history_country_{index}"
         history_clauses.append(
             text(
                 "EXISTS (SELECT 1 FROM jsonb_array_elements("
                 "candidates.experience_entries::jsonb) e "
-                "WHERE COALESCE(e->>'country', e->>'location', '') ILIKE :p)"
-            ).bindparams(p=pattern)
+                f"WHERE COALESCE(e->>'country', e->>'location', '') ILIKE :{bind_name})"
+            ).bindparams(bindparam(bind_name, pattern))
         )
     if not history_clauses:
         return current
@@ -123,19 +200,48 @@ def _min_years_clause(min_years: Optional[int]):
     ).bindparams(years=int(min_years))
 
 
-def _keywords_clause(keywords: list[str]):
-    """Residual ILIKE OR-block on ``cv_text`` (and ``soft_criteria`` rides here too)."""
+def _keywords_clause(keywords: list[str], *, match_all: bool = False):
+    """Indexed full-text retrieval across CVs plus enriched profile fallback.
+
+    Each phrase uses ``plainto_tsquery`` (all meaningful words in that phrase).
+    Residual keywords remain OR alternatives; separately parsed soft
+    requirements are ANDed so "Treasury and data" cannot qualify on only one.
+    Candidate titles/summary/experience cover people whose CV text has not been
+    fetched yet.
+    """
     if not keywords:
         return None
     clauses = []
+    app_vector = func.to_tsvector(
+        _ENGLISH, func.coalesce(CandidateApplication.cv_text, "")
+    )
+    candidate_vector = func.to_tsvector(
+        _ENGLISH, func.coalesce(Candidate.cv_text, "")
+    )
+    experience_text = func.lower(
+        func.coalesce(cast(cast(Candidate.experience_entries, JSONB), Text), "")
+    )
     for term in keywords:
         if not term:
             continue
+        normalized = normalize_term(term)
+        if not normalized:
+            continue
+        ts_query = func.plainto_tsquery(_ENGLISH, normalized)
         pattern = f"%{term}%"
-        clauses.append(CandidateApplication.cv_text.ilike(pattern))
+        clauses.append(
+            or_(
+                app_vector.op("@@")(ts_query),
+                candidate_vector.op("@@")(ts_query),
+                Candidate.position.ilike(pattern),
+                Candidate.headline.ilike(pattern),
+                Candidate.summary.ilike(pattern),
+                experience_text.like(f"%{normalized}%"),
+            )
+        )
     if not clauses:
         return None
-    return or_(*clauses)
+    return and_(*clauses) if match_all else or_(*clauses)
 
 
 def needs_candidate_join(parsed: ParsedFilter) -> bool:
@@ -143,6 +249,8 @@ def needs_candidate_join(parsed: ParsedFilter) -> bool:
     return bool(
         parsed.skills_all
         or parsed.skills_any
+        or parsed.titles_all
+        or parsed.titles_any
         or parsed.locations_country
         or parsed.locations_region
         or parsed.min_years_experience
@@ -180,6 +288,14 @@ def apply_parsed_filter(
     if skills_any_c is not None:
         query = query.filter(skills_any_c)
 
+    titles_all_c = _titles_all_clause(parsed.titles_all)
+    if titles_all_c is not None:
+        query = query.filter(titles_all_c)
+
+    titles_any_c = _titles_any_clause(parsed.titles_any)
+    if titles_any_c is not None:
+        query = query.filter(titles_any_c)
+
     countries = _expand_countries(parsed)
     country_c = _country_clause(countries)
     if country_c is not None:
@@ -190,10 +306,46 @@ def apply_parsed_filter(
         query = query.filter(years_c)
 
     effective_keywords = list(parsed.keywords)
-    if soft_criteria_as_keywords:
-        effective_keywords.extend(parsed.soft_criteria)
-    keywords_c = _keywords_clause(effective_keywords)
+    effective_soft = list(parsed.soft_criteria) if soft_criteria_as_keywords else []
+    # Keyword/profile clauses reference Candidate fields even when no explicit
+    # structured candidate filter was parsed.
+    if (effective_keywords or effective_soft) and not needs_candidate_join(parsed):
+        query = query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+    keywords_c = _keywords_clause(effective_keywords, match_all=False)
     if keywords_c is not None:
         query = query.filter(keywords_c)
+    soft_c = _keywords_clause(effective_soft, match_all=True)
+    if soft_c is not None:
+        query = query.filter(soft_c)
 
     return query
+
+
+def apply_relevance_order(base_query, parsed: ParsedFilter):
+    """Order the full deterministic match set before any bounded verification.
+
+    This removes the old database-natural "first 50" behaviour. CV relevance
+    is indexed; recency and id provide stable tie-breakers for structural-only
+    searches.
+    """
+    terms = [
+        normalize_term(item)
+        for item in [*parsed.soft_criteria, *parsed.keywords]
+        if normalize_term(item)
+    ]
+    order = []
+    if terms:
+        query_text = " ".join(terms)
+        ts_query = func.plainto_tsquery(_ENGLISH, query_text)
+        vector = func.to_tsvector(
+            _ENGLISH, func.coalesce(CandidateApplication.cv_text, "")
+        )
+        order.append(func.ts_rank_cd(vector, ts_query).desc())
+    order.extend(
+        [
+            CandidateApplication.updated_at.desc().nullslast(),
+            CandidateApplication.created_at.desc().nullslast(),
+            CandidateApplication.id.desc(),
+        ]
+    )
+    return base_query.order_by(None).order_by(*order)

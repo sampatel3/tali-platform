@@ -727,7 +727,11 @@ def test_idempotent_reapply_repairs_missing_resume_and_triggers_scoring(
     assert repaired.candidate.cv_file_url == "s3://bucket/repaired.pdf"
     assert calls == {
         "app_id": existing_id,
-        "kwargs": {"score": True, "score_force": True},
+        "kwargs": {
+            "score": True,
+            "score_force": True,
+            "parse_origin": "native_apply",
+        },
     }
 
 

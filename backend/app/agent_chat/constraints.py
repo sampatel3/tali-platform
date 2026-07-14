@@ -82,7 +82,19 @@ def _trigger_rescreen(
     try:
         from ..tasks.scoring_tasks import sweep_stale_scores
 
-        sweep_stale_scores.apply_async(kwargs={"limit": 500}, countdown=10)
+        sweep_stale_scores.apply_async(
+            kwargs={
+                "limit": 500,
+                "role_id": int(role.id),
+                "application_ids": (
+                    [int(value) for value in application_ids]
+                    if application_ids
+                    else None
+                ),
+                "explicit": True,
+            },
+            countdown=10,
+        )
     except Exception:  # pragma: no cover — never fail the edit on dispatch
         import logging
 

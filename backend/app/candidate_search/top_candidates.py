@@ -322,6 +322,7 @@ def _ground(
     criteria: list[str],
     client,
     organization_id: int,
+    role_id: int | None,
     application_id: int,
 ) -> list[CriterionVerdict]:
     """Pure (no DB / no ORM access) — safe to run in a worker thread. Grounds
@@ -337,6 +338,7 @@ def _ground(
         criteria=criteria,
         client=client,
         organization_id=organization_id,
+        role_id=role_id,
         application_id=int(application_id),
     )
     for v in verdicts:
@@ -351,6 +353,7 @@ def _ground_window(
     criteria: list[str],
     client,
     organization_id: int,
+    role_id: int | None = None,
 ) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
     """Ground each app in ``apps`` concurrently (I/O-bound Haiku calls).
 
@@ -371,6 +374,7 @@ def _ground_window(
                 criteria=criteria,
                 client=client,
                 organization_id=organization_id,
+                role_id=role_id,
                 application_id=int(app.id),
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
@@ -476,11 +480,18 @@ def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dic
     population = {
         "skills_all": list(parsed.skills_all),
         "skills_any": list(parsed.skills_any),
+        "titles_all": list(parsed.titles_all),
+        "titles_any": list(parsed.titles_any),
         "locations": locations,
         "min_years_experience": parsed.min_years_experience,
     }
     parts: list[str] = []
-    pop_bits = list(parsed.skills_all) + list(parsed.skills_any)
+    pop_bits = (
+        list(parsed.titles_all)
+        + list(parsed.titles_any)
+        + list(parsed.skills_all)
+        + list(parsed.skills_any)
+    )
     if pop_bits:
         parts.append(", ".join(pop_bits[:4]))
     if criteria:
@@ -625,13 +636,13 @@ def _candidate_payload(
 
 def _has_structural(parsed) -> bool:
     """Did the query carry any HARD structural filter (skills / candidate
-    location / years / graph)? When it did NOT, the whole actionable pool is
-    ranked by score; when it did, those matches only BIAS the grounding window
-    — they never exclude. So a parser mistake can reorder the queue but cannot
-    empty the result; grounding makes the actual met/over-cap/not-met calls."""
+    title / location / years / graph)? These define the requested population;
+    qualitative criteria are verified within that population."""
     return bool(
         parsed.skills_all
         or parsed.skills_any
+        or parsed.titles_all
+        or parsed.titles_any
         or parsed.locations_country
         or parsed.locations_region
         or parsed.min_years_experience
@@ -678,10 +689,27 @@ def _load_candidates(base_query, *, matcher_ids, score_attr, size: int):
     )
 
 
+def _load_candidates_by_ids(base_query, application_ids: list[int]):
+    """Hydrate a relevance-ordered id list without losing its order."""
+    if not application_ids:
+        return []
+    apps = (
+        base_query.filter(CandidateApplication.id.in_(application_ids))
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
+        .all()
+    )
+    by_id = {int(app.id): app for app in apps}
+    return [by_id[app_id] for app_id in application_ids if app_id in by_id]
+
+
 def find_top_candidates(
     *,
     db: Session,
     organization_id: int,
+    role_id: int | None = None,
     query: str,
     base_query,
     limit: int = DEFAULT_LIMIT,
@@ -697,13 +725,12 @@ def find_top_candidates(
         rank_by = "taali"
     limit = max(1, min(int(limit), MAX_LIMIT))
 
-    # 1. Parse. The parser's STRUCTURAL guesses (skills / candidate location /
-    #    years) are used ONLY to bias which candidates get grounded first — they
-    #    never exclude anyone. The pool is the whole actionable set; grounding
-    #    (evidence-based) makes every met / over-cap / not-met call below.
+    # 1. Parse. Structural skills/titles/location/years define the population;
+    #    grounding makes qualitative met / over-cap / not-met calls inside it.
     result = run_search(
         db=db,
         organization_id=organization_id,
+        role_id=role_id,
         nl_query=query,
         base_query=base_query,
         rerank_enabled=False,
@@ -718,19 +745,58 @@ def find_top_candidates(
     score_attr = getattr(CandidateApplication, score_col)
     # Structural matches bias the window; `None` when the query had no structural
     # filter at all (then the whole pool is fair game, ranked by score).
-    matcher_ids = set(result.application_ids or []) if _has_structural(parsed) else None
+    has_structural = _has_structural(parsed)
+    matcher_ids = set(result.application_ids or []) if has_structural else None
     pool_count = _pool_count(base_query)
+    matched_count = len(matcher_ids) if matcher_ids is not None else pool_count
+    candidate_pool = (
+        base_query
+        if matcher_ids is None
+        else base_query.filter(CandidateApplication.id.in_(matcher_ids))
+    )
 
     base_payload = {
         "spec": _build_spec(parsed, query=query, rank_by=rank_by, criteria=criteria),
         # The pool we ranked over — NOT a structural-filter count. A parse miss
         # can no longer report a misleading "0 matched"; 0 here means the role
         # genuinely has no actionable candidates.
-        "total_matched": pool_count,
+        "total_matched": matched_count,
+        "database_matches": matched_count,
+        "pool_size": pool_count,
         "structural_matches": len(matcher_ids) if matcher_ids is not None else None,
         "warnings": [w.model_dump(mode="json") for w in result.warnings],
         "rank_by": rank_by,
     }
+
+    # A hard population request that matched nobody must never be padded with
+    # unrelated high scorers.  This was especially damaging for occupations:
+    # "project manager" produced zero exact skill-array hits, after which the
+    # old path grounded the org's top engineers against only the qualitative
+    # criteria and presented them as PM results.  Fail closed and let the
+    # caller explain/relax the structural constraint instead.
+    if has_structural and not matcher_ids:
+        return {
+            **base_payload,
+            "evaluated": 0,
+            "deep_checked": 0,
+            "shown": 0,
+            "returned": 0,
+            "qualified": 0,
+            "capped": False,
+            "candidates": [],
+            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "evidence_model": None,
+            "warnings": base_payload["warnings"]
+            + [
+                {
+                    "code": "no_structural_matches",
+                    "message": (
+                        "No candidates matched the requested skills or titles; "
+                        "unrelated candidates were not substituted."
+                    ),
+                }
+            ],
+        }
 
     # Final/window ordering: structural matches first, then by score. Applied in
     # Python so it's deterministic regardless of the bounded load order.
@@ -744,7 +810,7 @@ def find_top_candidates(
     # No qualitative/constraint criteria → just the top `limit` by score.
     if not criteria:
         apps = _load_candidates(
-            base_query, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+            candidate_pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
         )
         apps.sort(key=_rank_key, reverse=True)
         shown = [
@@ -755,6 +821,10 @@ def find_top_candidates(
             **base_payload,
             "evaluated": len(shown),
             "shown": len(shown),
+            "returned": len(shown),
+            "deep_checked": 0,
+            "qualified": matched_count,
+            "capped": matched_count > len(shown),
             "candidates": shown,
             "excluded": {"not_met_total": 0, "by_criterion": []},
             "evidence_model": None,
@@ -773,7 +843,7 @@ def find_top_candidates(
     if client is None:
         # Grounding unavailable → degrade to a ranked list, no filtering.
         apps = _load_candidates(
-            base_query, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+            candidate_pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
         )
         apps.sort(key=_rank_key, reverse=True)
         shown = [
@@ -784,6 +854,10 @@ def find_top_candidates(
             **base_payload,
             "evaluated": 0,
             "shown": len(shown),
+            "returned": len(shown),
+            "deep_checked": 0,
+            "qualified": None,
+            "capped": matched_count > len(shown),
             "candidates": shown,
             "excluded": {"not_met_total": 0, "by_criterion": []},
             "evidence_model": None,
@@ -799,16 +873,20 @@ def find_top_candidates(
     #    can float them up. Callers scope the pool to in-the-running candidates
     #    (scored, not below-threshold), so this seldom truncates. The window is
     #    loaded bounded, so even an org-wide pool never materialises in full.
-    window_size = min(pool_count, GROUND_WINDOW_CAP)
+    window_size = min(matched_count, GROUND_WINDOW_CAP)
     apps = _load_candidates(
-        base_query,
+        candidate_pool,
         matcher_ids=matcher_ids,
         score_attr=score_attr,
         size=max(window_size, limit),
     )
     apps.sort(key=_rank_key, reverse=True)
     grounded = _ground_window(
-        apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
+        apps[:window_size],
+        criteria=criteria,
+        client=client,
+        organization_id=organization_id,
+        role_id=role_id,
     )
 
     survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
@@ -847,7 +925,11 @@ def find_top_candidates(
     return {
         **base_payload,
         "evaluated": len(grounded),
+        "deep_checked": len(grounded),
         "shown": len(shown),
+        "returned": len(shown),
+        "qualified": len(survivors),
+        "capped": matched_count > len(grounded),
         "candidates": shown,
         "excluded": {
             "not_met_total": excluded_not_met,
@@ -889,11 +971,14 @@ def screen_pool_against_requirement(
     *,
     db: Session,
     organization_id: int,
+    role_id: int | None = None,
     requirement: str,
     base_query,
     limit: int = DEFAULT_SCREEN_LIMIT,
     parser_client=None,
     evidence_client=None,
+    deep_verify: bool = False,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Screen the already-scored pool (``base_query``) against a NEW free-text
     requirement.
@@ -911,33 +996,48 @@ def screen_pool_against_requirement(
     from .runner import run_search  # local import keeps graph deps lazy
 
     limit = max(1, min(int(limit), MAX_SCREEN_LIMIT))
+    offset = max(0, int(offset))
     score_col = SCORE_FIELDS["taali"]
     score_attr = getattr(CandidateApplication, score_col)
 
-    # 1. Parse → population + qualitative criteria. Structural guesses only BIAS
-    #    which candidates get grounded first; they never exclude.
+    # 1. Parse and run the zero-cost Postgres retrieval across the full scored
+    #    pool. This is exhaustive at the person level; model verification is a
+    #    separate, opt-in bounded step below.
     result = run_search(
         db=db,
         organization_id=organization_id,
+        role_id=role_id,
         nl_query=requirement,
         base_query=base_query,
         rerank_enabled=False,
         include_subgraph=False,
         parser_client=parser_client,
-        defer_qualitative=True,
+        defer_qualitative=False,
     )
     parsed = result.parsed_filter
     criteria = _collect_criteria(parsed)
-    matcher_ids = set(result.application_ids or []) if _has_structural(parsed) else None
+    result_ids = list(result.application_ids or [])
+    matcher_ids = set(result_ids) if _has_structural(parsed) else None
     pool_count = _pool_count(base_query)
+    matched_count = (
+        int(result.database_matches)
+        if result.database_matches is not None
+        else len(result_ids)
+    )
+    matched_pool = base_query.filter(
+        CandidateApplication.id.in_(result_ids or [-1])
+    )
 
     base_payload = {
         "spec": _build_spec(parsed, query=requirement, rank_by="taali", criteria=criteria),
         "mode": "rediscovery",
-        "total_matched": pool_count,
+        "total_matched": matched_count,
+        "database_matches": matched_count,
+        "pool_size": pool_count,
         "structural_matches": len(matcher_ids) if matcher_ids is not None else None,
         "warnings": [w.model_dump(mode="json") for w in result.warnings],
         "rank_by": "taali",
+        "offset": offset,
     }
 
     def _rank_key(a):
@@ -948,9 +1048,7 @@ def screen_pool_against_requirement(
         )
 
     def _degrade(apps, *, warning):
-        """Rank by existing fit (no grounding) and return — used when the
-        requirement has no qualitative criteria or grounding is unavailable."""
-        apps.sort(key=_rank_key, reverse=True)
+        """Return the deterministic retrieval order without grounding."""
         shown = [
             _candidate_payload(a, rank=i, verdicts=[], has_criteria=bool(criteria))
             for i, a in enumerate(apps[:limit], start=1)
@@ -958,10 +1056,13 @@ def screen_pool_against_requirement(
         return {
             **base_payload,
             "screened": 0,
-            "capped": pool_count > len(shown),
+            "capped": matched_count > len(shown),
             "screen_cap": SCREEN_GROUND_WINDOW,
             "evaluated": 0,
             "shown": len(shown),
+            "returned": len(shown),
+            "deep_checked": 0,
+            "qualified": None,
             "candidates": shown,
             "excluded": {"not_met_total": 0, "by_criterion": []},
             "evidence_model": None,
@@ -969,25 +1070,33 @@ def screen_pool_against_requirement(
             "warnings": base_payload["warnings"] + [warning],
         }
 
-    # No qualitative criteria → nothing to ground; rank the recall by fit.
+    # Default path: return deterministic database matches with honest coverage
+    # and zero per-candidate model calls. A recruiter can explicitly request
+    # deep verification for the bounded citations pass.
+    if not deep_verify:
+        page_ids = result_ids[offset : offset + limit]
+        apps = _load_candidates_by_ids(matched_pool, page_ids)
+        return _degrade(
+            apps,
+            warning={
+                "code": "verification_not_requested",
+                "message": (
+                    "Returned exhaustive Postgres matches; deep CV verification "
+                    "was not requested."
+                ),
+            },
+        )
+
+    # Structural-only asks are already exact; there is no narrative criterion
+    # for a model to verify.
     if not criteria:
-        # Structural-only ask (e.g. a bare skill like "Python"): the requirement
-        # IS the structural filter, so HARD-restrict to the matches. matcher_ids
-        # is only an ordering bias inside _load_candidates, so without this a
-        # short match list gets padded with high-scoring candidates that don't
-        # match the requirement at all — surfacing unrelated people as finds.
-        pool = base_query if matcher_ids is None else base_query.filter(
-            CandidateApplication.id.in_(matcher_ids)
-        )
-        apps = _load_candidates(
-            pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
-        )
+        page_ids = result_ids[offset : offset + limit]
+        apps = _load_candidates_by_ids(matched_pool, page_ids)
         return _degrade(
             apps,
             warning={
                 "code": "no_criteria",
-                "message": "No qualitative criteria parsed from the requirement; "
-                "ranked by existing fit.",
+                "message": "No qualitative criteria parsed; returned exact database matches.",
             },
         )
 
@@ -1002,9 +1111,7 @@ def screen_pool_against_requirement(
             logger.warning("rediscovery grounding client init failed: %s", exc)
 
     if client is None:
-        apps = _load_candidates(
-            base_query, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
-        )
+        apps = _load_candidates_by_ids(matched_pool, result_ids[:limit])
         return _degrade(
             apps,
             warning={
@@ -1020,27 +1127,16 @@ def screen_pool_against_requirement(
     #    otherwise (a purely-qualitative ask) seed by RECENCY, NOT the stale role
     #    score — score-seeding biases rediscovery toward already-high-scorers and
     #    buries exactly the under-scored fits the feature exists to surface.
-    window_size = min(pool_count, SCREEN_GROUND_WINDOW)
-    seed_attr = score_attr if matcher_ids else CandidateApplication.created_at
-    apps = _load_candidates(
-        base_query,
-        matcher_ids=matcher_ids,
-        score_attr=seed_attr,
-        size=max(window_size, limit),
+    window_size = min(matched_count, SCREEN_GROUND_WINDOW)
+    apps = _load_candidates_by_ids(
+        matched_pool, result_ids[: max(window_size, limit)]
     )
-    if matcher_ids:
-        apps.sort(key=_rank_key, reverse=True)
-    else:
-        # Recency order; compare datetimes only (uniform tz from the column),
-        # undated rows last — a score-neutral window seed.
-        dated = sorted(
-            (a for a in apps if a.created_at is not None),
-            key=lambda a: a.created_at,
-            reverse=True,
-        )
-        apps = dated + [a for a in apps if a.created_at is None]
     grounded = _ground_window(
-        apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
+        apps[:window_size],
+        criteria=criteria,
+        client=client,
+        organization_id=organization_id,
+        role_id=role_id,
     )
 
     # 4. Hide hard-constraint failures (salary over cap, …); rank the rest by fit
@@ -1078,10 +1174,13 @@ def screen_pool_against_requirement(
     return {
         **base_payload,
         "screened": len(grounded),
-        "capped": pool_count > len(grounded),
+        "capped": matched_count > len(grounded),
         "screen_cap": SCREEN_GROUND_WINDOW,
         "evaluated": len(grounded),
+        "deep_checked": len(grounded),
         "shown": len(shown),
+        "returned": len(shown),
+        "qualified": len(survivors),
         "candidates": shown,
         "excluded": {
             "not_met_total": excluded_not_met,

@@ -68,6 +68,8 @@ _DOC_ROLE_HINTS = (
     "specialist", "consultant", "owner", "architect",
 )
 
+MIN_ASSESSMENT_INPUT_CHARS = 120
+
 
 def _slugify(value: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "_", (value or "").lower()).strip("_")
@@ -85,13 +87,60 @@ def _deliverable_kind_hint(role_name: str, jd_text: str) -> Optional[str]:
     return None  # let the generator decide
 
 
-def _role_jd_text(role: Role) -> str:
+def role_assessment_input_text(role: Role) -> str:
+    """Build the persisted role context used to author an assessment.
+
+    A requisition is structurally rich even when a caller supplies a terse
+    rendered public heading. Include its saved criteria and first-class role
+    attributes so Turn on does not later reject an otherwise valid published
+    job merely because the Markdown snapshot alone is short. Manual roles with
+    no meaningful spec/criteria still fail the minimum-input guard below.
+    """
+
     parts = [
         str(getattr(role, "job_spec_text", "") or ""),
+        str(getattr(role, "name", "") or ""),
         str(getattr(role, "description", "") or ""),
     ]
-    text_blob = "\n\n".join(p for p in parts if p.strip())
-    return text_blob.strip()
+    attribute_labels = (
+        ("Employment type", "employment_type"),
+        ("Workplace type", "workplace_type"),
+        ("Department", "department"),
+        ("Location city", "location_city"),
+        ("Location country", "location_country"),
+    )
+    for label, field in attribute_labels:
+        value = str(getattr(role, field, "") or "").strip()
+        if value:
+            parts.append(f"{label}: {value}")
+    try:
+        criteria = sorted(
+            (
+                criterion
+                for criterion in (getattr(role, "criteria", None) or [])
+                if getattr(criterion, "deleted_at", None) is None
+            ),
+            key=lambda criterion: (
+                int(getattr(criterion, "ordering", 0) or 0),
+                int(getattr(criterion, "id", 0) or 0),
+            ),
+        )
+    except Exception:
+        criteria = []
+    for criterion in criteria:
+        text = str(getattr(criterion, "text", "") or "").strip()
+        if text:
+            bucket = str(getattr(criterion, "bucket", "criterion") or "criterion")
+            parts.append(f"{bucket.title()}: {text}")
+    return "\n\n".join(part.strip() for part in parts if part.strip()).strip()
+
+
+# Compatibility for the draft-revision and automatic-repair paths.  The rich
+# requisition-aware input builder replaced the old JD-only helper, but these
+# callers still import the private name while they re-author an existing task.
+# Keep them on the same canonical input rather than reintroducing a second,
+# narrower rendering path.
+_role_jd_text = role_assessment_input_text
 
 
 def generate_and_link_task_for_role(
@@ -114,10 +163,11 @@ def generate_and_link_task_for_role(
         logger.info("role %s already has a linked task; skipping generation", role.id)
         return None
 
-    jd_text = _role_jd_text(role)
-    if len(jd_text) < 120:
+    jd_text = role_assessment_input_text(role)
+    if len(jd_text) < MIN_ASSESSMENT_INPUT_CHARS:
         raise TaskProvisioningBlockedError(
-            f"role JD is too thin to generate an assessment ({len(jd_text)} chars; minimum 120)"
+            "role JD is too thin to generate an assessment "
+            f"({len(jd_text)} chars; minimum {MIN_ASSESSMENT_INPUT_CHARS})"
         )
 
     role_name = str(getattr(role, "name", "") or "Role")
@@ -317,6 +367,8 @@ __all__ = [
     "authorize_assessment_task_provisioning",
     "finish_assessment_task_provisioning",
     "generate_and_link_task_for_role",
+    "_role_jd_text",
+    "_slugify",
     "provisioning_state_is_due",
     "request_assessment_task_provisioning",
     "role_has_active_task",

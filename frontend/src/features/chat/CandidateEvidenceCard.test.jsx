@@ -126,9 +126,9 @@ test('rediscovery mode shows the requirement-fit framing and screened/capped dis
   );
   expect(screen.getByText(/Rediscovery/)).toBeInTheDocument();
   expect(screen.getByText(/ranked by fit to your requirement/)).toBeInTheDocument();
-  // Honest disclosure of what was deep-checked vs the whole scored pool.
-  expect(screen.getByText(/deep-checked 30 of 523 scored/)).toBeInTheDocument();
-  expect(screen.getByText(/refine to narrow/)).toBeInTheDocument();
+  // Honest disclosure of what was deep-checked vs database retrieval.
+  expect(screen.getByText(/deep-checked 30 of 523 database matches/)).toBeInTheDocument();
+  expect(screen.getByText(/partial verification/)).toBeInTheDocument();
   // The grounded verdict + the candidate's score still render.
   expect(screen.getByText('Met')).toBeInTheDocument();
   expect(screen.getByText('Taali 78')).toBeInTheDocument();

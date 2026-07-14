@@ -12,6 +12,26 @@ import CandidateEvidenceCard from './CandidateEvidenceCard';
 // ``graph`` payload, instead of riding the chat path for every session.
 const GraphView = lazy(() => import('./GraphView'));
 
+export const SearchCoverage = ({ data }) => {
+  const databaseMatches = data?.database_matches ?? data?.total_matched;
+  if (typeof databaseMatches !== 'number') return null;
+  const returned = data.returned ?? data.applications?.length ?? 0;
+  const deepChecked = Number(data.deep_checked || 0);
+  return (
+    <div className={['cp-search-coverage', data.capped ? 'is-capped' : ''].join(' ')}>
+      <span>{returned} shown</span>
+      <span>{databaseMatches} database matches</span>
+      {deepChecked > 0 ? (
+        <span>
+          {deepChecked} deep-checked{data.capped ? ' · partial verification' : ''}
+        </span>
+      ) : (
+        <span>full database search · no deep verification</span>
+      )}
+    </div>
+  );
+};
+
 const ToolResultRender = ({ part }) => {
   // Decide which custom renderer(s) to show for this tool's payload. A
   // graph_search_candidates result can render BOTH a candidate grid (the
@@ -41,6 +61,9 @@ const ToolResultRender = ({ part }) => {
   ) {
     return (
       <>
+        {part.toolName === 'nl_search_candidates' ? (
+          <SearchCoverage data={part.result} />
+        ) : null}
         {Array.isArray(part.result.applications) ? (
           <CandidateGrid rows={part.result.applications} />
         ) : null}

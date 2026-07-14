@@ -4,7 +4,7 @@ Three public callables, signature-compatible with the previous Cypher
 implementation so callers (the search runner, the rerank step, the
 endpoint) need only re-import:
 
-- ``candidate_ids_matching_all(organization_id, predicates) -> list[int]``
+- ``candidate_ids_matching_all(organization_id, predicates, role_id=None) -> list[int]``
 - ``subgraph_for_candidates(organization_id, candidate_ids, db=None) -> GraphPayload``
 - ``colleague_neighbourhood(organization_id, candidate_id) -> dict``
 
@@ -46,7 +46,12 @@ NEIGHBOURHOOD_LIMIT = 60
 
 
 @contextmanager
-def _attribute_search(organization_id: int, label: str):
+def _attribute_search(
+    organization_id: int,
+    label: str,
+    *,
+    role_id: int | None = None,
+):
     """Set ``graph_metering_ctx`` around a ``graphiti.search`` call so the
     Voyage query-embed (and any Anthropic call) it makes inside the Graphiti
     loop is attributed to the org — propagated onto the loop thread by
@@ -54,7 +59,9 @@ def _attribute_search(organization_id: int, label: str):
     call_log with organization_id=NULL (reconcilable but un-attributed).
 
     Tagged ``graph_search:<label>`` in metadata so search spend is
-    distinguishable from graph_sync indexing in the usage breakdown.
+    distinguishable from graph_sync indexing in the usage breakdown. A caller
+    supplying ``role_id`` opts into role-cap admission; omitting it preserves
+    deliberate workspace-level, organization-only search.
     """
     from ..services.metered_async_anthropic_client import (
         GraphMeteringContext,
@@ -64,11 +71,17 @@ def _attribute_search(organization_id: int, label: str):
     token = graph_metering_ctx.set(
         GraphMeteringContext(
             organization_id=int(organization_id),
+            role_id=int(role_id) if role_id is not None else None,
             episode_name=f"graph_search:{label}",
-            trace_id=f"graph-search:{int(organization_id)}:{label}",
-            # Searches are workspace-level reads: admit against organization
-            # credits without inventing a role attribution.
+            trace_id=(
+                f"graph-search:{int(organization_id)}:role:{int(role_id)}:{label}"
+                if role_id is not None
+                else f"graph-search:{int(organization_id)}:{label}"
+            ),
+            # Workspace searches remain organization-only. A role-scoped agent
+            # search must also consume that role's monthly allowance.
             require_hard_admission=True,
+            require_role_admission=role_id is not None,
         )
     )
     try:
@@ -92,7 +105,10 @@ def _query_for_predicate(predicate: GraphPredicate) -> str:
 
 
 def candidate_ids_for_predicate(
-    *, organization_id: int, predicate: GraphPredicate
+    *,
+    organization_id: int,
+    predicate: GraphPredicate,
+    role_id: int | None = None,
 ) -> set[int]:
     """Return the set of Postgres candidate ids matching one predicate.
 
@@ -105,7 +121,11 @@ def candidate_ids_for_predicate(
     group_id = graph_client.group_id_for_org(organization_id)
     query = _query_for_predicate(predicate)
     try:
-        with _attribute_search(organization_id, "predicate"):
+        with _attribute_search(
+            organization_id,
+            "predicate",
+            role_id=role_id,
+        ):
             results = graph_client.run_async(
                 graphiti.search(query=query, group_ids=[group_id], num_results=DEFAULT_SEARCH_LIMIT)
             )
@@ -116,7 +136,10 @@ def candidate_ids_for_predicate(
 
 
 def candidate_ids_matching_all(
-    *, organization_id: int, predicates: list[GraphPredicate]
+    *,
+    organization_id: int,
+    predicates: list[GraphPredicate],
+    role_id: int | None = None,
 ) -> list[int]:
     """Intersection of candidate-id sets across all predicates.
 
@@ -128,7 +151,9 @@ def candidate_ids_matching_all(
     aggregate: set[int] | None = None
     for predicate in predicates:
         ids = candidate_ids_for_predicate(
-            organization_id=organization_id, predicate=predicate
+            organization_id=organization_id,
+            predicate=predicate,
+            role_id=role_id,
         )
         if not ids:
             return []
@@ -468,6 +493,7 @@ def colleague_neighbourhood(
     *,
     organization_id: int,
     candidate_id: int,
+    role_id: int | None = None,
     max_companies: int = 10,
     max_colleagues_per_company: int = 5,
 ) -> dict:
@@ -483,7 +509,11 @@ def colleague_neighbourhood(
     graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     try:
-        with _attribute_search(organization_id, "neighbourhood"):
+        with _attribute_search(
+            organization_id,
+            "neighbourhood",
+            role_id=role_id,
+        ):
             results = graph_client.run_async(
                 graphiti.search(
                     query=f"work history, education, and colleagues of candidate {candidate_id}",

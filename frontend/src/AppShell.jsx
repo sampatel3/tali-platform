@@ -143,9 +143,6 @@ const CandidateStandingReportPage = lazy(() =>
 const JobsPage = lazy(() =>
   import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
 );
-const ProspectsPage = lazy(() =>
-  import('./features/candidates/ProspectsPage')
-);
 const UnsubscribePage = lazy(() =>
   import('./features/outreach/UnsubscribePage')
 );
@@ -230,7 +227,7 @@ const isShowcaseRecruiterPath = (pathname, search = '') => {
   }
   const params = new URLSearchParams(effectiveSearch);
   if (params.get('demo') !== '1' || params.get('showcase') !== '1') return false;
-  return pathname === '/jobs' || pathname === '/candidates';
+  return pathname === '/jobs';
 };
 
 const isProtectedRecruiterPath = (pathname, search = '') => {
@@ -243,7 +240,6 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/jobs',
     '/requisitions',
     '/assessments',
-    '/candidates',
     '/analytics',
     '/reporting',
     '/tasks',
@@ -388,7 +384,7 @@ function AppContent() {
       if (
         liveParams.get('showcase') === '1'
         && liveParams.get('demo') === '1'
-        && (livePath === '/jobs' || livePath === '/candidates')
+        && livePath === '/jobs'
       ) {
         return;
       }
@@ -780,22 +776,11 @@ function AppContent() {
         )}
       />
 
-      {/* The Candidates tab surfaces org-level prospects — not-yet-applied
-          contacts (CSV import, manual add, the job page's Find-candidates
-          helper), plus the outreach campaign machinery ("Reach out"). Per-role
-          candidate lists still live under each job. The drill-down route
-          /candidates/:id below is the standing report, still used. */}
-      <Route
-        path="/candidates"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <ProspectsPage
-              onNavigate={navigateToPage}
-              NavComponent={DashboardNavWithMode}
-            />
-          </Suspense>
-        )}
-      />
+      {/* Candidates live per-job — each role's pipeline is the working
+          surface, and the cross-job "what needs a decision" view is the Home
+          hub. There is no top-level candidate list. The drill-down route
+          /candidates/:id below is the standing report, reached by
+          application id. */}
 
       {/* Taali Chat — agentic chat over the same MCP tools served at /mcp.
           Backend at /api/v1/taali-chat/*. The "Agents" sub-routes surface

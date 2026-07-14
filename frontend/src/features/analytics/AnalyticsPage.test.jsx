@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
@@ -16,14 +16,22 @@ vi.mock('../../shared/api', () => ({
     reportingSummary: vi.fn(),
     decisionsBreakdown: vi.fn(),
     decisionTrend: vi.fn(),
+    costPerOutcome: vi.fn(),
   },
 }));
 vi.mock('../../context/ToastContext', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
 vi.mock('./OutcomesTab', () => ({ OutcomesTab: () => null }));
-vi.mock('./FleetTab', () => ({ FleetTab: () => null }));
+vi.mock('./FleetTab', () => ({
+  FleetTab: ({ onOpenDecisionLog }) => (
+    <button type="button" onClick={onOpenDecisionLog}>Open decision log</button>
+  ),
+}));
 vi.mock('./TeachingTab', () => ({ TeachingTab: () => null }));
 vi.mock('./ExperimentsTab', () => ({ ExperimentsTab: () => null }));
-vi.mock('./DecisionLogTab', () => ({ DecisionLogTab: () => null, outcomeOf: () => ({ text: '' }) }));
+vi.mock('./DecisionLogTab', () => ({
+  DecisionLogTab: () => <div>Decision log panel</div>,
+  outcomeOf: () => ({ text: '' }),
+}));
 
 const setReducedMotion = (reduced) => {
   window.matchMedia = vi.fn().mockImplementation((query) => ({
@@ -42,6 +50,7 @@ const seedApi = () => {
   agentApi.listFeedback.mockResolvedValue({ data: [] });
   agentApi.listDecisions.mockResolvedValue({ data: [] });
   analyticsApi.decisionTrend.mockResolvedValue({ data: {} });
+  analyticsApi.costPerOutcome.mockResolvedValue({ data: null });
   analyticsApi.decisionsBreakdown.mockResolvedValue({
     data: { totals: { advance_conversion: { advanced_total: 200, hired: 40 } } },
   });
@@ -68,6 +77,7 @@ describe('AnalyticsPage pulse band', () => {
   it('uses the shared Motion stagger for the pulse band', async () => {
     setReducedMotion(false);
     const { container } = render(<AnalyticsPage />);
+    await screen.findByText('1,240');
 
     const band = container.querySelector('.an-pulse');
     expect(band).toBeTruthy();
@@ -92,5 +102,25 @@ describe('AnalyticsPage pulse band', () => {
     expect(await screen.findByText('20%')).toBeInTheDocument();
     // Money ticker → fmtUsd on cents ("$1,900").
     expect(await screen.findByText('$1,900')).toBeInTheDocument();
+  });
+
+  it('switches Fleet to live workspace context and opens the Decision log', async () => {
+    setReducedMotion(true);
+    const { container } = render(<AnalyticsPage />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent fleet' }));
+
+    expect(screen.getByRole('tab', { name: 'Agent fleet' })).toHaveAttribute('aria-selected', 'true');
+    expect(container.querySelector('.an-pulse')).not.toBeInTheDocument();
+    expect(screen.getByText('ANALYTICS · LIVE WORKSPACE')).toBeInTheDocument();
+    expect(screen.getByText('Analytics · agent fleet')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Role filter')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Time window' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open decision log' }));
+
+    expect(screen.getByRole('tab', { name: 'Decision log' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByText('Decision log panel')).toBeInTheDocument());
   });
 });

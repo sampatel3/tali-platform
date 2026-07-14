@@ -64,8 +64,20 @@ def evaluate_auto_reject_decision(
     #   2. role-level ``agentic_mode_enabled`` (agent-managed roles).
     # The caller additionally requires ``role.auto_reject``; when neither path
     # is eligible the reject is carded for manual review instead of written back.
-    agentic_eligible = bool(getattr(role, "agentic_mode_enabled", False)) if role is not None else False
-    auto_disqualify_eligible = bool(config["enabled"]) or agentic_eligible
+    role_paused = bool(
+        role is not None and getattr(role, "agent_paused_at", None) is not None
+    )
+    agentic_eligible = bool(
+        role is not None
+        and getattr(role, "agentic_mode_enabled", False)
+        and not role_paused
+    )
+    # Pause is a role-wide execution stop, including the legacy org-level
+    # Workable switch. The deterministic verdict still exists and is surfaced
+    # as a HITL card; only the irreversible provider/native write is withheld.
+    auto_disqualify_eligible = bool(
+        (bool(config["enabled"]) or agentic_eligible) and not role_paused
+    )
     # HARD RAIL: irreversible rejection fails closed across every ATS.  A
     # normalized post-handover state means a recruiter already advanced the
     # candidate; an unmapped Bullhorn state is intentionally unknown and must

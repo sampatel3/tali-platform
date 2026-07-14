@@ -43,8 +43,8 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     const offCard = screen.getByText('Frontend Engineer').closest('.job-card');
     const inactiveCard = screen.getByText('Staff Backend Engineer').closest('.job-card');
     expect(runningCard).toHaveClass('agent-on');
-    expect(pausedCard).toHaveClass('agent-inactive');
-    expect(offCard).toHaveClass('agent-inactive');
+    expect(pausedCard).not.toHaveClass('not-live');
+    expect(offCard).not.toHaveClass('not-live');
     expect(inactiveCard).toHaveClass('not-live');
     // Preview switcher chip.
     expect(screen.getByText(/PREVIEW · Jobs on Motion/i)).toBeInTheDocument();

@@ -1,0 +1,282 @@
+"""Coupled Taali sister-role creation and scoring lifecycle."""
+
+from __future__ import annotations
+
+import logging
+from collections import Counter
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session, joinedload, selectinload
+
+from ...deps import get_current_user
+from ...models.candidate import Candidate
+from ...models.candidate_application import CandidateApplication
+from ...models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
+from ...models.sister_role_evaluation import (
+    SISTER_EVAL_DONE,
+    SISTER_EVAL_ERROR,
+    SISTER_EVAL_PENDING,
+    SISTER_EVAL_RUNNING,
+    SISTER_EVAL_UNSCORABLE,
+    SisterRoleEvaluation,
+)
+from ...models.user import User
+from ...platform.database import get_db
+from ...schemas.sister_role import (
+    SisterRoleCreate,
+    SisterRoleCreateResponse,
+    SisterRolePreview,
+    SisterRoleScoringStatus,
+)
+from ...services.sister_role_service import ensure_sister_evaluations
+from ...tasks.sister_role_tasks import score_sister_role
+from .roles_management_routes import _serialize_role_detail
+
+router = APIRouter(tags=["Sister roles"])
+logger = logging.getLogger("taali.sister_roles")
+
+
+def _mark_dispatch_error(db: Session, *, role_id: int) -> None:
+    db.query(SisterRoleEvaluation).filter(
+        SisterRoleEvaluation.role_id == role_id,
+        SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
+    ).update(
+        {
+            SisterRoleEvaluation.status: SISTER_EVAL_ERROR,
+            SisterRoleEvaluation.error_message: "Scoring worker unavailable; retry the roster",
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def _source_role(db: Session, *, role_id: int, organization_id: int) -> Role:
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if str(role.role_kind or ROLE_KIND_STANDARD) == ROLE_KIND_SISTER:
+        raise HTTPException(status_code=409, detail="Create a sister role from the original Workable role")
+    if not role.workable_job_id:
+        raise HTTPException(status_code=409, detail="Sister roles currently require a Workable-linked source role")
+    return role
+
+
+def _sister_role(db: Session, *, role_id: int, organization_id: int) -> Role:
+    role = (
+        db.query(Role)
+        .options(joinedload(Role.ats_owner_role), selectinload(Role.sister_roles))
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if str(role.role_kind or "") != ROLE_KIND_SISTER or not role.ats_owner_role_id:
+        raise HTTPException(status_code=409, detail="Role is not a coupled sister role")
+    return role
+
+
+def _roster_counts(db: Session, source: Role) -> dict[str, int]:
+    filters = (
+        CandidateApplication.organization_id == source.organization_id,
+        CandidateApplication.role_id == source.id,
+        CandidateApplication.deleted_at.is_(None),
+    )
+    total = int(
+        db.query(func.count(CandidateApplication.id))
+        .filter(*filters)
+        .scalar()
+        or 0
+    )
+    with_cv = int(
+        db.query(func.count(CandidateApplication.id))
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(
+            *filters,
+            or_(
+                func.length(func.trim(func.coalesce(CandidateApplication.cv_text, ""))) > 0,
+                func.length(func.trim(func.coalesce(Candidate.cv_text, ""))) > 0,
+            ),
+        )
+        .scalar()
+        or 0
+    )
+    return {"total": total, "with_cv": with_cv, "missing_cv": total - with_cv}
+
+
+@router.get("/roles/{source_role_id}/sisters/preview", response_model=SisterRolePreview)
+def preview_sister_role(
+    source_role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    source = _source_role(
+        db, role_id=source_role_id, organization_id=current_user.organization_id
+    )
+    counts = _roster_counts(db, source)
+    return SisterRolePreview(
+        source_role_id=source.id,
+        source_role_name=source.name,
+        candidates_total=counts["total"],
+        candidates_with_cv=counts["with_cv"],
+        candidates_missing_cv=counts["missing_cv"],
+    )
+
+
+@router.post(
+    "/roles/{source_role_id}/sisters",
+    response_model=SisterRoleCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_sister_role(
+    source_role_id: int,
+    data: SisterRoleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    source = _source_role(
+        db, role_id=source_role_id, organization_id=current_user.organization_id
+    )
+    sister = Role(
+        organization_id=current_user.organization_id,
+        name=data.name.strip(),
+        description=f"Coupled scoring view of {source.name}",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=source.id,
+        job_spec_text=data.job_spec_text.strip(),
+        job_spec_filename="Taali sister role specification",
+        auto_reject_threshold_mode="manual",
+        agentic_mode_enabled=False,
+        auto_reject=False,
+        auto_reject_pre_screen=False,
+        auto_promote=False,
+        auto_skip_assessment=False,
+    )
+    db.add(sister)
+    try:
+        db.flush()
+        evaluation_counts = ensure_sister_evaluations(db, sister)
+        db.commit()
+        db.refresh(sister)
+    except Exception:
+        db.rollback()
+        raise
+
+    # Dispatch only after commit so workers can see both role and evaluation rows.
+    try:
+        score_sister_role.apply_async(args=[sister.id], queue="scoring")
+    except Exception:  # pragma: no cover - the persisted role remains retryable
+        logger.exception("Failed to dispatch initial sister scoring role_id=%s", sister.id)
+        _mark_dispatch_error(db, role_id=sister.id)
+    loaded = (
+        db.query(Role)
+        .options(
+            joinedload(Role.tasks),
+            joinedload(Role.ats_owner_role),
+            selectinload(Role.sister_roles),
+        )
+        .filter(Role.id == sister.id)
+        .first()
+    )
+    return SisterRoleCreateResponse(
+        role=_serialize_role_detail(db, loaded or sister, current_user.organization_id),
+        evaluation_counts=evaluation_counts,
+    )
+
+
+@router.post("/roles/{role_id}/sister-rescore", response_model=SisterRoleScoringStatus)
+def rescore_sister_role(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = _sister_role(db, role_id=role_id, organization_id=current_user.organization_id)
+    ensure_sister_evaluations(db, role, reset_existing=True)
+    db.commit()
+    try:
+        score_sister_role.apply_async(args=[role.id], queue="scoring")
+    except Exception as exc:
+        logger.exception("Failed to dispatch sister re-score role_id=%s", role.id)
+        _mark_dispatch_error(db, role_id=role.id)
+        raise HTTPException(
+            status_code=503,
+            detail="Scores are queued but the scoring worker is unavailable. Retry shortly.",
+        ) from exc
+    return _scoring_status(db, role)
+
+
+def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
+    rows = (
+        db.query(SisterRoleEvaluation.status, func.count(SisterRoleEvaluation.id))
+        .filter(SisterRoleEvaluation.role_id == role.id)
+        .group_by(SisterRoleEvaluation.status)
+        .all()
+    )
+    counts = Counter({str(key): int(value) for key, value in rows})
+    for key in (
+        SISTER_EVAL_PENDING, SISTER_EVAL_RUNNING, SISTER_EVAL_DONE,
+        SISTER_EVAL_ERROR, SISTER_EVAL_UNSCORABLE,
+    ):
+        counts.setdefault(key, 0)
+    total = sum(counts.values())
+    completed = counts[SISTER_EVAL_DONE] + counts[SISTER_EVAL_ERROR] + counts[SISTER_EVAL_UNSCORABLE]
+    if counts[SISTER_EVAL_RUNNING] or counts[SISTER_EVAL_PENDING]:
+        overall = "running"
+    elif counts[SISTER_EVAL_ERROR] and not counts[SISTER_EVAL_DONE]:
+        overall = "error"
+    else:
+        overall = "completed"
+    top = (
+        db.query(
+            SisterRoleEvaluation.source_application_id,
+            SisterRoleEvaluation.role_fit_score,
+            Candidate.full_name,
+        )
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == SisterRoleEvaluation.source_application_id,
+        )
+        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(
+            SisterRoleEvaluation.role_id == role.id,
+            SisterRoleEvaluation.status == SISTER_EVAL_DONE,
+        )
+        .order_by(SisterRoleEvaluation.role_fit_score.desc().nullslast())
+        .limit(5)
+        .all()
+    )
+    return SisterRoleScoringStatus(
+        role_id=role.id,
+        status=overall,
+        counts=dict(counts),
+        total=total,
+        completed=completed,
+        progress_percent=round((completed / total * 100.0) if total else 100.0, 1),
+        top_candidates=[
+            {"application_id": app_id, "candidate_name": name, "score": score}
+            for app_id, score, name in top
+        ],
+    )
+
+
+@router.get("/roles/{role_id}/sister-scoring-status", response_model=SisterRoleScoringStatus)
+def sister_role_scoring_status(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = _sister_role(db, role_id=role_id, organization_id=current_user.organization_id)
+    return _scoring_status(db, role)

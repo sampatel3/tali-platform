@@ -45,6 +45,7 @@ def test_predeploy_pins_metering_and_runs_separate_migrations():
     script = (RAILWAY_DIR / "prepare_production.sh").read_text()
 
     assert "USAGE_METER_LIVE=true" in script
+    assert "ATS_PUBLIC_APPLY_ENABLED=true" in script
     assert "--skip-deploys" in script
     assert 'payload.get("DATABASE_PUBLIC_URL")' in script
     assert '[sys.executable, "-m", "alembic", "upgrade", "head"]' in script
@@ -67,6 +68,27 @@ def test_web_wrapper_checks_workers_and_polls_readiness():
     assert "RAILWAY_STATUS_SCOPE=workers" in script
     assert "railway_wait_for_new_successful_deployment" in script
     assert "railway_wait_for_readiness" in script
+    assert "railway_validate_default_agent_capabilities" in script
+
+
+def test_status_wrapper_validates_native_apply_and_live_metering_everywhere():
+    script = (RAILWAY_DIR / "check_status.sh").read_text()
+
+    assert '"USAGE_METER_LIVE" "true"' in script
+    assert '"ATS_PUBLIC_APPLY_ENABLED" "true"' in script
+
+
+def test_default_agent_capability_gate_covers_assessment_providers():
+    script = (RAILWAY_DIR / "lib.sh").read_text()
+
+    for capability in (
+        "anthropic_probe_ok",
+        "e2b_configured",
+        "resend_probe_ok",
+        "github_probe_ok",
+        "github_mock_mode=false",
+    ):
+        assert capability in script
 
 
 def test_status_helpers_resolve_environment_specific_service(tmp_path: Path):
@@ -121,3 +143,62 @@ def test_status_helpers_resolve_environment_specific_service(tmp_path: Path):
         "deploy-123\tSUCCESS",
         "https://api.example.test",
     ]
+
+
+def test_default_agent_capability_gate_fails_closed(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text("#!/usr/bin/env bash\ncat \"$FAKE_HEALTH_JSON\"\n")
+    fake_curl.chmod(0o755)
+    health_file = tmp_path / "health.json"
+    capabilities = {
+        "anthropic_configured": True,
+        "anthropic_probe_ok": True,
+        "usage_meter_live": True,
+        "e2b_configured": True,
+        "resend_configured": True,
+        "resend_probe_ok": True,
+        "github_configured": True,
+        "github_probe_ok": True,
+        "github_mock_mode": False,
+    }
+    health_file.write_text(
+        json.dumps(
+            {
+                "agent_worker": {
+                    "queues": {"celery": {"capabilities": capabilities}}
+                }
+            }
+        )
+    )
+    command = (
+        f"source {RAILWAY_DIR / 'lib.sh'}; "
+        "railway_validate_default_agent_capabilities https://api.example.test"
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+        "FAKE_HEALTH_JSON": str(health_file),
+    }
+
+    healthy = subprocess.run(
+        ["bash", "-c", command], env=env, capture_output=True, text=True
+    )
+    assert healthy.returncode == 0, healthy.stderr
+
+    capabilities["resend_probe_ok"] = False
+    health_file.write_text(
+        json.dumps(
+            {
+                "agent_worker": {
+                    "queues": {"celery": {"capabilities": capabilities}}
+                }
+            }
+        )
+    )
+    unhealthy = subprocess.run(
+        ["bash", "-c", command], env=env, capture_output=True, text=True
+    )
+    assert unhealthy.returncode != 0
+    assert "resend_probe_ok" in unhealthy.stderr

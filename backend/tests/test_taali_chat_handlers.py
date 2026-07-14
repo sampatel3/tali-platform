@@ -98,8 +98,13 @@ def test_nl_search_candidates_passes_through_run_search(db):
     assert runner.called
     kwargs = runner.call_args.kwargs
     assert kwargs["organization_id"] == org.id
+    assert kwargs["role_id"] == role.id
     assert kwargs["nl_query"] == "aws engineers with 5 years"
+    assert kwargs["rerank_enabled"] is False
+    assert kwargs["include_subgraph"] is False
     assert out["total_matched"] == 2
+    assert out["database_matches"] == 2
+    assert out["returned"] == 2
     assert out["rerank_applied"] is True
     # Order from run_search must be preserved.
     assert [a["application_id"] for a in out["applications"]] == [app2.id, app1.id]
@@ -126,6 +131,33 @@ def test_nl_search_candidates_caps_limit(db):
         out = handlers.nl_search_candidates(db, user, query="any", limit=2)
     assert len(out["applications"]) == 2
     assert out["total_matched"] == 5  # raw match count is unaffected
+
+
+def test_nl_search_candidates_supports_person_result_pagination(db):
+    user, org = _make_user_and_org(db)
+    role = Role(organization_id=org.id, name="X", source="manual")
+    db.add(role)
+    db.commit()
+    apps = [
+        _make_app(db, org_id=org.id, role=role, candidate_name=f"P{i}",
+                  email=f"p{i}@x.test", taali=float(i))
+        for i in range(4)
+    ]
+    fake = SearchOutput(
+        application_ids=[a.id for a in apps],
+        parsed_filter=ParsedFilter(skills_all=["Python"]),
+        database_matches=4,
+    )
+    with patch("app.candidate_search.runner.run_search", return_value=fake):
+        out = handlers.nl_search_candidates(
+            db, user, query="Python", limit=2, offset=2
+        )
+    assert [row["application_id"] for row in out["applications"]] == [
+        apps[2].id,
+        apps[3].id,
+    ]
+    assert out["offset"] == 2
+    assert out["database_matches"] == 4
 
 
 def test_nl_search_candidates_rejects_empty_query(db):
@@ -169,8 +201,11 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
 
     captured: dict = {}
 
-    def _fake_engine(*, db, organization_id, query, base_query, limit, rank_by):
+    def _fake_engine(
+        *, db, organization_id, role_id, query, base_query, limit, rank_by
+    ):
         captured["ids"] = sorted(a.id for a in base_query.all())
+        captured["role_id"] = role_id
         captured["limit"] = limit
         captured["rank_by"] = rank_by
         return {"candidates": [], "shown": 0}
@@ -184,6 +219,7 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
         )
 
     assert captured["ids"] == sorted([strong.id, review.id])
+    assert captured["role_id"] == role.id
     assert below.id not in captured["ids"]              # below-threshold reject excluded
     assert below_noncanonical.id not in captured["ids"] # case/space variant excluded too
     assert unscored.id not in captured["ids"]           # un-evaluated excluded
@@ -218,17 +254,23 @@ def test_screen_pool_handler_scopes_scored_nonhired(db):
 
     captured = {}
 
-    def _fake_engine(*, db, organization_id, requirement, base_query, limit):
+    def _fake_engine(
+        *, db, organization_id, role_id, requirement, base_query, limit
+    ):
         captured["ids"] = {a.id for a in base_query.all()}
+        captured["role_id"] = role_id
         return {"mode": "rediscovery", "candidates": []}
 
     with patch(
         "app.candidate_search.top_candidates.screen_pool_against_requirement",
         _fake_engine,
     ):
-        handlers.screen_pool_against_requirement(db, user, requirement_text="banking")
+        handlers.screen_pool_against_requirement(
+            db, user, requirement_text="banking", role_id=role.id
+        )
 
     assert scored.id in captured["ids"]
+    assert captured["role_id"] == role.id
     assert unscored.id not in captured["ids"]  # not scored → excluded
     assert hired.id not in captured["ids"]      # already placed → excluded
 
@@ -265,7 +307,9 @@ def test_screen_pool_handler_excludes_candidate_hired_elsewhere(db):
 
     captured = {}
 
-    def _fake_engine(*, db, organization_id, requirement, base_query, limit):
+    def _fake_engine(
+        *, db, organization_id, role_id, requirement, base_query, limit
+    ):
         captured["ids"] = {a.id for a in base_query.all()}
         return {"mode": "rediscovery", "candidates": []}
 

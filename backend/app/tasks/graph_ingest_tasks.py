@@ -52,6 +52,36 @@ def _provider_retry_countdown(retries: int) -> int:
     return min(_PROVIDER_RETRY_CAP_SECONDS, 60 * (2 ** max(int(retries), 0)))
 
 
+def _listener_graph_role_is_active(
+    db,
+    *,
+    organization_id: int,
+    role_id: int,
+) -> bool:
+    """Return whether listener-originated provider work is still authorized.
+
+    Listener tasks can sit in Redis while a recruiter pauses or turns off the
+    role. Re-read the authoritative row at execution time so that stale queued
+    work cannot start a new Graphiti/Voyage/Anthropic call after that hold.
+    Explicit backfills call ``candidate_graph.sync`` directly and do not pass
+    through this listener-only gate.
+    """
+    from ..models.role import Role
+
+    return (
+        db.query(Role.id)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+            Role.agent_paused_at.is_(None),
+        )
+        .scalar()
+        is not None
+    )
+
+
 @celery_app.task(
     name="app.tasks.graph_ingest_tasks.sync_candidate_to_graph",
     bind=True,
@@ -76,6 +106,17 @@ def sync_candidate_to_graph(self, candidate_id: int) -> dict:
         role_id = sync_module.billing_role_id_for_candidate(candidate, db)
         if role_id is None:
             return {"status": "skipped", "reason": "below_cost_gate", "id": candidate_id}
+        organization_id = getattr(candidate, "organization_id", None)
+        if organization_id is None or not _listener_graph_role_is_active(
+            db,
+            organization_id=int(organization_id),
+            role_id=int(role_id),
+        ):
+            return {
+                "status": "skipped",
+                "reason": "role_not_running",
+                "id": candidate_id,
+            }
         # bill_* tags each claude_call_log / usage_event with the right org +
         # candidate so graph-sync spend flows into the role's monthly budget
         # instead of landing org=NULL.
@@ -83,8 +124,7 @@ def sync_candidate_to_graph(self, candidate_id: int) -> dict:
             sync_module.sync_candidate(
                 candidate,
                 db=db,
-                bill_organization_id=int(candidate.organization_id)
-                if candidate.organization_id is not None else None,
+                bill_organization_id=int(organization_id),
                 bill_role_id=int(role_id),
                 require_role_admission=True,
                 raise_on_error=True,
@@ -129,6 +169,16 @@ def sync_interview_to_graph(self, interview_id: int) -> dict:
             return {
                 "status": "skipped",
                 "reason": "role_attribution_unavailable",
+                "id": interview_id,
+            }
+        if not _listener_graph_role_is_active(
+            db,
+            organization_id=int(interview.organization_id),
+            role_id=int(role_id),
+        ):
+            return {
+                "status": "skipped",
+                "reason": "role_not_running",
                 "id": interview_id,
             }
         # ApplicationInterview.organization_id is non-nullable — pass it
@@ -180,6 +230,16 @@ def sync_event_to_graph(self, event_id: int) -> dict:
             return {
                 "status": "skipped",
                 "reason": "role_attribution_unavailable",
+                "id": event_id,
+            }
+        if not _listener_graph_role_is_active(
+            db,
+            organization_id=int(ev.organization_id),
+            role_id=int(role_id),
+        ):
+            return {
+                "status": "skipped",
+                "reason": "role_not_running",
                 "id": event_id,
             }
         # Pass db + the event's (non-nullable) organization_id so the graph_sync

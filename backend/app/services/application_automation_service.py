@@ -15,6 +15,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from .document_service import sanitize_text_for_storage
+from .native_pre_screen_automation import try_native_careers_reject
 from .pre_screen_decision_emitter import queue_pre_screen_reject
 from .pre_screening_service import (
     evaluate_auto_reject_decision,
@@ -26,18 +27,6 @@ from .workable_actions_service import (
     workable_job_state,
     workable_job_syncable,
 )
-
-
-def _candidate_label(app: CandidateApplication) -> str:
-    candidate = getattr(app, "candidate", None)
-    name = sanitize_text_for_storage(str(getattr(candidate, "full_name", None) or "").strip())
-    if name:
-        return name
-    email = sanitize_text_for_storage(str(getattr(candidate, "email", None) or "").strip())
-    if email:
-        return email
-    return "Candidate"
-
 
 def reject_for_cv_gap(
     *,
@@ -291,59 +280,15 @@ def run_auto_reject_if_needed(
     # don't attempt the Workable round-trip — surface a Decision Hub card
     # instead (or skip cleanly if no card can be created). (Codex #229)
     if role is not None and not getattr(app, "workable_candidate_id", None):
-        # A native careers-page application has no upstream ATS record to
-        # mutate. Once the recruiter explicitly opts into deterministic
-        # pre-screen rejection, complete the local Taali transition instead of
-        # manufacturing an unnecessary Decision Hub task. This exception is
-        # intentionally narrow: LLM/full-score/assessment rejects still use the
-        # permanent human-confirm rail elsewhere.
-        if str(getattr(app, "source", "") or "").strip().lower() == "careers":
-            ensure_pipeline_fields(app)
-            transition_outcome(
-                db,
-                app=app,
-                to_outcome="rejected",
-                actor_type=actor_type,
-                actor_id=actor_id,
-                reason="Auto-rejected from deterministic native pre-screen",
-            )
-            snapshot = (
-                decision.get("snapshot")
-                if isinstance(decision.get("snapshot"), dict)
-                else {}
-            )
-            config = (
-                decision.get("config")
-                if isinstance(decision.get("config"), dict)
-                else {}
-            )
-            append_application_event(
-                db,
-                app=app,
-                event_type="auto_rejected",
-                actor_type=actor_type,
-                actor_id=actor_id,
-                reason=decision.get("reason"),
-                metadata={
-                    "pre_screen_score": snapshot.get("pre_screen_score"),
-                    "threshold_100": config.get("threshold_100"),
-                    "workable_synced": False,
-                    "ats_provider": "standalone",
-                    "source": "native_public_apply",
-                },
-            )
-            mark_auto_reject_state(
-                app,
-                state="rejected",
-                reason=decision.get("reason"),
-                triggered=True,
-            )
-            return {
-                **decision,
-                "performed": True,
-                "state": "rejected",
-                "workable_synced": False,
-            }
+        native_outcome = try_native_careers_reject(
+            db,
+            app=app,
+            decision=decision,
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
+        if native_outcome is not None:
+            return native_outcome
         # Unlinked candidate: the disqualify-by-id below would be a guaranteed
         # miss. Surface a card instead (or skip cleanly if none can be made).
         return _divert_pre_screen_reject_to_card(

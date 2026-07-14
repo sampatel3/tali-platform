@@ -55,7 +55,12 @@ def _seed_advance(db):
     org = Organization(name="Outbox Org", slug=f"outbox-{id(db)}")
     db.add(org)
     db.flush()
-    role = Role(organization_id=org.id, name="Backend", source="manual")
+    role = Role(
+        organization_id=org.id,
+        name="Backend",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
     db.add(role)
     db.flush()
     cand = Candidate(
@@ -219,6 +224,52 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert summary2["scanned"] == 0
     assert summary2["sent"] == 0
     assert dispatched == []
+
+
+def test_drain_defers_paused_role_without_attempt_or_provider_call(db):
+    _, role, _, _ = _enqueue_pending(db)
+    role.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    row = db.query(GraphEpisodeOutbox).one()
+    assert summary["sent"] == 0
+    assert summary["deferred"] == 1
+    assert summary["role_deferred"] == 1
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 0
+    dispatch.assert_not_called()
+
+    role.agent_paused_at = None
+    db.commit()
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as resumed_dispatch:
+        resumed = episode_outbox.drain(db)
+
+    assert resumed["sent"] == 1
+    resumed_dispatch.assert_called_once()
+
+
+def test_drain_defers_turned_off_role_without_attempt_or_provider_call(db):
+    _, role, _, _ = _enqueue_pending(db)
+    role.agentic_mode_enabled = False
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    row = db.query(GraphEpisodeOutbox).one()
+    assert summary["role_deferred"] == 1
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 0
+    dispatch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

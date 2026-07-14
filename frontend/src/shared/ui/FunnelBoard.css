@@ -53,14 +53,6 @@
 }
 
 .fb-flat .fb-v {
-  font-size: var(--fs-h3);
-}
-
-/* Home hub only: the founder wants the stage counts to read as big KPI
-   numbers (matching the home-preview), not the compact card-heading size.
-   Scoped to `.home-body` so the shared flat FunnelBoard used elsewhere
-   (JobPipelinePage, which is NOT under `.home-body`) stays at --fs-h3. */
-.home-body .fb-flat .fb-v {
   font-size: var(--fs-stat);
 }
 
@@ -79,7 +71,7 @@
    they read as the agent's pending-decision counts under each stage. */
 .fb-stchips .fb-dchip {
   font-family: var(--font-sans);
-  font-size: var(--fs-eyebrow);
+  font-size: var(--fs-body);
   font-weight: 500;
   letter-spacing: 0;
   border-radius: 999px;
@@ -105,18 +97,9 @@
 }
 
 .fb-stchips .fb-dnone {
-  font-size: var(--fs-eyebrow);
+  font-size: var(--fs-body);
   letter-spacing: 0;
   text-transform: none;
-}
-
-/* Home Hub only: the per-stage decision chips ("348 send assessment",
-   "3 advance", "80 reject", "5 delivered"…) were too small to read at
-   --fs-eyebrow (8.4px). Bump to --fs-body (10.4px) on the Hub for legibility.
-   Scoped to .home-body so JobPipelinePage's flat funnel is unaffected. */
-.home-body .fb-stchips .fb-dchip,
-.home-body .fb-stchips .fb-dnone {
-  font-size: var(--fs-body);
 }
 
 /* Phone: let the flat strip scroll inside its own card like the full board. */
@@ -125,15 +108,9 @@
     overflow-x: auto;
   }
   .fb-flat .fb-stages {
-    min-width: 560px;
+    min-width: 660px;
   }
   .fb-flat .fb-v {
-    font-size: var(--fs-subtitle);
-  }
-  /* Phone step-down for the enlarged home counts so they stay proportionate
-     to the narrow viewport (keeps them bigger than the base, smaller than
-     the desktop --fs-stat). */
-  .home-body .fb-flat .fb-v {
     font-size: var(--fs-h2);
   }
 }
@@ -160,10 +137,10 @@
 
 .fb-grid {
   display: grid;
-  /* One column per PIPELINE_FUNNEL_STAGES entry (Applied · Scored · Invited ·
-     Advanced · Rejected). `completed` is no longer a top-level tile, so this is
-     5 — a 6th column left an empty cell (dead space) after Rejected. */
-  grid-template-columns: repeat(5, 1fr);
+  /* One column per PIPELINE_FUNNEL_STAGES entry (Sourced · Applied · Scored ·
+     Invited · Advanced · Rejected). `completed` is folded into Invited, and
+     `sourced` (Phase 3a prospects) leads the funnel — 6 stages. */
+  grid-template-columns: repeat(6, 1fr);
   gap: 4px;
 }
 
@@ -283,7 +260,7 @@
     padding: 12px 14px;
   }
   .fb-grid {
-    min-width: 460px;
+    min-width: 552px;
   }
   .fb-v {
     font-size: var(--fs-h3);

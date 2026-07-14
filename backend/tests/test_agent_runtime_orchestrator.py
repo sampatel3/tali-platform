@@ -76,7 +76,8 @@ def _make_role(db, org: Organization) -> Role:
         name="Backend",
         source="manual",
         agentic_mode_enabled=True,
-        monthly_usd_budget_cents=0,  # 0 disables the monthly check
+        # Legacy zero values resolve to the documented $50 default cap.
+        monthly_usd_budget_cents=0,
         # Data-readiness gate requires a job spec before the agent runs.
         job_spec_text="Requirements\n- 5+ years backend engineering\n",
     )

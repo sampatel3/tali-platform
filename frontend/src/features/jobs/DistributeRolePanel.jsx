@@ -1,9 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, Copy, ExternalLink, Mail } from 'lucide-react';
+import { ChevronDown, Copy, ExternalLink, Globe, Linkedin, Mail, Rss } from 'lucide-react';
 
 import { roles as rolesApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+
+// "Live since 12 Jun 2026" — a plain, recruiter-facing date (no time). Falls
+// back to nothing when the page carries no published_at.
+function publishedSince(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 // "Distribute this role" panel on the published-role view. Everything here
 // produces copy-paste / one-click-out artefacts that point at the role's
@@ -50,6 +59,38 @@ function FeedRow({ url }) {
   );
 }
 
+// Status view: is this job live, where can it go, and since when. Makes
+// "published vs not" unmistakable before the copy-paste artefacts.
+function DistStatus({ data }) {
+  const share = data?.share_urls || {};
+  const since = publishedSince(data?.published_at);
+  const channels = [
+    { key: 'linkedin', Icon: Linkedin, label: 'LinkedIn', on: Boolean(share.linkedin) },
+    { key: 'email', Icon: Mail, label: 'Email', on: Boolean(share.email) },
+    { key: 'apply', Icon: Globe, label: 'Public apply page', on: Boolean(share.apply_url || data?.apply_url) },
+    { key: 'feed', Icon: Rss, label: 'Indeed / Google Jobs feed', on: Boolean(data?.feed_url) },
+  ];
+  return (
+    <div className="dist-status">
+      <div className="dist-status-head">
+        <span className="dist-live-pill"><span className="dot" /> Live</span>
+        {since ? <span className="dist-status-since">Live since {since}</span> : null}
+      </div>
+      <div className="dist-status-line">
+        This role is published — candidates can apply on your public job page, and it&apos;s
+        carried in your careers feed for the job boards to pull.
+      </div>
+      <div className="dist-channels">
+        {channels.map(({ key, Icon, label, on }) => (
+          <span key={key} className={`dist-channel ${on ? '' : 'off'}`}>
+            <Icon size={11} /> {label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Artefacts({ data }) {
   const copy = useCopy();
   const [post, setPost] = useState(data?.linkedin_post || '');
@@ -62,6 +103,7 @@ function Artefacts({ data }) {
 
   return (
     <div className="src-results">
+      <DistStatus data={data} />
       <div className="src-tool">
         <div className="src-tool-head">
           <span className="src-tool-title">LinkedIn post</span>

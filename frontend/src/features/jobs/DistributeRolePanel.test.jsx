@@ -28,6 +28,7 @@ const publishedPayload = {
     email: 'mailto:?subject=Job%20opportunity&body=x',
     apply_url: 'https://app.example.com/job/abc123',
   },
+  published_at: '2026-06-12T09:00:00Z',
   feed_url: 'https://api.example.com/api/v1/public/careers/acme/feed.xml',
 };
 
@@ -62,6 +63,19 @@ describe('DistributeRolePanel', () => {
 
     // Feed URL shown for boards.
     expect(screen.getByText(publishedPayload.feed_url)).toBeInTheDocument();
+  });
+
+  it('shows a Live status view (published, channels, live-since) for a published role', async () => {
+    rolesApi.distribution.mockResolvedValue({ data: publishedPayload });
+    open();
+    // Unmistakable "Live" status.
+    expect(await screen.findByText('Live')).toBeInTheDocument();
+    // "Live since" uses the published_at date.
+    expect(screen.getByText(/Live since/i)).toBeInTheDocument();
+    // Channels this job can go to.
+    expect(screen.getByText('LinkedIn')).toBeInTheDocument();
+    expect(screen.getByText(/Indeed \/ Google Jobs feed/i)).toBeInTheDocument();
+    expect(screen.getByText('Public apply page')).toBeInTheDocument();
   });
 
   it('copies the apply link', async () => {

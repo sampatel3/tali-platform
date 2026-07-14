@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, AlertTriangle, RefreshCw } from 'lucide-react';
 
 import * as apiClient from '../../../shared/api';
+import { getAgentPauseCopy } from '../../../shared/agentPauseCopy';
 import { MotionLoop } from '../../../shared/motion';
 import { Button, Panel, Spinner } from '../../../shared/ui/TaaliPrimitives';
 import { useToast } from '../../../context/ToastContext';
@@ -109,7 +110,7 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
         <div>
           <div className="font-medium">Agent paused</div>
           <div className="text-taali-fg-muted">
-            {role.agent_paused_reason || 'No new agent decisions will be queued until you re-enable agent mode.'}
+            {getAgentPauseCopy(role.agent_paused_reason).description}
           </div>
         </div>
       </div>

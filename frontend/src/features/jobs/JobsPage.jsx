@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Building2,
   Filter,
+  Globe,
   Inbox,
   Pause,
   RefreshCw,
@@ -62,11 +63,12 @@ const STAGES = PIPELINE_FUNNEL_STAGES;
 // and reduced motion are already settled, avoiding repeated zero-to-value runs.
 const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
 
-// Inactive roles keep the same settled opacity as the longstanding non-live
-// treatment. A role is visually active only while its agent is running; agent
-// OFF / PAUSED and non-live Workable lifecycle states settle dimmed. Motion
-// owns the reveal opacity, so the inactive target must be explicit here.
+// Non-live ATS roles keep the longstanding settled opacity. Agent state is an
+// independent signal carried by the ON / PAUSED / OFF pill and must never dim
+// an otherwise active posting. Motion owns the reveal opacity, so the inactive
+// lifecycle target must be explicit here.
 const ROLE_CARD_DIMMED_OPACITY = 0.55;
+const NON_LIVE_WORKABLE_STATES = new Set(['draft', 'archived', 'closed']);
 const roleCardFadeVariants = Object.freeze({
   hidden: fadeVariants.hidden,
   visible: ({ index = 0, stagger = false } = {}) => ({
@@ -142,21 +144,33 @@ const isRoleDraft = (role) => {
     && Number(role?.applications_count || 0) === 0;
 };
 
-// Native roles are Live when their public intake lifecycle is open. Workable
-// roles without a native lifecycle retain their provider publish-state fallback.
-const isRoleLive = (role) => (
-  hasNativeLifecycle(role)
-    ? roleJobStatus(role) === 'open'
-    : String(role?.workable_job_state || '').toLowerCase() === 'published'
+const workableState = (role) => String(role?.workable_job_state || '').trim().toLowerCase();
+const isWorkableBackedRole = (role) => (
+  String(role?.source || '').toLowerCase() === 'workable'
+  || Boolean(role?.workable_job_id)
+  || role?.role_kind === 'sister'
 );
 
-// Any explicit non-open native lifecycle is inactive. Provider-only roles use
-// the Workable state as before.
-const isRoleDimmed = (role) => (
-  hasNativeLifecycle(role)
-    ? roleJobStatus(role) !== 'open'
-    : String(role?.source || '').toLowerCase() === 'workable' && !isRoleLive(role)
-);
+// A Workable-backed role follows the provider's authoritative publish state.
+// A native role is Live only while its intake lifecycle is open; when the API
+// supplies `is_published`, that readiness signal prevents a preview page or a
+// paused/off agent from being presented as accepting applications.
+const isRoleLive = (role) => {
+  if (role?.workable_job_live != null) return role.workable_job_live === true;
+  if (isWorkableBackedRole(role)) return workableState(role) === 'published';
+  if (!hasNativeLifecycle(role)) return false;
+  if (roleJobStatus(role) !== 'open') return false;
+  return role?.is_published == null ? true : role.is_published === true;
+};
+
+// Dimming represents the posting lifecycle, independently of whether the
+// agent is on, paused, or off. Explicit ATS state remains authoritative for
+// Workable and sister roles; native roles follow their persisted job status.
+const isRoleDimmed = (role) => {
+  if (role?.workable_job_live != null) return role.workable_job_live === false;
+  if (isWorkableBackedRole(role) && NON_LIVE_WORKABLE_STATES.has(workableState(role))) return true;
+  return hasNativeLifecycle(role) ? roleJobStatus(role) !== 'open' : false;
+};
 
 const filterRoleBySource = (role, sourceFilter) => {
   if (sourceFilter === 'live') return isRoleLive(role);
@@ -912,8 +926,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   const activationQueued = !agentEnabled
                     && ['pending', 'retry_wait'].includes(activationStatus);
                   const activationBlocked = !agentEnabled && activationStatus === 'blocked';
-                  const roleActive = agentActive && !lifecycleDimmed;
-                  const roleDimmed = !roleActive;
                   // Live agent status from the /roles/{id}/agent/status fan-out.
                   // When loaded, the indicator shows the canvas-spec
                   // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
@@ -936,13 +948,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       custom={{ index: roleIndex, stagger: !gridStaggerDone }}
                       variants={reduced ? reducedRoleCardFadeVariants : roleCardFadeVariants}
                       initial={reduced ? false : 'hidden'}
-                      animate={roleDimmed ? 'dimmed' : 'visible'}
+                      animate={lifecycleDimmed ? 'dimmed' : 'visible'}
                       exit="exit"
                       transition={{
                         layout: reduced ? motionTransition.instant : motionTransition.layout,
                       }}
                       data-motion-index={roleIndex}
-                      className={`job-card ${workableRole ? 'from-wk' : ''} ${roleActive ? 'agent-on' : 'agent-inactive'} ${lifecycleDimmed ? 'not-live' : ''}`}
+                      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
                       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                       role="button"
                       tabIndex={0}
@@ -1016,6 +1028,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                                 {JOB_STATUS_META[role.job_status].label}
                               </span>
                             ) : null}
+                            {role?.is_published && roleLive ? (
+                              <span
+                                className="job-live-badge"
+                                title="Public job page is live — candidates can apply"
+                              >
+                                <Globe size={10} strokeWidth={2} /> Live
+                              </span>
+                            ) : null}
                             {role?.client_name ? (
                               <span className="job-client-chip" title={`Client · ${role.client_name}`}>
                                 <Building2 size={10} strokeWidth={2} /> {role.client_name}
@@ -1024,6 +1044,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           </div>
                           <div className="role-meta">
                             {[
+                              role?.role_kind === 'sister' && role?.ats_owner_role_name
+                                ? `Coupled to ${role.ats_owner_role_name} in Workable`
+                                : null,
+                              role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
+                                ? `${role.sister_role_count} coupled sister role${role.sister_role_count === 1 ? '' : 's'}`
+                                : null,
                               roleDept || null,
                               roleLoc || null,
                               lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,

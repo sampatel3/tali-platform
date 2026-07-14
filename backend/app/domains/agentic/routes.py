@@ -964,7 +964,13 @@ def re_evaluate(
 
     if application is not None and score_is_outdated(application):
         try:
-            job = enqueue_score(db, application, force=True, bypass_pre_screen=True)
+            job = enqueue_score(
+                db,
+                application,
+                force=True,
+                bypass_pre_screen=True,
+                requires_active_agent=False,
+            )
             db.commit()
         except Exception as exc:
             db.rollback()

@@ -35,7 +35,7 @@ const resultCount = (toolName, result) => {
   if (Array.isArray(result)) return `${result.length} results`;
   if (toolName === 'nl_search_candidates' || toolName === 'graph_search_candidates') {
     if (Array.isArray(result.applications)) {
-      const total = result.total_matched ?? result.applications.length;
+      const total = result.database_matches ?? result.total_matched ?? result.applications.length;
       return `${result.applications.length} of ${total}`;
     }
   }

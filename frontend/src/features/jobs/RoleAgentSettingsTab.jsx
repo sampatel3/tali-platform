@@ -164,7 +164,7 @@ const RoleAgentSettingsTab = ({
       return;
     }
     const parsed = Number(budgetDraftDollars);
-    if (!Number.isFinite(parsed) || parsed < 0) return;
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
     setBudgetSaving(true);
     try {
       await onSaveBudget(parsed);
@@ -376,7 +376,9 @@ const RoleAgentSettingsTab = ({
                     <div className="mc-agent-warn-body">
                       {generatedDraft
                         ? `${generatedDraft.name} is still a draft. Turn on once and the agent will validate and approve it automatically, or explicitly skip the assessment stage.`
-                        : 'No manual task setup is required. Turn on will generate and validate a role-specific task automatically, or you can choose a library task or explicitly skip the stage.'}
+                        : (role?.agentic_mode_enabled
+                          ? 'This running role is skipping the assessment stage. Choose an active task before turning assessment skipping off.'
+                          : 'No manual task setup is required. Turn on will generate and validate a role-specific task automatically, or you can choose a library task or explicitly skip the stage.')}
                     </div>
                   </div>
                 </div>
@@ -390,7 +392,9 @@ const RoleAgentSettingsTab = ({
                   aria-label="Assessment task"
                   disabled={savingAssessmentTask}
                 >
-                  <option value="">No assessment task</option>
+                  <option value="">
+                    {role?.agentic_mode_enabled ? 'No assessment task (skip stage)' : 'No assessment task'}
+                  </option>
                   {assessmentTaskOptions.map((task) => (
                     <option key={task.id} value={String(task.id)}>{task.name}</option>
                   ))}
@@ -478,14 +482,28 @@ const RoleAgentSettingsTab = ({
               key: 'auto_skip_assessment',
               value: autoSkipAssessment,
               title: 'Auto skip assessment',
-              sub: 'Bypass the assessment stage: strong candidates queue as advance-to-interview cards in the Decision Hub instead of receiving an assessment invite. Combine with Auto-promote to advance them without approval.',
+              disabled: Boolean(
+                role?.agentic_mode_enabled
+                && autoSkipAssessment
+                && activeAssignedTasks.length === 0
+              ),
+              sub: (
+                role?.agentic_mode_enabled
+                && autoSkipAssessment
+                && activeAssignedTasks.length === 0
+              )
+                ? 'Choose an active assessment task above before turning this off. Until then, qualified candidates bypass the assessment stage.'
+                : 'Bypass the assessment stage: strong candidates queue as advance-to-interview cards in the Decision Hub instead of receiving an assessment invite. Combine with Auto-promote to advance them without approval.',
             },
           ].map((rule, idx) => (
             <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
               <button
                 type="button"
                 className={`mc-switch ${rule.value ? 'on' : ''}`}
-                onClick={() => handleAutonomyToggle(rule.key, !rule.value)}
+                onClick={() => {
+                  if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
+                }}
+                disabled={Boolean(rule.disabled)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
               />
@@ -568,7 +586,7 @@ const RoleAgentSettingsTab = ({
                   <span className="prefix">$</span>
                   <input
                     type="number"
-                    min={0}
+                    min={1}
                     step={5}
                     value={budgetDraftDollars}
                     onChange={(event) => setBudgetDraftDollars(event.target.value)}
@@ -591,7 +609,12 @@ const RoleAgentSettingsTab = ({
                   type="button"
                   className="btn btn-purple btn-xs"
                   onClick={submitBudgetEdit}
-                  disabled={budgetSaving || budgetDraftDollars === ''}
+                  disabled={
+                    budgetSaving
+                    || budgetDraftDollars === ''
+                    || !Number.isFinite(Number(budgetDraftDollars))
+                    || Number(budgetDraftDollars) <= 0
+                  }
                 >
                   <Check size={11} />
                   {budgetSaving ? 'Saving…' : 'Save cap'}

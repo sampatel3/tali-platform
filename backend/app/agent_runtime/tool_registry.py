@@ -364,7 +364,6 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Natural-language description of the candidates you want."},
-                "role_id": {"type": "integer", "description": "Optional: restrict matches to one role."},
                 "rerank": {"type": "boolean", "default": True},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
             },
@@ -813,12 +812,14 @@ def _tool_compare_applications(db: Session, *, agent_run: AgentRun, role: Role, 
 
 
 def _tool_nl_search_candidates(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
-    role_id = args.get("role_id")
     return mcp_handlers.nl_search_candidates(
         db,
         _read_ctx(role),
         query=str(args.get("query") or ""),
-        role_id=int(role_id) if role_id is not None else int(role.id),
+        # Autonomous search is always scoped and billed to the running role.
+        # Never accept a model-supplied billing identity: otherwise an agent
+        # could consume another role's allowance and bypass its own cap.
+        role_id=int(role.id),
         rerank=bool(args.get("rerank", True)),
         limit=int(args.get("limit") or 25),
     )

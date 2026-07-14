@@ -10,6 +10,7 @@ from app.components.integrations.workable.sync_service import WorkableSyncServic
 from app.domains.workable_provider import service as workable_provider_service
 from app.domains.identity_access.organization_serialization import (
     merge_ai_tooling_config,
+    resolved_ai_tooling_config,
 )
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -17,7 +18,7 @@ from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.org_criterion import BUCKET_MUST, OrganizationCriterion
 from app.models.organization import Organization
 from app.models.role import Role
-from app.schemas.organization import OrgUpdate
+from app.schemas.organization import AgentDefaults, OrgUpdate
 from app.services.agent_policy_settings import (
     activation_policy_values,
     apply_workspace_agent_defaults,
@@ -107,6 +108,7 @@ def test_unsaved_workspace_uses_concrete_safe_platform_defaults(db):
     apply_workspace_agent_defaults(role, org)
 
     assert role.agentic_mode_enabled is None or role.agentic_mode_enabled is False
+    assert role.monthly_usd_budget_cents == 5_000
     assert role.auto_send_assessment is True
     assert role.auto_resend_assessment is True
     assert role.auto_advance is True
@@ -118,6 +120,33 @@ def test_unsaved_workspace_uses_concrete_safe_platform_defaults(db):
     assert effective["auto_resend_assessment"] is True
     assert effective["auto_advance"] is True
     assert effective["auto_reject_pre_screen"] is False
+
+
+def test_legacy_zero_workspace_budget_normalizes_to_activatable_default(db):
+    org = _org(db, suffix="legacy-zero-budget")
+    org.default_role_budget_cents = 0
+    org.ai_tooling_config = {"agent_defaults": {"budget_cents": 0}}
+    role = Role(organization_id=org.id, name="Legacy zero budget")
+
+    apply_workspace_agent_defaults(role, org)
+
+    assert role.monthly_usd_budget_cents == 5_000
+    assert resolved_ai_tooling_config(org)["agent_defaults"]["budget_cents"] == 5_000
+
+
+def test_legacy_default_block_resolves_to_same_safe_platform_policy(db):
+    org = _org(db, suffix="legacy-default-block")
+    org.ai_tooling_config = {"agent_defaults": AgentDefaults().model_dump()}
+    role = Role(organization_id=org.id, name="Legacy defaults")
+
+    apply_workspace_agent_defaults(role, org)
+
+    assert role.auto_send_assessment is True
+    assert role.auto_resend_assessment is True
+    assert role.auto_advance is True
+    assert role.auto_promote is True
+    assert role.auto_reject_pre_screen is False
+    assert role.auto_skip_assessment is False
 
 
 def test_granular_runtime_uses_legacy_fallback_and_concrete_override():

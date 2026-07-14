@@ -96,6 +96,32 @@ def test_distribution_returns_artefacts_for_published_role(client, db):
     assert body["share_urls"]["email"].startswith("mailto:?")
     # Feed URL points at this org's careers feed.
     assert body["feed_url"].endswith(f"/api/v1/public/careers/{slug}/feed.xml")
+    # published_at is surfaced so the panel can show "Live since …".
+    assert body["published_at"] is not None
+
+
+# ---- Jobs-list "Live" published flag --------------------------------------
+
+
+def test_roles_list_is_published_flag(client, db):
+    """Only an intake-ready role is Live in the batched roles response."""
+    headers, _ = auth_headers(client)
+    _set_org_slug(db)
+    pub = _publish_role(client, headers, db, title="Backend Engineer")
+    preview = _publish_role(
+        client, headers, db, activate=False, title="Preview Role"
+    )
+    draft = client.post("/api/v1/roles", json={"name": "Draft Role"}, headers=headers).json()
+
+    rows = client.get("/api/v1/roles", headers=headers).json()
+    by_id = {r["id"]: r for r in rows}
+    assert by_id[pub["role_id"]]["is_published"] is True
+    assert by_id[preview["role_id"]]["is_published"] is False
+    assert by_id[draft["id"]]["is_published"] is False
+    for role_id in (pub["role_id"], preview["role_id"], draft["id"]):
+        detail = client.get(f"/api/v1/roles/{role_id}", headers=headers)
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["is_published"] is by_id[role_id]["is_published"]
 
 
 def test_distribution_unpublished_role_returns_published_false(client):

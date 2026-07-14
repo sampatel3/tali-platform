@@ -12,6 +12,7 @@ from app.models.cv_score_job import CvScoreJob, SCORE_JOB_RUNNING
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.usage_event import UsageEvent
+from app.agent_runtime.budget_guard import remaining_role_admission_microcredits
 from app.services.pricing_service import Feature
 from app.services.provider_usage_admission import (
     PROVIDER_ATTEMPT_STARTED_STATE,
@@ -178,6 +179,25 @@ def test_hard_reservation_enforces_role_monthly_cap(db, monkeypatch):
     db.refresh(org)
     assert org.credits_balance == 2_000_000
     assert db.query(BillingCreditLedger).count() == 0
+
+
+def test_legacy_zero_role_budget_uses_finite_default_for_admission(db):
+    org = _org(db, balance=100_000_000)
+    role = Role(
+        organization_id=org.id,
+        name="Legacy Zero Budget",
+        monthly_usd_budget_cents=0,
+    )
+    db.add(role)
+    db.commit()
+
+    remaining = remaining_role_admission_microcredits(
+        db,
+        role=role,
+        per_active_score_job=30_000,
+    )
+
+    assert remaining == 5_000 * 10_000
 
 
 def test_assessment_creation_gate_checks_role_capacity_in_shadow_mode(

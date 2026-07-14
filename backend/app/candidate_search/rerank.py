@@ -23,6 +23,8 @@ from ..llm import strip_json_fences
 from . import MODEL_VERSION
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
+from ..services.pricing_service import Feature
+from .metering import admitted_search_metering
 
 logger = logging.getLogger("taali.candidate_search.rerank")
 
@@ -64,7 +66,7 @@ def _build_candidate_summary(candidate: Candidate, application: CandidateApplica
 
 
 def _build_graph_context(
-    *, organization_id: int, candidate_id: int
+    *, organization_id: int, candidate_id: int, role_id: int | None = None
 ) -> dict | None:
     """Pull a compact graph neighbourhood from Neo4j (or None when unavailable)."""
     try:
@@ -77,6 +79,7 @@ def _build_graph_context(
         return graph_search.colleague_neighbourhood(
             organization_id=organization_id,
             candidate_id=candidate_id,
+            role_id=role_id,
         )
     except Exception as exc:
         logger.debug("Graph context unavailable for candidate=%s: %s", candidate_id, exc)
@@ -165,6 +168,8 @@ def _evaluate_one(
             ],
         }
     ]
+    if not metering or not metering.get("credit_reservation"):
+        raise ValueError("candidate rerank requires a hard-admitted metering payload")
     try:
         response = client.messages.create(
             model=MODEL_VERSION,
@@ -172,7 +177,7 @@ def _evaluate_one(
             temperature=RERANK_TEMPERATURE,
             system=_SYSTEM_PROMPT,
             messages=messages,
-            metering=metering or {"feature": "cv_rerank"},
+            metering=metering,
         )
         if metrics is not None:
             usage = getattr(response, "usage", None)
@@ -206,6 +211,7 @@ def rerank_application_ids(
     *,
     db: Session,
     organization_id: int,
+    role_id: int | None = None,
     application_ids: list[int],
     soft_criteria: list[str],
     client=None,
@@ -248,7 +254,18 @@ def rerank_application_ids(
         candidate = application.candidate
         summary = _build_candidate_summary(candidate, application)
         graph = _build_graph_context(
-            organization_id=organization_id, candidate_id=int(candidate.id)
+            organization_id=organization_id,
+            candidate_id=int(candidate.id),
+            role_id=role_id,
+        )
+        call_metering = admitted_search_metering(
+            organization_id=organization_id,
+            role_id=role_id,
+            feature=Feature.CV_RERANK,
+            entity_id=f"application:{app_id}",
+            sub_feature="candidate_search_rerank",
+            trace_id=f"candidate-search:rerank:application:{app_id}",
+            base_metering={"db": db},
         )
         if _evaluate_one(
             soft_criteria=soft_criteria,
@@ -256,12 +273,7 @@ def rerank_application_ids(
             graph=graph,
             client=client,
             metrics=metrics,
-            metering={
-                "feature": "cv_rerank",
-                "organization_id": organization_id,
-                "entity_id": f"application:{app_id}",
-                "db": db,
-            },
+            metering=call_metering,
         ):
             kept.append(int(app_id))
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Pause, Play, Power, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 
 import { useAgentStatus } from './AgentBar';
+import { getAgentPauseCopy } from '../agentPauseCopy';
 import { AgentLoop } from '../motion';
 import { BreadcrumbsRow } from '../ui/Breadcrumbs';
 import { Button } from '../ui/TaaliPrimitives';
@@ -121,7 +122,8 @@ const AgentStrip = ({
     bootstrapStatus = null,
   } = agent || {};
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
-  const isManualPause = /recruiter|paused by/i.test(String(pausedReason || ''));
+  const pauseCopy = getAgentPauseCopy(pausedReason);
+  const isManualPause = pauseCopy.kind === 'manual';
   const hasBulkCounts = pauseAllCount != null || resumeAllCount != null;
   // Mixed org — some roles running AND some paused. Pause and Resume are BOTH
   // live buttons. The split moves into the tick (so the buttons stay short),
@@ -148,13 +150,16 @@ const AgentStrip = ({
     // Manual pauses wait for the recruiter. System holds are rechecked by the
     // recovery sweep, while Resume remains an optional immediate retry.
     if (isManualPause) {
-      message = 'Paused by you';
+      message = pauseCopy.label;
     } else {
       const r = String(pausedReason || '').toLowerCase();
-      if (r.startsWith('monthly usd cap')) message = 'Monthly budget reached · auto-checking';
-      else if (r.includes('decision budget')) message = 'Cycle limit reached';
-      else if (r.includes('bootstrap failed')) message = 'Startup held · auto-checking';
-      else message = 'System hold · auto-checking';
+      if (r.includes('bootstrap failed')) {
+        message = 'Startup held · auto-checking';
+      } else if (pauseCopy.kind === 'unknown') {
+        message = 'System hold · auto-checking';
+      } else {
+        message = `${pauseCopy.label} · auto-checking`;
+      }
     }
   } else if (!onActivate) {
     message = offStateMessage || 'Open a role to turn on agent mode there.';

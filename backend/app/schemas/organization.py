@@ -108,8 +108,8 @@ class AgentDefaultsAutonomy(BaseModel):
     detail Agent settings tab. New roles inherit these defaults."""
 
     auto_invite_above: bool = True
-    auto_reject_below: bool = True
-    auto_advance_high_score: bool = False
+    auto_reject_below: bool = False
+    auto_advance_high_score: bool = True
     passive_outbound: bool = False
 
 
@@ -119,7 +119,7 @@ class AgentDefaults(BaseModel):
     Agent settings tab take precedence over these."""
 
     enabled: bool = True
-    budget_cents: int = Field(default=5000, ge=0)
+    budget_cents: int = Field(default=5000, ge=1)
     pause_threshold_pct: int = Field(default=80, ge=0, le=100)
     autonomy: AgentDefaultsAutonomy = Field(default_factory=AgentDefaultsAutonomy)
     # Canonical action-level controls. ``None`` preserves older saved payloads:
@@ -141,7 +141,7 @@ class AgentDefaults(BaseModel):
 
 class AgentDefaultsUpdate(BaseModel):
     enabled: Optional[bool] = None
-    budget_cents: Optional[int] = Field(default=None, ge=0)
+    budget_cents: Optional[int] = Field(default=None, ge=1)
     pause_threshold_pct: Optional[int] = Field(default=None, ge=0, le=100)
     autonomy: Optional[AgentDefaultsAutonomy] = None
     auto_send_assessment: Optional[bool] = None

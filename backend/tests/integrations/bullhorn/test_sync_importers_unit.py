@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app.components.integrations.bullhorn import stage_map as sm
 from app.components.integrations.bullhorn import sync_candidates, sync_events, sync_jobs
 from app.models.ats_stage_map import AtsStageMap
@@ -21,7 +23,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import JOB_STATUS_OPEN, Role
 
 
 def _org(db) -> Organization:
@@ -58,6 +60,82 @@ class _StubClient:
     # Not used by these unit tests, but present so the CV path no-ops cleanly.
     def list_file_attachments(self, *, candidate_id, fields):
         return []
+
+
+@pytest.mark.parametrize(
+    ("agentic", "paused", "is_open", "expected_paid"),
+    [
+        pytest.param(True, False, True, True, id="enabled"),
+        pytest.param(True, True, True, False, id="paused"),
+        pytest.param(False, False, True, False, id="off"),
+        pytest.param(True, False, False, False, id="provider-closed"),
+    ],
+)
+def test_new_bullhorn_application_paid_dispatch_requires_running_agent(
+    db,
+    monkeypatch,
+    *,
+    agentic,
+    paused,
+    is_open,
+    expected_paid,
+):
+    """Bullhorn metadata imports even when a sticky-starred agent is held."""
+
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Platform Engineer",
+        source="bullhorn",
+        bullhorn_job_order_id="9001",
+        bullhorn_job_data={"id": 9001, "isOpen": is_open},
+        job_status=JOB_STATUS_OPEN,
+        starred_for_auto_sync=True,
+        agentic_mode_enabled=agentic,
+        agent_paused_at=(_now() if paused else None),
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.flush()
+
+    calls: list[dict] = []
+
+    def _capture_created(app, **kwargs):
+        calls.append({"application_id": app.id, **kwargs})
+
+    monkeypatch.setattr(sync_candidates, "on_application_created", _capture_created)
+    sync_candidates.sync_submission(
+        db=db,
+        org=org,
+        role=role,
+        submission={
+            "id": "7001",
+            "candidate": {"id": "8001"},
+            "jobOrder": {"id": "9001"},
+            "status": "New Lead",
+        },
+        candidate_payload={
+            "id": "8001",
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "email": "ada@example.com",
+        },
+        client=_StubClient(),
+        now=_now(),
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["score"] is expected_paid
+    assert calls[0]["allow_paid_work"] is expected_paid
+    assert calls[0]["parse_origin"] == "ats_ingest"
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == role.id)
+        .one()
+    )
+    assert app.source == "bullhorn"
+    assert app.bullhorn_job_submission_id == "7001"
+    assert role.starred_for_auto_sync is True
 
 
 # --- stage_map --------------------------------------------------------------

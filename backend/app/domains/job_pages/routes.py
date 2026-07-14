@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...deps import get_optional_current_user
+from ...cv_parsing.origins import CV_PARSE_ORIGIN_NATIVE_APPLY
 from ...models.candidate_application import CandidateApplication
 from ...models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
 from ...models.organization import Organization
@@ -385,7 +386,12 @@ def apply_to_job_page(
             if bool(knockout.get("passed", True)):
                 from ...services.application_events import on_application_created
 
-                on_application_created(existing, score=True, score_force=True)
+                on_application_created(
+                    existing,
+                    score=True,
+                    score_force=True,
+                    parse_origin=CV_PARSE_ORIGIN_NATIVE_APPLY,
+                )
         return {
             "status": "received",
             "message": _APPLY_RECEIVED_MESSAGE,
@@ -399,7 +405,12 @@ def apply_to_job_page(
     if attached_resume and result.knockout_passed:
         from ...services.application_events import on_application_created
 
-        on_application_created(result.application, score=True, score_force=True)
+        on_application_created(
+            result.application,
+            score=True,
+            score_force=True,
+            parse_origin=CV_PARSE_ORIGIN_NATIVE_APPLY,
+        )
 
     return {
         "status": "received",

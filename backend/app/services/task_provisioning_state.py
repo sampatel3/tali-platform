@@ -252,6 +252,39 @@ def authorize_assessment_task_provisioning(
     return True
 
 
+def defer_assessment_task_provisioning_until_activation(
+    role: Role, *, reason: str, now: datetime | None = None
+) -> bool:
+    """Withdraw a pending paid generation grant after activation is cancelled.
+
+    Turn on promotes publish-time ``awaiting_activation`` state to a paid
+    outbox.  A later Turn off/cancel must perform the inverse transition, not
+    merely cancel the nested activation intent: a broker delivery may already
+    exist and otherwise claim or recover the outer generation request.  Clearing
+    the claim token also prevents an in-flight worker from persisting output
+    after the cancellation boundary (a provider call already in flight may
+    still settle normally).
+    """
+
+    current_time = now or _utcnow()
+    state = task_provisioning_state(role)
+    status = str(state.get("status") or "")
+    if status not in PROVISIONING_RECOVERABLE_STATUSES:
+        return False
+    role.assessment_task_provisioning = {
+        **state,
+        "status": PROVISIONING_AWAITING_ACTIVATION,
+        "claim_token": None,
+        "claimed_at": None,
+        "last_error": None,
+        "next_attempt_at": None,
+        "deferred_at": _iso(current_time),
+        "deferred_reason": str(reason or "activation cancelled")[:500],
+        "updated_at": _iso(current_time),
+    }
+    return True
+
+
 def provisioning_state_is_due(
     state: dict[str, Any], *, now: datetime | None = None
 ) -> bool:
@@ -316,6 +349,11 @@ def claim_assessment_task_provisioning(
         return TaskProvisioningClaim(status="already_running", role=role)
     if status in {PROVISIONING_SUCCEEDED, PROVISIONING_BLOCKED}:
         return TaskProvisioningClaim(status=status, role=role)
+    if status not in PROVISIONING_RECOVERABLE_STATUSES:
+        # ``awaiting_activation`` is a deliberate no-spend hold. A stale
+        # broker delivery must not silently turn it back into a paid claim;
+        # only ``authorize_assessment_task_provisioning`` may do that.
+        return TaskProvisioningClaim(status=status or "inactive", role=role)
 
     claim_token = uuid.uuid4().hex
     role.assessment_task_provisioning = {
@@ -437,6 +475,7 @@ __all__ = [
     "_linked_task_id",
     "authorize_assessment_task_provisioning",
     "claim_assessment_task_provisioning",
+    "defer_assessment_task_provisioning_until_activation",
     "finish_assessment_task_provisioning",
     "provisioning_state_is_due",
     "request_assessment_task_provisioning",

@@ -18,10 +18,12 @@ Their topology variables are deliberately different:
 | `taali-worker` | `celery` | `true` | General tasks and the only Beat scheduler |
 | `taali-worker-scoring` | `scoring` | `false` | Dedicated scoring capacity; never runs Beat |
 
-The repository deployment wrapper pins and reads back all three values
+The repository deployment wrapper pins and reads back all three topology values
 (`TALI_SERVICE_MODE=worker` plus the queue and Beat settings) before uploading
-each service. It then waits for a new successful Railway deployment for both;
-one healthy worker can never produce a successful rollout result on its own.
+each service. It also pins live metering and native apply consistently across
+web and both workers. It then waits for a new successful Railway deployment for
+both; one healthy worker can never produce a successful rollout result on its
+own.
 
 Do not replace the bootstrap with a raw Celery command in production: doing so
 skips dependency/runtime validation that makes agent activation readiness
@@ -57,12 +59,12 @@ recovery/proactive backstop rather than a delay after Turn on.
 
 `backend/railway.json` is shared by web and both workers, so it intentionally
 does **not** declare an HTTP healthcheck. Celery workers do not serve `/ready`.
-The coordinated repository wrapper first pins live metering on all services and
-applies/verifies migrations through production `DATABASE_PUBLIC_URL`; it then
-deploys and validates both workers, deploys web, and finally polls the public
-web `/ready` endpoint. That endpoint verifies fresh canaries from both queues,
-providing an end-to-end check without applying an impossible HTTP probe to
-worker processes.
+The coordinated repository wrapper first pins live metering and native apply on
+all services and applies/verifies migrations through production
+`DATABASE_PUBLIC_URL`; it then deploys and validates both workers, deploys web,
+polls public `/ready`, and verifies the default worker's E2B, Resend-delivery,
+and real GitHub capabilities. This provides an end-to-end check without
+applying an impossible HTTP probe to worker processes.
 
 From repo root:
 

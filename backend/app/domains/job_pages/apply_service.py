@@ -236,6 +236,54 @@ def _restore_soft_deleted_application(
     return application
 
 
+def _engage_sourced_application(
+    db: Session,
+    application: CandidateApplication,
+    *,
+    answers: dict,
+    passed: bool,
+    failed: list[int],
+    source_name: str | None,
+) -> CandidateApplication:
+    """Engage a `sourced` prospect into a real application.
+
+    A sourced lead was added to the role BEFORE it applied (un-scored, never in
+    the decision queue). When that person actually applies, the SAME row moves
+    `sourced -> applied` (respecting the ``uq_candidate_role_application``
+    unique constraint — we never insert a duplicate) and, from that point,
+    scoring runs. Records the knockout verdict + an audit event, then hands the
+    application back to the shared apply tail (score / knockout-reject).
+    """
+    from ..assessments_runtime.pipeline_service import transition_stage
+
+    application.screening_answers = {
+        **answers,
+        "_knockout": {"passed": passed, "failed": failed},
+    }
+    # Carry the "sourced" provenance onto the engaged application.
+    application.source_strategy = "sourced"
+    if not (application.source_name or "").strip() and (source_name or "").strip():
+        application.source_name = source_name
+    # Clear any stale reject stamps from the sourced life — this is a fresh apply.
+    application.auto_reject_state = None
+    application.auto_reject_reason = None
+    application.auto_reject_triggered_at = None
+    # The engagement transition (system-driven: the candidate applied). This is
+    # the ONLY forward edge out of `sourced`; scoring is fanned out by the route
+    # AFTER this, never before.
+    transition_stage(
+        db,
+        app=application,
+        to_stage="applied",
+        source="system",
+        actor_type="system",
+        reason="Sourced prospect engaged — applied via the public job page",
+        idempotency_key=f"sourced_engaged:{int(application.id)}",
+    )
+    db.flush()
+    return application
+
+
 def submit_application(
     db: Session,
     org_id: int,
@@ -277,7 +325,15 @@ def submit_application(
         )
         .first()
     )
-    if existing is not None and existing.deleted_at is None:
+    # A `sourced` prospect that now applies is an ENGAGEMENT, not an idempotent
+    # re-submit: fall through so it transitions sourced -> applied and gets
+    # scored. Every OTHER active (candidate, role) application is idempotent.
+    is_sourced_engagement = (
+        existing is not None
+        and existing.deleted_at is None
+        and (existing.pipeline_stage or "").strip().lower() == "sourced"
+    )
+    if existing is not None and existing.deleted_at is None and not is_sourced_engagement:
         meta = (existing.screening_answers or {}).get("_knockout", {})
         _ensure_eeo_token(db, existing)
         return ApplyResult(
@@ -290,7 +346,16 @@ def submit_application(
     questions = list_role_questions(db, org_id, role.id)
     passed, failed = evaluate_knockouts(questions, answers)
 
-    if existing is not None:
+    if is_sourced_engagement:
+        application = _engage_sourced_application(
+            db,
+            existing,
+            answers=answers,
+            passed=passed,
+            failed=failed,
+            source_name=source_name,
+        )
+    elif existing is not None:
         application = _restore_soft_deleted_application(
             db,
             existing,

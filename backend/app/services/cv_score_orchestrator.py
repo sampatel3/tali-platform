@@ -233,6 +233,7 @@ def enqueue_score(
     *,
     force: bool = False,
     bypass_pre_screen: bool = False,
+    requires_active_agent: bool = False,
 ) -> CvScoreJob | None:
     """Queue a CV score for an application.
 
@@ -249,6 +250,12 @@ def enqueue_score(
     ``bypass_pre_screen`` is the explicit opt-out for the pre-screen
     gate: use only when a recruiter has reviewed and wants a full v9
     score regardless of the cheap filter's verdict.
+
+    ``requires_active_agent`` is durable execution authority, not merely an
+    enqueue-time hint. Ingest/cohort/agent callers set it to ``True`` so a
+    queued job cannot begin after Pause or Turn off. Authenticated recruiter
+    and administrator actions leave it ``False`` and may still run while the
+    autonomous agent is held (subject to credits and the role cap).
     """
     if not application or application.id is None:
         return None
@@ -376,7 +383,35 @@ def enqueue_score(
                 SCORE_JOB_PENDING,
                 SCORE_JOB_RUNNING,
             }:
+                # An explicit recruiter action is fresh authority to finish an
+                # already-queued autonomous score. Persist the promotion before
+                # returning so the separate worker cannot observe the old flag.
+                if (
+                    not bool(requires_active_agent)
+                    and bool(getattr(existing, "requires_active_agent", True))
+                ):
+                    existing.requires_active_agent = False
+                    existing.force_full_score = bool(
+                        getattr(existing, "force_full_score", False)
+                        or bypass_pre_screen
+                    )
+                    db.add(existing)
+                    db.commit()
                 return existing
+
+        if bool(requires_active_agent) and (
+            not bool(locked_role.agentic_mode_enabled)
+            or locked_role.agent_paused_at is not None
+        ):
+            logger.info(
+                "autonomous score enqueue held application_id=%s role_id=%s "
+                "enabled=%s paused=%s",
+                application.id,
+                locked_role.id,
+                bool(locked_role.agentic_mode_enabled),
+                locked_role.agent_paused_at is not None,
+            )
+            return None
 
         ensure_role_capacity(
             db,
@@ -439,6 +474,8 @@ def enqueue_score(
         application_id=application.id,
         role_id=application.role_id,
         status=SCORE_JOB_PENDING,
+        requires_active_agent=bool(requires_active_agent),
+        force_full_score=bool(bypass_pre_screen),
     )
     db.add(job)
     db.flush()  # populate job.id

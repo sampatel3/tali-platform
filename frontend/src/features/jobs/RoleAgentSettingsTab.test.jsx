@@ -150,6 +150,29 @@ describe('RoleAgentSettingsTab assessment task', () => {
     ).toBeInTheDocument();
   });
 
+  it('keeps a running taskless role in explicit skip mode until a task is chosen', () => {
+    const onAutonomyChange = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps({
+          agentic_mode_enabled: true,
+          auto_skip_assessment: true,
+        })}
+        roleTasks={[]}
+        allTasks={catalogue}
+        onAutonomyChange={onAutonomyChange}
+      />,
+    );
+
+    expect(
+      screen.getByText(/this running role is skipping the assessment stage/i),
+    ).toBeInTheDocument();
+    const skipToggle = screen.getByRole('button', { name: 'Auto skip assessment' });
+    expect(skipToggle).toBeDisabled();
+    fireEvent.click(skipToggle);
+    expect(onAutonomyChange).not.toHaveBeenCalled();
+  });
+
   it('assigns a task from settings via the existing role↔task link', () => {
     const onAssignAssessmentTask = vi.fn();
     render(
@@ -193,5 +216,26 @@ describe('RoleAgentSettingsTab assessment task', () => {
     expect(screen.getByText(/Job spec tab/)).toBeInTheDocument();
     // No single-select in the A/B case.
     expect(screen.queryByRole('button', { name: 'Assessment task' })).not.toBeInTheDocument();
+  });
+});
+
+describe('RoleAgentSettingsTab budget validation', () => {
+  it('does not allow a zero-dollar role cap to be saved', () => {
+    const onSaveBudget = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        onSaveBudget={onSaveBudget}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    const input = screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' });
+    expect(input).toHaveAttribute('min', '1');
+    fireEvent.change(input, { target: { value: '0' } });
+    const save = screen.getByRole('button', { name: /save cap/i });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(onSaveBudget).not.toHaveBeenCalled();
   });
 });

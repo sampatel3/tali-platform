@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 from app.models.organization import Organization
 from app.models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
 from app.models.task import Task
@@ -121,6 +123,168 @@ def test_turn_off_cancels_a_pending_activation_intent(client):
     intent = cancelled.json()["assessment_task_provisioning"]["activation_intent"]
     assert intent["status"] == "cancelled"
     assert cancelled.json()["agentic_mode_enabled"] is False
+
+
+@pytest.mark.parametrize("intent_status", ["pending", "retry_wait", "blocked"])
+def test_role_patch_versions_unfinished_activation_with_latest_policy(
+    client, db, intent_status
+):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.tasks.assessment_tasks.generate_assessment_task_for_role.delay"
+    ):
+        created = client.post(
+            "/api/v1/roles",
+            json={"name": f"Policy race {intent_status}"},
+            headers=headers,
+        ).json()
+        queued = client.patch(
+            f"/api/v1/roles/{created['id']}",
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 7_500,
+                "activation_assessment_action": "approve_when_ready",
+            },
+            headers=headers,
+        )
+    assert queued.status_code == 200, queued.text
+
+    role = db.query(Role).filter(Role.id == created["id"]).one()
+    provisioning = dict(role.assessment_task_provisioning or {})
+    intent = dict(provisioning["activation_intent"])
+    intent["status"] = intent_status
+    if intent_status == "retry_wait":
+        intent["next_attempt_at"] = (
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat()
+    if intent_status == "blocked":
+        intent["last_error"] = "waiting for explicit retry"
+        intent["blocked_at"] = datetime.now(timezone.utc).isoformat()
+    provisioning["activation_intent"] = intent
+    role.assessment_task_provisioning = provisioning
+    db.commit()
+
+    updated = client.patch(
+        f"/api/v1/roles/{role.id}",
+        json={
+            "monthly_usd_budget_cents": 3_300,
+            "auto_send_assessment": False,
+            "auto_resend_assessment": False,
+            "auto_advance": False,
+            "auto_reject": True,
+            "auto_reject_pre_screen": True,
+            "auto_skip_assessment": True,
+            "auto_reject_threshold_mode": "manual",
+            "score_threshold": 82,
+            "agent_action_allowlist": ["review_candidate"],
+            "agent_token_budget_per_cycle": 2_000,
+            "agent_decision_budget_per_cycle": 3,
+        },
+        headers=headers,
+    )
+
+    assert updated.status_code == 200, updated.text
+    refreshed = updated.json()["assessment_task_provisioning"][
+        "activation_intent"
+    ]
+    assert refreshed["status"] == intent_status
+    assert refreshed["policy_revision"] == 2
+    assert refreshed["monthly_usd_budget_cents"] == 3_300
+    assert refreshed["auto_send_assessment"] is False
+    assert refreshed["auto_resend_assessment"] is False
+    assert refreshed["auto_advance"] is False
+    assert refreshed["auto_reject"] is True
+    assert refreshed["auto_reject_pre_screen"] is True
+    assert refreshed["auto_skip_assessment"] is True
+    assert refreshed["auto_reject_threshold_mode"] == "manual"
+    assert refreshed["score_threshold"] == 82
+    assert refreshed["agent_action_allowlist"] == ["review_candidate"]
+    assert refreshed["agent_token_budget_per_cycle"] == 2_000
+    assert refreshed["agent_decision_budget_per_cycle"] == 3
+
+
+def test_latest_skip_and_restrictions_win_when_pending_activation_completes(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.tasks.assessment_tasks.generate_assessment_task_for_role.delay"
+    ):
+        created = client.post(
+            "/api/v1/roles",
+            json={"name": "Skip activation race"},
+            headers=headers,
+        ).json()
+        queued = client.patch(
+            f"/api/v1/roles/{created['id']}",
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 8_000,
+                "auto_send_assessment": True,
+                "auto_resend_assessment": True,
+                "auto_advance": True,
+                "activation_assessment_action": "approve_when_ready",
+            },
+            headers=headers,
+        )
+    assert queued.status_code == 200, queued.text
+
+    tightened = client.patch(
+        f"/api/v1/roles/{created['id']}",
+        json={
+            "monthly_usd_budget_cents": 2_500,
+            "auto_send_assessment": False,
+            "auto_resend_assessment": False,
+            "auto_advance": False,
+            "auto_skip_assessment": True,
+            "auto_reject": False,
+            "agent_action_allowlist": ["review_candidate"],
+            "agent_token_budget_per_cycle": 2_000,
+            "agent_decision_budget_per_cycle": 2,
+        },
+        headers=headers,
+    )
+    assert tightened.status_code == 200, tightened.text
+    intent = tightened.json()["assessment_task_provisioning"][
+        "activation_intent"
+    ]
+
+    with (
+        patch("app.services.task_approval_service.approve_task_for_use") as approve,
+        patch("app.services.application_events.on_role_jd_attached"),
+        patch("app.tasks.automation_tasks.regenerate_role_tech_questions.delay"),
+        patch(
+            "app.services.agent_activation_checklist.surface_activation_questions",
+            return_value=[],
+        ),
+    ):
+        completed = complete_role_activation_intent(
+            db,
+            role_id=created["id"],
+            request_id=intent["request_id"],
+            worker_task_id="worker-skip-race",
+        )
+
+    assert completed == {
+        "status": "activated",
+        "role_id": created["id"],
+        "task_id": None,
+    }
+    approve.assert_not_called()
+    db.expire_all()
+    role = db.query(Role).filter(Role.id == created["id"]).one()
+    assert role.agentic_mode_enabled is True
+    assert role.monthly_usd_budget_cents == 2_500
+    assert role.auto_send_assessment is False
+    assert role.auto_resend_assessment is False
+    assert role.auto_advance is False
+    assert role.auto_skip_assessment is True
+    assert role.agent_action_allowlist == ["review_candidate"]
+    assert role.agent_token_budget_per_cycle == 2_000
+    assert role.agent_decision_budget_per_cycle == 2
+    assert role.assessment_task_provisioning["activation_intent"][
+        "status"
+    ] == "succeeded"
 
 
 def test_turn_on_blocks_inactive_manual_task_instead_of_waiting_forever(db):

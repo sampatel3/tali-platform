@@ -14,6 +14,7 @@ import pytest
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
@@ -83,8 +84,9 @@ def test_auto_enqueue_calls_enqueue_score_for_each_unscored_app(db):
 
     seen_app_ids: list[int] = []
 
-    def fake_enqueue(db_arg, app, *, force=False):
+    def fake_enqueue(db_arg, app, *, force=False, **kwargs):
         seen_app_ids.append(int(app.id))
+        assert kwargs["requires_active_agent"] is True
         return object()  # truthy stand-in for a Job
 
     with patch("app.services.cv_score_orchestrator.enqueue_score", side_effect=fake_enqueue):
@@ -105,6 +107,37 @@ def test_auto_enqueue_skips_already_scored_apps(db):
 
     assert count == 1
     assert m.call_count == 1
+
+
+def test_auto_enqueue_replays_paused_deferred_rescore_after_resume(db):
+    org, role = _seed_role(db)
+    app = _seed_app(db, org=org, role=role, cv_match_score=72.0)
+    db.add(
+        CvScoreJob(
+            application_id=app.id,
+            role_id=role.id,
+            status="stale",
+            error_message="deferred_agent_paused",
+            requires_active_agent=True,
+            force_full_score=True,
+        )
+    )
+    db.commit()
+
+    with patch(
+        "app.services.cv_score_orchestrator.enqueue_score",
+        return_value=object(),
+    ) as enqueue:
+        count = _auto_enqueue_scoring(db, role=role)
+
+    assert count == 1
+    enqueue.assert_called_once_with(
+        db,
+        app,
+        force=True,
+        bypass_pre_screen=True,
+        requires_active_agent=True,
+    )
 
 
 def test_auto_enqueue_skips_apps_without_cv_text(db):
@@ -154,7 +187,8 @@ def test_auto_enqueue_swallows_individual_failures(db):
 
     calls = {"n": 0}
 
-    def flaky(db_arg, app, *, force=False):
+    def flaky(db_arg, app, *, force=False, **kwargs):
+        assert kwargs["requires_active_agent"] is True
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("simulated metering glitch")

@@ -10,11 +10,13 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from ...deps import get_current_user
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
+from ...models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
 from ...models.organization import Organization
 from ...models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
 from ...models.role_brief import RoleBrief
 from ...models.task import Task
 from ...models.user import User
+from ...platform.config import settings
 from ...platform.database import get_db
 from ...models.org_criterion import (
     BUCKET_PREFERRED,
@@ -42,12 +44,15 @@ from ...schemas.role import (
 from ...services.application_events import on_role_jd_attached
 from ...services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
+    SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
     activation_policy_values,
     apply_workspace_agent_defaults,
+    role_is_score_only,
     role_automation_enabled,
 )
 from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
+from ...services.job_page_lifecycle import role_accepts_native_applications
 from ...services.role_criteria_service import (
     reset_role_to_workspace,
     sync_all_criteria,
@@ -188,7 +193,11 @@ def list_roles(
         # drops the criteria array entirely, so hydrating it would only transfer
         # rows we discard. selectin (not joined) keeps ``.limit()`` below
         # applying cleanly to roles rather than to a tasks cartesian product.
-        .options(selectinload(Role.tasks))
+        .options(
+            selectinload(Role.tasks),
+            joinedload(Role.ats_owner_role),
+            selectinload(Role.sister_roles),
+        )
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
@@ -212,12 +221,15 @@ def list_roles(
         return []
 
     role_ids = [role.id for role in roles]
+    operational_role_ids = list({
+        int(role.ats_owner_role_id or role.id) for role in roles
+    })
     app_counts_rows = (
         db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.role_id.in_(role_ids),
+            CandidateApplication.role_id.in_(operational_role_ids),
         )
         .group_by(CandidateApplication.role_id)
         .all()
@@ -234,7 +246,7 @@ def list_roles(
                 CandidateApplication.organization_id == current_user.organization_id,
                 CandidateApplication.deleted_at.is_(None),
                 CandidateApplication.application_outcome == "open",
-                CandidateApplication.role_id.in_(role_ids),
+                CandidateApplication.role_id.in_(operational_role_ids),
             )
             .group_by(CandidateApplication.role_id)
             .all()
@@ -255,7 +267,7 @@ def list_roles(
             .filter(
                 CandidateApplication.organization_id == current_user.organization_id,
                 CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.role_id.in_(role_ids),
+                CandidateApplication.role_id.in_(operational_role_ids),
             )
             .group_by(CandidateApplication.role_id)
             .all()
@@ -268,7 +280,7 @@ def list_roles(
         stage_counts_by_role = role_pipeline_counts_bulk(
             db,
             organization_id=current_user.organization_id,
-            role_ids=role_ids,
+            role_ids=operational_role_ids,
         )
 
     # Batched role -> client lookup (one query) for the Jobs list's Client column
@@ -279,16 +291,47 @@ def list_roles(
         db, organization_id=current_user.organization_id, role_ids=role_ids
     )
 
+    # Batched "has an OPEN public job page" — one DISTINCT query joining
+    # JobPage → RoleBrief for the whole page, not a per-card lookup. Drives the
+    # Jobs list "Live" badge (role has a live /job/{token} apply page).
+    published_page_role_ids = {
+        int(rid)
+        for (rid,) in (
+            db.query(RoleBrief.role_id)
+            .join(JobPage, JobPage.brief_id == RoleBrief.id)
+            .filter(
+                RoleBrief.organization_id == current_user.organization_id,
+                RoleBrief.role_id.in_(role_ids),
+                JobPage.status == JOB_PAGE_STATUS_OPEN,
+            )
+            .distinct()
+            .all()
+        )
+        if rid is not None
+    }
+    # An OPEN JobPage can be a preview while the managed role is still draft,
+    # its agent is off/paused, or public apply is globally disabled. The Jobs
+    # list's ``is_published`` field drives its Live badge, so use the same
+    # fail-closed intake policy as the public apply and distribution routes.
+    live_native_role_ids = {
+        int(role.id)
+        for role in roles
+        if int(role.id) in published_page_role_ids
+        and settings.ATS_PUBLIC_APPLY_ENABLED
+        and role_accepts_native_applications(role)
+    }
+
     return [
         role_to_response(
             role,
             summary=True,
             tasks_count=len(role.tasks or []),
-            applications_count=app_counts.get(role.id, 0),
-            stage_counts=stage_counts_by_role.get(role.id, {}),
-            active_candidates_count=active_counts.get(role.id, 0),
-            last_candidate_activity_at=last_activity_by_role.get(role.id),
+            applications_count=app_counts.get(int(role.ats_owner_role_id or role.id), 0),
+            stage_counts=stage_counts_by_role.get(int(role.ats_owner_role_id or role.id), {}),
+            active_candidates_count=active_counts.get(int(role.ats_owner_role_id or role.id), 0),
+            last_candidate_activity_at=last_activity_by_role.get(int(role.ats_owner_role_id or role.id)),
             client=clients_by_role.get(role.id),
+            is_published=role.id in live_native_role_ids,
         )
         for role in roles
     ]
@@ -298,11 +341,12 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     """The full role-detail payload: funnel counts + pending-decision chips + the
     linked requisition's structured spec. Shared by GET /roles/{id} and the
     job-status mutation so both stay in lock-step."""
+    operational_role_id = int(role.ats_owner_role_id or role.id)
     app_count = (
         db.query(func.count(CandidateApplication.id))
         .filter(
             CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == role.id,
+            CandidateApplication.role_id == operational_role_id,
             CandidateApplication.deleted_at.is_(None),
         )
         .scalar()
@@ -313,7 +357,7 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     # the role detail page can render the home-card funnel summary from the
     # single GET rather than deriving it from the (row-capped) applications list.
     stage_counts = role_pipeline_counts(
-        db, organization_id=organization_id, role_id=role.id
+        db, organization_id=organization_id, role_id=operational_role_id
     )
     # Pending agent decisions by type — feeds the role funnel's "awaiting your
     # decision" chips (uncapped, unlike the row-limited applications fetch).
@@ -330,6 +374,19 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     client = role_client_map(
         db, organization_id=organization_id, role_ids=[role.id]
     ).get(role.id)
+    is_published = bool(
+        settings.ATS_PUBLIC_APPLY_ENABLED
+        and role_accepts_native_applications(role)
+        and db.query(JobPage.id)
+        .join(RoleBrief, RoleBrief.id == JobPage.brief_id)
+        .filter(
+            RoleBrief.organization_id == organization_id,
+            RoleBrief.role_id == role.id,
+            JobPage.status == JOB_PAGE_STATUS_OPEN,
+        )
+        .first()
+        is not None
+    )
     return role_to_response(
         role,
         tasks_count=len(role.tasks or []),
@@ -338,6 +395,7 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
         pending_decisions_by_type=pending_decisions_by_type,
         requisition=requisition,
         client=client,
+        is_published=is_published,
     )
 
 
@@ -349,7 +407,11 @@ def get_role_endpoint(
 ):
     role = (
         db.query(Role)
-        .options(joinedload(Role.tasks))
+        .options(
+            joinedload(Role.tasks),
+            joinedload(Role.ats_owner_role),
+            selectinload(Role.sister_roles),
+        )
         .filter(Role.id == role_id, Role.organization_id == current_user.organization_id)
         .first()
     )
@@ -531,6 +593,23 @@ def update_role(
     activation_assessment_action = updates.pop(
         "activation_assessment_action", None
     )
+    if role_is_score_only(role):
+        unsafe_automation = {
+            key
+            for key in (
+                "agentic_mode_enabled",
+                "auto_reject",
+                "auto_reject_pre_screen",
+                "auto_promote",
+                *GRANULAR_AUTOMATION_FIELDS,
+            )
+            if updates.get(key) is True
+        }
+        if unsafe_automation:
+            raise HTTPException(
+                status_code=409,
+                detail=SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+            )
     if activation_assessment_action and not bool(
         updates.get("agentic_mode_enabled")
     ):
@@ -539,6 +618,19 @@ def update_role(
             detail=(
                 "activation_assessment_action is valid only while turning "
                 "the agent on"
+            ),
+        )
+    if (
+        updates.get("auto_skip_assessment") is False
+        and bool(role.agentic_mode_enabled)
+        and not any(bool(task.is_active) for task in (role.tasks or []))
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Assign an active assessment task before turning assessment "
+                "skipping off. This candidate-facing workflow change requires "
+                "an explicit task choice."
             ),
         )
     if activation_assessment_action == "approve_when_ready":
@@ -786,6 +878,7 @@ def update_role(
             # Evaluate the effective path from this PATCH, not only the stale
             # persisted value.  Enabling + skipping assessments atomically must
             # not require email/repository providers the role will not use.
+            activation_policy = activation_policy_values(role, updates)
             readiness = activation_readiness(
                 role,
                 auto_skip_assessment=(
@@ -793,6 +886,14 @@ def update_role(
                     if updates.get("auto_skip_assessment") is not None
                     else None
                 ),
+                monthly_usd_budget_cents=int(incoming_budget),
+                auto_send_assessment=activation_policy[
+                    "auto_send_assessment"
+                ],
+                auto_resend_assessment=activation_policy[
+                    "auto_resend_assessment"
+                ],
+                auto_advance=activation_policy["auto_advance"],
             )
             if not readiness.get("ready"):
                 db.rollback()
@@ -921,6 +1022,29 @@ def update_role(
             updates["auto_skip_assessment"]
         )
         role.auto_skip_assessment = bool(updates["auto_skip_assessment"])
+    activation_policy_fields = {
+        "monthly_usd_budget_cents",
+        "auto_reject",
+        "auto_reject_pre_screen",
+        "auto_promote",
+        *GRANULAR_AUTOMATION_FIELDS,
+        "auto_skip_assessment",
+        "score_threshold",
+        "auto_reject_threshold_mode",
+        "agent_action_allowlist",
+        "agent_token_budget_per_cycle",
+        "agent_decision_budget_per_cycle",
+    }
+    if activation_policy_fields.intersection(updates):
+        # A saved Turn-on command is an authorization/outbox, not an immutable
+        # policy snapshot. Keep it aligned with edits made while generation or
+        # readiness is pending so its worker can never restore older, broader
+        # automation settings over a recruiter's newer restrictions.
+        from ...services.role_activation_intent import (
+            refresh_role_activation_intent_policy,
+        )
+
+        refresh_role_activation_intent_policy(role)
     # Clearing a pause is a guarded state transition, even when a caller sends
     # ``agentic_mode_enabled=true`` explicitly.  This prevents an over-budget
     # or production-unready role from being unconditionally unpaused by the
@@ -1533,14 +1657,20 @@ def upload_role_job_spec(
     role.interview_focus = None
     role.interview_focus_generated_at = None
 
+    is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
     try:
         sync_derived_criteria(db, role)
-        mark_role_scores_stale(db, role.id)
-        _request_autogenerate_assessment_task(
-            role,
-            reason="job_spec_upload",
-            supersede_generated_drafts=True,
-        )
+        if is_sister:
+            from ...services.sister_role_service import ensure_sister_evaluations
+
+            ensure_sister_evaluations(db, role, reset_existing=True)
+        else:
+            mark_role_scores_stale(db, role.id)
+            _request_autogenerate_assessment_task(
+                role,
+                reason="job_spec_upload",
+                supersede_generated_drafts=True,
+            )
         db.commit()
         db.refresh(role)
     except Exception:
@@ -1550,8 +1680,35 @@ def upload_role_job_spec(
     # Auto-trigger interview-focus generation in the background. The
     # request returns immediately; the worker writes interview_focus +
     # pack templates back onto the role row when Claude responds.
-    on_role_jd_attached(role)
-    _maybe_autogenerate_assessment_task(role)
+    if is_sister:
+        from ...tasks.sister_role_tasks import score_sister_role
+
+        try:
+            score_sister_role.apply_async(args=[role.id], queue="scoring")
+        except Exception:  # pragma: no cover - persisted spec remains retryable
+            from ...models.sister_role_evaluation import (
+                SISTER_EVAL_ERROR,
+                SISTER_EVAL_PENDING,
+                SisterRoleEvaluation,
+            )
+
+            logger.exception("Failed to dispatch sister scoring role_id=%s", role.id)
+            db.query(SisterRoleEvaluation).filter(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
+            ).update(
+                {
+                    SisterRoleEvaluation.status: SISTER_EVAL_ERROR,
+                    SisterRoleEvaluation.error_message: (
+                        "Scoring worker unavailable; retry the roster"
+                    ),
+                },
+                synchronize_session=False,
+            )
+            db.commit()
+    else:
+        on_role_jd_attached(role)
+        _maybe_autogenerate_assessment_task(role)
 
     return {
         "success": True,
@@ -1692,11 +1849,36 @@ def remove_role_task(
     if in_use:
         raise HTTPException(status_code=400, detail="Cannot unlink task that already has assessments")
     role.tasks = [t for t in (role.tasks or []) if t.id != task_id]
+    enabled_last_task_removed = bool(
+        role.agentic_mode_enabled
+        and not any(bool(task.is_active) for task in (role.tasks or []))
+        and not bool(role.auto_skip_assessment)
+    )
+    if enabled_last_task_removed:
+        # Choosing "No assessment task" is the recruiter's explicit choice to
+        # bypass that stage. Keep the live role internally consistent instead
+        # of silently translating taskless send decisions into advances while
+        # settings still claim assessment skipping is off.
+        role.auto_skip_assessment = True
     try:
         db.commit()
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to unlink task from role")
+    if enabled_last_task_removed:
+        try:
+            from ...services.bulk_decision_service import (
+                reconcile_pending_positive_decisions,
+            )
+
+            reconcile_pending_positive_decisions(db, role=role)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Assessment-stage reconcile failed after task unlink role_id=%s",
+                role.id,
+            )
+            db.rollback()
     return None
 
 

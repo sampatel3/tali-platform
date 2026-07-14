@@ -271,3 +271,55 @@ railway_wait_for_readiness() {
   echo "diagnostics: curl --fail-with-body ${base_url}/health" >&2
   return 1
 }
+
+railway_validate_default_agent_capabilities() {
+  local base_url="${1%/}"
+  local health_file
+  health_file="$(mktemp)"
+  if ! curl --fail --silent --show-error --max-time 15 \
+    "$base_url/ready" > "$health_file"; then
+    rm -f "$health_file"
+    echo "error: could not read agent capability status from ${base_url}/ready." >&2
+    return 1
+  fi
+
+  local result=0
+  python3 - "$health_file" <<'PY' || result=$?
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+capabilities = (
+    payload.get("agent_worker", {})
+    .get("queues", {})
+    .get("celery", {})
+    .get("capabilities", {})
+)
+required_true = (
+    "anthropic_configured",
+    "anthropic_probe_ok",
+    "usage_meter_live",
+    "e2b_configured",
+    "resend_configured",
+    "resend_probe_ok",
+    "github_configured",
+    "github_probe_ok",
+)
+errors = [key for key in required_true if capabilities.get(key) is not True]
+if capabilities.get("github_mock_mode") is not False:
+    errors.append("github_mock_mode=false")
+if errors:
+    print(
+        "error: default agent assessment path is not production-ready: "
+        + ", ".join(errors),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print(
+    "Default agent capability validation passed "
+    "(Anthropic, E2B, Resend delivery, and GitHub)."
+)
+PY
+  rm -f "$health_file"
+  return "$result"
+}

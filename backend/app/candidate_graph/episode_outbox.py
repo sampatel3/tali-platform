@@ -286,10 +286,37 @@ def _billing_role_id(db: Session, row: GraphEpisodeOutbox) -> int | None:
         .filter(
             Role.id == int(role_id),
             Role.organization_id == int(row.organization_id),
+            Role.deleted_at.is_(None),
         )
         .scalar()
     )
     return int(valid) if valid is not None else None
+
+
+def _role_allows_outbox_dispatch(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int,
+) -> bool:
+    """Fresh authority check for the automatic outbox provider dispatch.
+
+    Rows remain durable while a role is paused or off, but the five-minute
+    drain must not turn that backlog into new model/embedding spend. The row is
+    simply reconsidered on a later tick after the recruiter resumes the role.
+    """
+    return (
+        db.query(Role.id)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+            Role.agent_paused_at.is_(None),
+        )
+        .scalar()
+        is not None
+    )
 
 
 def drain(
@@ -333,6 +360,7 @@ def drain(
     drain_now = _now()
     rows = [row for row in locked_rows if _retry_is_due(row, now=drain_now)]
     deferred = len(locked_rows) - len(rows)
+    role_deferred = 0
 
     sent = 0
     failed = 0
@@ -363,6 +391,17 @@ def drain(
             row.last_error = "valid role attribution unavailable for graph billing"
             row.updated_at = now
             failed += 1
+            continue
+        if not _role_allows_outbox_dispatch(
+            db,
+            organization_id=int(row.organization_id),
+            role_id=int(role_id),
+        ):
+            # Pause/Turn off is a temporary execution hold, not corruption and
+            # not a provider failure. Keep the durable signal pending without
+            # consuming an attempt; a later drain resumes it automatically.
+            deferred += 1
+            role_deferred += 1
             continue
         try:
             # Attribute the spend: the row always carries organization_id,
@@ -415,6 +454,7 @@ def drain(
         "failed": failed,
         "pending": still_pending,
         "deferred": deferred,
+        "role_deferred": role_deferred,
     }
 
 

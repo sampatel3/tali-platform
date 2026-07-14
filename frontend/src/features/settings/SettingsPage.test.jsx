@@ -255,6 +255,8 @@ describe('SettingsPage recruiter surface', () => {
       .toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'Skip the assessment stage' }))
       .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('spinbutton', { name: /Default budget/i }))
+      .toHaveValue(200);
   });
 
   it('legacy /settings/ai and /settings/scoring deep links land on the agent tab', async () => {

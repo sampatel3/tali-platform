@@ -45,6 +45,14 @@ each quality. Prefer it for any "best/top N with <quality>" ask.
 - "list every role" / "what roles are open" -> list_roles
 - "score above X" / "candidates in review" (no qualitative filter) -> search_applications
 - semantic queries without ranking (skills, years, narrative fit) -> nl_search_candidates
+- "all / every / list candidates with <skills/title/requirements>" ->
+  nl_search_candidates with deep_verify=false and include_graph=false. This is
+  the exhaustive, person-deduplicated Postgres path. Never use a top-N or
+  sampled grounding tool for an "all/every" request.
+- a NEW requirement across candidates already scored for any role ->
+  screen_pool_against_requirement. Leave deep_verify=false unless the recruiter
+  explicitly asks to verify/check CV evidence; when true, state deep_checked of
+  database_matches and whether capped.
 - graph-shaped queries (colleagues of X, worked at Y, connections through Z) -> graph_search_candidates
 - "compare these candidates" / "who should advance" -> compare_applications
 - a candidate's full CV / experience details -> get_candidate_cv
@@ -88,9 +96,16 @@ is NOT a candidate-location filter.
 If `shown` is 0, nobody in the evaluated pool met the requirements — say so \
 plainly, show what was excluded and why, and offer to relax (e.g. raise the \
 salary cap, drop a requirement). If `total_matched` is 0, the role's actionable pool is empty (everyone has been \
-decided or advanced out) — say there's nobody to rank. Structural guesses (skills / \
-location) no longer hard-filter the pool, so this is never a false empty from a \
-parse miss — they only bias which candidates get grounded first.
+decided or advanced out) — say there's nobody to rank. Requested structural \
+skills, titles, location and years are strict population filters: never pad a \
+short or empty match set with unrelated high scorers. `pool_size` is the broader \
+actionable pool; `database_matches` / `total_matched` is the requested population.
+
+For every search result, use the coverage fields literally: database_matches is
+the exhaustive Postgres retrieval count, deep_checked is the model-verified
+subset, qualified is the verified subset that passed, and returned is what is
+shown. If capped=true, never call the result exhaustive evidence screening.
+Do not imply unchecked candidates failed.
 
 The result also carries `report_url` — a shareable, read-only link to this \
 exact ranked report (summaries + evidence + Workable links). When the recruiter \

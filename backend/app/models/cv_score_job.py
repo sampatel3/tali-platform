@@ -1,6 +1,8 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy.sql.expression import false as sql_false
+from sqlalchemy.sql.expression import true as sql_true
 
 from ..platform.database import Base
 
@@ -47,6 +49,24 @@ class CvScoreJob(Base):
     cache_hit = Column(String, nullable=True)  # "hit" | "miss" | None
     error_message = Column(Text, nullable=True)
     celery_task_id = Column(String, nullable=True)
+    # Durable execution authority.  Autonomous/ingest work must re-check the
+    # live Role immediately before provider spend; an explicit recruiter or
+    # administrator score remains allowed while the role agent is paused/off.
+    # Existing rows are conservatively treated as autonomous by migration.
+    requires_active_agent = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=sql_true(),
+    )
+    # Persist the recruiter-approved pre-screen bypass.  Keeping this only in
+    # the Celery message caused stuck-job recovery to silently lose it.
+    force_full_score = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=sql_false(),
+    )
     queued_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models.role import JOB_STATUS_OPEN, Role
+from ..models.role import JOB_STATUS_OPEN, ROLE_KIND_STANDARD, Role
 from .workable_actions_service import WORKABLE_NON_LIVE_JOB_STATES, workable_job_state
 
 
@@ -77,6 +77,55 @@ def role_accepts_native_applications(role: Role | None) -> bool:
     return bool(native_intake_state(role).get("ready"))
 
 
+def _remote_boolean_is_false(value: Any) -> bool:
+    """Interpret an explicit remote boolean without treating absence as closed."""
+
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"", "0", "false", "no", "off"}
+    return not bool(value)
+
+
+def role_allows_new_paid_ats_work(role: Role | None) -> bool:
+    """Whether an ATS import may launch new model-backed parse/score work.
+
+    ``starred_for_auto_sync`` deliberately is *not* an execution grant.  The
+    star is sticky adoption/cadence metadata, whereas Turn on/Pause/Turn off is
+    the live authority for autonomous spend.  Sync may therefore continue to
+    refresh ATS metadata for a starred role while this returns ``False``.
+
+    Provider lifecycle is fail-closed for explicit terminal states but remains
+    permissive when an older payload has no state field, matching the existing
+    Workable and Bullhorn import compatibility rules.
+    """
+
+    if role is None or getattr(role, "deleted_at", None) is not None:
+        return False
+    if (getattr(role, "role_kind", None) or ROLE_KIND_STANDARD) != ROLE_KIND_STANDARD:
+        return False
+    if not bool(getattr(role, "agentic_mode_enabled", False)):
+        return False
+    if getattr(role, "agent_paused_at", None) is not None:
+        return False
+
+    job_status = getattr(role, "job_status", None)
+    if job_status is not None and job_status != JOB_STATUS_OPEN:
+        return False
+
+    state = workable_job_state(role)
+    if getattr(role, "workable_job_id", None) and state in WORKABLE_NON_LIVE_JOB_STATES:
+        return False
+
+    if getattr(role, "bullhorn_job_order_id", None):
+        payload = getattr(role, "bullhorn_job_data", None)
+        payload = payload if isinstance(payload, dict) else {}
+        if "isOpen" in payload and _remote_boolean_is_false(payload.get("isOpen")):
+            return False
+
+    return True
+
+
 __all__ = [
     "INTAKE_AGENT_OFF",
     "INTAKE_AGENT_PAUSED",
@@ -85,5 +134,6 @@ __all__ = [
     "INTAKE_READY",
     "native_intake_state",
     "role_accepts_native_applications",
+    "role_allows_new_paid_ats_work",
     "role_uses_managed_native_lifecycle",
 ]

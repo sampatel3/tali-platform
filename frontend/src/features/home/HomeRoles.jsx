@@ -6,7 +6,8 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
-import { formatUsd, humanizePausedReason } from './atoms';
+import { formatAgentPauseStatus } from '../../shared/agentPauseCopy';
+import { formatUsd } from './atoms';
 import { AgentLoop } from '../../shared/motion';
 
 export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
@@ -59,10 +60,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
                 <span className="rq-r-name-main">{r.name}</span>
                 {r.paused ? (
                   <span className="rq-r-flag amber">
-                    {(() => {
-                      const label = humanizePausedReason(r.paused_reason);
-                      return label ? `PAUSED · ${label}` : 'PAUSED';
-                    })()}
+                    {formatAgentPauseStatus(r.paused_reason)}
                   </span>
                 ) : null}
                 {r.paused ? null : r.agentic_mode_enabled ? (

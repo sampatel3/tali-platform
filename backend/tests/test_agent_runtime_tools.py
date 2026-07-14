@@ -877,10 +877,11 @@ def test_compare_applications_dispatch(db):
     assert [r["application_id"] for r in result["applications"]] == [a1.id, a2.id]
 
 
-def test_nl_search_candidates_dispatch_passes_role_id(db):
-    """Agent's nl_search wrapper should default role_id to the agent's role."""
+def test_nl_search_candidates_dispatch_pins_agent_role_id(db):
+    """Agent search cannot spoof another role's scope or billing identity."""
     org = _make_org(db)
     role = _make_role(db, org)
+    other_role = _make_role(db, org)
     a1 = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
     run = _make_agent_run(db, role)
 
@@ -896,13 +897,14 @@ def test_nl_search_candidates_dispatch_passes_role_id(db):
     ) as mock_runner:
         result = tool_registry.dispatch(
             "nl_search_candidates",
-            {"query": "python engineer"},
+            {"query": "python engineer", "role_id": other_role.id},
             db=db,
             agent_run=run,
             role=role,
         )
 
     assert mock_runner.called
+    assert mock_runner.call_args.kwargs["role_id"] == role.id
     assert result["total_matched"] == 1
     assert result["applications"][0]["application_id"] == a1.id
 

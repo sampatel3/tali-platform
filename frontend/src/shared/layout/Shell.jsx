@@ -11,7 +11,6 @@ import {
   Moon,
   Settings as SettingsIcon,
   Sun,
-  UserPlus,
   X,
 } from 'lucide-react';
 
@@ -43,10 +42,9 @@ import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 // Clients moved out of the top nav into Settings → Clients (managed there);
 // the per-client view is reached via the Jobs page's client filter. See the
 // requisition->job bridge work.
-const NAV_TABS = [
+export const NAV_TABS = [
   { id: 'home',     label: 'Home',     Icon: Home },
   { id: 'jobs',     label: 'Jobs',     Icon: Briefcase },
-  { id: 'candidates', label: 'Candidates', Icon: UserPlus },
   { id: 'chat',     label: 'Chat',     Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
   { id: 'analytics', label: 'Analytics', Icon: LineChart },
@@ -274,8 +272,9 @@ export const Shell = ({ currentPage, onNavigate }) => {
   //   - 'analytics' IS a real tab now — keep it (do NOT fold into Home).
   //   - legacy 'reporting' → the Analytics tab (its route redirects there).
   //   - assessments inbox and requisitions live under the Jobs tab, so
-  //     highlight Jobs on those surfaces. 'candidates' is its own top-level
-  //     tab now (the Prospects surface) — no longer folded into Jobs.
+  //     highlight Jobs on those surfaces. Candidates live per-job now, so
+  //     the candidate standing report ('candidate-report') has no top-level
+  //     tab to highlight — it resolves to itself and no nav item lights up.
   const JOBS_TAB_PAGES = new Set(['assessments', 'requisitions']);
   const resolvedPage = JOBS_TAB_PAGES.has(currentPage)
     ? 'jobs'

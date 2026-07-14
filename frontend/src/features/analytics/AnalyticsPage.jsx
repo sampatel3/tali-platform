@@ -1,7 +1,6 @@
-// AnalyticsPage — the dedicated /analytics route, rebuilt to match
-// frontend/public/analytics-preview.html exactly: crumb + title + role/window/
-// Export controls, a 6-stat pulse band, and five underline tabs (Outcomes /
-// Agent fleet / Teaching history / A·B tasks / Decision log).
+// AnalyticsPage — the dedicated /analytics route. Outcomes owns the scoped
+// reporting pulse; Agent fleet is a live workspace view; the remaining tabs
+// keep their focused teaching, experiment, and decision-log workflows.
 //
 // EVERY value is real. The page owns the role + window scope and threads it
 // into the windowed feeds:
@@ -83,6 +82,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
 
   const [summary, setSummary] = useState(null);
   const [breakdown, setBreakdown] = useState(null);
+  const [cost, setCost] = useState(null);
   const [trend, setTrend] = useState(null);
   const [rolesBreakdown, setRolesBreakdown] = useState([]);
   const [feedback, setFeedback] = useState([]);
@@ -130,14 +130,16 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
       analyticsApi.decisionsBreakdown(scope),
       analyticsApi.decisionTrend(roleId ? { role_id: roleId } : {}),
       agentApi.listFeedback({ limit: 30, ...(roleId ? { role_id: roleId } : {}) }),
+      analyticsApi.costPerOutcome(scope),
     ])
-      .then(([s, b, t, f]) => {
+      .then(([s, b, t, f, c]) => {
         if (cancelled) return;
         const summaryOk = s.status === 'fulfilled';
         if (summaryOk) setSummary(s.value?.data || null);
         if (b.status === 'fulfilled') setBreakdown(b.value?.data || null);
         if (t.status === 'fulfilled') setTrend(t.value?.data || null);
         if (f.status === 'fulfilled') setFeedback(Array.isArray(f.value?.data) ? f.value.data : []);
+        if (c.status === 'fulfilled') setCost(c.value?.data || null);
         setLoadError(!summaryOk);
         if (summaryOk) setHasLoaded(true);
       })
@@ -250,14 +252,20 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
     <div>
       {NavComponent ? <NavComponent currentPage="analytics" onNavigate={onNavigate} /> : null}
       <AgentHeader
-        breadcrumbs={[{ label: `Analytics · ${windowLabel(windowKey).toLowerCase()}` }]}
-        kicker={`ANALYTICS · ${windowLabel(windowKey).toUpperCase()}${roleId ? '' : ' · ALL ROLES'}`}
+        breadcrumbs={[{
+          label: tab === 'fleet'
+            ? 'Analytics · agent fleet'
+            : `Analytics · ${windowLabel(windowKey).toLowerCase()}`,
+        }]}
+        kicker={tab === 'fleet'
+          ? 'ANALYTICS · LIVE WORKSPACE'
+          : `ANALYTICS · ${windowLabel(windowKey).toUpperCase()}${roleId ? '' : ' · ALL ROLES'}`}
         title="Analytics"
         subtitle="Outcomes, your agent fleet, and the teaching history that keeps the agent calibrated."
-        actions={headerActions}
+        actions={tab === 'fleet' ? null : headerActions}
       />
       <div className="an-page">
-        {loadError ? (
+        {loadError && tab === 'outcomes' ? (
           <div className="an-error" role="alert">
             <p>Couldn&apos;t load analytics. This is usually a temporary connection issue.</p>
             <button type="button" className="btn btn-sm" onClick={() => setReloadKey((k) => k + 1)}>
@@ -267,46 +275,48 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         ) : null}
         {/* 6-stat pulse band. Dims + shows a spinner while a scope change is
             in-flight so the numbers under the new label aren't read as final. */}
-        <MotionStagger
-          className="an-pulse"
-          data-motion-stagger="analytics-pulse"
-          aria-busy={loading && hasLoaded ? 'true' : undefined}
-          style={loading && hasLoaded ? { opacity: 0.5, transition: 'opacity 120ms' } : undefined}
-        >
-          <div className="an-pcell">
-            <div className="k">Decisions</div>
-            <div className="v">{decisionsTick}</div>
-            <div className="s">{approved.toLocaleString()} approved</div>
-          </div>
-          <div className="an-pcell">
-            <div className="k">Auto-advanced</div>
-            <div className="v">{autoAdvancedTick}</div>
-            <div className="s">{autoRejected.toLocaleString()} auto-rejected</div>
-          </div>
-          <div className="an-pcell">
-            <div className="k">Advance → hire</div>
-            <div className="v attn">{advanceHirePct != null ? advanceHireTick : '—'}</div>
-            <div className="s">{hired.toLocaleString()} of {advancedTotal.toLocaleString()} advanced</div>
-          </div>
-          <div className="an-pcell">
-            <div className="k">Override rate</div>
-            <div className="v">{overrideRateTick}</div>
-            <div className="s">{overridden.toLocaleString()} override{overridden === 1 ? '' : 's'}</div>
-          </div>
-          <div className="an-pcell">
-            <div className="k">Taught</div>
-            <div className="v">{teachRateTick}</div>
-            <div className="s">{taught.toLocaleString()} teaching event{taught === 1 ? '' : 's'}</div>
-          </div>
-          <div className="an-pcell">
-            <div className="k">Spend · MTD</div>
-            <div className="v">
-              {spendTick}
-              {budgetCents > 0 ? <small> / {fmtUsd(budgetCents)}</small> : null}
+        {tab === 'outcomes' ? (
+          <MotionStagger
+            className="an-pulse"
+            data-motion-stagger="analytics-pulse"
+            aria-busy={loading && hasLoaded ? 'true' : undefined}
+            style={loading && hasLoaded ? { opacity: 0.5, transition: 'opacity 120ms' } : undefined}
+          >
+            <div className="an-pcell">
+              <div className="k">Decisions</div>
+              <div className="v">{decisionsTick}</div>
+              <div className="s">{approved.toLocaleString()} approved</div>
             </div>
-            <div className="s">{budgetPctValue != null ? `${budgetPctValue}%` : 'no cap set'}</div>
-          </div>
-        </MotionStagger>
+            <div className="an-pcell">
+              <div className="k">Auto-advanced</div>
+              <div className="v">{autoAdvancedTick}</div>
+              <div className="s">{autoRejected.toLocaleString()} auto-rejected</div>
+            </div>
+            <div className="an-pcell">
+              <div className="k">Advance → hire</div>
+              <div className="v attn">{advanceHirePct != null ? advanceHireTick : '—'}</div>
+              <div className="s">{hired.toLocaleString()} of {advancedTotal.toLocaleString()} advanced</div>
+            </div>
+            <div className="an-pcell">
+              <div className="k">Override rate</div>
+              <div className="v">{overrideRateTick}</div>
+              <div className="s">{overridden.toLocaleString()} override{overridden === 1 ? '' : 's'}</div>
+            </div>
+            <div className="an-pcell">
+              <div className="k">Taught</div>
+              <div className="v">{teachRateTick}</div>
+              <div className="s">{taught.toLocaleString()} teaching event{taught === 1 ? '' : 's'}</div>
+            </div>
+            <div className="an-pcell">
+              <div className="k">Spend · MTD</div>
+              <div className="v">
+                {spendTick}
+                {budgetCents > 0 ? <small> / {fmtUsd(budgetCents)}</small> : null}
+              </div>
+              <div className="s">{budgetPctValue != null ? `${budgetPctValue}%` : 'no cap set'}</div>
+            </div>
+          </MotionStagger>
+        ) : null}
 
         {/* Underline tabs — shared .vtabs/.vtab vocabulary. */}
         <MotionTabs value={tab} onValueChange={setTab} className="vtabs" aria-label="Analytics views">
@@ -343,10 +353,10 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
               </div>
             )
             : (
-              <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} />
+              <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} cost={cost} />
             )
         ) : tab === 'fleet' ? (
-          <FleetTab />
+          <FleetTab onOpenDecisionLog={() => setTab('log')} />
         ) : tab === 'teaching' ? (
           <TeachingTab feedback={feedback} trend={trend} roleId={roleId} roleName={roleName} />
         ) : tab === 'ab' ? (

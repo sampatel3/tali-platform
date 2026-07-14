@@ -84,7 +84,11 @@ def micro_to_cents(micro) -> int:
 
 
 def role_monthly_usd_cents(role: Role) -> int:
-    return int(role.monthly_usd_budget_cents or DEFAULT_USD_BUDGET_MONTHLY_CENTS)
+    raw_cap = getattr(role, "monthly_usd_budget_cents", None)
+    if raw_cap is None:
+        return DEFAULT_USD_BUDGET_MONTHLY_CENTS
+    parsed_cap = int(raw_cap)
+    return parsed_cap if parsed_cap > 0 else DEFAULT_USD_BUDGET_MONTHLY_CENTS
 
 
 def spend_by_role_map(db: Session, *, organization_id: int) -> dict:
@@ -186,15 +190,22 @@ def remaining_role_admission_microcredits(
 ) -> int | None:
     """Remaining cap after actual spend and projected in-flight score jobs.
 
-    ``None`` means the role has no explicit positive monthly cap.  This is a
+    ``None`` means the role has no configured monthly cap. A legacy zero value
+    uses the documented $50 fallback; it must never become an unlimited hard-
+    admission path while the cycle-level check sees a finite cap. This is a
     bounded admission reservation rather than a durable monetary hold: active
     ``CvScoreJob`` rows are the existing durable evidence of committed work,
     and each is conservatively valued at the caller's SCORE reservation.
     """
     raw_cap = getattr(role, "monthly_usd_budget_cents", None)
-    if raw_cap is None or int(raw_cap) <= 0:
+    if raw_cap is None:
         return None
-    cap_micro = int(raw_cap) * 10_000
+    effective_cap = (
+        int(raw_cap)
+        if int(raw_cap) > 0
+        else DEFAULT_USD_BUDGET_MONTHLY_CENTS
+    )
+    cap_micro = effective_cap * 10_000
     spent_micro = month_to_date_spend_microcredits(db, role=role)
     active_commitment = active_score_commitment_count(db, role=role) * max(
         int(per_active_score_job), 0
@@ -240,8 +251,6 @@ def check_monthly_usd(db: Session, *, role: Role) -> BudgetCheck:
     on this role, not just the autonomous agent.
     """
     cap_cents = role_monthly_usd_cents(role)
-    if cap_cents <= 0:
-        return BudgetCheck(ok=True)  # 0 means unset
     spent_cents = month_to_date_spend_cents(db, role=role)
     if spent_cents >= cap_cents:
         return BudgetCheck(

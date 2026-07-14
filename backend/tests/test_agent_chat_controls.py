@@ -94,6 +94,39 @@ def test_activate_without_budget_asks_for_one(kick, db):
     assert not kick.called
 
 
+@patch.object(_controls, "_kick_cycle")
+def test_sister_role_chat_controls_are_score_only(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=False, budget=5_000)
+    role.role_kind = "sister"
+    role.auto_advance = False
+    db.flush()
+
+    activation = _run(
+        db, role, user, "set_agent_state", {"action": "activate"}
+    )
+    settings = _run(
+        db,
+        role,
+        user,
+        "adjust_agent_settings",
+        {"monthly_budget_cents": 9_000, "auto_advance": True},
+    )
+
+    assert activation["ok"] is False
+    assert activation["reason"] == "score_only_role"
+    assert "score-only" in activation["message"]
+    assert settings["ok"] is False
+    assert settings["reason"] == "score_only_role"
+    assert settings["changed"] == []
+    assert "score-only" in settings["message"]
+    assert role.agentic_mode_enabled is False
+    assert role.monthly_usd_budget_cents == 5_000
+    assert role.auto_advance is False
+    kick.assert_not_called()
+
+
 @patch.object(_controls, "_kick_cycle", return_value=True)
 def test_chat_activation_opens_native_requisition(kick, db):
     org = _org(db)
@@ -240,6 +273,40 @@ def test_adjust_agent_settings_updates_fields(kick, db):
     assert role.monthly_usd_budget_cents == 7500
     assert role.auto_reject is True
     assert "monthly_budget" in res["changed"] and "auto_reject" in res["changed"]
+
+
+@patch.object(_controls, "_kick_cycle")
+def test_adjust_agent_settings_rejects_zero_budget(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True, budget=5_000)
+
+    res = _run(
+        db, role, user, "adjust_agent_settings", {"monthly_budget_cents": 0}
+    )
+
+    assert res["ok"] is False
+    assert res["reason"] == "invalid_budget"
+    assert role.monthly_usd_budget_cents == 5_000
+    kick.assert_not_called()
+
+
+@patch.object(_controls, "_kick_cycle")
+def test_chat_cannot_enable_live_assessment_stage_without_task(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True)
+    role.auto_skip_assessment = True
+    db.flush()
+
+    res = _run(
+        db, role, user, "adjust_agent_settings", {"auto_skip_assessment": False}
+    )
+
+    assert res["ok"] is False
+    assert res["reason"] == "assessment_task_required"
+    assert role.auto_skip_assessment is True
+    kick.assert_not_called()
 
 
 @patch.object(_controls, "_kick_cycle")

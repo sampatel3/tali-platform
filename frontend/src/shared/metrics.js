@@ -14,6 +14,10 @@
 // backend bucket (see FUNNEL_INVITED_SUBSUMED / OPEN_FUNNEL_STAGE_KEYS) — it's
 // just not a top-level tile.
 export const PIPELINE_FUNNEL_STAGES = [
+  // `sourced` leads the funnel — prospects added before they applied (Phase 3a).
+  // Its own bucket (applicationFunnelBucket / backend funnel_bucket_for), never
+  // folded into Applied, un-scored and never in the decision queue.
+  { key: 'sourced', label: 'Sourced' },
   { key: 'applied', label: 'Applied' },
   { key: 'scored', label: 'Scored' },
   { key: 'invited', label: 'Invited' },
@@ -158,6 +162,9 @@ export const applicationFunnelBucket = (application) => {
   // reached — regardless of Tali's own pipeline_stage.
   if (isPostHandoverWorkableStage(application?.workable_stage)) return 'advanced';
   const stage = String(application?.pipeline_stage || '').toLowerCase();
+  // A `sourced` prospect is pre-applied and un-scored — its OWN bucket, never
+  // folded into `applied` (mirrors the backend funnel_bucket_for).
+  if (stage === 'sourced') return 'sourced';
   if (stage === 'applied') {
     // Evaluated = real cv_match score OR a genuinely-RUN pre-screen (the list
     // payload serializes the score as `pre_screen_score`; `pre_screen_score_100`

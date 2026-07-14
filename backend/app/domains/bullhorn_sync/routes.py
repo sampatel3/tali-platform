@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from ...components.integrations.bullhorn import stage_map as stage_map_mod
 from ...deps import get_current_user
-from ...domains.assessments_runtime.pipeline_service import PIPELINE_STAGES
+from ...domains.assessments_runtime.pipeline_service import SYNC_MAPPABLE_STAGES
 from ...models.ats_stage_map import AtsStageMap
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -318,7 +318,7 @@ def get_stage_map(
         .all()
     )
     return {
-        "pipeline_stages": list(PIPELINE_STAGES),
+        "pipeline_stages": list(SYNC_MAPPABLE_STAGES),
         "mappings": [
             {
                 "remote_status": r.remote_status,
@@ -356,10 +356,10 @@ def replace_stage_map(
         stage = row.taali_stage.strip()
         if not remote or not stage:
             continue
-        if stage not in PIPELINE_STAGES:
+        if stage not in SYNC_MAPPABLE_STAGES:
             raise HTTPException(
                 status_code=422,
-                detail=f"Unknown Taali stage '{stage}'. Must be one of {list(PIPELINE_STAGES)}.",
+                detail=f"Unknown Taali stage '{stage}'. Must be one of {list(SYNC_MAPPABLE_STAGES)}.",
             )
         if known_statuses and remote not in known_statuses:
             raise HTTPException(

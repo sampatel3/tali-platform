@@ -43,7 +43,7 @@ for service in \
   railway_service_snapshot "$STATUS_FILE" "$ENV_NAME" "$service" >/dev/null
 done
 
-echo "Pinning live usage metering on web and both workers without deploying..."
+echo "Pinning the production agent contract on web and both workers without deploying..."
 for service in \
   "$WEB_SERVICE" \
   "$GENERAL_WORKER_SERVICE" \
@@ -52,7 +52,8 @@ for service in \
     --service "$service" \
     --environment "$ENV_NAME" \
     --skip-deploys \
-    USAGE_METER_LIVE=true >/dev/null
+    USAGE_METER_LIVE=true \
+    ATS_PUBLIC_APPLY_ENABLED=true >/dev/null
 done
 for service in \
   "$WEB_SERVICE" \
@@ -60,6 +61,8 @@ for service in \
   "$SCORING_WORKER_SERVICE"; do
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "USAGE_METER_LIVE" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "ATS_PUBLIC_APPLY_ENABLED" "true"
 done
 
 # Fetch the resolved public database URL without printing any Railway variables.

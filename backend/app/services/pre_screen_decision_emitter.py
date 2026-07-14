@@ -31,6 +31,7 @@ from typing import Any, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..domains.assessments_runtime.pipeline_service import normalize_pipeline_key
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
@@ -168,6 +169,13 @@ def queue_pre_screen_reject(
     review. The irreversible Workable auto-disqualify stays gated upstream
     (``run_auto_reject_if_needed`` → ``auto_disqualify_eligible``).
     """
+    # HARD GUARD: a `sourced` prospect is pre-applied — no CV, never scored,
+    # never in the decision queue. It has no verdict, so it must never produce a
+    # reject card. It reaches `applied` (and only then gets scored/decided) when
+    # the person engages. This backstops the natural exclusion (a sourced app has
+    # no pre_screen_run_at, caught below) with an explicit stage gate.
+    if normalize_pipeline_key(getattr(application, "pipeline_stage", None)) == "sourced":
+        return None
     # Defer to full scoring. The pre-screen reject is a CHEAP gate whose only
     # job is to reject before paying for full cv_match scoring. Once a
     # candidate has a cv_match score, that score is authoritative and the
@@ -350,6 +358,12 @@ def queue_knockout_reject(
     applicant). Idempotent per application; returns the existing pending card if
     one exists. Never raises.
     """
+    # HARD GUARD: a `sourced` prospect never enters the decision queue (it hasn't
+    # applied, so it can't have failed a knockout gate). Belt-and-braces — the
+    # apply path only knockouts a real application — but keeps the invariant
+    # explicit at every card-creation entry point.
+    if normalize_pipeline_key(getattr(application, "pipeline_stage", None)) == "sourced":
+        return None
     try:
         # One pending decision per app — never double-card a candidate.
         existing_pending = (
@@ -852,6 +866,10 @@ def reconcile_pre_screen_reject_decisions(
             CandidateApplication.role_id == int(role.id),
             CandidateApplication.organization_id == int(organization_id),
             CandidateApplication.application_outcome == "open",
+            # A `sourced` prospect is never in the decision queue (see the
+            # queue_* guards); exclude it here so a threshold reconcile can't
+            # emit a reject card for one.
+            CandidateApplication.pipeline_stage != "sourced",
             or_(*below_conditions),
         )
         .all()

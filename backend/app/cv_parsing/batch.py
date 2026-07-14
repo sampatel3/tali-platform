@@ -40,6 +40,11 @@ from ..llm import (
     structured_tool_params,
 )
 from . import MODEL_VERSION, PROMPT_VERSION
+from .origins import (
+    CV_PARSE_ORIGIN_ATS_INGEST,
+    autonomous_origin_for_application,
+    normalize_cv_parse_origin,
+)
 from .prompts import build_cv_parse_prompt
 from .runner import (
     CV_TEXT_CEILING,
@@ -144,7 +149,10 @@ def sweep_pending_applications(
     recruiter-marked filled/cancelled roles are excluded in SQL (2026-06
     audit: 51% of the score line went to reqs nobody recruits — don't
     repeat that here; the backlog on dead reqs stays unparsed unless those
-    reqs reopen). Roles without Workable data or a job_status count as live.
+    reqs reopen). Only classifiable autonomous ATS/native rows are swept, and
+    they require an enabled, unpaused agent. Explicit recruiter uploads use the
+    live task so their authority is carried in the queue instead of inferred
+    from application source. Unknown/manual legacy backlog fails closed.
 
     Per application: cache hit (success) → applied inline, no API call;
     cache hit (deterministic failure) → skipped, nothing would change;
@@ -158,7 +166,7 @@ def sweep_pending_applications(
 
     The caller owns the transaction (commits applied cache hits).
     """
-    from sqlalchemy import func, or_
+    from sqlalchemy import and_, func, or_
     from sqlalchemy.orm import joinedload
 
     from ..models.candidate_application import CandidateApplication
@@ -166,9 +174,12 @@ def sweep_pending_applications(
         JOB_STATUS_CANCELLED,
         JOB_STATUS_FILLED,
         JOB_STATUS_FILLED_EXTERNAL,
+        JOB_STATUS_OPEN,
+        ROLE_KIND_STANDARD,
         Role,
     )
     from ..services.claude_client_resolver import get_metered_client
+    from ..services.job_page_lifecycle import role_allows_new_paid_ats_work
     from ..services.pricing_service import Feature
     from ..services.workable_actions_service import WORKABLE_NON_LIVE_JOB_STATES
     from . import cache as cache_module
@@ -180,6 +191,7 @@ def sweep_pending_applications(
         "cache_applied": 0,
         "cache_failed_skip": 0,
         "render_failed": 0,
+        "runtime_blocked": 0,
         "admission_blocked": 0,
         "admission_failed": 0,
         "lock_contended": False,
@@ -212,15 +224,34 @@ def sweep_pending_applications(
 
     in_flight = in_flight_application_ids(db)
 
+    autonomous_application = func.lower(
+        func.coalesce(CandidateApplication.source, "")
+    ).in_(
+        ["workable", "bullhorn", "careers"]
+    )
+    autonomous_runtime_ready = and_(
+        Role.agentic_mode_enabled.is_(True),
+        Role.agent_paused_at.is_(None),
+        Role.role_kind == ROLE_KIND_STANDARD,
+        or_(Role.job_status.is_(None), Role.job_status == JOB_STATUS_OPEN),
+    )
+
     apps = (
         db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate))
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
             CandidateApplication.cv_sections.is_(None),
             CandidateApplication.cv_text.isnot(None),
             CandidateApplication.cv_text != "",
             CandidateApplication.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+            # A batch sweep has no request-time human principal. Admit only
+            # persisted autonomous intake rows while their agent is running.
+            and_(autonomous_application, autonomous_runtime_ready),
             # Live reqs only. The filter must be in SQL (not post-load):
             # with a large dead-req backlog a Python-side skip could fill
             # the whole scan window with skipped rows and starve live ones.
@@ -255,6 +286,19 @@ def sweep_pending_applications(
             break
         if app.id in in_flight:
             summary["in_flight"] += 1
+            continue
+
+        role = getattr(app, "role", None)
+        origin = autonomous_origin_for_application(app)
+        if origin is None:
+            summary["runtime_blocked"] += 1
+            continue
+        if origin == CV_PARSE_ORIGIN_ATS_INGEST and not role_allows_new_paid_ats_work(role):
+            # SQL handles the common enabled/paused/job-status cases so a large
+            # held backlog cannot starve live rows. This final shared-policy
+            # check covers provider-specific lifecycle payloads (for example a
+            # Bullhorn ``isOpen:false`` snapshot) without duplicating them here.
+            summary["runtime_blocked"] += 1
             continue
 
         cv_text = _effective_cv_text(app)
@@ -303,6 +347,8 @@ def sweep_pending_applications(
             "organization_id": org_id,
             "role_id": app.role_id,
             "entity_id": f"application:{app.id}",
+            # Durable authority for any live retry after this batch ends.
+            "origin": origin,
             # The key of the text this request was rendered from. Apply
             # compares it against the row's CURRENT text so a CV replaced
             # mid-flight doesn't get stale sections (and the result is
@@ -446,8 +492,10 @@ def apply_batch_results(db: Any, entries: Any, context: Optional[dict] = None) -
     to the live per-application task, which owns the retry-once and
     deterministic-failure-caching semantics. The caller commits.
 
-    ``context`` is the batch row's per-custom_id attribution map. When it
-    carries the submit-time ``cache_key``, results whose application text
+    ``context`` is the batch row's per-custom_id attribution map. It carries
+    the submit-time parse ``origin`` into any live retry. Missing/unknown
+    legacy origins fail closed. When it carries the submit-time ``cache_key``,
+    results whose application text
     changed mid-flight (CV re-uploaded/refetched) are NOT stored on the
     row — the result is cached under the text it came from and the row is
     left pending for the next sweep to submit with the fresh text.
@@ -478,12 +526,22 @@ def apply_batch_results(db: Any, entries: Any, context: Optional[dict] = None) -
             summary["skipped"] += 1
             continue
 
+        custom_id = str(getattr(entry, "custom_id", ""))
+        per_context = context.get(custom_id) or {}
+        origin = normalize_cv_parse_origin(
+            per_context.get("origin") if isinstance(per_context, dict) else None
+        )
+
         result = getattr(entry, "result", None)
         if getattr(result, "type", None) != "succeeded":
             # Request-level failure (errored/expired/canceled). Hand to the
             # live task — it retries and caches deterministic failures.
-            _requeue_live(parse_application_cv_sections, app_id)
-            summary["requeued"] += 1
+            if _requeue_live(
+                parse_application_cv_sections, app_id, origin=origin
+            ):
+                summary["requeued"] += 1
+            else:
+                summary["skipped"] += 1
             continue
 
         cv_text = _effective_cv_text(app)
@@ -497,8 +555,12 @@ def apply_batch_results(db: Any, entries: Any, context: Optional[dict] = None) -
             logger.info(
                 "cv_parse batch validation failed app_id=%s: %s", app_id, exc
             )
-            _requeue_live(parse_application_cv_sections, app_id)
-            summary["requeued"] += 1
+            if _requeue_live(
+                parse_application_cv_sections, app_id, origin=origin
+            ):
+                summary["requeued"] += 1
+            else:
+                summary["skipped"] += 1
             continue
 
         parsed = ParsedCV.from_sections(
@@ -511,7 +573,6 @@ def apply_batch_results(db: Any, entries: Any, context: Optional[dict] = None) -
             prompt_version=PROMPT_VERSION,
             model_version=MODEL_VERSION,
         )
-        custom_id = str(getattr(entry, "custom_id", ""))
         submitted_key = (context.get(custom_id) or {}).get("cache_key")
         try:
             # Cache under the text the result actually came from, so a
@@ -535,10 +596,21 @@ def apply_batch_results(db: Any, entries: Any, context: Optional[dict] = None) -
     return summary
 
 
-def _requeue_live(task: Any, application_id: int) -> None:
+def _requeue_live(
+    task: Any, application_id: int, *, origin: str | None
+) -> bool:
     """Enqueue the live per-application parse; never raises (a requeue
     failure just leaves the row for a later sweep)."""
+    normalized_origin = normalize_cv_parse_origin(origin)
+    if normalized_origin is None:
+        logger.warning(
+            "cv_parse live requeue blocked: unknown origin app_id=%s",
+            application_id,
+        )
+        return False
     try:
-        task.delay(application_id)
+        task.delay(application_id, origin=normalized_origin)
+        return True
     except Exception:  # pragma: no cover — defensive
         logger.exception("cv_parse live requeue failed app_id=%s", application_id)
+        return False

@@ -836,9 +836,10 @@ def sync_starred_roles():
 
     Filters each org's sync to the workable_job_id of its starred roles,
     so this stays fast (per-job calls) even for orgs with hundreds of
-    roles. Auto-scoring of newly created applications happens inside the
-    sync path — see sync_service._sync_candidate_for_role, gated on
-    role.starred_for_auto_sync.
+    roles. The star remains sticky adoption/sync-cadence metadata, so paused
+    and off roles stay synchronized. It is not permission to spend: the
+    candidate path separately requires an enabled, unpaused, lifecycle-ready
+    role before launching any new paid parse/score work.
     """
     from sqlalchemy.orm import Session
 
@@ -915,9 +916,9 @@ def sync_starred_roles():
                         subdomain=org.workable_subdomain,
                     )
                 )
-                # mode="full" so the candidate path enters the branch
-                # that downloads the CV and calls on_application_created;
-                # that's where starred_for_auto_sync gates auto-scoring.
+                # mode="full" preserves candidate metadata for adopted roles.
+                # on_application_created applies the independent running-agent
+                # gate before it can launch paid parsing/scoring.
                 service.sync_org(
                     db,
                     org,
@@ -1697,6 +1698,7 @@ def sweep_assessment_task_provisioning(limit: int = 200):
             .filter(
                 Role.deleted_at.is_(None),
                 Role.agentic_mode_enabled.is_(True),
+                Role.agent_paused_at.is_(None),
                 Role.job_spec_text.isnot(None),
                 Role.job_spec_text != "",
                 Role.interview_focus.is_(None),
@@ -1731,6 +1733,7 @@ def sweep_assessment_task_provisioning(limit: int = 200):
             .filter(
                 Role.deleted_at.is_(None),
                 Role.agentic_mode_enabled.is_(True),
+                Role.agent_paused_at.is_(None),
                 Role.job_spec_text.isnot(None),
                 Role.job_spec_text != "",
                 Role.tech_questions_signature.is_(None),
@@ -1831,7 +1834,9 @@ def sweep_assessment_task_provisioning(limit: int = 200):
 
     for pending_role_id in focus_keys:
         try:
-            generate_role_interview_focus.delay(pending_role_id)
+            generate_role_interview_focus.delay(
+                pending_role_id, requires_running_agent=True
+            )
             focus_dispatched += 1
         except Exception:
             focus_failed += 1

@@ -284,11 +284,13 @@ class _CountingClient:
 
     def __init__(self, behaviour):
         self.calls = 0
+        self.requests = []
         outer = self
 
         class _M:
             def create(self, **kwargs):
                 outer.calls += 1
+                outer.requests.append(kwargs)
                 return behaviour(outer.calls)
 
         self.messages = _M()
@@ -368,6 +370,46 @@ def test_retries_transient_then_succeeds(monkeypatch):
     )
     assert client.calls == 3
     assert out[0].status == "met" and out[0].grounded is True
+    reservation_refs = {
+        call["metering"]["credit_reservation"]["external_ref"]
+        for call in client.requests
+    }
+    assert len(reservation_refs) == 3
+
+
+def test_grounding_threads_role_into_each_admitted_call(monkeypatch):
+    captured = []
+
+    def _admit(**kwargs):
+        captured.append(kwargs)
+        return {
+            "feature": "candidate_grounding",
+            "organization_id": kwargs["organization_id"],
+            "role_id": kwargs["role_id"],
+            "credit_reservation": {
+                "organization_id": kwargs["organization_id"],
+                "feature": "candidate_grounding",
+                "amount": 5_000,
+                "external_ref": "test-grounding-hold",
+                "live": False,
+            },
+        }
+
+    monkeypatch.setattr(ge, "admitted_search_metering", _admit)
+    client = _CountingClient(lambda _n: _met_response())
+
+    out = ge.extract_cv_evidence(
+        cv_text="core banking platform",
+        criteria=["banking domain experience"],
+        client=client,
+        organization_id=1,
+        role_id=88,
+        application_id=9,
+    )
+
+    assert out[0].status == "met"
+    assert captured[0]["role_id"] == 88
+    assert client.requests[0]["metering"]["role_id"] == 88
 
 
 def test_non_transient_error_is_not_retried(monkeypatch):
@@ -624,7 +666,12 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: list(apps))
 
     out = tc.find_top_candidates(
-        db=db, organization_id=1, query="top data engineers", base_query=MagicMock(), limit=2
+        db=db,
+        organization_id=1,
+        role_id=44,
+        query="top data engineers",
+        base_query=MagicMock(),
+        limit=2,
     )
 
     assert out["total_matched"] == 3
@@ -636,10 +683,52 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     # not ILIKE-matched into the pool (the "0 matched" bug).
     assert seen_kwargs.get("defer_qualitative") is True
     assert seen_kwargs.get("rerank_enabled") is False
+    assert seen_kwargs.get("role_id") == 44
     # no qualitative criteria → no grounding spend, no evidence model, no filter
     assert out["evidence_model"] is None
     assert out["excluded"]["not_met_total"] == 0
     assert out["candidates"][0]["criteria"] == []
+
+
+def test_find_top_candidates_does_not_pad_zero_structural_matches(monkeypatch):
+    """A failed role/skill prefilter must not turn into unrelated top scorers."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **kw: SearchOutput(
+            application_ids=[],
+            parsed_filter=ParsedFilter(
+                skills_any=["project manager", "scrum master"],
+                soft_criteria=["Treasury experience", "Data experience"],
+            ),
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 1_461)
+
+    def _must_not_load(*_args, **_kwargs):
+        raise AssertionError("unrelated candidates must not be loaded")
+
+    monkeypatch.setattr(tc, "_load_candidates", _must_not_load)
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="project manager or scrum master with Treasury and Data",
+        base_query=MagicMock(),
+        limit=10,
+        evidence_client=MagicMock(),
+    )
+
+    assert out["total_matched"] == 0
+    assert out["pool_size"] == 1_461
+    assert out["structural_matches"] == 0
+    assert out["evaluated"] == 0
+    assert out["shown"] == 0
+    assert out["candidates"] == []
+    assert out["warnings"][-1]["code"] == "no_structural_matches"
 
 
 def test_find_top_candidates_hides_not_met(monkeypatch):
@@ -880,10 +969,9 @@ def test_find_top_candidates_keeps_failed_preference(monkeypatch):
     assert out["excluded"]["not_met_total"] == 0
 
 
-def test_structural_match_biases_but_does_not_exclude(monkeypatch):
-    """The anti-collapse guarantee: a narrow/wrong structural filter (here only
-    app 3 matched) must NOT empty the result — non-matchers are still grounded
-    and shown. total_matched reflects the whole pool, not the 1 structural hit."""
+def test_structural_match_is_a_strict_population_filter(monkeypatch):
+    """A requested skill/title is a hard population constraint; unrelated
+    high scorers must never pad the result."""
     from app.candidate_search import runner as runner_mod
 
     monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
@@ -896,7 +984,7 @@ def test_structural_match_biases_but_does_not_exclude(monkeypatch):
     a1 = _fake_app(1, taali=90, name="A"); a1.cv_text = "fintech platform work"
     a2 = _fake_app(2, taali=85, name="B"); a2.cv_text = "fintech and banking"
     a3 = _fake_app(3, taali=40, name="C"); a3.cv_text = "fintech startup"
-    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a1, a2, a3])
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a3])
 
     class _FakeClient:
         class _M:
@@ -911,8 +999,9 @@ def test_structural_match_biases_but_does_not_exclude(monkeypatch):
         db=MagicMock(), organization_id=1, query="top react engineers in fintech",
         base_query=MagicMock(), limit=3, evidence_client=_FakeClient())
     ids = {c["application_id"] for c in out["candidates"]}
-    assert ids == {1, 2, 3}            # nobody excluded by the narrow structural filter
-    assert out["total_matched"] == 3   # the whole pool, not just the 1 structural match
+    assert ids == {3}
+    assert out["total_matched"] == 1
+    assert out["pool_size"] == 3
     assert out["structural_matches"] == 1
 
 

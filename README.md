@@ -85,8 +85,8 @@ taali-platform/
 1. **Backend + two workers (Railway)**
    - New project; add PostgreSQL and Redis, plus web, general-worker, and scoring-worker services from `backend/`.
    - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `RESEND_API_KEY`, real GitHub credentials, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
-   - Run `./scripts/railway/deploy_production.sh`. It pins and validates `USAGE_METER_LIVE=true`, migrates via production `DATABASE_PUBLIC_URL`, deploys general `celery` + Beat, deploys scoring-only without Beat, deploys web, then polls `/ready`.
-   - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final `/ready` poll validates web and both queue canaries end to end.
+   - Run `./scripts/railway/deploy_production.sh`. It pins and validates live metering and native apply on all three services, migrates via production `DATABASE_PUBLIC_URL`, deploys general `celery` + Beat, deploys scoring-only without Beat, deploys web, then polls `/ready`.
+   - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final gate validates web, both queue canaries, and live Anthropic/E2B/Resend/GitHub capability for the default assessment path.
 
 2. **Frontend (Vercel)**  
    - Import or deploy from `frontend/`.  

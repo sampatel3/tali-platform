@@ -122,13 +122,15 @@ railway_validate_worker_variables \
 railway_validate_worker_variables \
   "$ENV_NAME" "$SCORING_WORKER_SERVICE" "scoring" "false"
 
-echo "Live usage metering variables:"
+echo "Production agent contract variables:"
 for service in \
   "$WEB_SERVICE" \
   "$GENERAL_WORKER_SERVICE" \
   "$SCORING_WORKER_SERVICE"; do
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "USAGE_METER_LIVE" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "ATS_PUBLIC_APPLY_ENABLED" "true"
 done
 
 echo "Railway ${STATUS_SCOPE} status validation passed."

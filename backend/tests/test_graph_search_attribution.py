@@ -33,3 +33,16 @@ def test_attribute_search_resets_on_exception():
     except RuntimeError:
         pass
     assert graph_metering_ctx.get() is None  # reset even when the body raises
+
+
+def test_attribute_search_enforces_role_admission_when_role_scoped():
+    assert graph_metering_ctx.get() is None
+    with _attribute_search(42, "predicate", role_id=9):
+        ctx = graph_metering_ctx.get()
+        assert ctx is not None
+        assert ctx.organization_id == 42
+        assert ctx.role_id == 9
+        assert ctx.require_hard_admission is True
+        assert ctx.require_role_admission is True
+        assert ctx.trace_id == "graph-search:42:role:9:predicate"
+    assert graph_metering_ctx.get() is None

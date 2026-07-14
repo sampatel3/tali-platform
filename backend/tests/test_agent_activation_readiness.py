@@ -318,6 +318,52 @@ def test_readiness_requires_room_under_role_monthly_cap(_beat, db):
     assert "under this role's monthly cap" in reason["detail"]
 
 
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_readiness_uses_incoming_monthly_cap_without_mutating_role(_beat, db):
+    role = _role(db, active_task=True)
+    role.monthly_usd_budget_cents = 1
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(),
+        monthly_usd_budget_cents=5_000,
+    )
+
+    assert result["ready"] is True
+    assert role.monthly_usd_budget_cents == 1
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_readiness_uses_incoming_auto_advance_for_workable_writeback(_beat, db):
+    role = _role(db, active_task=True)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.workable_connected = True
+    org.workable_config = {"workable_writeback": True}
+    role.workable_job_id = "workable-role"
+    role.auto_advance = True
+    db.flush()
+
+    stale_policy = activation_readiness(role, settings_obj=_settings())
+    incoming_policy = activation_readiness(
+        role,
+        settings_obj=_settings(),
+        auto_advance=False,
+    )
+
+    assert "workable_interview_stage_missing" in {
+        reason["code"] for reason in stale_policy["reasons"]
+    }
+    assert incoming_policy["ready"] is True
+    assert role.auto_advance is True
+
+
 def test_local_readiness_does_not_require_external_services(db):
     local = _settings(
         DEPLOYMENT_ENV="development",

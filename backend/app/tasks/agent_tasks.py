@@ -791,6 +791,83 @@ AUTO_SCORE_PER_TICK_CAP = 50
 ACTIVATION_AUTO_SCORE_CAP = 500
 
 
+def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[int]]:
+    """Replay the latest score attempts that Pause/Turn off held.
+
+    A normal unscored drain misses forced rescores whose previous numeric score
+    is still present.  Persisting the hold as a stale CvScoreJob and draining it
+    first makes Resume/Turn on complete both first scores and re-scores without
+    a manual click or a six-hour stale-job timeout.
+    """
+    from sqlalchemy import func
+
+    from ..models.candidate_application import CandidateApplication
+    from ..models.cv_score_job import SCORE_JOB_STALE, CvScoreJob
+    from ..services.cv_score_orchestrator import enqueue_score
+
+    bounded = max(0, int(limit))
+    if bounded <= 0:
+        return 0, set()
+    if (
+        not bool(getattr(role, "agentic_mode_enabled", False))
+        or getattr(role, "agent_paused_at", None) is not None
+    ):
+        return 0, set()
+
+    latest_id = (
+        db.query(
+            CvScoreJob.application_id.label("application_id"),
+            func.max(CvScoreJob.id).label("job_id"),
+        )
+        .filter(CvScoreJob.role_id == int(role.id))
+        .group_by(CvScoreJob.application_id)
+        .subquery()
+    )
+    rows = (
+        db.query(
+            CvScoreJob.application_id,
+            CvScoreJob.force_full_score,
+        )
+        .join(latest_id, CvScoreJob.id == latest_id.c.job_id)
+        .filter(
+            CvScoreJob.status == SCORE_JOB_STALE,
+            CvScoreJob.error_message.in_(
+                ("deferred_agent_paused", "deferred_agent_off")
+            ),
+        )
+        .order_by(CvScoreJob.id.asc())
+        .limit(bounded)
+        .all()
+    )
+    attempted = {int(row.application_id) for row in rows}
+    touched = 0
+    for application_id, force_full_score in rows:
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id
+                == int(role.organization_id),
+                CandidateApplication.role_id == int(role.id),
+                CandidateApplication.application_outcome == "open",
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+        if app is None:
+            continue
+        job = enqueue_score(
+            db,
+            app,
+            force=True,
+            bypass_pre_screen=bool(force_full_score),
+            requires_active_agent=True,
+        )
+        if job is not None:
+            touched += 1
+    return touched, attempted
+
+
 def _auto_enqueue_scoring(
     db,
     *,
@@ -836,6 +913,15 @@ def _auto_enqueue_scoring(
         from ..services.cv_score_orchestrator import enqueue_score
         from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
 
+        deferred_touched, deferred_app_ids = _requeue_deferred_agent_scores(
+            db,
+            role=role,
+            limit=int(limit),
+        )
+        remaining_limit = max(int(limit) - deferred_touched, 0)
+        if remaining_limit <= 0:
+            return deferred_touched
+
         backoff_cutoff = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF
         # Re-screen is only worthwhile when the candidate uploaded a newer
         # CV after the last pre-screen run.
@@ -860,6 +946,16 @@ def _auto_enqueue_scoring(
                 CandidateApplication.cv_match_score.is_(None),
                 CandidateApplication.application_outcome == "open",
                 CandidateApplication.deleted_at.is_(None),
+                *(
+                    [CandidateApplication.id.notin_(deferred_app_ids)]
+                    if deferred_app_ids
+                    else []
+                ),
+                # HARD GUARD: never auto-score a `sourced` prospect. It has no CV
+                # (the cv_text filter below already excludes it), but keep the
+                # stage gate explicit so a sourced lead is never scored before it
+                # engages and transitions to `applied`.
+                CandidateApplication.pipeline_stage != "sourced",
                 CandidateApplication.cv_text.isnot(None),
                 CandidateApplication.cv_text != "",
                 # Active jobs are already admitted commitments. Excluding them
@@ -891,7 +987,7 @@ def _auto_enqueue_scoring(
             # Oldest first so the backlog drains in a fair order. The
             # next tick picks up where this one left off.
             .order_by(CandidateApplication.id.asc())
-            .limit(int(limit))
+            .limit(remaining_limit)
             .all()
         )
         if unscored:
@@ -992,12 +1088,17 @@ def _auto_enqueue_scoring(
                         score_reservation,
                     )
                     unscored = unscored[:credit_capacity]
-        touched = 0
+        touched = deferred_touched
         first_error: Exception | None = None
         for app in unscored:
             app_id = int(app.id)
             try:
-                job = enqueue_score(db, app, force=False)
+                job = enqueue_score(
+                    db,
+                    app,
+                    force=False,
+                    requires_active_agent=True,
+                )
                 if job is not None:
                     touched += 1
             except Exception as exc:

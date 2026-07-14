@@ -42,7 +42,9 @@ from ....services.s3_service import (
     upload_bytes_to_s3,
 )
 from ....services.application_events import on_application_created
+from ....cv_parsing.origins import CV_PARSE_ORIGIN_ATS_INGEST
 from ....services.agent_policy_settings import apply_workspace_agent_defaults
+from ....services.job_page_lifecycle import role_allows_new_paid_ats_work
 from ....services.fit_matching_service import (
     CvMatchValidationError,
     calculate_cv_job_match_sync,
@@ -2409,25 +2411,25 @@ class WorkableSyncService:
                     )
             # Refresh the read-only score cache from existing fields. Paid
             # scoring is never run synchronously inside the sync loop. Newly
-            # created applications on an agent/starred role are admitted to
-            # the bounded async scoring path below; manual Score / Rescore
+            # created applications on a running role agent are admitted to the
+            # bounded async scoring path below; manual Score / Rescore
             # remains an optional recovery/override for other roles.
             if app.score_cached_at is None:
                 refresh_application_score_cache(app, db=db)
             else:
                 refresh_pre_screening_fields(app)
-            # Defer the per-application auto work (interview pack +
-            # auto-reject pre-screen) to Celery. Default scoring stays
-            # human-triggered, EXCEPT for roles flagged
-            # starred_for_auto_sync — recruiters opt those into real-time
-            # scoring per-candidate. Only score on the create branch
-            # (created_application) so re-syncs of an existing app don't
-            # re-enqueue scoring jobs every Beat tick.
-            auto_score = bool(
-                created_application
-                and getattr(role, "starred_for_auto_sync", False)
+            # The star is sticky adoption/sync-cadence metadata, not permission
+            # to spend.  Only a lifecycle-ready, enabled, unpaused role may
+            # launch NEW paid parse/score work. Metadata continues to sync while
+            # paused/off, and work queued before the hold is left untouched.
+            paid_work_allowed = role_allows_new_paid_ats_work(role)
+            auto_score = bool(created_application and paid_work_allowed)
+            on_application_created(
+                app,
+                score=auto_score,
+                allow_paid_work=paid_work_allowed,
+                parse_origin=CV_PARSE_ORIGIN_ATS_INGEST,
             )
-            on_application_created(app, score=auto_score)
             # NOTE: syncs never dispatch paid re-scoring. A changed
             # Workable context (new answers/comments/activities) is
             # stored for display and for the NEXT recruiter-approved
@@ -2442,5 +2444,48 @@ class WorkableSyncService:
             # Preserve local source-of-truth stage for existing applications.
             app.status = sanitize_text_for_storage(app.status)
         db.flush()
+        # Sister roles share this canonical application roster. When a new CV
+        # arrives (or its text changes), create/refresh only the alternate
+        # evaluation rows; never clone ATS state. A short countdown lets the
+        # surrounding Workable sync transaction commit before workers read it.
+        if created_application or mode == "full":
+            try:
+                # ``role`` is reused across the whole candidate loop, so its
+                # relationship lazy-loads once rather than adding a sister-role
+                # lookup per candidate on large Workable imports.
+                live_sisters = [
+                    sister for sister in (role.sister_roles or [])
+                    if sister.deleted_at is None
+                ]
+                if live_sisters and role_allows_new_paid_ats_work(role):
+                    from ....services.sister_role_service import (
+                        ensure_application_sister_evaluations,
+                    )
+                    from ....models.sister_role_evaluation import SISTER_EVAL_ERROR, SisterRoleEvaluation
+                    from ....tasks.sister_role_tasks import score_sister_evaluation
+
+                    sister_evaluation_ids = ensure_application_sister_evaluations(
+                        db, app, sister_roles=live_sisters,
+                    )
+                    for sister_evaluation_id in sister_evaluation_ids:
+                        try:
+                            score_sister_evaluation.apply_async(
+                                args=[sister_evaluation_id], queue="scoring", countdown=5,
+                            )
+                        except Exception:  # pragma: no cover - broker failure path
+                            logger.exception(
+                                "Failed to dispatch sister-role evaluation id=%s",
+                                sister_evaluation_id,
+                            )
+                            evaluation = db.get(SisterRoleEvaluation, sister_evaluation_id)
+                            if evaluation is not None:
+                                evaluation.status = SISTER_EVAL_ERROR
+                                evaluation.error_message = (
+                                    "Scoring worker unavailable; retry the roster"
+                                )
+            except Exception:  # pragma: no cover - sync must remain resilient
+                logger.exception(
+                    "Failed to queue sister-role evaluation application_id=%s", app.id
+                )
         counters["application_upserted"] += 1
         return counters

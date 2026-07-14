@@ -9,6 +9,7 @@ per-application enqueue.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -30,11 +31,17 @@ from app.cv_parsing.runner import (
     _SYSTEM_PROMPT,
 )
 from app.cv_parsing.schemas import ParsedCV, ParsedCVSections
+from app.cv_parsing.origins import (
+    CV_PARSE_ORIGIN_ATS_INGEST,
+    CV_PARSE_ORIGIN_NATIVE_APPLY,
+    CV_PARSE_ORIGIN_RECRUITER_UPLOAD,
+    autonomous_origin_for_application,
+)
 from app.models.anthropic_batch_job import AnthropicBatchJob
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import JOB_STATUS_OPEN, Role
 from app.services.metered_anthropic_client import MeteredAnthropicClient
 
 CV_TEXT = "Jane Doe. Senior engineer at Acme Corp since 2019. Python, SQL."
@@ -47,7 +54,12 @@ def _seed_app(db, *, org=None, role=None, cv_text=CV_TEXT, email="c@x.test"):
         db.flush()
     if role is None:
         role = Role(
-            organization_id=org.id, name="R", source="manual", job_spec_text="hire"
+            organization_id=org.id,
+            name="R",
+            source="manual",
+            job_spec_text="hire",
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=5000,
         )
         db.add(role)
         db.flush()
@@ -62,7 +74,7 @@ def _seed_app(db, *, org=None, role=None, cv_text=CV_TEXT, email="c@x.test"):
         pipeline_stage="review",
         pipeline_stage_source="recruiter",
         application_outcome="open",
-        source="manual",
+        source="careers",
         cv_text=cv_text,
     )
     db.add(app)
@@ -77,6 +89,24 @@ def test_custom_id_roundtrip():
     assert application_id_from(custom_id_for(42)) == 42
     assert application_id_from("cvparse-notanint") is None
     assert application_id_from("other-42") is None
+
+
+def test_autonomous_origin_uses_application_source_not_role_linkage():
+    ats_linked_role = SimpleNamespace(
+        workable_job_id="ATS-1", bullhorn_job_order_id=None
+    )
+    assert (
+        autonomous_origin_for_application(
+            SimpleNamespace(source="careers", role=ats_linked_role)
+        )
+        == CV_PARSE_ORIGIN_NATIVE_APPLY
+    )
+    assert (
+        autonomous_origin_for_application(
+            SimpleNamespace(source="manual", role=ats_linked_role)
+        )
+        is None
+    )
 
 
 def test_build_request_matches_sync_params():
@@ -164,11 +194,95 @@ def test_sweep_submits_per_org_and_dedupes_in_flight(db, monkeypatch):
     assert all(r.status == "submitted" for r in rows)
     ctx = next(r.context for r in rows if r.request_count == 2)
     assert ctx[custom_id_for(app1.id)]["entity_id"] == f"application:{app1.id}"
+    assert ctx[custom_id_for(app1.id)]["origin"] == CV_PARSE_ORIGIN_NATIVE_APPLY
 
     # Second sweep: everything is in-flight, nothing resubmitted.
     summary2 = sweep_pending_applications(db)
     assert summary2["in_flight"] == 3
     assert len(fake.created) == 2
+
+
+def test_sweep_defers_ats_parse_backlog_until_agent_is_running(db, monkeypatch):
+    org = Organization(name="ATS hold", slug=f"ats-hold-{id(db)}")
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="Workable role",
+        source="workable",
+        workable_job_id="ATS-HOLD",
+        workable_job_data={"state": "published"},
+        job_status=JOB_STATUS_OPEN,
+        starred_for_auto_sync=True,
+        agentic_mode_enabled=False,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.flush()
+    _, _, app = _seed_app(
+        db,
+        org=org,
+        role=role,
+        cv_text="Unique ATS-held CV text for batch admission.",
+        email="ats-hold@x.test",
+    )
+    app.source = "workable"
+    db.commit()
+
+    fake = _FakeBatches()
+    _patch_client(monkeypatch, fake)
+
+    held = sweep_pending_applications(db)
+    assert held["batches"] == []
+    assert fake.created == []
+    assert app.cv_sections is None
+
+    role.agentic_mode_enabled = True
+    db.commit()
+    resumed = sweep_pending_applications(db)
+
+    assert len(resumed["batches"]) == 1
+    assert len(fake.created) == 1
+    assert fake.created[0]["requests"][0]["custom_id"] == custom_id_for(app.id)
+
+
+def test_sweep_defers_native_parse_and_excludes_unknown_manual_rows(db, monkeypatch):
+    org, role, native_app = _seed_app(
+        db,
+        cv_text="Unique held native CV text.",
+        email="native-held@x.test",
+    )
+    _, _, manual_app = _seed_app(
+        db,
+        org=org,
+        role=role,
+        cv_text="Unique unknown manual CV text.",
+        email="manual-unknown@x.test",
+    )
+    manual_app.source = "manual"
+    # A linked ATS role is not authority to reinterpret a manual row as ATS;
+    # the native row's own `careers` source also remains native.
+    role.workable_job_id = "LINKED-ROLE"
+    role.workable_job_data = {"state": "published"}
+    role.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    fake = _FakeBatches()
+    _patch_client(monkeypatch, fake)
+    assert sweep_pending_applications(db)["batches"] == []
+
+    role.agent_paused_at = None
+    db.commit()
+    resumed = sweep_pending_applications(db)
+
+    submitted = {
+        request["custom_id"]
+        for batch in fake.created
+        for request in batch["requests"]
+    }
+    assert resumed["batches"]
+    assert submitted == {custom_id_for(native_app.id)}
+    assert custom_id_for(manual_app.id) not in submitted
 
 
 def test_sweep_blocks_batch_submit_before_provider_when_credits_are_empty(
@@ -239,6 +353,8 @@ def test_sweep_excludes_closed_and_archived_roles(db, monkeypatch):
         source="manual",
         job_spec_text="hire",
         workable_job_data={"state": "published"},
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
     )
     db.add(published_role)
     db.flush()
@@ -362,10 +478,10 @@ def test_apply_results_hands_failures_to_live_task(db, monkeypatch):
     _, _, app_err = _seed_app(db, org=org, role=role, email="err@x.test")
     db.commit()
 
-    requeued: list[int] = []
+    requeued: list[tuple[int, str | None]] = []
     monkeypatch.setattr(
         "app.tasks.automation_tasks.parse_application_cv_sections.delay",
-        lambda app_id: requeued.append(app_id),
+        lambda app_id, *, origin=None: requeued.append((app_id, origin)),
     )
 
     entries = [
@@ -378,11 +494,20 @@ def test_apply_results_hands_failures_to_live_task(db, monkeypatch):
             result=SimpleNamespace(type="errored"),
         ),
     ]
-    summary = apply_batch_results(db, entries)
+    context = {
+        custom_id_for(app_bad.id): {"origin": CV_PARSE_ORIGIN_NATIVE_APPLY},
+        custom_id_for(app_err.id): {"origin": CV_PARSE_ORIGIN_ATS_INGEST},
+    }
+    summary = apply_batch_results(db, entries, context=context)
     db.commit()
 
     assert summary == {"applied": 1, "requeued": 2, "skipped": 0, "stale_skipped": 0}
-    assert sorted(requeued) == sorted([app_bad.id, app_err.id])
+    assert sorted(requeued) == sorted(
+        [
+            (app_bad.id, CV_PARSE_ORIGIN_NATIVE_APPLY),
+            (app_err.id, CV_PARSE_ORIGIN_ATS_INGEST),
+        ]
+    )
     db.refresh(app_bad)
     assert app_bad.cv_sections is None  # untouched; live task owns it
 
@@ -484,10 +609,10 @@ def test_on_application_created_respects_batch_flag(db, monkeypatch):
     _, _, app = _seed_app(db)
     db.commit()
 
-    enqueued: list[tuple] = []
+    enqueued: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
         "app.tasks.automation_tasks.parse_application_cv_sections.apply_async",
-        lambda args, **kw: enqueued.append(args),
+        lambda args, **kw: enqueued.append((args, kw)),
     )
     # Silence the unrelated auto-reject enqueue.
     monkeypatch.setattr(
@@ -496,9 +621,63 @@ def test_on_application_created_respects_batch_flag(db, monkeypatch):
     )
 
     monkeypatch.setattr(settings, "CV_PARSE_BATCH_ENABLED", True, raising=False)
-    on_application_created(app)
+    on_application_created(app, parse_origin=CV_PARSE_ORIGIN_NATIVE_APPLY)
     assert enqueued == []  # the batch sweep owns it
 
+    on_application_created(app, parse_origin=CV_PARSE_ORIGIN_RECRUITER_UPLOAD)
+    assert enqueued == [
+        (
+            (app.id,),
+            {
+                "kwargs": {"origin": CV_PARSE_ORIGIN_RECRUITER_UPLOAD},
+                "countdown": 15,
+            },
+        )
+    ]
+    enqueued.clear()
+
     monkeypatch.setattr(settings, "CV_PARSE_BATCH_ENABLED", False, raising=False)
-    on_application_created(app)
-    assert enqueued == [(app.id,)]  # live path unchanged
+    on_application_created(app, parse_origin=CV_PARSE_ORIGIN_NATIVE_APPLY)
+    assert enqueued == [
+        (
+            (app.id,),
+            {
+                "kwargs": {"origin": CV_PARSE_ORIGIN_NATIVE_APPLY},
+                "countdown": 15,
+            },
+        )
+    ]
+
+
+def test_on_application_created_paid_hold_suppresses_parse_and_score(db, monkeypatch):
+    from app.platform.config import settings
+    from app.services.application_events import on_application_created
+
+    _, _, app = _seed_app(db)
+    db.commit()
+
+    parse_calls: list[int] = []
+    score_calls: list[int] = []
+    monkeypatch.setattr(settings, "CV_PARSE_BATCH_ENABLED", False, raising=False)
+    monkeypatch.setattr(
+        "app.tasks.automation_tasks.parse_application_cv_sections.apply_async",
+        lambda args, **kw: parse_calls.append(args[0]),
+    )
+    monkeypatch.setattr(
+        "app.tasks.automation_tasks.run_application_auto_reject.delay",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator.enqueue_score",
+        lambda db, application, **kw: score_calls.append(application.id),
+    )
+
+    on_application_created(
+        app,
+        score=True,
+        allow_paid_work=False,
+        parse_origin=CV_PARSE_ORIGIN_ATS_INGEST,
+    )
+
+    assert parse_calls == []
+    assert score_calls == []
