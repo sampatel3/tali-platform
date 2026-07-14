@@ -63,7 +63,7 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     )
 
     with patch(
-        "app.domains.assessments_runtime.sister_role_routes.score_sister_role.apply_async"
+        "app.services.related_role_service.score_sister_role.apply_async"
     ) as dispatch:
         response = client.post(
             f"/api/v1/roles/{source.id}/sisters",

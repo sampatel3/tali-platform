@@ -13,7 +13,7 @@ export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, on
 
   useEffect(() => {
     if (!open || !sourceRole?.id) return undefined;
-    setName(`${sourceRole.name || 'Role'} · Sister`);
+    setName(`${sourceRole.name || 'Role'} · Related`);
     setJobSpecText(sourceRole.job_spec_text || '');
     setError('');
     setPreview(null);
@@ -39,7 +39,7 @@ export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, on
       });
       onCreated?.(res?.data?.role);
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to create the sister role.'));
+      setError(getErrorMessage(err, 'Failed to create the related role.'));
     } finally {
       setSaving(false);
     }
@@ -49,7 +49,7 @@ export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, on
     <Dialog
       open={open}
       onClose={saving ? () => {} : onClose}
-      title="Create a sister role"
+      title="Create a related role"
       description={`Create a new Taali scoring view over ${sourceRole?.name || 'this Workable role'}. Candidate stages and actions stay coupled to the original Workable job.`}
       panelClassName="max-w-3xl"
       footer={(
@@ -81,7 +81,7 @@ export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, on
             placeholder="Paste the complete updated job specification…"
           />
           <span className="mt-1 block text-xs text-[var(--taali-muted)]">
-            Use the complete spec, not only the differences. This text becomes the scoring rubric for the sister role.
+            Use the complete spec, not only the differences. This text becomes the scoring rubric for the related role.
           </span>
         </label>
         <div className="rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4 text-sm">
@@ -89,7 +89,7 @@ export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, on
             <span className="inline-flex items-center gap-2"><Spinner size={13} /> Checking the shared roster…</span>
           ) : preview ? (
             <div className="space-y-1">
-              <div><strong>{preview.candidates_total}</strong> candidates will appear in the sister role.</div>
+              <div><strong>{preview.candidates_total}</strong> candidates will appear in the related role.</div>
               <div><strong>{preview.candidates_with_cv}</strong> have CV text and will be scored now.</div>
               {preview.candidates_missing_cv > 0 ? (
                 <div>{preview.candidates_missing_cv} without CV text will show as “Not scorable”.</div>

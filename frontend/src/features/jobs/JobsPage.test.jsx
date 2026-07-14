@@ -177,7 +177,7 @@ describe('JobsPage Workable sync states', () => {
     expect(within(rejectedCell).getByText('4')).toBeInTheDocument();
   });
 
-  it('routes "+ New requisition" to the requisition flow (the create-a-job entry point)', async () => {
+  it('routes "+ Create job" to the job-creation flow', async () => {
     apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
       data: {
         run_id: null,
@@ -191,7 +191,7 @@ describe('JobsPage Workable sync states', () => {
     const onNavigate = vi.fn();
     render(<MemoryRouter><JobsPage onNavigate={onNavigate} /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ New requisition' }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ Create job' }));
 
     expect(onNavigate).toHaveBeenCalledWith('requisitions');
   });

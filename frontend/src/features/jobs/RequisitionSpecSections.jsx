@@ -49,7 +49,7 @@ export function RequisitionSpecSections({ requisition }) {
     <div className="role-sec req-spec">
       <div className="role-sec-title">
         <span className="marker">RQ</span>
-        From the requisition
+        From the job brief
       </div>
       <div className="req-meta">
         {r.ref_code ? <code className="req-ref">{r.ref_code}</code> : null}

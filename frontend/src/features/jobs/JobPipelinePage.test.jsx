@@ -155,6 +155,7 @@ const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
     <MemoryRouter initialEntries={['/jobs/101']}>
       <Routes>
         <Route path="/jobs/:roleId" element={<JobPipelinePage onNavigate={onNavigate} />} />
+        <Route path="/chat/agents/:roleId" element={<div>Role agent chat route</div>} />
       </Routes>
     </MemoryRouter>
   ),
@@ -292,7 +293,7 @@ describe('JobPipelinePage', () => {
 
     renderPipeline();
 
-    expect(await screen.findByText('Sister · Workable')).toBeInTheDocument();
+    expect(await screen.findByText('Related · Workable')).toBeInTheDocument();
     expect(screen.getByText((_, element) => (
       element?.tagName === 'SPAN'
       && element.textContent.includes('This is a scoring view coupled to AI Engineer · Workable')
@@ -310,6 +311,32 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByRole('heading', { name: /^Role specification$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
     expect(apiClient.roles.updateJobSpec).not.toHaveBeenCalled();
+  });
+
+  it('opens related-role creation directly from the job header', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        job_spec_text: 'AI engineer role requiring Python, production machine learning systems, evaluation, observability, and reliable delivery.',
+      },
+    });
+    apiClient.roles.previewSister.mockResolvedValue({
+      data: { candidates_total: 2, candidates_with_cv: 2, candidates_missing_cv: 0 },
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Create related role/i }));
+
+    expect(await screen.findByRole('heading', { name: /Create a related role/i })).toBeInTheDocument();
+    expect(apiClient.roles.previewSister).toHaveBeenCalledWith(baseRole.id);
+    expect(screen.getByRole('button', { name: /Create and score candidates/i })).toBeEnabled();
+  });
+
+  it('links the job header directly to its role-agent chat', async () => {
+    renderPipeline();
+    const chatButton = await screen.findByRole('button', { name: /Ask agent/i });
+    fireEvent.click(chatButton);
+    expect(await screen.findByText('Role agent chat route')).toBeInTheDocument();
   });
 
   it('removes manual sourcing, processing, syncing and distribution work from the role page', async () => {

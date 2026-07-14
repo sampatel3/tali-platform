@@ -3,6 +3,7 @@ import {
   Briefcase,
   CheckSquare,
   ChevronDown,
+  ExternalLink,
   Home,
   LineChart,
   LogOut,
@@ -67,24 +68,27 @@ const initialsFor = (name, org) => {
   return letters.slice(0, 2).toUpperCase() || 'TA';
 };
 
-const useOrgName = (user) => {
+const useOrgProfile = (user) => {
   const fallback = useMemo(
     () => normalizeHeaderOrgName(pickOrganizationName(user), 'No company'),
     [user],
   );
-  const [orgName, setOrgName] = useState(fallback);
+  const [profile, setProfile] = useState({ name: fallback, slug: '' });
   useEffect(() => {
     let cancelled = false;
-    setOrgName(fallback);
+    setProfile((current) => ({ ...current, name: fallback }));
     if (!user) return undefined;
     const load = async () => {
       try {
         const res = await organizationsApi.get();
         if (cancelled) return;
         const resolved = String(res?.data?.name || '').trim();
-        setOrgName(normalizeHeaderOrgName(resolved || fallback, 'No company'));
+        setProfile({
+          name: normalizeHeaderOrgName(resolved || fallback, 'No company'),
+          slug: String(res?.data?.slug || '').trim(),
+        });
       } catch {
-        if (!cancelled) setOrgName(normalizeHeaderOrgName(fallback, 'No company'));
+        if (!cancelled) setProfile({ name: normalizeHeaderOrgName(fallback, 'No company'), slug: '' });
       }
     };
     void load();
@@ -92,7 +96,62 @@ const useOrgName = (user) => {
       cancelled = true;
     };
   }, [fallback, user?.id, user?.organization_id]);
-  return orgName;
+  return profile;
+};
+
+export const JobsNavMenu = ({ active, orgSlug }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (ref.current && !ref.current.contains(event.target)) setOpen(false);
+    };
+    const onKey = (event) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="mc-nav-jobs-wrap" ref={ref}>
+      <button
+        type="button"
+        className={`mc-nav-tab ${active ? 'on' : ''}`.trim()}
+        aria-current={active ? 'page' : undefined}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Briefcase size={15} strokeWidth={1.8} aria-hidden="true" />
+        <span>Jobs</span>
+        <ChevronDown size={12} strokeWidth={1.8} className={open ? 'is-open' : ''} />
+      </button>
+      <AnimatePresence initial={false}>
+        {open ? (
+          <m.div className="mc-jobs-menu" role="menu" initial="hidden" animate="visible" exit="exit" variants={popoverVariants}>
+            <PageLink page="jobs" role="menuitem" onClick={() => setOpen(false)}>
+              <Briefcase size={15} />
+              <span><strong>All jobs</strong><small>Open every role and pipeline</small></span>
+            </PageLink>
+            <PageLink page="requisitions" role="menuitem" onClick={() => setOpen(false)}>
+              <span className="mc-jobs-menu-plus" aria-hidden="true">+</span>
+              <span><strong>Create a job</strong><small>Build the brief with Taali</small></span>
+            </PageLink>
+            {orgSlug ? (
+              <PageLink to={`/careers/${encodeURIComponent(orgSlug)}`} role="menuitem" onClick={() => setOpen(false)}>
+                <ExternalLink size={15} />
+                <span><strong>Job board</strong><small>View your public openings</small></span>
+              </PageLink>
+            ) : null}
+          </m.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
 };
 
 const ThemeMenuItem = () => {
@@ -162,6 +221,7 @@ const MobileNavDrawer = ({
   homePending,
   onLogout,
   onNavigate,
+  orgSlug,
 }) => {
   const panelRef = useRef(null);
   useEffect(() => {
@@ -217,17 +277,24 @@ const MobileNavDrawer = ({
             const liveBadge = (id === 'home' && homePending > 0) ? String(homePending) : null;
             const visibleBadge = liveBadge ?? badge;
             return (
-              <PageLink
-                key={id}
-                page={id}
-                className={`mc-drawer-tab ${resolvedPage === id ? 'on' : ''}`.trim()}
-                aria-current={resolvedPage === id ? 'page' : undefined}
-                onClick={onClose}
-              >
-                <TabIcon size={18} strokeWidth={1.8} aria-hidden="true" />
-                <span>{label}</span>
-                {visibleBadge ? <span className="mc-badge">{visibleBadge}</span> : null}
-              </PageLink>
+              <React.Fragment key={id}>
+                <PageLink
+                  page={id}
+                  className={`mc-drawer-tab ${resolvedPage === id ? 'on' : ''}`.trim()}
+                  aria-current={resolvedPage === id ? 'page' : undefined}
+                  onClick={onClose}
+                >
+                  <TabIcon size={18} strokeWidth={1.8} aria-hidden="true" />
+                  <span>{label}</span>
+                  {visibleBadge ? <span className="mc-badge">{visibleBadge}</span> : null}
+                </PageLink>
+                {id === 'jobs' ? (
+                  <div className="mc-drawer-job-links">
+                    <PageLink page="requisitions" onClick={onClose}>Create a job</PageLink>
+                    {orgSlug ? <PageLink to={`/careers/${encodeURIComponent(orgSlug)}`} onClick={onClose}>Job board</PageLink> : null}
+                  </div>
+                ) : null}
+              </React.Fragment>
             );
           })}
         </nav>
@@ -251,7 +318,8 @@ const MobileNavDrawer = ({
 // theme toggle, sign out).
 export const Shell = ({ currentPage, onNavigate }) => {
   const { user, logout } = useAuth();
-  const orgName = useOrgName(user);
+  const orgProfile = useOrgProfile(user);
+  const orgName = orgProfile.name;
   const displayName = pickUserName(user) || 'User';
   const initials = useMemo(() => initialsFor(displayName, orgName), [displayName, orgName]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -327,6 +395,9 @@ export const Shell = ({ currentPage, onNavigate }) => {
           // Live pending-count badge on Home — overrides the static badge.
           const liveBadge = (id === 'home' && homePending > 0) ? String(homePending) : null;
           const visibleBadge = liveBadge ?? badge;
+          if (id === 'jobs') {
+            return <JobsNavMenu key={id} active={resolvedPage === id} orgSlug={orgProfile.slug} />;
+          }
           return (
             <PageLink
               key={id}
@@ -413,6 +484,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
           homePending={homePending}
           onLogout={handleLogout}
           onNavigate={onNavigate}
+          orgSlug={orgProfile.slug}
         />
       ) : null}
     </AnimatePresence>

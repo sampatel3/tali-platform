@@ -1553,7 +1553,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="clients"
                   title="Hiring departments"
-                  subtitle="Whoever a requisition is for — an external client like ADCB or an internal team like Engineering. Add one, then assign it to a requisition to track its rate, margin, and open / filled jobs; filter the Jobs page by department to see each one's pipeline."
+                  subtitle="Whoever a job is for — an external client like ADCB or an internal team like Engineering. Add one, then assign jobs to it to track rate, margin, and open / filled roles; filter the Jobs page by department to see each pipeline."
                 >
                   {visitedSections.has('clients') ? <ClientsManager /> : null}
 

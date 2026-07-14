@@ -64,7 +64,12 @@ MAX_CONSECUTIVE_ERROR_ROUNDS = 2
 # role_id here when the model leaves it out — otherwise an omitted role_id
 # leaks org-wide results.
 _ROLE_SCOPED_TOOLS = frozenset(
-    {"list_recent_agent_decisions", "list_recent_agent_runs"}
+    {
+        "list_recent_agent_decisions",
+        "list_recent_agent_runs",
+        "preview_related_role",
+        "create_related_role",
+    }
 )
 
 
@@ -343,7 +348,9 @@ def run_chat_turn(
             ):
                 args = {**args, "role_id": int(conversation.role_id)}
             try:
-                result = dispatch_tool(name, args, db=db, user=user)
+                result = dispatch_tool(
+                    name, args, db=db, user=user, conversation=conversation
+                )
                 is_error = False
             except Exception as exc:
                 logger.exception("Tool %s failed: %s", name, exc)

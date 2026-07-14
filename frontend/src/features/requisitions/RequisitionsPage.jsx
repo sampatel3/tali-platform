@@ -167,7 +167,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       const list = await requisitionApi.list();
       setBriefs(Array.isArray(list) ? list : []);
     } catch {
-      setError('Could not load requisitions.');
+      setError('Could not load job drafts.');
     } finally {
       // First response is in (empty or not) — the sidebar can stop showing
       // skeletons and, if the list really is empty, show the empty copy.
@@ -245,7 +245,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setBrief(next);
     } catch {
       if (selectingRef.current !== id) return;
-      setError('Could not load this requisition.');
+      setError('Could not load this job draft.');
       setBrief(null);
     } finally {
       if (selectingRef.current === id) setLoadingBrief(false);
@@ -266,7 +266,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setComposer('');
       clearAttachments();
     } catch {
-      setError('Could not create a requisition.');
+      setError('Could not create a job draft.');
     } finally {
       setCreating(false);
     }
@@ -641,7 +641,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       ? brief.jd_override
       : renderJobSpec(template, brief);
     const body = (jd || '').replace(/\s+$/, '');
-    const refLine = `_Taali ref: ${refCode} — please keep this line so this role links back to your Taali requisition._`;
+    const refLine = `_Taali ref: ${refCode} — please keep this line so this role links back to your Taali job._`;
     return body ? `${body}\n\n---\n${refLine}\n` : `${refLine}\n`;
   }, [refCode, brief, template]);
 
@@ -830,13 +830,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         <aside className="rq-side">
           <div className="rq-side-head">
             <div className="rq-side-head-row">
-              <span className="rq-side-kicker">Requisitions</span>
+              <span className="rq-side-kicker">Job drafts</span>
               {briefs.length > 0 ? (
                 <span className="rq-side-count">{briefs.length}</span>
               ) : null}
             </div>
             <button type="button" className="rq-new-btn" onClick={createReq} disabled={creating}>
-              {creating ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Plus size={15} />} New requisition
+              {creating ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Plus size={15} />} New job
             </button>
           </div>
           <ul className="rq-side-list">
@@ -850,7 +850,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                 </li>
               ))
             ) : briefs.length === 0 ? (
-              <li className="rq-side-empty">No requisitions yet. Start one and tell the agent about the role.</li>
+              <li className="rq-side-empty">No job drafts yet. Start one and tell the agent about the role.</li>
             ) : (
               briefs.map((b) => (
                 <li key={b.id}>
@@ -859,7 +859,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     className={`rq-side-item${b.id === selectedId ? ' is-active' : ''}`}
                     onClick={() => select(b.id)}
                   >
-                    <span className="rq-side-title">{b.title || 'Untitled requisition'}</span>
+                    <span className="rq-side-title">{b.title || 'Untitled job'}</span>
                     <span className="rq-side-meta">
                       <span className={`rq-dot ${isPublishedRequisition(b.status) ? 'is-published' : 'is-open'}`} />
                       {requisitionStatusLabel(b.status)}
@@ -885,16 +885,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
               </div>
               <div className="rq-switching-body">
                 <MotionSpinner className="rq-motion-spinner" size={15} />
-                <span className="rq-switching-note">Loading requisition…</span>
+                <span className="rq-switching-note">Loading job…</span>
               </div>
             </div>
           ) : !brief ? (
             <div className="rq-blank">
               <div className="rq-blank-card">
                 <div className="rq-blank-glyph"><FileText size={22} /></div>
-                <h2>Draft a requisition with the agent</h2>
+                <h2>Create a job with the agent</h2>
                 <p>
-                  Start a new requisition, then tell the agent about the role — talk it through,
+                  Start a new job, then tell the agent about the role — talk it through,
                   paste a kickoff-call transcript, or screenshot a JD. The brief fills in beside
                   the conversation as you go.
                 </p>
@@ -902,7 +902,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     button) is hidden, so this CTA is the only way in — keep it
                     reachable here so the empty state isn't a dead end. */}
                 <button type="button" className="rq-publish-btn rq-blank-cta" onClick={createReq} disabled={creating}>
-                  {creating ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Plus size={15} />} Start a requisition
+                  {creating ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Plus size={15} />} Start a job
                 </button>
               </div>
             </div>
@@ -910,7 +910,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
             <>
               <header className="rq-main-head">
                 <div className="rq-main-head-titles">
-                  <h1 className="rq-main-title">{brief.title || 'Untitled requisition'}</h1>
+                  <h1 className="rq-main-title">{brief.title || 'Untitled job'}</h1>
                   <div className="rq-main-sub">
                     <span className="rq-status-chip">{requisitionStatusLabel(brief.status)}</span>
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
@@ -1041,7 +1041,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           <span className={`rq-job-status ${linkedJob?.workable_job_id ? 'is-open' : 'is-draft'}`}>
                             {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Taali job ready · Workable optional'}
                           </span>
-                          {refCode ? <code className="rq-ref-code" title="Requisition ref code">{refCode}</code> : null}
+                          {refCode ? <code className="rq-ref-code" title="Job reference code">{refCode}</code> : null}
                         </div>
                         <p className="rq-workable-hint">
                           Taali applications and the agent do not depend on Workable. If you also want Workable distribution, create it there with this spec and keep the ref line for automatic linking.
@@ -1095,7 +1095,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   why fields are read-only instead of letting saves fail. */}
               {applied ? (
                 <div className="rq-applied-note" role="note">
-                  This requisition has been applied to a live role, so the brief is now read-only.
+                  This job brief has been applied to a live role, so it is now read-only.
                 </div>
               ) : null}
 
@@ -1188,7 +1188,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
                 {/* Right column — Job spec (live JD document) + Brief tabs */}
                 <div className="rq-right">
-                  <div className="rq-tabs" role="tablist" aria-label="Requisition detail">
+                  <div className="rq-tabs" role="tablist" aria-label="Job setup detail">
                     <button
                       type="button"
                       role="tab"
@@ -1209,7 +1209,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     </button>
                   </div>
                   {loadingBrief ? (
-                    <div className="rq-brief"><div className="rq-brief-scroll"><MotionSpinner label="Loading requisition" size={15} /></div></div>
+                    <div className="rq-brief"><div className="rq-brief-scroll"><MotionSpinner label="Loading job" size={15} /></div></div>
                   ) : rightTab === 'jobspec' ? (
                     <JobSpec
                       template={template}

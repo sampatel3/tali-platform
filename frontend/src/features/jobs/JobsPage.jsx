@@ -690,9 +690,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               onClick={() => { if (!isShowcase) onNavigate('requisitions'); }}
               disabled={isShowcase}
               aria-disabled={isShowcase || undefined}
-              title="Start a requisition — the agent captures the full spec, then publishes the job"
+              title="Create a job — the agent captures the full brief, then publishes it"
             >
-              + New requisition
+              + Create job
             </button>
           </>
         )}
@@ -890,14 +890,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         ) : filtered.length === 0 ? (
           <EmptyState
             title="No jobs found"
-            description="Try a different filter, or start a new requisition — the agent captures the spec and publishes the job."
+            description="Try a different filter, or create a job — the agent captures the brief and publishes it."
             action={(
               <button
                 type="button"
                 className="btn btn-outline"
                 onClick={() => onNavigate('requisitions')}
               >
-                + New requisition
+                + Create job
               </button>
             )}
           />
@@ -1048,7 +1048,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                                 ? `Coupled to ${role.ats_owner_role_name} in Workable`
                                 : null,
                               role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
-                                ? `${role.sister_role_count} coupled sister role${role.sister_role_count === 1 ? '' : 's'}`
+                                ? `${role.sister_role_count} related role${role.sister_role_count === 1 ? '' : 's'}`
                                 : null,
                               roleDept || null,
                               roleLoc || null,

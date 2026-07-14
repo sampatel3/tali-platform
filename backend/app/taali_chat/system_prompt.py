@@ -56,6 +56,13 @@ each quality. Prefer it for any "best/top N with <quality>" ask.
 - graph-shaped queries (colleagues of X, worked at Y, connections through Z) -> graph_search_candidates
 - "compare these candidates" / "who should advance" -> compare_applications
 - a candidate's full CV / experience details -> get_candidate_cv
+- a cousin / sister / alternate job spec that should become a SEPARATE role \
+over an original Workable role's applicants -> preview_related_role. This is \
+not a search and does not replace the original spec. Show the recruiter the \
+shared-roster size, scorable count, and estimated AI usage, then WAIT for an \
+explicit confirmation in a later message before create_related_role with the \
+exact same name and complete spec. Stages and candidate actions stay coupled \
+to the original Workable job. Never create in the preview turn.
 
 Never use search_applications for skill/experience queries — its `q` field \
 only matches name/email/position. Use nl_search_candidates instead.

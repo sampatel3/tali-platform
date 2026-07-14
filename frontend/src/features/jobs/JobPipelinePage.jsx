@@ -3,7 +3,9 @@ import '../../styles/16-job-pipeline.css';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
+  GitFork,
   Link2,
+  MessageSquare,
   RefreshCw,
   Sparkles,
 } from 'lucide-react';
@@ -45,6 +47,7 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
+import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
 import { AtsTypeTag, atsTypeColumnLabel, roleAtsType } from './atsType';
 import { getErrorMessage, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
@@ -338,6 +341,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
   const [sisterRescoring, setSisterRescoring] = useState(false);
   const [sisterPollVersion, setSisterPollVersion] = useState(0);
+  const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
   // Set only on a cold-load failure with nothing cached to paint — drives the
@@ -1198,7 +1202,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       showToast('Re-scoring queued for the coupled candidate roster.', 'success');
       window.setTimeout(() => { void loadRoleWorkspace(); }, 1000);
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to queue the sister-role re-score.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to queue the related-role re-score.'), 'error');
     } finally {
       setSisterRescoring(false);
     }
@@ -1590,6 +1594,28 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 {sisterScoringStatus?.status === 'running' ? `Scoring ${sisterScoringStatus.progress_percent || 0}%` : 'Re-score roster'}
               </button>
             ) : null}
+            {role?.role_kind !== 'sister' ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => navigate(`/chat/agents/${role.id}`)}
+                title="Open this job's agent chat"
+              >
+                <MessageSquare size={12} />
+                Ask agent
+              </button>
+            ) : null}
+            {role?.role_kind !== 'sister' && roleAtsType(role) === 'workable' ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => setSisterDialogOpen(true)}
+                title="Create a separate scoring role over this Workable candidate pool"
+              >
+                <GitFork size={12} />
+                Create related role
+              </button>
+            ) : null}
             {canEditJobSpec ? (
               <button
                 type="button"
@@ -1634,7 +1660,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               })()
             )}
             {role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0 ? (
-              <div className="f"><span className="k">Coupled views</span><span className="v purple">{role.sister_role_count} sister role{role.sister_role_count === 1 ? '' : 's'}</span></div>
+              <div className="f"><span className="k">Related roles</span><span className="v purple">{role.sister_role_count} related role{role.sister_role_count === 1 ? '' : 's'}</span></div>
             ) : null}
           </div>
         )}
@@ -2157,7 +2183,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               <div className="ctable-toolbar-grow" />
               {role?.role_kind === 'sister' && sisterScoringStatus?.status === 'running' ? (
                 <span className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
-                  <Spinner size={12} /> Sister scores {sisterScoringStatus.progress_percent || 0}% complete
+                  <Spinner size={12} /> Related-role scores {sisterScoringStatus.progress_percent || 0}% complete
                 </span>
               ) : null}
             </div>
@@ -2190,7 +2216,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       <tr>
                         <th>Candidate</th>
                         <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">{role?.role_kind === 'sister' ? 'Sister score' : 'Score'}{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">{role?.role_kind === 'sister' ? 'Related-role score' : 'Score'}{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
                         </th>
                         {role?.role_kind === 'sister' ? <th title={`Fit score on ${role?.ats_owner_role_name || 'the original role'}`}>Original fit</th> : null}
                         <th>Stage</th>
@@ -2333,6 +2359,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           variant="danger"
           onClose={() => setPendingRoleView(null)}
           onConfirm={discardSpecAndNavigate}
+        />
+
+        <CreateSisterRoleDialog
+          open={sisterDialogOpen}
+          sourceRole={role}
+          rolesApi={rolesApi}
+          onClose={() => setSisterDialogOpen(false)}
+          onCreated={(createdRole) => {
+            setSisterDialogOpen(false);
+            if (createdRole?.id) navigate(`/jobs/${createdRole.id}`);
+          }}
         />
 
         <Dialog

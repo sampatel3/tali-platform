@@ -23,6 +23,8 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from ..models.agent_decision import AgentDecision
 from ..models.role import Role
+from ..services import related_role_service as _related_roles
+from ..services.sister_role_service import text_fingerprint
 from . import assessments as _assessments
 from . import constraints as _constraints
 from . import controls as _controls
@@ -46,12 +48,16 @@ CARD_TYPES = frozenset(
         "threshold_change",
         "constraint_change",
         "job_spec_change",
+        "related_role_preview",
+        "related_role_created",
         "draft_task_review",
         "candidate_evidence",
     }
 )
 # Cards that represent a committed mutation (vs read-only analysis).
-MUTATION_CARD_TYPES = frozenset({"threshold_change", "constraint_change", "job_spec_change"})
+MUTATION_CARD_TYPES = frozenset(
+    {"threshold_change", "constraint_change", "job_spec_change", "related_role_created"}
+)
 
 
 AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
@@ -255,6 +261,53 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
                 "job_spec_text": {"type": "string", "description": "The full new job description text the recruiter pasted."},
             },
             "required": ["job_spec_text"],
+        },
+    },
+    {
+        "name": "preview_related_role",
+        "description": (
+            "Preview creating a NEW related Taali role over this Workable role's "
+            "existing candidate pool, using a complete cousin/alternate job spec. "
+            "Returns the shared roster size, scorable count, and estimated AI "
+            "usage without creating anything. Use this instead of update_job_spec "
+            "when the recruiter wants a separate role/view while preserving this "
+            "original role. Always show the preview and wait for a later explicit "
+            "confirmation before calling create_related_role."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name for the new related role.",
+                },
+                "job_spec_text": {
+                    "type": "string",
+                    "description": "The complete updated/cousin job specification, not only the differences.",
+                },
+            },
+            "required": ["name", "job_spec_text"],
+        },
+    },
+    {
+        "name": "create_related_role",
+        "description": (
+            "Create the related role and queue fresh scores for the shared roster. "
+            "Candidate stages and actions remain coupled to the original Workable "
+            "role. This paid mutation is accepted only after preview_related_role "
+            "has been shown and the recruiter explicitly confirms in a NEW message."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "job_spec_text": {"type": "string"},
+                "confirmation_token": {
+                    "type": ["string", "null"],
+                    "description": "Opaque token from the preview, when available.",
+                },
+            },
+            "required": ["name", "job_spec_text"],
         },
     },
     {
@@ -824,6 +877,90 @@ def dispatch_tool(
                 payload={"role_id": int(role.id), "max_count": int(estimate.get("count") or 0)},
             )
         return result
+    if name == "preview_related_role":
+        clean_name = str(args.get("name") or "").strip()
+        clean_spec = str(args.get("job_spec_text") or "").strip()
+        if not clean_name:
+            raise ValueError("Give the related role a name.")
+        if len(clean_spec) < 80:
+            raise ValueError(
+                "Paste the complete updated job specification (at least 80 characters)."
+            )
+        result = _related_roles.preview_related_role(
+            db, role_id=int(role.id), organization_id=org_id
+        )
+        result.update({"proposed_name": clean_name})
+        return attach_confirmation(
+            result,
+            operation="create_related_role",
+            payload={
+                "role_id": int(role.id),
+                "name": clean_name,
+                "spec_fingerprint": text_fingerprint(clean_spec),
+                "max_total": int(result.get("candidates_total") or 0),
+                "max_scorable": int(result.get("candidates_with_cv") or 0),
+            },
+        )
+    if name == "create_related_role":
+        clean_name = str(args.get("name") or "").strip()
+        clean_spec = str(args.get("job_spec_text") or "").strip()
+        if conversation is None:
+            return blocked_confirmation_result(
+                "create_related_role", "No persisted chat confirmation is available."
+            )
+        check = require_later_turn_confirmation(
+            db,
+            conversation=conversation,
+            operation="create_related_role",
+            token=str(args.get("confirmation_token") or "") or None,
+        )
+        if not check.ok:
+            return blocked_confirmation_result("create_related_role", check.reason)
+        current = _related_roles.preview_related_role(
+            db, role_id=int(role.id), organization_id=org_id
+        )
+        matches_preview = (
+            int(check.payload.get("role_id") or 0) == int(role.id)
+            and str(check.payload.get("name") or "") == clean_name
+            and str(check.payload.get("spec_fingerprint") or "")
+            == text_fingerprint(clean_spec)
+            and int(current.get("candidates_total") or 0)
+            <= int(check.payload.get("max_total") or 0)
+            and int(current.get("candidates_with_cv") or 0)
+            <= int(check.payload.get("max_scorable") or 0)
+        )
+        if not matches_preview:
+            current.update(
+                {
+                    "proposed_name": clean_name,
+                    "message": (
+                        "The name, specification, or roster changed since the preview. "
+                        "Please confirm this refreshed scope."
+                    ),
+                }
+            )
+            return attach_confirmation(
+                current,
+                operation="create_related_role",
+                payload={
+                    "role_id": int(role.id),
+                    "name": clean_name,
+                    "spec_fingerprint": text_fingerprint(clean_spec),
+                    "max_total": int(current.get("candidates_total") or 0),
+                    "max_scorable": int(current.get("candidates_with_cv") or 0),
+                },
+            )
+        related, evaluation_counts = _related_roles.create_related_role(
+            db,
+            role_id=int(role.id),
+            organization_id=org_id,
+            name=clean_name,
+            job_spec_text=clean_spec,
+        )
+        result = _related_roles.related_role_created_payload(
+            related, evaluation_counts
+        )
+        return mark_confirmation_consumed(result, check=check)
     if name == "rescreen_role":
         if conversation is not None:
             check = require_later_turn_confirmation(

@@ -1,6 +1,9 @@
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect } from 'vitest';
 
-import { NAV_TABS } from './Shell';
+import { JobsNavMenu, NAV_TABS } from './Shell';
 import { pathForPage } from '../../app/routing';
 
 // Candidates live per-job (each role's pipeline) and the cross-job
@@ -29,5 +32,22 @@ describe('candidate report route resolution', () => {
 
   it('no longer resolves a top-level candidates list page', () => {
     expect(pathForPage('candidates')).toBeNull();
+  });
+});
+
+describe('Jobs navigation menu', () => {
+  it('uses recruiter-facing job language and links to the public job board', () => {
+    render(
+      <MemoryRouter>
+        <JobsNavMenu active orgSlug="deep-light" />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Jobs/i }));
+
+    expect(screen.getByRole('menuitem', { name: /All jobs/i })).toHaveAttribute('href', '/jobs');
+    expect(screen.getByRole('menuitem', { name: /Create a job/i })).toHaveAttribute('href', '/requisitions');
+    expect(screen.getByRole('menuitem', { name: /Job board/i })).toHaveAttribute('href', '/careers/deep-light');
+    expect(screen.queryByText(/^Requisitions?$/i)).not.toBeInTheDocument();
   });
 });
