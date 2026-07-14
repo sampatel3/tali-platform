@@ -702,6 +702,9 @@
 .role-sec ul {
   margin: 0;
   padding-left: 20px;
+  /* Tailwind Preflight removes list markers globally. Job-spec content is
+     editorial prose, so restore the semantic bullets its <ul> promises. */
+  list-style: disc outside;
 }
 
 .role-spec-source {
