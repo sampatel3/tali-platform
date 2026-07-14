@@ -303,42 +303,42 @@ const AgentDefaultsForm = ({
       <div className="settings-subcard settings-top-gap">
         <div className="settings-subcard-head">
           <div>
-            <h3>Default autonomy policy</h3>
+            <h3>Workspace automation defaults</h3>
             <p>
-              The exact reversible actions a new role inherits. Screening, parsing, scoring, monitoring, and metering run whenever that role&apos;s agent is on. These defaults never turn an agent on by themselves; a recruiter still reviews the effective role policy and chooses Turn on once.
+              New roles inherit these settings. They do not turn the agent on, and existing roles keep their current settings.
             </p>
           </div>
         </div>
         <div className="settings-toggle-list">
           <ToggleCard
-            title="Send assessments automatically"
-            description="Send the approved first assessment invite when the candidate passes policy. Off: the invite waits in the Decision Hub."
-            checked={autoSendAssessment}
-            onChange={(value) => onChange({ autoSendAssessment: value })}
-          />
-          <ToggleCard
-            title="Resend assessment invites automatically"
-            description="Retry an existing assessment invitation when delivery policy calls for it. Off: each resend waits for approval."
-            checked={autoResendAssessment}
-            onChange={(value) => onChange({ autoResendAssessment: value })}
-          />
-          <ToggleCard
-            title="Advance on-policy candidates automatically"
-            description="Move qualified candidates into recruiter handoff. Interviews, offers, and hiring remain human decisions."
-            checked={autoAdvance}
-            onChange={(value) => onChange({ autoAdvance: value })}
-          />
-          <ToggleCard
-            title="Reject deterministic screening failures automatically"
-            description="Only explicit rules-based pre-screen failures may reject under safeguards. Full-score, assessment, ambiguous, and off-policy rejections always require human confirmation."
+            title="Auto-reject pre-screen failures"
+            description="Reject candidates who fail a required screening question or fall below the pre-screen threshold. Full CV-score and assessment rejections still need approval."
             checked={autoRejectPreScreen}
             onChange={(value) => onChange({ autoRejectPreScreen: value })}
           />
           <ToggleCard
-            title="Skip the assessment stage"
-            description="Strong candidates bypass assessment and follow the configured advancement policy. This takes precedence over assessment send and resend defaults."
+            title="Auto-send assessments"
+            description="Send the approved assessment when a candidate passes pre-screen."
+            checked={autoSendAssessment}
+            onChange={(value) => onChange({ autoSendAssessment: value })}
+          />
+          <ToggleCard
+            title="Auto-retry assessment invites"
+            description="Retry an assessment invite when the delivery policy allows it."
+            checked={autoResendAssessment}
+            onChange={(value) => onChange({ autoResendAssessment: value })}
+          />
+          <ToggleCard
+            title="Skip assessment for strong candidates"
+            description="Let strong candidates bypass assessment. Pair with Auto-advance to move them forward without approval."
             checked={autoSkipAssessment}
             onChange={(value) => onChange({ autoSkipAssessment: value })}
+          />
+          <ToggleCard
+            title="Auto-advance qualified candidates"
+            description="Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions."
+            checked={autoAdvance}
+            onChange={(value) => onChange({ autoAdvance: value })}
           />
         </div>
       </div>
@@ -1868,8 +1868,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
                   <div className="settings-toggle-list settings-top-gap">
                     <ToggleCard
-                      title="Enable Workable auto-reject"
-                      description="Turn automatic Workable rejections on or off for the whole workspace. Each role's score cutoff and its 'ask me first' setting live on the role page."
+                      title="Allow Workable rejection write-backs"
+                      description="Workspace safety gate for writing automatic rejections to Workable. Each role must also have Auto-reject pre-screen failures turned on."
                       checked={Boolean(workableForm.autoRejectEnabled)}
                       onChange={(value) => setWorkableForm((prev) => ({ ...prev, autoRejectEnabled: value }))}
                     />

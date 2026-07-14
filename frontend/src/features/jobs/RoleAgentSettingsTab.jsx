@@ -275,15 +275,15 @@ const RoleAgentSettingsTab = ({
 
         {role?.id ? <RoleScreeningQuestions roleId={role.id} /> : null}
 
-        {/* Reject threshold */}
+        {/* Screening threshold */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                Reject <em>threshold</em>
+                Screening <em>threshold</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Below this CV score, candidates are flagged for reject review. Full-score and assessment reject recommendations always need human confirmation. Only a deterministic pre-screen failure can auto-reject, and only when explicitly enabled below.
+                Candidates below this score fail pre-screen. Use Auto-reject pre-screen failures below to reject them automatically; full CV-score and assessment rejections always need your approval.
               </p>
             </div>
           </div>
@@ -317,7 +317,7 @@ const RoleAgentSettingsTab = ({
           </div>
           {thresholdMode === 'auto' ? (
             <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
-              Agent-managed — no fixed number. The agent holds candidates to a quality bar set by your top candidates across all roles, and recalibrates it as you hire.
+              The agent adjusts this threshold from your strongest candidates and hiring outcomes.
             </p>
           ) : (
             <div className="mc-agent-settings-slider">
@@ -328,7 +328,7 @@ const RoleAgentSettingsTab = ({
                 step={1}
                 value={thresholdDisplay}
                 onChange={(event) => setThresholdDraft(event.target.value)}
-                aria-label="Reject threshold percent"
+                aria-label="Screening threshold percent"
                 className="ce-range mc-agent-settings-slider-input"
                 style={{ '--ce-range-val': thresholdDisplay }}
               />
@@ -380,7 +380,7 @@ const RoleAgentSettingsTab = ({
                 Assessment <em>tasks</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Which skills assessment qualified candidates receive. If none is assigned, Turn on generates, repairs, battle-tests, and approves one automatically; choosing a library task or A/B set is an optional override.
+                Choose the assessment sent to qualified candidates. If none is assigned, Turn on creates and validates one automatically.
               </p>
             </div>
           </div>
@@ -506,14 +506,19 @@ const RoleAgentSettingsTab = ({
           )}
         </section>
 
-        {/* Autonomy rules */}
+        {/* Automatic actions */}
         <section className="mc-agent-settings-card">
-          <h2 className="mc-agent-settings-card-title">
-            Autonomy <em>rules</em>
-          </h2>
-          <p className="mc-agent-settings-card-help" style={{ marginBottom: 14 }}>
-            These are the exact reversible actions Turn on will authorize. Screening and scoring always run while the agent is on; irreversible full-score and assessment rejections always wait for you.
-          </p>
+          <div className="mc-agent-settings-card-head">
+            <div>
+              <h2 className="mc-agent-settings-card-title">
+                Automatic <em>actions</em>
+              </h2>
+              <p className="mc-agent-settings-card-help">
+                Choose what the agent can do without asking you.
+              </p>
+            </div>
+            <span className="mc-kicker is-mute">SAVES INSTANTLY</span>
+          </div>
           {externalProvider && externalJobLive === false && (
             <div className="mc-agent-warn" role="alert">
               <svg
@@ -532,53 +537,37 @@ const RoleAgentSettingsTab = ({
               </svg>
               <div>
                 <div className="mc-agent-warn-title">
-                  Changes won’t sync to {externalProviderLabel} — this job is {externalJobState || 'not live'}
+                  {externalProviderLabel} write-backs may be unavailable — this job is {externalJobState || 'not live'}
                 </div>
                 <div className="mc-agent-warn-body">
-                  {externalProviderLabel} doesn’t accept updates on a job in this state, so Taali
-                  can’t write rejections or stage changes (such as moving a candidate
-                  to interview) back to it. Existing history and recruiter actions
-                  remain available here, while new autonomous ATS processing waits.
-                  Re-publish this job in {externalProviderLabel} to restore the full flow.
+                  Re-publish the job in {externalProviderLabel} before relying on synced rejections or stage changes. Taali’s local history remains available.
                 </div>
               </div>
             </div>
           )}
-          <div className="mc-agent-settings-card-help" style={{ marginBottom: 8 }}>
-            Effective policy: assessments <strong>{autoSendAssessment ? 'send automatically' : 'wait for approval'}</strong>
-            {' · '}resends <strong>{autoResendAssessment ? 'run automatically' : 'wait for approval'}</strong>
-            {' · '}advances <strong>{autoAdvance ? 'run automatically' : 'wait for approval'}</strong>
-            {' · '}deterministic screening rejects <strong>{deterministicReject ? 'may execute under safeguards' : 'wait for approval'}</strong>.
-          </div>
           {[
+            {
+              key: 'deterministic_pre_screen_reject',
+              value: deterministicReject,
+              title: 'Auto-reject pre-screen failures',
+              sub: 'Reject candidates who fail a required screening question or fall below the pre-screen threshold. Full CV-score and assessment rejections still need approval.',
+            },
             {
               key: 'auto_send_assessment',
               value: autoSendAssessment,
-              title: 'Send assessments automatically',
-              sub: 'Send the approved assessment immediately when a candidate passes the role policy. Off: each initial invite waits in the Decision Hub.',
+              title: 'Auto-send assessments',
+              sub: 'Send the approved assessment when a candidate passes pre-screen.',
             },
             {
               key: 'auto_resend_assessment',
               value: autoResendAssessment,
-              title: 'Resend assessment invites automatically',
-              sub: 'Retry an existing assessment invitation when the delivery policy calls for it. Off: each resend waits for approval.',
-            },
-            {
-              key: 'auto_advance',
-              value: autoAdvance,
-              title: 'Advance on-policy candidates automatically',
-              sub: 'Move qualified candidates into the recruiter handoff without a routine click. Interviews, offers, and hiring remain human decisions.',
-            },
-            {
-              key: 'deterministic_pre_screen_reject',
-              value: deterministicReject,
-              title: 'Reject deterministic screening failures automatically',
-              sub: 'One explicit opt-in for rules-based pre-screen failures when policy and ATS safeguards pass. Full-score, assessment, ambiguous, and off-policy rejections always remain in the Decision Hub for human confirmation.',
+              title: 'Auto-retry assessment invites',
+              sub: 'Retry an assessment invite when the delivery policy allows it.',
             },
             {
               key: 'auto_skip_assessment',
               value: autoSkipAssessment,
-              title: 'Auto skip assessment',
+              title: 'Skip assessment for strong candidates',
               disabled: Boolean(
                 role?.agentic_mode_enabled
                 && autoSkipAssessment
@@ -590,7 +579,13 @@ const RoleAgentSettingsTab = ({
                 && activeAssignedTasks.length === 0
               )
                 ? 'Choose an active assessment task above before turning this off. Until then, qualified candidates bypass the assessment stage.'
-                : 'Bypass the assessment stage: strong candidates queue as advance-to-interview cards in the Decision Hub instead of receiving an assessment invite. Combine with automatic advance to move them without approval.',
+                : 'Let strong candidates bypass assessment. Turn on Auto-advance to move them forward without approval.',
+            },
+            {
+              key: 'auto_advance',
+              value: autoAdvance,
+              title: 'Auto-advance qualified candidates',
+              sub: 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
           ].map((rule, idx) => (
             <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
@@ -615,7 +610,7 @@ const RoleAgentSettingsTab = ({
         {/* Save bar */}
         <div className="mc-agent-settings-savebar">
           <span>
-            Changes apply to this role only. Org defaults stay intact —{' '}
+            Automation switches save instantly. Threshold changes apply to this role only —{' '}
             <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
           </span>
           <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={savingRoleConfig}>
@@ -629,7 +624,7 @@ const RoleAgentSettingsTab = ({
         <div className="mc-agent-settings-side-card">
           <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>ROLE AI-USAGE BUDGET · THIS MONTH</div>
           <p className="mc-agent-settings-card-help" style={{ marginTop: 0, marginBottom: 10 }}>
-            Covers model-backed pre-screening, scoring, semantic search, assessment grading, and agent reasoning. Sandbox runtime, email, storage, and repository hosting are separate; see Settings → Billing for available operational estimates.
+            AI usage for pre-screening, scoring, search, assessment grading, and agent reasoning. Other operating costs appear in Settings → Billing.
           </p>
           <div className="mc-agent-settings-budget-amount">
             <span className="big">{fmtUsd(monthlySpentCents)}</span>
@@ -738,9 +733,9 @@ const RoleAgentSettingsTab = ({
             must-have card here, so there's one source of truth. */}
 
         <div className="mc-agent-settings-side-card">
-          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AUTOMATIC HOLDS</div>
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE BEHAVIOR</div>
           <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
-            The agent pauses at the monthly cap, when usage credits run out, or when startup cannot complete. System holds recover and retry automatically after the dependency clears; a manual Pause remains until you explicitly resume it. Pause or Turn off stops autonomous processing and AI spend. {agentIntakeLifecycleCopy(role)}
+            Budget, credit, and startup holds recover automatically. A manual pause waits for you to resume it. {agentIntakeLifecycleCopy(role)}
           </p>
         </div>
 

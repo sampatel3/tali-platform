@@ -22,12 +22,12 @@ const baseProps = (roleOverrides = {}) => ({
 });
 
 describe('RoleAgentSettingsTab autonomy policy', () => {
-  it('surfaces each positive automation grant separately', () => {
+  it('surfaces each automatic action separately', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
-    expect(screen.getByText('Send assessments automatically')).toBeInTheDocument();
-    expect(screen.getByText('Resend assessment invites automatically')).toBeInTheDocument();
-    expect(screen.getByText('Advance on-policy candidates automatically')).toBeInTheDocument();
-    expect(screen.getByText('Reject deterministic screening failures automatically')).toBeInTheDocument();
+    expect(screen.getByText('Auto-reject pre-screen failures')).toBeInTheDocument();
+    expect(screen.getByText('Auto-send assessments')).toBeInTheDocument();
+    expect(screen.getByText('Auto-retry assessment invites')).toBeInTheDocument();
+    expect(screen.getByText('Auto-advance qualified candidates')).toBeInTheDocument();
   });
 
   it('uses effective granular policy and fires the exact action change', () => {
@@ -40,7 +40,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
       })}
       onAutonomyChange={onAutonomyChange}
     />);
-    const toggle = screen.getByRole('button', { name: 'Send assessments automatically' });
+    const toggle = screen.getByRole('button', { name: 'Auto-send assessments' });
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(toggle);
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
@@ -63,9 +63,9 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
       onAutonomyChange={onAutonomyChange}
     />);
 
-    const send = screen.getByRole('button', { name: 'Send assessments automatically' });
-    const resend = screen.getByRole('button', { name: 'Resend assessment invites automatically' });
-    const advance = screen.getByRole('button', { name: 'Advance on-policy candidates automatically' });
+    const send = screen.getByRole('button', { name: 'Auto-send assessments' });
+    const resend = screen.getByRole('button', { name: 'Auto-retry assessment invites' });
+    const advance = screen.getByRole('button', { name: 'Auto-advance qualified candidates' });
     expect(send).toHaveAttribute('aria-pressed', 'true');
     expect(resend).toHaveAttribute('aria-pressed', 'true');
     expect(advance).toHaveAttribute('aria-pressed', 'true');
@@ -80,7 +80,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
       {...baseProps({ auto_reject: true, auto_reject_pre_screen: false })}
       onAutonomyChange={onAutonomyChange}
     />);
-    const toggle = screen.getByRole('button', { name: 'Reject deterministic screening failures automatically' });
+    const toggle = screen.getByRole('button', { name: 'Auto-reject pre-screen failures' });
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: /^Auto-reject$/i })).not.toBeInTheDocument();
     fireEvent.click(toggle);
@@ -92,25 +92,25 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
   it('makes the irreversible human-confirm rail explicit', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
     expect(
-      screen.getAllByText(/full-score and assessment reject recommendations always/i).length,
+      screen.getAllByText(/full CV-score and assessment rejections/i).length,
     ).toBeGreaterThan(0);
     expect(
-      screen.getByText(/explicit opt-in for rules-based pre-screen failures when policy and ATS safeguards pass/i),
+      screen.getByText(/fail a required screening question or fall below the pre-screen threshold/i),
     ).toBeInTheDocument();
   });
 
   it('distinguishes manual pauses from automatic budget, credit, and startup holds', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
-    expect(screen.getByText('AUTOMATIC HOLDS')).toBeInTheDocument();
-    expect(screen.getByText(/manual Pause remains until you explicitly resume it/i)).toBeInTheDocument();
-    expect(screen.getByText(/usage credits run out/i)).toBeInTheDocument();
+    expect(screen.getByText('PAUSE BEHAVIOR')).toBeInTheDocument();
+    expect(screen.getByText(/manual pause waits for you to resume it/i)).toBeInTheDocument();
+    expect(screen.getByText(/Budget, credit, and startup holds recover automatically/i)).toBeInTheDocument();
     expect(screen.getByText(/applications close until Resume or Turn on/i)).toBeInTheDocument();
   });
 
   it('labels the role cap as AI usage and separates operational costs', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
     expect(screen.getByText(/ROLE AI-USAGE BUDGET/i)).toBeInTheDocument();
-    expect(screen.getByText(/Sandbox runtime, email, storage, and repository hosting are separate/i)).toBeInTheDocument();
+    expect(screen.getByText(/Other operating costs appear in Settings/i)).toBeInTheDocument();
     expect(screen.getByText(/Settings → Billing/i)).toBeInTheDocument();
   });
 });
@@ -168,7 +168,7 @@ describe('RoleAgentSettingsTab assessment task', () => {
     expect(
       screen.getByText(/this running role is skipping the assessment stage/i),
     ).toBeInTheDocument();
-    const skipToggle = screen.getByRole('button', { name: 'Auto skip assessment' });
+    const skipToggle = screen.getByRole('button', { name: 'Skip assessment for strong candidates' });
     expect(skipToggle).toBeDisabled();
     fireEvent.click(skipToggle);
     expect(onAutonomyChange).not.toHaveBeenCalled();

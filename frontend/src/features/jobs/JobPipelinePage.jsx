@@ -959,7 +959,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       });
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
-      showToast('Reject threshold updated.', 'success');
+      showToast('Screening threshold updated.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to save reject threshold.'), 'error');
     } finally {
@@ -1894,7 +1894,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 auto_send_assessment: 'Assessment sending',
                 auto_resend_assessment: 'Assessment resending',
                 auto_advance: 'Candidate advancement',
-                deterministic_pre_screen_reject: 'Deterministic screening rejection',
+                deterministic_pre_screen_reject: 'Pre-screen auto-reject',
                 auto_skip_assessment: 'Assessment skipping',
               };
               if (!labels[key]) return;
@@ -1958,19 +1958,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   auto_send_assessment: 'Assessment sending on — approved on-policy invites send automatically.',
                   auto_resend_assessment: 'Assessment resending on — policy-approved retries run automatically.',
                   auto_advance: 'Candidate advancement on — qualified candidates move to recruiter handoff automatically.',
-                  deterministic_pre_screen_reject: 'Deterministic screening rejection on — only explicit rules-based failures may reject automatically under the configured safeguards.',
+                  deterministic_pre_screen_reject: 'Pre-screen auto-reject on — failed pre-screens reject automatically; later-stage rejections still need approval.',
                 };
                 const disabledMessages = {
                   auto_send_assessment: 'Assessment sending off — each initial invite waits in the Decision Hub.',
                   auto_resend_assessment: 'Assessment resending off — each retry waits for approval.',
                   auto_advance: 'Candidate advancement off — each advance waits in the Decision Hub.',
-                  deterministic_pre_screen_reject: 'Deterministic screening rejection off — every rejection waits for human confirmation.',
+                  deterministic_pre_screen_reject: 'Pre-screen auto-reject off — failed pre-screens wait in the Decision Hub.',
                 };
                 showToast(
                   key === 'auto_skip_assessment'
                     ? (value
-                      ? 'Auto skip assessment on — strong candidates queue for advance instead of receiving an assessment.'
-                      : 'Auto skip assessment off — assessment invites resume for this role.')
+                      ? 'Assessment skip on — strong candidates bypass assessment.'
+                      : 'Assessment skip off — assessment invites resume for this role.')
                     : (value ? enabledMessages[key] : disabledMessages[key]),
                   'success',
                 );
@@ -2450,7 +2450,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           open={Boolean(activationPreflight)}
           onClose={() => setActivationPreflight(null)}
           title="Turn on this role’s agent?"
-          description="This is the one human authorization step. After confirmation, the saved policy runs durably without keeping this page open."
+          description="Confirm once and the saved policy keeps running after you close this page."
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
@@ -2476,11 +2476,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   Qualified candidates {resolvedRoleAutomation(role, 'auto_advance') ? 'advance automatically to recruiter handoff' : 'wait for recruiter approval before advancing'}.
                 </li>
                 <li>
-                  Deterministic pre-screen failures {
+                  Pre-screen failures {
                     resolvedDeterministicReject(role)
-                      ? 'may reject automatically under the configured safeguards'
+                      ? 'reject automatically when provider and safety checks pass'
                       : 'wait for recruiter approval'
-                  }. Full-score, assessment, ambiguous, interview, offer, and hire decisions remain human-controlled.
+                  }. Full CV-score and assessment rejections still need approval.
                 </li>
                 <li>
                   Assessment stage: {

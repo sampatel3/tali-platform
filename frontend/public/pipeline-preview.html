@@ -300,7 +300,7 @@
           </div>
         </div>
         <div class="asec">
-          <div class="ah">Reject threshold</div><div class="ad">Candidates scoring below this are flagged or auto-rejected.</div>
+          <div class="ah">Screening threshold</div><div class="ad">Pre-screen results below this score follow the auto-reject setting.</div>
           <div class="selrow"><span class="tlabel" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute)">Mode</span><span class="sel">Manual <i class="ti ti-chevron-down" style="font-size:14px;color:var(--mute)"></i></span><span style="font-size:13px;color:var(--ink-2)">Currently <b style="color:var(--purple-2)">55%</b></span></div>
           <input type="range" class="rng" min="0" max="100" value="55">
           <div class="rngscale"><span>0</span><span>25</span><span>50</span><span>75</span><span>100%</span></div>
@@ -309,9 +309,9 @@
           <div style="font-size:12px;color:var(--mute)">61 below threshold · 87 above · <a style="color:var(--purple-2);font-weight:500">Review the 61 →</a></div>
         </div>
         <div class="asec">
-          <div class="ah">Autonomy rules</div><div class="ad">What the agent may do without waiting for your approval.</div>
-          <div class="toggle"><div class="tg"><b>Auto-reject below threshold</b><p>Below-threshold candidates are rejected immediately. Off: every reject lands in the Decision Hub for you.</p></div><div class="sw"></div></div>
-          <div class="toggle"><div class="tg"><b>Auto-promote</b><p>Sending an assessment and advancing to interview happen without approval.</p></div><div class="sw on"></div></div>
+          <div class="ah">Automatic actions</div><div class="ad">Choose what the agent can do without asking you.</div>
+          <div class="toggle"><div class="tg"><b>Auto-reject pre-screen failures</b><p>Reject candidates who fail a required screening question or the pre-screen threshold.</p></div><div class="sw"></div></div>
+          <div class="toggle"><div class="tg"><b>Auto-send assessments</b><p>Send the approved assessment when a candidate passes pre-screen.</p></div><div class="sw on"></div></div>
         </div>
         <div class="savebar"><span>Changes apply to this role only — they override your org defaults.</span><button class="btn sm primary">Save role settings</button></div>
       </div>
