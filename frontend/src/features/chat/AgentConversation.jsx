@@ -153,13 +153,17 @@ const AgentConversation = ({
   );
 
   const answer = useCallback(
-    async (needsInputId, response) => {
+    async (needsInputId, response, expectedVersion) => {
       try {
-        await agentChat.answerNeedsInput(needsInputId, response);
+        await agentChat.answerNeedsInput(needsInputId, response, expectedVersion);
         load();
         onAfterSend?.();
-      } catch {
-        showToast?.('Couldn’t record that answer.', 'error');
+      } catch (err) {
+        showToast?.(
+          err?.response?.data?.detail?.message || 'Couldn’t record that answer.',
+          err?.response?.status === 409 ? 'info' : 'error',
+        );
+        load();
       }
     },
     [load, onAfterSend, showToast]
@@ -178,32 +182,42 @@ const AgentConversation = ({
   );
 
   const approveDraft = useCallback(
-    async (taskId) => {
+    async (taskId, expectedVersion) => {
       if (!roleId || sending) return;
       setSending(true);
       try {
-        const { data } = await agentChat.approveDraftTask(roleId, taskId);
+        const { data } = await agentChat.approveDraftTask(roleId, taskId, expectedVersion);
         setTimeline(data.timeline || []);
         onAfterSend?.();
       } catch (err) {
-        showToast?.(err?.response?.data?.detail || 'Couldn’t approve that draft.', 'error');
+        showToast?.(
+          err?.response?.data?.detail?.message || err?.response?.data?.detail || 'Couldn’t approve that draft.',
+          err?.response?.status === 409 ? 'info' : 'error',
+        );
+        load();
       } finally {
         setSending(false);
       }
     },
-    [roleId, sending, onAfterSend, showToast]
+    [roleId, sending, onAfterSend, showToast, load]
   );
 
   const reviseDraft = useCallback(
-    async (taskId, feedback) => {
+    async (taskId, feedback, expectedVersion) => {
       if (!roleId || sending) return;
       setSending(true);
       try {
-        const { data } = await agentChat.reviseDraftTask(roleId, taskId, feedback);
+        const { data } = await agentChat.reviseDraftTask(roleId, taskId, {
+          ...feedback,
+          expectedVersion,
+        });
         setTimeline(data.timeline || []);
         onAfterSend?.();
       } catch (err) {
-        showToast?.(err?.response?.data?.detail || 'Couldn’t revise that draft.', 'error');
+        showToast?.(
+          err?.response?.data?.detail?.message || err?.response?.data?.detail || 'Couldn’t revise that draft.',
+          err?.response?.status === 409 ? 'info' : 'error',
+        );
         load();
       } finally {
         setSending(false);

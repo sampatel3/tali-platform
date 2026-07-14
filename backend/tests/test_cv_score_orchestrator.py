@@ -718,6 +718,35 @@ def test_explicit_score_worker_runs_while_agent_is_paused(
     assert observed["force_full_score"] is True
 
 
+def test_score_worker_rejects_soft_deleted_role_before_provider_spend(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.tasks import scoring_tasks
+
+    role.deleted_at = datetime.now(timezone.utc)
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=False,
+    )
+    db.add(job)
+    db.commit()
+    execute = MagicMock()
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", execute)
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    execute.assert_not_called()
+    assert result["status"] == "error"
+    db.refresh(job)
+    assert job.status == SCORE_JOB_ERROR
+    assert job.error_message == "role_missing_or_deleted_before_scoring"
+
+
 def test_periodic_stale_sweep_does_not_cross_into_paused_autonomous_role(
     monkeypatch, session,
 ) -> None:
@@ -839,6 +868,44 @@ def test_explicit_stale_sweep_requires_role_scope() -> None:
 
     assert result["status"] == "error"
     assert result["reason"] == "explicit stale-score sweeps require role_id scope"
+
+
+def test_stale_sweep_never_enqueues_for_soft_deleted_role(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.tasks import scoring_tasks
+
+    role.deleted_at = datetime.now(timezone.utc)
+    db.add(
+        CvScoreJob(
+            application_id=app.id,
+            role_id=role.id,
+            status="stale",
+            requires_active_agent=False,
+        )
+    )
+    db.commit()
+    dispatched: list[int] = []
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "enqueue_score",
+        lambda _db, application, **_kwargs: dispatched.append(
+            int(application.id)
+        ),
+    )
+
+    result = scoring_tasks.sweep_stale_scores.run(
+        limit=10,
+        role_id=int(role.id),
+        application_ids=[int(app.id)],
+        explicit=True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["examined"] == 0
+    assert result["enqueued"] == 0
+    assert dispatched == []
 
 
 def test_score_worker_discards_result_when_role_intent_changes_mid_call(

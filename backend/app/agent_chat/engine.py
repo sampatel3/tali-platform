@@ -26,6 +26,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..llm import CallUsage, MeteringContext, one_call
@@ -47,7 +48,13 @@ from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import InsufficientCreditsError, record_event, reserve
 from .system_prompt import PROMPT_VERSION, build_system_blocks
-from .tools import AGENT_CHAT_TOOLS, CARD_TYPES, MUTATION_CARD_TYPES, dispatch_tool
+from .tools import (
+    AGENT_CHAT_TOOLS,
+    CARD_TYPES,
+    MUTATION_CARD_TYPES,
+    MUTATION_TOOL_NAMES,
+    dispatch_tool,
+)
 
 logger = logging.getLogger("taali.agent_chat")
 
@@ -175,6 +182,7 @@ def run_agent_response(
     user: User,
     organization: Organization,
     conversation: AgentConversation,
+    accepted_role_version: int | None = None,
 ) -> AgentConversationMessage:
     """Run the tool-use loop for a turn whose user message is ALREADY in history,
     then persist + return the final assistant message. The slow, credit-spending,
@@ -187,6 +195,14 @@ def run_agent_response(
     model = settings.resolved_claude_model
     system_blocks = build_system_blocks(db, role=role)
     messages = _load_history(db, conversation)
+    # Immutable-at-enqueue baseline, advanced only after this turn completes one
+    # of its own successful mutation tools. Read-only tools deliberately ignore
+    # this cursor so a stale turn can still answer using the latest role state.
+    expected_role_version = int(
+        accepted_role_version
+        if accepted_role_version is not None
+        else (role.version or 1)
+    )
 
     usage = CallUsage()
     trace_id = uuid.uuid4().hex
@@ -299,11 +315,37 @@ def run_agent_response(
             tool_count += 1
             try:
                 result = dispatch_tool(
-                    name, args, db=db, role=role, user=user, conversation=conversation
+                    name,
+                    args,
+                    db=db,
+                    role=role,
+                    user=user,
+                    conversation=conversation,
+                    expected_role_version=expected_role_version,
                 )
                 is_error = False
+                if name in MUTATION_TOOL_NAMES:
+                    # A successful tool may have advanced the role revision.
+                    # Carry that turn-owned revision into a deliberate follow-up
+                    # mutation (for example set budget, then activate).
+                    expected_role_version = int(role.version or expected_role_version)
                 if isinstance(result, dict) and result.get("type") in CARD_TYPES:
                     collected_cards.append(result)
+            except HTTPException as exc:
+                # Preserve the same structured 409 contract used by direct UI
+                # writes so the model can truthfully tell the recruiter to
+                # review the newer job instead of retrying a stale mutation.
+                logger.info(
+                    "agent_chat tool %s rejected with HTTP %s",
+                    name,
+                    exc.status_code,
+                )
+                result = {
+                    "error": exc.detail,
+                    "status_code": int(exc.status_code),
+                    "tool": name,
+                }
+                is_error = True
             except Exception as exc:
                 logger.exception("agent_chat tool %s failed: %s", name, exc)
                 result = {"error": str(exc), "tool": name}
@@ -381,6 +423,7 @@ def run_agent_turn(
     organization: Organization,
     conversation: AgentConversation,
     user_message: str,
+    accepted_role_version: int | None = None,
 ) -> list[AgentConversationMessage]:
     """Persist the user message then run the response in one synchronous call —
     returns the new VISIBLE messages (user + final assistant). Used by the bulk
@@ -391,7 +434,12 @@ def run_agent_turn(
         db=db, conversation=conversation, user=user, user_message=user_message
     )
     assistant_row = run_agent_response(
-        db=db, role=role, user=user, organization=organization, conversation=conversation
+        db=db,
+        role=role,
+        user=user,
+        organization=organization,
+        conversation=conversation,
+        accepted_role_version=accepted_role_version,
     )
     return [user_row, assistant_row]
 

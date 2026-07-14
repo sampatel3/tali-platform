@@ -21,7 +21,12 @@ const buildAuthorLabel = (note) => {
   return 'Recruiter';
 };
 
-export default function RoleFeedbackNotes({ roleId }) {
+export default function RoleFeedbackNotes({
+  roleId,
+  roleVersion,
+  onRoleVersionChange,
+  onRoleConflict,
+}) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -53,20 +58,29 @@ export default function RoleFeedbackNotes({ roleId }) {
     setSaving(true);
     setSaveError('');
     try {
-      const resp = await roles.createFeedbackNote(roleId, trimmedDraft);
+      const resp = await roles.createFeedbackNote(roleId, trimmedDraft, roleVersion);
       const created = resp?.data;
       if (created) {
         setNotes((prev) => [created, ...prev]);
+        if (created.role_version != null) {
+          onRoleVersionChange?.(created.role_version);
+        }
       } else {
         await refresh();
       }
       setDraft('');
-    } catch {
-      setSaveError('Couldn\'t save your feedback — try again.');
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      if (error?.response?.status === 409 && detail?.code === 'ROLE_VERSION_CONFLICT') {
+        setSaveError(detail.message || 'This job changed. Review the latest version and try again.');
+        await onRoleConflict?.();
+      } else {
+        setSaveError('Couldn\'t save your feedback — try again.');
+      }
     } finally {
       setSaving(false);
     }
-  }, [roleId, trimmedDraft, saving, refresh]);
+  }, [onRoleConflict, onRoleVersionChange, refresh, roleId, roleVersion, saving, trimmedDraft]);
 
   const onKeyDown = (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {

@@ -269,6 +269,23 @@ def test_daily_review_role_returns_skip_when_role_missing(db):
     assert result["reason"] == "role_not_found"
 
 
+def test_daily_review_role_treats_soft_deleted_role_as_missing(db):
+    from app.tasks import agent_tasks
+    from tests.conftest import TestingSessionLocal
+
+    org = _make_org(db)
+    role = _make_role(db, org, agentic=True, deleted=True)
+
+    with patch(
+        "app.platform.database.SessionLocal", new=TestingSessionLocal
+    ), patch("app.agent_runtime.orchestrator.run_cycle") as run_cycle:
+        result = agent_tasks.agent_daily_review_role.run(role_id=int(role.id))
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "role_not_found"
+    run_cycle.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Initial user message routes to the daily-review variant
 # ---------------------------------------------------------------------------

@@ -320,6 +320,167 @@ def test_run_cycle_increments_decisions_when_queue_tool_called(db):
     assert run.trigger == "event"
 
 
+def test_run_cycle_drops_actions_when_agent_is_disabled_during_provider_call(db):
+    """Turning the agent off in-flight must prevent the response taking effect."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_stale",
+                name="queue_advance_decision",
+                input_={
+                    "application_id": int(app.id),
+                    "reasoning": "This action arrived after shutdown.",
+                    "evidence": {"taali_score": 80},
+                    "confidence": 0.9,
+                },
+            )
+        ],
+        stop_reason="tool_use",
+    )
+
+    def _disable_before_return(**kwargs):
+        role.agentic_mode_enabled = False
+        role.version = int(role.version or 1) + 1
+        db.flush()
+        return response
+
+    client = MagicMock()
+    client.messages.create = MagicMock(side_effect=_disable_before_return)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error == "agent_disabled_during_cycle"
+    assert run.decisions_emitted == 0
+    assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
+def test_run_cycle_rechecks_role_version_before_a_second_provider_round(db):
+    """A config change after a tool round must stop the next paid request."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    first_response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_read",
+                name="get_application",
+                input_={"application_id": int(app.id)},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    unused_second_response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_done",
+                name="agent_run_complete",
+                input_={"summary": "This round must never run."},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    client = _scripted_client([first_response, unused_second_response])
+    original_dispatch = orchestrator.dispatch
+
+    def _dispatch_then_change_version(name, args, *, db, agent_run, role):
+        result = original_dispatch(
+            name,
+            args,
+            db=db,
+            agent_run=agent_run,
+            role=role,
+        )
+        role.version = int(role.version or 1) + 1
+        db.flush()
+        return result
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.dispatch",
+        side_effect=_dispatch_then_change_version,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error == "role_configuration_changed_during_cycle"
+    assert client.messages.create.call_count == 1
+
+
+def test_run_cycle_rechecks_power_between_tools_in_one_response(db):
+    """A multi-tool response cannot continue after the first tool turns stale."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_first",
+                name="get_application",
+                input_={"application_id": int(app.id)},
+            ),
+            _block_tool_use(
+                tool_use_id="tu_must_not_run",
+                name="queue_advance_decision",
+                input_={
+                    "application_id": int(app.id),
+                    "reasoning": "Must be discarded after shutdown.",
+                    "evidence": {},
+                    "confidence": 0.9,
+                },
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+    client = _scripted_client([response])
+    original_dispatch = orchestrator.dispatch
+    dispatched_names: list[str] = []
+
+    def _dispatch_then_disable(name, args, *, db, agent_run, role):
+        dispatched_names.append(name)
+        result = original_dispatch(
+            name,
+            args,
+            db=db,
+            agent_run=agent_run,
+            role=role,
+        )
+        if len(dispatched_names) == 1:
+            role.agentic_mode_enabled = False
+            role.version = int(role.version or 1) + 1
+            db.flush()
+        return result
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.dispatch",
+        side_effect=_dispatch_then_disable,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error == "agent_disabled_during_cycle"
+    assert dispatched_names == ["get_application"]
+    assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
 # ---------------------------------------------------------------------------
 # Edge cases — the orchestrator's safety nets
 # ---------------------------------------------------------------------------

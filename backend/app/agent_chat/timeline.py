@@ -62,7 +62,9 @@ def serialize_message(m: AgentConversationMessage) -> dict[str, Any]:
     }
 
 
-def serialize_needs_input(n: AgentNeedsInput) -> dict[str, Any]:
+def serialize_needs_input(
+    n: AgentNeedsInput, *, role_version: int | None = None
+) -> dict[str, Any]:
     if n.resolved_at is not None:
         status = "answered"
     elif n.dismissed_at is not None:
@@ -73,6 +75,7 @@ def serialize_needs_input(n: AgentNeedsInput) -> dict[str, Any]:
         "kind": "needs_input",
         "id": f"needs-{n.id}",
         "needs_input_id": int(n.id),
+        "role_version": role_version,
         "question_kind": n.kind,
         "prompt": n.prompt,
         "options": n.options or None,
@@ -165,7 +168,10 @@ def build_timeline(db: Session, *, conversation: AgentConversation, role: Role) 
 
     items: list[dict[str, Any]] = []
     items.extend(serialize_message(m) for m in _messages(db, conversation))
-    items.extend(serialize_needs_input(n) for n in _needs_inputs(db, role, since=since))
+    items.extend(
+        serialize_needs_input(n, role_version=int(role.version or 1))
+        for n in _needs_inputs(db, role, since=since)
+    )
     items.extend(
         serialize_decision(d, candidate_name=name, score=score)
         for d, name, score in _decisions(db, role, since=since)

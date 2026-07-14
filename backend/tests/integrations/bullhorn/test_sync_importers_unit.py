@@ -26,6 +26,7 @@ from app.models.job_page import JobPage
 from app.models.organization import Organization
 from app.models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
 from app.models.role_brief import RoleBrief
+from app.models.role_change_event import RoleChangeEvent
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 
 
@@ -469,6 +470,20 @@ class TestUpsertRoleFromJobOrder:
         persisted_page = db.query(JobPage).filter(JobPage.id == page_id).one()
         assert persisted_page.brief_id == brief.id
         assert persisted_page.brief.role_id == role_id
+        assert adopted.version == 2
+        event = (
+            db.query(RoleChangeEvent)
+            .filter(RoleChangeEvent.role_id == role_id)
+            .one()
+        )
+        assert event.from_version == 1
+        assert event.to_version == 2
+        assert event.reason == "Bullhorn requisition role linked"
+        if initial_job_status == JOB_STATUS_DRAFT:
+            assert event.changes["job_status"] == {
+                "before": JOB_STATUS_DRAFT,
+                "after": JOB_STATUS_OPEN,
+            }
 
     def test_stamped_job_does_not_hijack_workable_linked_requisition(self, db):
         org = _org(db)

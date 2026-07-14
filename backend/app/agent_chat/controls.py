@@ -25,6 +25,15 @@ from ..services.agent_policy_settings import (
     role_is_score_only,
     role_automation_enabled,
 )
+from ..services.role_change_audit import (
+    ROLE_CHANGE_ACTION_AGENT_ENABLED,
+    ROLE_CHANGE_ACTION_AGENT_PAUSED,
+    ROLE_CHANGE_ACTION_AGENT_RESUMED,
+    ROLE_CHANGE_ACTION_UPDATED,
+    add_role_change_event,
+    capture_role_change_snapshot,
+)
+from ..services.role_concurrency import bump_role_version
 
 logger = logging.getLogger("taali.agent_chat.controls")
 
@@ -38,6 +47,7 @@ def _now() -> datetime:
 
 def _state(role: Role) -> dict[str, Any]:
     return {
+        "version": int(role.version or 1),
         "enabled": bool(role.agentic_mode_enabled),
         "paused": role.agent_paused_at is not None,
         "paused_reason": role.agent_paused_reason,
@@ -53,13 +63,103 @@ def _state(role: Role) -> dict[str, Any]:
     }
 
 
+def _commit_audited_role_change(
+    db: Session,
+    role: Role,
+    *,
+    before: dict[str, Any],
+    from_version: int,
+    action: str,
+    actor_user_id: int,
+    reason: str = "agent chat",
+) -> bool:
+    """Commit a Role mutation and its versioned audit row atomically.
+
+    Returning ``False`` for a no-op avoids duplicate version numbers/events
+    when the model repeats a tool call or asks for the already-current value.
+    The tool dispatcher acquires the shared Role row lock before entering these
+    controls, so every successful call advances from the latest version.
+    """
+
+    try:
+        changed = capture_role_change_snapshot(role) != before
+        if changed:
+            to_version = bump_role_version(role)
+            add_role_change_event(
+                db,
+                role=role,
+                before=before,
+                action=action,
+                actor_user_id=int(actor_user_id),
+                from_version=int(from_version),
+                to_version=int(to_version),
+                reason=reason,
+            )
+        db.commit()
+        db.refresh(role)
+        return changed
+    except Exception:
+        # Tool errors are caught by the chat engine, which continues using the
+        # same Session. Clear every pending mutation so a later message commit
+        # cannot separate the Role write from its audit record.
+        db.rollback()
+        raise
+
+
+def _relock_role(db: Session, role: Role) -> Role:
+    """Reacquire the shared Role lock for a post-dispatch compensation."""
+
+    locked = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role.id),
+            Role.organization_id == int(role.organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .with_for_update(of=Role)
+        .first()
+    )
+    if locked is None:  # A hard delete cannot be safely compensated.
+        raise RuntimeError(f"role {role.id} disappeared during agent control")
+    db.refresh(locked)
+    return locked
+
+
+def _relock_for_dispatch_compensation(
+    db: Session,
+    role: Role,
+    *,
+    dispatched_version: int,
+) -> tuple[Role, bool]:
+    """Relock and confirm the failed dispatch still owns its revision.
+
+    Dispatch happens after the audited state commit, so another UI/chat write
+    can legitimately land before a broker failure is observed. Compensation
+    may only revert the exact revision that was dispatched; a later version is
+    authoritative and must be preserved untouched.
+    """
+
+    locked = _relock_role(db, role)
+    if int(locked.version or 1) == int(dispatched_version):
+        return locked, True
+    # No write on mismatch. End the FOR UPDATE transaction immediately while
+    # retaining a refreshed object for the tool response.
+    db.commit()
+    db.refresh(locked)
+    return locked, False
+
+
 def _kick_cycle(role: Role, *, activation: bool = False) -> bool:
     """Enqueue the complete cohort pipeline (same as the settings UI on
     activate/resume). Never block the chat turn on a broker hiccup."""
     try:
         from ..tasks.agent_tasks import agent_cohort_tick_role
 
-        agent_cohort_tick_role.delay(int(role.id), activation=activation)
+        agent_cohort_tick_role.delay(
+            int(role.id),
+            activation=activation,
+            dispatch_role_version=int(role.version or 1),
+        )
         return True
     except Exception:  # pragma: no cover — fail-closed caller handles state
         logger.exception("failed to enqueue agent cycle for role_id=%s", role.id)
@@ -109,6 +209,8 @@ def _queue_durable_activation(
         request_role_activation_intent,
     )
 
+    audit_before = capture_role_change_snapshot(role)
+    audit_from = int(role.version or 1)
     policy = activation_policy_values(role)
     intent = request_role_activation_intent(
         role,
@@ -120,8 +222,14 @@ def _queue_durable_activation(
         auto_advance=policy["auto_advance"],
     )
     try:
-        db.commit()
-        db.refresh(role)
+        _commit_audited_role_change(
+            db,
+            role,
+            before=audit_before,
+            from_version=audit_from,
+            action="agent_activation_queued",
+            actor_user_id=int(user_id),
+        )
     except Exception:
         db.rollback()
         logger.exception("failed to persist chat activation role_id=%s", role.id)
@@ -235,6 +343,8 @@ def set_agent_state(
             }
         was_enabled = bool(role.agentic_mode_enabled)
         was_paused = role.agent_paused_at is not None
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         previous = {
             "agentic_mode_enabled": was_enabled,
             "agent_paused_at": role.agent_paused_at,
@@ -293,12 +403,47 @@ def set_agent_state(
             role.agent_bootstrap_error = None
             role.agent_bootstrap_started_at = _now()
             role.agent_bootstrap_completed_at = None
-        db.commit()
+        audit_action = ROLE_CHANGE_ACTION_UPDATED
+        if not was_enabled:
+            audit_action = ROLE_CHANGE_ACTION_AGENT_ENABLED
+        elif was_paused:
+            audit_action = ROLE_CHANGE_ACTION_AGENT_RESUMED
+        _commit_audited_role_change(
+            db,
+            role,
+            before=audit_before,
+            from_version=audit_from,
+            action=audit_action,
+            actor_user_id=int(user_id),
+        )
+        # Immutable compare-and-compensate token for this exact dispatch. A
+        # newer role revision must never be overwritten if the broker rejects
+        # the handoff after this commit.
+        dispatched_version = int(role.version or 1)
         if (not was_enabled) or was_paused:         # activation OR resume → kick a cycle
             if not _kick_cycle(role, activation=not was_enabled):
                 # Match the HTTP toggle's fail-closed behavior. Do not tell the
                 # recruiter the agent is active when the worker queue refused
                 # its bootstrap.
+                role, owns_dispatched_revision = _relock_for_dispatch_compensation(
+                    db,
+                    role,
+                    dispatched_version=dispatched_version,
+                )
+                if not owns_dispatched_revision:
+                    return {
+                        "type": "agent_state",
+                        "ok": False,
+                        "reason": "dispatch_failed",
+                        "message": (
+                            "The worker queue rejected that start, but the job "
+                            "changed afterwards, so I preserved the newer settings."
+                        ),
+                        "compensation_skipped": True,
+                        "agent": _state(role),
+                    }
+                compensation_before = capture_role_change_snapshot(role)
+                compensation_from = dispatched_version
                 role.agentic_mode_enabled = previous["agentic_mode_enabled"]
                 role.agent_paused_at = previous["agent_paused_at"]
                 role.agent_paused_reason = previous["agent_paused_reason"]
@@ -310,7 +455,15 @@ def set_agent_state(
                 role.agent_bootstrap_status = "failed"
                 role.agent_bootstrap_error = "agent bootstrap dispatch failed"
                 role.agent_bootstrap_completed_at = _now()
-                db.commit()
+                _commit_audited_role_change(
+                    db,
+                    role,
+                    before=compensation_before,
+                    from_version=compensation_from,
+                    action="agent_bootstrap_compensated",
+                    actor_user_id=int(user_id),
+                    reason="agent bootstrap dispatch failed",
+                )
                 return {
                     "type": "agent_state",
                     "ok": False,
@@ -333,9 +486,26 @@ def set_agent_state(
         return result
 
     if act in _PAUSE:
+        if role.agent_paused_at is not None:
+            return {
+                "type": "agent_state",
+                "ok": True,
+                "action": "paused",
+                "agent": _state(role),
+            }
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         role.agent_paused_at = _now()
         role.agent_paused_reason = "paused by recruiter"
-        db.commit()
+        _commit_audited_role_change(
+            db,
+            role,
+            before=audit_before,
+            from_version=audit_from,
+            action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+            actor_user_id=int(user_id),
+            reason="paused by recruiter via agent chat",
+        )
         return {"type": "agent_state", "ok": True, "action": "paused", "agent": _state(role)}
 
     return {
@@ -347,6 +517,7 @@ def set_agent_state(
 
 def adjust_agent_settings(
     db: Session, role: Role, *,
+    user_id: int,
     monthly_budget_cents: int | None = None,
     auto_reject: bool | None = None,
     auto_reject_pre_screen: bool | None = None,
@@ -394,6 +565,8 @@ def adjust_agent_settings(
             "agent": _state(role),
         }
 
+    audit_before = capture_role_change_snapshot(role)
+    audit_from = int(role.version or 1)
     changed: list[str] = []
     if monthly_budget_cents is not None:
         if int(monthly_budget_cents) <= 0:
@@ -478,7 +651,21 @@ def adjust_agent_settings(
         except Exception:  # pragma: no cover — never block the turn
             logger.exception("resume_if_under_budget failed for role_id=%s", role.id)
 
-    db.commit()
+    _commit_audited_role_change(
+        db,
+        role,
+        before=audit_before,
+        from_version=audit_from,
+        action=(
+            ROLE_CHANGE_ACTION_AGENT_RESUMED
+            if resumed
+            else ROLE_CHANGE_ACTION_UPDATED
+        ),
+        actor_user_id=int(user_id),
+    )
+    # The budget-resume dispatch owns only this committed revision. Keep this
+    # token stable across follow-up reconciliation and broker I/O.
+    dispatched_version = int(role.version or 1)
     # An assessment-stage flip re-flows already-pending send/advance cards
     # right away — same reconcile the settings-UI PATCH runs (Codex #866).
     if skip_changed:
@@ -494,23 +681,47 @@ def adjust_agent_settings(
                 "assessment-stage reconcile failed for role_id=%s", role.id
             )
     resume_error = None
+    compensation_skipped = False
     if resumed and not _kick_cycle(role):
         # The shared readiness gate proved the runtime healthy immediately
         # before resume, but the broker can still reject this specific handoff.
         # Restore the pause and persist a durable failed acknowledgement rather
         # than returning a green agent that never received its bootstrap task.
-        role.agent_paused_at = _now()
-        role.agent_paused_reason = "agent bootstrap dispatch failed"
-        role.agent_bootstrap_status = "failed"
-        role.agent_bootstrap_error = "agent bootstrap dispatch failed"
-        role.agent_bootstrap_completed_at = _now()
-        db.commit()
+        role, owns_dispatched_revision = _relock_for_dispatch_compensation(
+            db,
+            role,
+            dispatched_version=dispatched_version,
+        )
+        if owns_dispatched_revision:
+            compensation_before = capture_role_change_snapshot(role)
+            role.agent_paused_at = _now()
+            role.agent_paused_reason = "agent bootstrap dispatch failed"
+            role.agent_bootstrap_status = "failed"
+            role.agent_bootstrap_error = "agent bootstrap dispatch failed"
+            role.agent_bootstrap_completed_at = _now()
+            _commit_audited_role_change(
+                db,
+                role,
+                before=compensation_before,
+                from_version=dispatched_version,
+                action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+                actor_user_id=int(user_id),
+                reason="agent bootstrap dispatch failed",
+            )
+            resume_error = "worker queue unavailable; agent left paused"
+        else:
+            compensation_skipped = True
+            resume_error = (
+                "worker queue unavailable; newer job settings were preserved"
+            )
         resumed = False
-        resume_error = "worker queue unavailable; agent left paused"
-    return {
+    result = {
         "type": "agent_settings", "ok": True, "changed": changed,
         "resumed": resumed, "resume_error": resume_error, "agent": _state(role),
     }
+    if compensation_skipped:
+        result["compensation_skipped"] = True
+    return result
 
 
 def sync_workable_comments(db: Session, role: Role, *, user: Any = None) -> dict[str, Any]:

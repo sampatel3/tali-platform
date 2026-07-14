@@ -54,6 +54,8 @@ const RoleAgentSettingsTab = ({
   allTasks = [],
   onAssignAssessmentTasks,
   savingAssessmentTask = false,
+  onRoleVersionChange,
+  onRoleConflict,
 }) => {
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
@@ -266,14 +268,25 @@ const RoleAgentSettingsTab = ({
 
         {/* Standing recruiter feedback to the agent — append-only log;
             recent entries inline into the agent's system prompt. */}
-        <RoleFeedbackNotes roleId={role?.id} />
+        <RoleFeedbackNotes
+          roleId={role?.id}
+          roleVersion={role?.version}
+          onRoleVersionChange={onRoleVersionChange}
+          onRoleConflict={onRoleConflict}
+        />
 
         {/* Q&A history with the agent — recent answers to the agent's
             role-config questions (must-haves, threshold, budget). Hidden
             entirely when there's no history. */}
         <RecruiterAnswersLog roleId={role?.id} />
 
-        {role?.id ? <RoleScreeningQuestions roleId={role.id} /> : null}
+        {role?.id ? (
+          <RoleScreeningQuestions
+            roleId={role.id}
+            roleVersion={role.version}
+            onRoleVersionChange={onRoleVersionChange}
+          />
+        ) : null}
 
         {/* Screening threshold */}
         <section className="mc-agent-settings-card">

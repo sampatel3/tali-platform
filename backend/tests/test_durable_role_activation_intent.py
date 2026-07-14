@@ -77,6 +77,7 @@ def test_turn_on_command_is_persisted_while_role_stays_off(client):
         response = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 7500,
                 "auto_promote": True,
@@ -106,6 +107,7 @@ def test_turn_off_cancels_a_pending_activation_intent(client):
         queued = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
                 "activation_assessment_action": "approve_when_ready",
@@ -116,7 +118,7 @@ def test_turn_off_cancels_a_pending_activation_intent(client):
 
     cancelled = client.patch(
         f"/api/v1/roles/{created['id']}",
-        json={"agentic_mode_enabled": False},
+        json={"expected_version": queued.json()["version"], "agentic_mode_enabled": False},
         headers=headers,
     )
     assert cancelled.status_code == 200
@@ -141,6 +143,7 @@ def test_role_patch_versions_unfinished_activation_with_latest_policy(
         queued = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 7_500,
                 "activation_assessment_action": "approve_when_ready",
@@ -167,6 +170,7 @@ def test_role_patch_versions_unfinished_activation_with_latest_policy(
     updated = client.patch(
         f"/api/v1/roles/{role.id}",
         json={
+            "expected_version": queued.json()["version"],
             "monthly_usd_budget_cents": 3_300,
             "auto_send_assessment": False,
             "auto_resend_assessment": False,
@@ -218,6 +222,7 @@ def test_latest_skip_and_restrictions_win_when_pending_activation_completes(
         queued = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 8_000,
                 "auto_send_assessment": True,
@@ -232,6 +237,7 @@ def test_latest_skip_and_restrictions_win_when_pending_activation_completes(
     tightened = client.patch(
         f"/api/v1/roles/{created['id']}",
         json={
+            "expected_version": queued.json()["version"],
             "monthly_usd_budget_cents": 2_500,
             "auto_send_assessment": False,
             "auto_resend_assessment": False,

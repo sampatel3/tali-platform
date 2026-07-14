@@ -54,6 +54,16 @@ from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import build_role_interview_pack_templates
 from ....services.job_spec_override_service import has_manual_job_spec_override
 from ....services.pre_screening_service import refresh_pre_screening_fields
+from ....services.role_change_audit import (
+    ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
+    ROLE_CHANGE_ACTION_RESTORED,
+    ROLE_CHANGE_ACTION_UPDATED,
+    add_role_change_event,
+    build_role_change_diff,
+    capture_role_change_snapshot,
+)
+from ....services.role_concurrency import bump_role_version
+from ....services.role_lifecycle import restore_role_from_ats
 from ....services.taali_scoring import normalize_score_100
 from .service import WorkableRateLimitError, WorkableService
 
@@ -428,6 +438,31 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _locked_existing_role(db: Session, *criteria: Any) -> Role | None:
+    """Lock a role and refresh only when this session cached an older version.
+
+    Selecting the version as a scalar first both acquires the database lock and
+    avoids needlessly replacing a same-version identity-mapped instance (which
+    matters for dialects such as SQLite that lose timezone metadata on reload).
+    """
+
+    locked = (
+        db.query(Role.id, Role.version)
+        .filter(*criteria)
+        .with_for_update(of=Role)
+        .first()
+    )
+    if locked is None:
+        return None
+    role = db.get(Role, int(locked.id))
+    if role is None:
+        return None
+    locked_version = int(locked.version or 1)
+    if int(role.version or 1) != locked_version:
+        db.refresh(role)
+    return role
+
+
 def _adopt_requisition_role(
     db: Session,
     org: Organization,
@@ -435,6 +470,7 @@ def _adopt_requisition_role(
     job_id: str,
     title: str,
     description: str,
+    audit_context: dict[str, Any] | None = None,
 ) -> Role | None:
     """Requisition -> Workable bridge: link a freshly-imported Workable job back
     to the INACTIVE Taali job a requisition published, instead of minting a
@@ -467,10 +503,10 @@ def _adopt_requisition_role(
     )
     if brief is None or not brief.role_id:
         return None
-    role = (
-        db.query(Role)
-        .filter(Role.id == brief.role_id, Role.organization_id == org.id)
-        .first()
+    role = _locked_existing_role(
+        db,
+        Role.id == brief.role_id,
+        Role.organization_id == org.id,
     )
     if role is None:
         return None
@@ -485,9 +521,12 @@ def _adopt_requisition_role(
         or role.job_status not in (None, JOB_STATUS_DRAFT, JOB_STATUS_OPEN)
     ):
         return None
+    if audit_context is not None:
+        audit_context["before"] = capture_role_change_snapshot(role)
+        audit_context["from_version"] = int(role.version or 1)
     role.workable_job_id = job_id
     role.job_status = JOB_STATUS_OPEN
-    role.deleted_at = None
+    restore_role_from_ats(role, restored_at=_now(), provider="Workable")
     logger.info(
         "Workable bridge: adopted requisition role_id=%s into job_id=%s via ref %s",
         role.id,
@@ -495,6 +534,60 @@ def _adopt_requisition_role(
         code,
     )
     return role
+
+
+def _record_workable_role_change(
+    db: Session,
+    *,
+    role: Role,
+    before: dict[str, Any] | None,
+    from_version: int | None,
+    job_id: str,
+) -> None:
+    """Version and audit one material Workable update in the sync transaction."""
+
+    if before is None or from_version is None:
+        return
+    after = capture_role_change_snapshot(role)
+    changes = build_role_change_diff(before, after)
+    if not changes:
+        return
+    to_version = bump_role_version(role)
+    spec_fields = {
+        "description",
+        "job_spec_text",
+        "job_spec_filename",
+        "job_spec_file_url",
+        "job_spec_uploaded_at",
+        "job_spec_manually_edited_at",
+    }
+    restored = (
+        before.get("deleted_at") is not None
+        and after.get("deleted_at") is None
+    )
+    add_role_change_event(
+        db,
+        role=role,
+        before=before,
+        action=(
+            ROLE_CHANGE_ACTION_RESTORED
+            if restored
+            else (
+                ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED
+                if spec_fields.intersection(changes)
+                else ROLE_CHANGE_ACTION_UPDATED
+            )
+        ),
+        actor_user_id=None,
+        from_version=from_version,
+        to_version=to_version,
+        reason=(
+            "Workable role restored with agent off"
+            if restored
+            else "Workable pull sync"
+        ),
+        request_id=f"workable-job:{job_id}",
+    )
 
 
 def _is_terminal_stage(stage_value: str | None) -> bool:
@@ -1139,7 +1232,12 @@ class WorkableSyncService:
                 break
             try:
                 _role, created_new = self._upsert_role(db, org, job)
+                # One role lifecycle/configuration boundary per transaction.
+                # This releases its row lock before discovery considers the
+                # next job, matching Clear's deterministic lock discipline.
+                db.commit()
             except WorkableRateLimitError:
+                db.rollback()
                 # A 429 during discovery must not abort the candidate sync this
                 # rides on — stop discovering and let the primary sync proceed.
                 logger.warning(
@@ -1148,6 +1246,7 @@ class WorkableSyncService:
                 )
                 break
             except Exception:
+                db.rollback()
                 logger.exception(
                     "discover_new_jobs: upsert failed org_id=%s code=%s",
                     org.id,
@@ -1328,6 +1427,10 @@ class WorkableSyncService:
                         summary["current_job_shortcode"] = shortcode
                         summary["current_candidate_index"] = None
                         summary["last_request"] = f"GET /jobs/{shortcode}"
+                        # Do not retain several Role locks until the batched
+                        # progress checkpoint; Clear locks all roles by id and
+                        # must never deadlock against remote API ordering.
+                        db.commit()
                         if (job_idx + 1) % 10 == 0:
                             summary["db_snapshot"] = self._build_db_snapshot(db, org)
                             self._persist_progress(db, org, run, summary)
@@ -1745,21 +1848,35 @@ class WorkableSyncService:
         list_description = _get_desc(job) or ""
         description = _get_desc(details) or list_description
         role = None
+        audit_before: dict[str, Any] | None = None
+        audit_from_version: int | None = None
         if job_id:
-            role = (
-                db.query(Role)
-                .filter(Role.organization_id == org.id, Role.workable_job_id == job_id)
-                .first()
+            role = _locked_existing_role(
+                db,
+                Role.organization_id == org.id,
+                Role.workable_job_id == job_id,
             )
+            if role is not None:
+                audit_before = capture_role_change_snapshot(role)
+                audit_from_version = int(role.version or 1)
         created = False
         if not role:
             # Bridge: before minting a fresh role, try to ADOPT the inactive
             # requisition job whose ref code is stamped in this Workable job's
             # spec (draft -> open, no duplicate). Adopted roles are treated as
             # existing so their brief-materialized criteria are preserved.
+            adoption_audit: dict[str, Any] = {}
             role = _adopt_requisition_role(
-                db, org, job_id=job_id, title=title, description=description
+                db,
+                org,
+                job_id=job_id,
+                title=title,
+                description=description,
+                audit_context=adoption_audit,
             )
+            if role is not None:
+                audit_before = adoption_audit.get("before")
+                audit_from_version = adoption_audit.get("from_version")
         if not role:
             role = Role(
                 organization_id=org.id,
@@ -1785,7 +1902,7 @@ class WorkableSyncService:
             ats_source="workable",
             cached_ats_spec=previous_ats_spec,
         )
-        role.deleted_at = None  # restore if was soft-deleted
+        restore_role_from_ats(role, restored_at=_now(), provider="Workable")
         role.source = "workable"
         role.workable_job_id = job_id or role.workable_job_id
         # Cache the role's Workable stage pipeline so the stage pickers serve
@@ -1945,6 +2062,14 @@ class WorkableSyncService:
                             getattr(role, "id", "?"),
                             exc_info=True,
                         )
+
+        _record_workable_role_change(
+            db,
+            role=role,
+            before=audit_before,
+            from_version=audit_from_version,
+            job_id=job_id,
+        )
 
         return role, created
 

@@ -41,9 +41,12 @@ export const requisitionApi = {
   // set the Content-Type boundary (matching candidatesClient.createWithCv —
   // axios is told `multipart/form-data` and fills the boundary itself).
   // Returns `{ brief, reply, messages, gaps }`.
-  chat: (id, { message = '', files = [] } = {}) => {
+  chat: (id, { message = '', files = [], expectedVersion = null } = {}) => {
     const form = new FormData();
     form.append('message', message ?? '');
+    if (Number.isInteger(expectedVersion)) {
+      form.append('expected_version', String(expectedVersion));
+    }
     (files || []).forEach((file) => {
       if (file) form.append('files', file);
     });
@@ -62,28 +65,42 @@ export const requisitionApi = {
   // merges the response identically (and `suggested_replies` carries the next
   // gap's template options). Typing free-form text / pasting a transcript or
   // screenshot still goes through chat() (the LLM path).
-  answer: (id, fieldKey, value) =>
-    api.post(`${BASE}/${id}/answer`, { field_key: fieldKey, value }).then((r) => r.data),
+  answer: (id, fieldKey, value, expectedVersion = null) =>
+    api.post(`${BASE}/${id}/answer`, {
+      field_key: fieldKey,
+      value,
+      ...(Number.isInteger(expectedVersion) ? { expected_version: expectedVersion } : {}),
+    }).then((r) => r.data),
 
   // Manual field edits from the live-brief click-to-edit. Pass column fields
   // directly (e.g. `{ summary: '…' }`) or custom template keys under
   // `custom_fields` (e.g. `{ custom_fields: { relocation_support: 'yes' } }`).
-  update: (id, fields) => api.patch(`${BASE}/${id}`, fields).then((r) => r.data),
+  update: (id, fields, expectedVersion = null) => api.patch(`${BASE}/${id}`, {
+    ...fields,
+    ...(Number.isInteger(expectedVersion) ? { expected_version: expectedVersion } : {}),
+  }).then((r) => r.data),
 
   // Ask the agent to AI-draft the role's responsibilities (the "What you'll
   // do" bullets on the JD). Returns the FULL serialized brief — same shape as
   // update()/get() — with `custom_fields.responsibilities` populated, so the
   // caller merges it into state exactly like an update.
-  draftResponsibilities: (id) =>
-    api.post(`${BASE}/${id}/draft-responsibilities`).then((r) => r.data),
+  draftResponsibilities: (id, expectedVersion = null) =>
+    api.post(`${BASE}/${id}/draft-responsibilities`, null, {
+      params: Number.isInteger(expectedVersion)
+        ? { expected_version: expectedVersion }
+        : undefined,
+    }).then((r) => r.data),
 
   // Publish the brief: snapshots the rendered JD markdown onto a public job
   // page (and provisions the live role behind it). `jdMarkdown` is the fully
   // rendered job description — the recruiter's per-requisition override if set,
   // else the template-filled draft (see RequisitionsPage). Returns
   // `{ job_page_id, token, url, status, published_at }`; re-calling re-snapshots.
-  publish: (id, jdMarkdown) =>
-    api.post(`${BASE}/${id}/publish`, { jd_markdown: jdMarkdown }).then((r) => r.data),
+  publish: (id, jdMarkdown, expectedVersion = null) =>
+    api.post(`${BASE}/${id}/publish`, {
+      jd_markdown: jdMarkdown,
+      ...(Number.isInteger(expectedVersion) ? { expected_version: expectedVersion } : {}),
+    }).then((r) => r.data),
 
   // Mint (or fetch) the public CLIENT INTAKE link for this requisition — the
   // no-login URL a consultancy recruiter sends to their client so the client

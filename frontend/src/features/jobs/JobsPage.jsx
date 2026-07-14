@@ -649,10 +649,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       item.id === role.id ? { ...item, starred_for_auto_sync: !isStarred } : item
     )));
     try {
+      let response;
       if (isStarred) {
-        await rolesApi.unstar(role.id);
+        response = await rolesApi.unstar(role.id, role.version);
       } else {
-        await rolesApi.star(role.id);
+        response = await rolesApi.star(role.id, role.version);
+      }
+      if (response?.data) {
+        setRoles((current) => current.map((item) => (
+          item.id === role.id ? { ...item, ...response.data } : item
+        )));
       }
     } catch {
       setRoles((current) => current.map((item) => (

@@ -142,6 +142,7 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     payload["job"] = (
         {
             "role_id": role.id,
+            "version": int(role.version or 1),
             "name": role.name,
             "job_status": role.job_status,
             "workable_job_id": role.workable_job_id,

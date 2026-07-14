@@ -302,30 +302,30 @@ def score_application_job(
             # Another worker already picked this up — bail out.
             return {"status": "skipped", "application_id": application_id, "job_status": job.status}
 
-        # Autonomous authority is checked against a freshly locked Role in the
-        # same transaction that claims the job. Local and ATS terminal states,
-        # Pause, and Turn off therefore win over work still waiting in Redis;
-        # already-running provider work may finish normally.
-        scoring_role = None
-        if bool(getattr(job, "requires_active_agent", True)):
-            scoring_role = (
-                db.query(Role)
-                .filter(
-                    Role.id == int(application.role_id),
-                    Role.organization_id == int(application.organization_id),
-                )
-                .with_for_update()
-                .populate_existing()
-                .one_or_none()
-                if application.role_id is not None
-                else None
+        # Every queued score is fenced by the current role lifecycle under the
+        # same lock that claims the job. A recruiter-authorized score may run
+        # while an active role's agent is paused. Autonomous work additionally
+        # rechecks all current run-authority conditions before the paid call.
+        scoring_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(application.role_id),
+                Role.organization_id == int(application.organization_id),
+                Role.deleted_at.is_(None),
             )
-            if scoring_role is None:
-                job.status = SCORE_JOB_ERROR
-                job.error_message = "role_missing_before_scoring"
-                job.finished_at = datetime.now(timezone.utc)
-                db.commit()
-                return {"status": "error", "application_id": application_id}
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+            if application.role_id is not None
+            else None
+        )
+        if scoring_role is None:
+            job.status = SCORE_JOB_ERROR
+            job.error_message = "role_missing_or_deleted_before_scoring"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"status": "error", "application_id": application_id}
+        if bool(getattr(job, "requires_active_agent", True)):
             reason, authority_detail = autonomous_hold(scoring_role)
             if reason is not None:
                 job.status = SCORE_JOB_STALE
@@ -960,7 +960,10 @@ def sweep_stale_scores(
                 & (CvScoreJob.queued_at == latest_job_subq.c.max_queued),
             )
             .join(Role, Role.id == CvScoreJob.role_id)
-            .filter(CvScoreJob.status == "stale")
+            .filter(
+                CvScoreJob.status == "stale",
+                Role.deleted_at.is_(None),
+            )
         )
         if explicit and role_id is None:
             return {

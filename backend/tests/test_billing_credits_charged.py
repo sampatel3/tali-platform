@@ -364,14 +364,18 @@ def test_patch_raising_budget_resumes_paused_role_via_route(client):
     with _patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as mock_delay:
         resp = client.patch(
             f"/api/v1/roles/{role_id}",
-            json={"monthly_usd_budget_cents": 10000},
+            json={"expected_version": 1, "monthly_usd_budget_cents": 10000},
             headers=headers,
         )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["agent_paused_at"] is None
     assert body.get("agent_paused_reason") in (None, "")
-    mock_delay.assert_called_once_with(role_id, activation=False)
+    mock_delay.assert_called_once_with(
+        role_id,
+        activation=False,
+        dispatch_role_version=body["version"],
+    )
 
 
 def test_patch_budget_edit_does_not_clear_recruiter_pause(client):
@@ -402,7 +406,7 @@ def test_patch_budget_edit_does_not_clear_recruiter_pause(client):
     with _patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as kick:
         response = client.patch(
             f"/api/v1/roles/{role_id}",
-            json={"monthly_usd_budget_cents": 10_000},
+            json={"expected_version": 1, "monthly_usd_budget_cents": 10_000},
             headers=headers,
         )
 
@@ -440,14 +444,18 @@ def test_patch_explicit_true_resumes_through_guard_and_wakes_role(client):
     with _patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as kick:
         response = client.patch(
             f"/api/v1/roles/{role_id}",
-            json={"agentic_mode_enabled": True},
+            json={"expected_version": 1, "agentic_mode_enabled": True},
             headers=headers,
         )
 
     assert response.status_code == 200, response.text
     assert response.json()["agent_paused_at"] is None
     assert response.json()["agent_bootstrap_status"] == "starting"
-    kick.assert_called_once_with(role_id, activation=False)
+    kick.assert_called_once_with(
+        role_id,
+        activation=False,
+        dispatch_role_version=response.json()["version"],
+    )
 
 
 # ---------------------------------------------------------------------------

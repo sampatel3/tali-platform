@@ -21,7 +21,7 @@ describe('HiringTeamPanel', () => {
       .mockResolvedValueOnce([{ user_id: 9, team_role: 'interviewer', name: 'Dana Lee', email: 'dana@x.test' }]);
     hiringTeamApi.set.mockResolvedValue({ user_id: 9, team_role: 'interviewer' });
 
-    render(<HiringTeamPanel roleId={4} />);
+    render(<HiringTeamPanel roleId={4} roleVersion={3} />);
     expect(await screen.findByText('Add to hiring team')).toBeInTheDocument();
 
     // Open the member picker (a custom select trigger) and choose Dana.
@@ -29,7 +29,7 @@ describe('HiringTeamPanel', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'Dana Lee' }));
 
     fireEvent.click(screen.getByText('Add'));
-    await waitFor(() => expect(hiringTeamApi.set).toHaveBeenCalledWith(4, 9, 'interviewer'));
+    await waitFor(() => expect(hiringTeamApi.set).toHaveBeenCalledWith(4, 9, 'interviewer', 3));
     expect(await screen.findByText('Dana Lee')).toBeInTheDocument();
   });
 
@@ -39,9 +39,9 @@ describe('HiringTeamPanel', () => {
       .mockResolvedValueOnce([]);
     hiringTeamApi.remove.mockResolvedValue({});
 
-    render(<HiringTeamPanel roleId={4} />);
+    render(<HiringTeamPanel roleId={4} roleVersion={3} />);
     expect(await screen.findByText('Dana Lee')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Remove'));
-    await waitFor(() => expect(hiringTeamApi.remove).toHaveBeenCalledWith(4, 9));
+    await waitFor(() => expect(hiringTeamApi.remove).toHaveBeenCalledWith(4, 9, 3));
   });
 });

@@ -16,7 +16,10 @@ export const agent = {
   // A4: discard a stale decision and re-run the agent on fresh inputs.
   // Surfaced by the "Re-evaluate" button when a decision is_stale.
   reEvaluateDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/re-evaluate`, {}),
-  discardPending: (roleId) => api.post('/agent-decisions/discard', { role_id: roleId }),
+  discardPending: (roleId, expectedVersion) => api.post('/agent-decisions/discard', {
+    role_id: roleId,
+    expected_version: expectedVersion,
+  }),
   // Approve a batch of pending decisions in one request. Each is
   // executed independently server-side; the response carries a
   // per-failure summary so the UI can surface partial successes.
@@ -62,8 +65,12 @@ export const agent = {
   // pending decisions are KEPT; resume clears it when back under the monthly
   // cap and kicks an immediate cycle. Distinct from the role PATCH
   // agentic_mode_enabled toggle, which turns the agent fully off.
-  pause: (roleId) => api.post(`/roles/${roleId}/agent/pause`, {}),
-  resume: (roleId) => api.post(`/roles/${roleId}/agent/resume`, {}),
+  pause: (roleId, expectedVersion) => api.post(`/roles/${roleId}/agent/pause`, {
+    expected_version: expectedVersion,
+  }),
+  resume: (roleId, expectedVersion) => api.post(`/roles/${roleId}/agent/resume`, {
+    expected_version: expectedVersion,
+  }),
 
   // Per-role agent status
   status: (roleId) => api.get(`/roles/${roleId}/agent/status`),

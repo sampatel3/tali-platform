@@ -17,6 +17,10 @@ from . import data_readiness
 from ..actions import ask_recruiter as ask_recruiter_action
 from ..actions.types import Actor
 from ..deps import get_current_user
+from ..domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.organization import Organization
 from ..models.user import User
@@ -62,6 +66,10 @@ class NeedsInputView(BaseModel):
     id: int
     role_id: int
     role_name: str | None = None
+    # Revision of the shared job configuration when this card was rendered.
+    # A setting answer must echo it so an old card cannot overwrite a newer
+    # edit made in another browser session.
+    role_version: int
     kind: str
     prompt: str
     options: list[dict[str, Any]] | None = None
@@ -93,6 +101,7 @@ class NeedsInputView(BaseModel):
             id=int(row.id),
             role_id=int(row.role_id),
             role_name=row.role.name if row.role is not None else None,
+            role_version=int(row.role.version or 1),
             kind=row.kind,
             prompt=row.prompt,
             options=row.options,
@@ -161,6 +170,7 @@ class AnswerBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     response: dict[str, Any]
+    expected_version: int
 
 
 @router.post("/{needs_input_id}/answer", response_model=NeedsInputView)
@@ -177,6 +187,7 @@ def answer_needs_input(
         organization_id=int(user.organization_id),
         needs_input_id=needs_input_id,
         response=body.response,
+        expected_version=body.expected_version,
     )
     db.commit()
     db.refresh(row)
@@ -247,6 +258,28 @@ def reject_cv_gap(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="needs_input row not found")
+
+    # Candidate rejection is an agent-controlled action on this specific job.
+    # The shared Role row lock also serializes this decision against hiring-team
+    # membership changes before any candidate is touched.
+    role = require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(row.role_id),
+        permission=JobPermission.CONTROL_AGENT,
+    )
+    row = (
+        db.query(AgentNeedsInput)
+        .options(joinedload(AgentNeedsInput.role))
+        .filter(
+            AgentNeedsInput.id == needs_input_id,
+            AgentNeedsInput.organization_id == user.organization_id,
+        )
+        .with_for_update(of=AgentNeedsInput)
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="needs_input row not found")
     spec = _CV_GAP_REJECT.get(row.kind)
     if spec is None:
         raise HTTPException(
@@ -257,10 +290,6 @@ def reject_cv_gap(
         raise HTTPException(
             status_code=409, detail="this item is already resolved or dismissed"
         )
-    role = row.role
-    if role is None:
-        raise HTTPException(status_code=404, detail="role not found")
-
     cohort_fn = getattr(data_readiness, spec["cohort"])
     count_fn = getattr(data_readiness, spec["count"])
 
@@ -287,6 +316,16 @@ def reject_cv_gap(
     rejected = 0
     failed: list[dict[str, Any]] = []
     for app in apps:
+        # Each successful candidate commits independently because the external
+        # ATS write cannot be part of our database transaction. Reacquire the
+        # job lock and permission before every next effect so a hiring-team
+        # removal or job deletion stops the batch at that boundary.
+        role = require_job_permission(
+            db,
+            current_user=user,
+            role_id=int(row.role_id),
+            permission=JobPermission.CONTROL_AGENT,
+        )
         try:
             result = reject_for_cv_gap(
                 db=db,
@@ -318,6 +357,14 @@ def reject_cv_gap(
                 }
             )
 
+    # The final card-resolution write is another post-commit effect and gets
+    # the same fresh authorization boundary.
+    role = require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(row.role_id),
+        permission=JobPermission.CONTROL_AGENT,
+    )
     # Refresh/resolve both CV-gap cards against the new live counts: when this
     # card's cohort is empty it auto-resolves and disappears on the next
     # reload.

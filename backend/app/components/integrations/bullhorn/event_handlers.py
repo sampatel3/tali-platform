@@ -50,6 +50,13 @@ from ....services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
 )
+from ....services.role_change_audit import (
+    ROLE_CHANGE_ACTION_SOFT_DELETED,
+    add_role_change_event,
+    capture_role_change_snapshot,
+)
+from ....services.role_concurrency import bump_role_version
+from ....services.role_lifecycle import stop_role_for_ats_deletion
 from . import sync_candidates, sync_events, sync_jobs
 from .local_write import bullhorn_status_overwrite_blocked
 from .service import BullhornService
@@ -295,12 +302,44 @@ def _handle_delete(
     """
     stamp = now or _now()
     if entity_name == ENTITY_JOB_ORDER:
-        role = (
-            db.query(Role)
-            .filter(Role.organization_id == org.id, Role.bullhorn_job_order_id == entity_id)
+        locked = (
+            db.query(Role.id, Role.version)
+            .filter(
+                Role.organization_id == org.id,
+                Role.bullhorn_job_order_id == entity_id,
+            )
+            .order_by(Role.id.asc())
+            .with_for_update(of=Role)
             .first()
         )
-        if role is not None and sync_jobs.soft_close_role(role, closed_at=stamp):
+        if locked is None:
+            return "skipped"
+        role = db.get(Role, int(locked.id))
+        if role is None:
+            return "skipped"
+        if int(role.version or 1) != int(locked.version or 1):
+            db.refresh(role)
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
+        closed = sync_jobs.soft_close_role(role, closed_at=stamp)
+        stopped = stop_role_for_ats_deletion(
+            role,
+            deleted_at=stamp,
+            provider="Bullhorn",
+        )
+        if closed or stopped:
+            audit_to = bump_role_version(role)
+            add_role_change_event(
+                db,
+                role=role,
+                before=audit_before,
+                action=ROLE_CHANGE_ACTION_SOFT_DELETED,
+                actor_user_id=None,
+                from_version=audit_from,
+                to_version=audit_to,
+                reason="Bullhorn job deleted or closed; agent turned off",
+                request_id=f"bullhorn-job-delete:{entity_id}",
+            )
             db.commit()
             return "deleted_role"
         return "skipped"

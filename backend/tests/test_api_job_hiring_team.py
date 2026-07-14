@@ -35,7 +35,7 @@ def test_hiring_team_add_list_upsert_remove(client, db):
     # Add a hiring manager.
     r = client.post(
         f"/api/v1/roles/{rid}/hiring-team",
-        json={"user_id": uid, "team_role": "hiring_manager"},
+        json={"user_id": uid, "team_role": "hiring_manager", "expected_version": 1},
         headers=headers,
     )
     assert r.status_code == 201, r.text
@@ -49,7 +49,7 @@ def test_hiring_team_add_list_upsert_remove(client, db):
     # Re-posting the same user upserts the team role (no duplicate row).
     r = client.post(
         f"/api/v1/roles/{rid}/hiring-team",
-        json={"user_id": uid, "team_role": "interviewer"},
+        json={"user_id": uid, "team_role": "interviewer", "expected_version": 2},
         headers=headers,
     )
     assert r.status_code == 201 and r.json()["team_role"] == "interviewer"
@@ -59,13 +59,17 @@ def test_hiring_team_add_list_upsert_remove(client, db):
     # Invalid team role rejected.
     r = client.post(
         f"/api/v1/roles/{rid}/hiring-team",
-        json={"user_id": uid, "team_role": "boss"},
+        json={"user_id": uid, "team_role": "boss", "expected_version": 3},
         headers=headers,
     )
     assert r.status_code == 422
 
     # Remove.
-    r = client.delete(f"/api/v1/roles/{rid}/hiring-team/{uid}", headers=headers)
+    r = client.delete(
+        f"/api/v1/roles/{rid}/hiring-team/{uid}",
+        params={"expected_version": 3},
+        headers=headers,
+    )
     assert r.status_code == 204
     r = client.get(f"/api/v1/roles/{rid}/hiring-team", headers=headers)
     assert r.json() == []
@@ -95,7 +99,11 @@ def test_hiring_team_add_member_from_other_org_is_404(client, db):
     db.commit()
     r = client.post(
         f"/api/v1/roles/{role.id}/hiring-team",
-        json={"user_id": outsider.id, "team_role": "interviewer"},
+        json={
+            "user_id": outsider.id,
+            "team_role": "interviewer",
+            "expected_version": 1,
+        },
         headers=headers,
     )
     assert r.status_code == 404

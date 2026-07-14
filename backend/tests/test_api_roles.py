@@ -19,6 +19,12 @@ from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
 
 
+def _role_version(client, headers, role_id: int) -> int:
+    response = client.get(f"/api/v1/roles/{role_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    return int(response.json()["version"])
+
+
 def test_role_application_assessment_lifecycle(client, db, monkeypatch):
     from app.components.notifications.tasks import dispatch_pending_assessment_invite
 
@@ -43,7 +49,10 @@ def test_role_application_assessment_lifecycle(client, db, monkeypatch):
 
     link_resp = client.post(
         f"/api/v1/roles/{role['id']}/tasks",
-        json={"task_id": task["id"]},
+        json={
+            "task_id": task["id"],
+            "expected_version": _role_version(client, headers, role["id"]),
+        },
         headers=headers,
     )
     assert link_resp.status_code == 200, link_resp.text
@@ -52,6 +61,7 @@ def test_role_application_assessment_lifecycle(client, db, monkeypatch):
     upload_job_spec = client.post(
         f"/api/v1/roles/{role['id']}/upload-job-spec",
         files=job_spec_file,
+        data={"expected_version": link_resp.json()["version"]},
         headers=headers,
     )
     assert upload_job_spec.status_code == 200, upload_job_spec.text
@@ -105,14 +115,22 @@ def test_role_star_unstar_toggles_auto_sync_flag(client):
     listed = client.get("/api/v1/roles", headers=headers).json()
     assert any(r["id"] == role["id"] and r["starred_for_auto_sync"] is False for r in listed)
 
-    star_resp = client.post(f"/api/v1/roles/{role['id']}/star", headers=headers)
+    star_resp = client.post(
+        f"/api/v1/roles/{role['id']}/star",
+        json={"expected_version": role["version"]},
+        headers=headers,
+    )
     assert star_resp.status_code == 200, star_resp.text
     assert star_resp.json()["starred_for_auto_sync"] is True
 
     listed = client.get("/api/v1/roles", headers=headers).json()
     assert any(r["id"] == role["id"] and r["starred_for_auto_sync"] is True for r in listed)
 
-    unstar_resp = client.delete(f"/api/v1/roles/{role['id']}/star", headers=headers)
+    unstar_resp = client.delete(
+        f"/api/v1/roles/{role['id']}/star",
+        params={"expected_version": star_resp.json()["version"]},
+        headers=headers,
+    )
     assert unstar_resp.status_code == 200, unstar_resp.text
     assert unstar_resp.json()["starred_for_auto_sync"] is False
 
@@ -159,6 +177,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
                 "auto_resend_assessment": True,
                 "auto_advance": False,
                 "auto_reject_pre_screen": True,
+                "expected_version": role.version,
             },
             headers=headers,
         )
@@ -189,8 +208,12 @@ def test_role_star_is_org_scoped(client):
     role_a = client.post("/api/v1/roles", json={"name": "Org A Role"}, headers=headers_a).json()
 
     # OrgB cannot star OrgA's role.
-    forbidden = client.post(f"/api/v1/roles/{role_a['id']}/star", headers=headers_b)
-    assert forbidden.status_code == 404
+    forbidden = client.post(
+        f"/api/v1/roles/{role_a['id']}/star",
+        json={"expected_version": role_a["version"]},
+        headers=headers_b,
+    )
+    assert forbidden.status_code == 403
 
 
 def test_single_candidate_can_have_multiple_role_applications(client):
@@ -225,7 +248,14 @@ def test_assessments_filters_by_role_and_application(client):
     role = client.post("/api/v1/roles", json={"name": "Filter role"}, headers=headers).json()
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Role filter requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
-    client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers)
+    client.post(
+        f"/api/v1/roles/{role['id']}/tasks",
+        json={
+            "task_id": task["id"],
+            "expected_version": _role_version(client, headers, role["id"]),
+        },
+        headers=headers,
+    )
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "filters@example.com", "candidate_name": "Filters"},
@@ -259,7 +289,14 @@ def test_reject_assessment_for_task_not_linked_to_role(client):
     role = client.post("/api/v1/roles", json={"name": "Validation role"}, headers=headers).json()
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Validation role requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
-    client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": linked_task["id"]}, headers=headers)
+    client.post(
+        f"/api/v1/roles/{role['id']}/tasks",
+        json={
+            "task_id": linked_task["id"],
+            "expected_version": _role_version(client, headers, role["id"]),
+        },
+        headers=headers,
+    )
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "validation@example.com"},
@@ -295,7 +332,14 @@ def test_allow_assessment_creation_without_application_cv(client):
     role = client.post("/api/v1/roles", json={"name": "CV gate role"}, headers=headers).json()
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"CV gate requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
-    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    assert client.post(
+        f"/api/v1/roles/{role['id']}/tasks",
+        json={
+            "task_id": task["id"],
+            "expected_version": _role_version(client, headers, role["id"]),
+        },
+        headers=headers,
+    ).status_code == 200
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "nocv@example.com"},
@@ -319,7 +363,7 @@ def test_reject_role_assessment_creation_without_available_credits(client, db, m
     role = client.post("/api/v1/roles", json={"name": "Credit gate role"}, headers=headers).json()
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Credit gate requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
-    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"], "expected_version": _role_version(client, headers, role["id"])}, headers=headers).status_code == 200
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "credit-gate@example.com"},
@@ -352,7 +396,7 @@ def test_duplicate_role_assessment_requires_retake(client):
     role = client.post("/api/v1/roles", json={"name": "Retake guard role"}, headers=headers).json()
     spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake guard requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
-    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"], "expected_version": _role_version(client, headers, role["id"])}, headers=headers).status_code == 200
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "retake-guard@example.com"},
@@ -384,7 +428,7 @@ def test_role_assessment_retake_voids_previous_attempt(client, db):
     role = client.post("/api/v1/roles", json={"name": "Retake lifecycle role"}, headers=headers).json()
     spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake lifecycle requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
-    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"], "expected_version": _role_version(client, headers, role["id"])}, headers=headers).status_code == 200
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "retake-lifecycle@example.com"},
@@ -439,7 +483,7 @@ def test_role_assessment_retake_succeeds_with_balance(client, db):
     role = client.post("/api/v1/roles", json={"name": "Retake role"}, headers=headers).json()
     spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
-    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"], "expected_version": _role_version(client, headers, role["id"])}, headers=headers).status_code == 200
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "retake-reserved@example.com"},
@@ -468,7 +512,7 @@ def test_role_application_summary_uses_role_fit_before_completion_and_hierarchic
     role = client.post("/api/v1/roles", json={"name": "Score summary role"}, headers=headers).json()
     spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Score summary requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
-    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"], "expected_version": _role_version(client, headers, role["id"])}, headers=headers).status_code == 200
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "summary-score@example.com", "candidate_name": "Summary Score"},
@@ -713,7 +757,11 @@ def test_reject_delete_role_with_existing_application(client):
     )
     assert app_resp.status_code == 201
 
-    delete_resp = client.delete(f"/api/v1/roles/{role['id']}", headers=headers)
+    delete_resp = client.delete(
+        f"/api/v1/roles/{role['id']}",
+        params={"expected_version": _role_version(client, headers, role["id"])},
+        headers=headers,
+    )
     assert delete_resp.status_code == 400
     assert "applications" in delete_resp.json()["detail"].lower()
 
@@ -724,7 +772,7 @@ def test_reject_unlink_role_task_when_assessment_exists(client):
     role = client.post("/api/v1/roles", json={"name": "Unlink guard role"}, headers=headers).json()
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Unlink guard requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
-    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"], "expected_version": _role_version(client, headers, role["id"])}, headers=headers).status_code == 200
     app = client.post(
         f"/api/v1/roles/{role['id']}/applications",
         json={"candidate_email": "unlink-guard@example.com"},
@@ -739,7 +787,11 @@ def test_reject_unlink_role_task_when_assessment_exists(client):
     )
     assert created.status_code == 201
 
-    unlink_resp = client.delete(f"/api/v1/roles/{role['id']}/tasks/{task['id']}", headers=headers)
+    unlink_resp = client.delete(
+        f"/api/v1/roles/{role['id']}/tasks/{task['id']}",
+        params={"expected_version": _role_version(client, headers, role["id"])},
+        headers=headers,
+    )
     assert unlink_resp.status_code == 400
     assert "already has assessments" in unlink_resp.json()["detail"].lower()
 
@@ -758,7 +810,7 @@ def test_live_role_cannot_enable_assessment_stage_without_active_task(client, db
 
     response = client.patch(
         f"/api/v1/roles/{role.id}",
-        json={"auto_skip_assessment": False},
+        json={"auto_skip_assessment": False, "expected_version": role.version},
         headers=headers,
     )
 
@@ -780,7 +832,7 @@ def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
     ).json()
     assert client.post(
         f"/api/v1/roles/{created['id']}/tasks",
-        json={"task_id": task["id"]},
+        json={"task_id": task["id"], "expected_version": created["version"]},
         headers=headers,
     ).status_code == 200
     role = db.query(Role).filter(Role.id == created["id"]).one()
@@ -790,6 +842,7 @@ def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
 
     response = client.delete(
         f"/api/v1/roles/{role.id}/tasks/{task['id']}",
+        params={"expected_version": _role_version(client, headers, role.id)},
         headers=headers,
     )
 
@@ -817,7 +870,10 @@ def test_role_budget_rejects_zero_on_create_and_update(client):
     ).json()
     update_response = client.patch(
         f"/api/v1/roles/{role['id']}",
-        json={"monthly_usd_budget_cents": 0},
+        json={
+            "monthly_usd_budget_cents": 0,
+            "expected_version": role["version"],
+        },
         headers=headers,
     )
     assert update_response.status_code == 422, update_response.text
@@ -2048,7 +2104,10 @@ def test_assessment_invite_event_is_logged_when_stage_is_unchanged(
 
     link_resp = client.post(
         f"/api/v1/roles/{role['id']}/tasks",
-        json={"task_id": task["id"]},
+        json={
+            "task_id": task["id"],
+            "expected_version": _role_version(client, headers, role["id"]),
+        },
         headers=headers,
     )
     assert link_resp.status_code == 200, link_resp.text

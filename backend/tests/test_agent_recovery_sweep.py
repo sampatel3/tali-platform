@@ -8,6 +8,7 @@ from unittest.mock import patch
 from app.agent_runtime.budget_guard import MANUAL_PAUSE_REASON
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.role_change_event import RoleChangeEvent
 
 
 def _paused_role(db, *, reason: str) -> Role:
@@ -32,6 +33,7 @@ def test_recovery_sweep_resumes_healthy_system_hold(db):
     from tests.conftest import TestingSessionLocal
 
     role = _paused_role(db, reason="platform credits depleted; top up to resume")
+    initial_version = int(role.version or 1)
     with (
         patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
         patch.object(agent_tasks.agent_cohort_tick_role, "delay") as dispatch,
@@ -44,7 +46,21 @@ def test_recovery_sweep_resumes_healthy_system_hold(db):
     assert result["role_ids"] == [role.id]
     assert current.agent_paused_at is None
     assert current.agent_bootstrap_status == "starting"
-    dispatch.assert_called_once_with(role.id, activation=False)
+    assert current.version == initial_version + 1
+    dispatch.assert_called_once_with(
+        role.id,
+        activation=False,
+        dispatch_role_version=initial_version + 1,
+    )
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.action == "agent_resumed"
+    assert event.actor_user_id is None
+    assert event.from_version == initial_version
+    assert event.to_version == initial_version + 1
 
 
 def test_recovery_sweep_never_clears_manual_pause(db):
@@ -91,6 +107,7 @@ def test_recovery_sweep_repauses_when_broker_dispatch_fails(db):
     from tests.conftest import TestingSessionLocal
 
     role = _paused_role(db, reason="agent bootstrap failed after retries: provider outage")
+    initial_version = int(role.version or 1)
     with (
         patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
         patch.object(
@@ -107,3 +124,64 @@ def test_recovery_sweep_repauses_when_broker_dispatch_fails(db):
     assert current.agent_paused_at is not None
     assert current.agent_paused_reason == "agent recovery dispatch failed"
     assert current.agent_bootstrap_status == "failed"
+    assert current.version == initial_version + 2
+    events = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .order_by(RoleChangeEvent.id)
+        .all()
+    )
+    assert [event.action for event in events] == ["agent_resumed", "agent_paused"]
+    assert all(event.actor_user_id is None for event in events)
+    assert [(event.from_version, event.to_version) for event in events] == [
+        (initial_version, initial_version + 1),
+        (initial_version + 1, initial_version + 2),
+    ]
+
+
+def test_recovery_dispatch_failure_preserves_newer_role_revision(db):
+    from app.tasks import agent_tasks
+    from tests.conftest import TestingSessionLocal
+
+    role = _paused_role(db, reason="provider recovered")
+    initial_version = int(role.version or 1)
+    dispatched_version = initial_version + 1
+
+    def newer_recruiter_write(*args, **kwargs):
+        assert kwargs["dispatch_role_version"] == dispatched_version
+        other = TestingSessionLocal()
+        try:
+            current = other.query(Role).filter(Role.id == role.id).one()
+            current.name = "Newer recruiter edit"
+            current.version = dispatched_version + 1
+            other.commit()
+        finally:
+            other.close()
+        raise RuntimeError("broker unavailable")
+
+    with (
+        patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
+        patch.object(
+            agent_tasks.agent_cohort_tick_role,
+            "delay",
+            side_effect=newer_recruiter_write,
+        ),
+    ):
+        result = agent_tasks.agent_recovery_sweep.run()
+
+    db.expire_all()
+    current = db.query(Role).filter(Role.id == role.id).one()
+    assert result["dispatch_failed"] == [role.id]
+    assert current.version == dispatched_version + 1
+    assert current.name == "Newer recruiter edit"
+    assert current.agent_paused_at is None
+    assert current.agent_bootstrap_status == "starting"
+    events = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .all()
+    )
+    assert len(events) == 1
+    assert events[0].action == "agent_resumed"
+    assert events[0].from_version == initial_version
+    assert events[0].to_version == dispatched_version

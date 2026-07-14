@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { roles as rolesApi } from '../../shared/api';
 import { Button, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { roleVersionConflict } from './roleConcurrency';
 
 const QUESTION_KINDS = [
   { value: 'boolean', label: 'Yes / no' },
@@ -39,7 +40,7 @@ const questionDraft = (question = null) => ({
 
 const kindLabel = (kind) => QUESTION_KINDS.find((item) => item.value === kind)?.label || kind;
 
-export default function RoleScreeningQuestions({ roleId }) {
+export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRoleVersionChange }) {
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -48,6 +49,21 @@ export default function RoleScreeningQuestions({ roleId }) {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [formError, setFormError] = useState('');
+  const [currentRoleVersion, setCurrentRoleVersion] = useState(
+    Number.isInteger(roleVersion) && roleVersion >= 1 ? roleVersion : 1,
+  );
+
+  useEffect(() => {
+    if (Number.isInteger(roleVersion) && roleVersion >= 1) {
+      setCurrentRoleVersion(roleVersion);
+    }
+  }, [roleVersion]);
+
+  const acceptRoleVersion = (version) => {
+    if (!Number.isInteger(version) || version < 1) return;
+    setCurrentRoleVersion(version);
+    onRoleVersionChange?.(version);
+  };
 
   const load = useCallback(async () => {
     if (!roleId) return;
@@ -101,6 +117,7 @@ export default function RoleScreeningQuestions({ roleId }) {
     setSaving(true);
     setFormError('');
     const payload = {
+      expected_version: currentRoleVersion,
       prompt,
       kind: draft.kind,
       options,
@@ -114,6 +131,7 @@ export default function RoleScreeningQuestions({ roleId }) {
         : await rolesApi.updateScreeningQuestion(roleId, editingId, payload);
       const saved = response?.data;
       if (saved) {
+        acceptRoleVersion(saved.role_version);
         setQuestions((current) => (
           editingId == null
             ? [...current, saved]
@@ -123,8 +141,14 @@ export default function RoleScreeningQuestions({ roleId }) {
         await load();
       }
       reset();
-    } catch {
-      setFormError('Could not save this question. Try again.');
+    } catch (error) {
+      const conflict = roleVersionConflict(error);
+      if (conflict) {
+        acceptRoleVersion(conflict.currentVersion);
+        setFormError(`${conflict.message} Your draft is still here; review it and try again.`);
+      } else {
+        setFormError('Could not save this question. Try again.');
+      }
     } finally {
       setSaving(false);
     }
@@ -134,11 +158,22 @@ export default function RoleScreeningQuestions({ roleId }) {
     setDeletingId(questionId);
     setFormError('');
     try {
-      await rolesApi.deleteScreeningQuestion(roleId, questionId);
+      const response = await rolesApi.deleteScreeningQuestion(
+        roleId,
+        questionId,
+        currentRoleVersion,
+      );
+      acceptRoleVersion(response?.data?.role_version);
       setQuestions((current) => current.filter((item) => item.id !== questionId));
       if (editingId === questionId) reset();
-    } catch {
-      setFormError('Could not remove that question. Try again.');
+    } catch (error) {
+      const conflict = roleVersionConflict(error);
+      if (conflict) {
+        acceptRoleVersion(conflict.currentVersion);
+        setFormError(`${conflict.message} Refresh the questions before removing it.`);
+      } else {
+        setFormError('Could not remove that question. Try again.');
+      }
     } finally {
       setDeletingId(null);
     }

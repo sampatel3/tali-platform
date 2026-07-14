@@ -22,6 +22,7 @@ def _setup(db):
     user = User(
         email=f"ws-{id(db)}@x.test", hashed_password="x", full_name="Rec",
         organization_id=org.id, is_active=True, is_verified=True, is_superuser=False,
+        role="owner",
     )
     db.add(user)
     db.flush()

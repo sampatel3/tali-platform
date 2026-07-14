@@ -101,6 +101,7 @@ import { JobPipelinePage } from './JobPipelinePage';
 
 const baseRole = {
   id: 101,
+  version: 7,
   name: 'AI Native Engineer',
   source: 'workable',
   active_candidates_count: 2,
@@ -240,6 +241,7 @@ describe('JobPipelinePage', () => {
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
       auto_reject: false,
       auto_reject_pre_screen: false,
+      expected_version: 7,
     }));
   });
 
@@ -270,6 +272,7 @@ describe('JobPipelinePage', () => {
       auto_resend_assessment: true,
       auto_advance: true,
       auto_promote: false,
+      expected_version: 7,
     }));
   });
 
@@ -538,6 +541,7 @@ describe('JobPipelinePage', () => {
     expect(activationPayload).toEqual(expect.objectContaining({
       agentic_mode_enabled: true,
       monthly_usd_budget_cents: 5000,
+      expected_version: 7,
     }));
     expect(activationPayload).not.toHaveProperty('auto_promote');
     expect(activationPayload).not.toHaveProperty('auto_send_assessment');
@@ -1002,6 +1006,7 @@ Banking transformation experience
       expect(apiClient.roles.createCriterion).toHaveBeenCalledWith(
         101,
         expect.objectContaining({ text: 'Payments experience matters', bucket: 'must' }),
+        7,
       );
     });
   });
@@ -1137,6 +1142,7 @@ Banking transformation experience
     await waitFor(() => {
       expect(apiClient.roles.updateJobSpec).toHaveBeenCalledWith(101, {
         job_spec_text: updatedSpec,
+        expected_version: 7,
       });
     });
     expect(apiClient.roles.update).not.toHaveBeenCalledWith(
@@ -1147,6 +1153,47 @@ Banking transformation experience
       expect.stringContaining('updated criteria affect 2 existing candidates'),
       'success',
     ));
+  });
+
+  it('keeps a stale job-spec draft and offers the collaborator version on conflict', async () => {
+    const originalSpec = '## About the role\nBuild reliable data products for teams across the business and own delivery outcomes.';
+    const draftSpec = `${originalSpec}\n\n## Requirements\n- Recruiter draft requirement`;
+    const latestSpec = `${originalSpec}\n\n## Requirements\n- Collaborator saved requirement`;
+    const latestRole = { ...baseRole, version: 8, source: 'workable', job_spec_text: latestSpec };
+    apiClient.roles.get.mockResolvedValue({
+      data: { ...baseRole, source: 'workable', job_spec_text: originalSpec },
+    });
+    apiClient.roles.updateJobSpec.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'ROLE_VERSION_CONFLICT',
+            message: 'This job was changed by another recruiter.',
+            current_role: latestRole,
+            current_version: 8,
+            changed_by: { name: 'Aisha Khan' },
+          },
+        },
+      },
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    fireEvent.change(screen.getByLabelText('Job description'), { target: { value: draftSpec } });
+    fireEvent.click(screen.getByRole('button', { name: /Save job spec/i }));
+
+    expect(await screen.findByText(/A newer job specification is available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Aisha Khan saved changes while you were editing/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Job description')).toHaveValue(draftSpec);
+    expect(apiClient.roles.updateJobSpec).toHaveBeenCalledWith(101, {
+      job_spec_text: draftSpec,
+      expected_version: 7,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Discard draft & load latest/i }));
+    expect(screen.getByLabelText('Job description')).toHaveValue(latestSpec);
   });
 
   it('renders a Last updated column and sorts by it (independent of score) via the header', async () => {
@@ -1199,7 +1246,7 @@ Banking transformation experience
     expect(await screen.findByText('Agent on')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
     // Resume hits the per-role soft-resume endpoint, NOT a role PATCH.
-    expect(apiClient.agent.resume).toHaveBeenCalledWith(101);
+    expect(apiClient.agent.resume).toHaveBeenCalledWith(101, 7);
     expect(resolveResume).toBeTypeOf('function'); // resume was fired, not awaited
   });
 
@@ -1219,7 +1266,7 @@ Banking transformation experience
     // Optimistic flip to PAUSED; calls the soft-pause endpoint, never a role
     // PATCH (which would disable the agent and risk the queue).
     expect(await screen.findByText('Paused')).toBeInTheDocument();
-    expect(apiClient.agent.pause).toHaveBeenCalledWith(101);
+    expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
     expect(apiClient.roles.update).not.toHaveBeenCalled();
   });
 
@@ -1243,8 +1290,48 @@ Banking transformation experience
     // Confirm WITHOUT ticking discard → disable only, queue preserved.
     fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
 
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      agentic_mode_enabled: false,
+      expected_version: 7,
+    }));
     expect(apiClient.agent.discardPending).not.toHaveBeenCalled();
+  });
+
+  it('restores the latest agent state when a stale Turn off conflicts', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 0 },
+    });
+    apiClient.roles.update.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'ROLE_VERSION_CONFLICT',
+            message: 'This agent was changed by another recruiter.',
+            current_role: { id: 101, version: 8, agentic_mode_enabled: true },
+            current_version: 8,
+            changed_by: { name: 'Aisha Khan' },
+          },
+        },
+      },
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /turn off agent/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('Latest settings are shown'),
+      'error',
+    ));
+    expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      agentic_mode_enabled: false,
+      expected_version: 7,
+    });
+    expect(await screen.findByText('Agent on')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
   });
 
   it('New CVs tile counts only auto-scorable candidates, breaking out held-back ones', async () => {
@@ -1314,7 +1401,10 @@ Banking transformation experience
     fireEvent.click(await screen.findByRole('checkbox', { name: /also discard/i }));
     fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
 
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
-    await waitFor(() => expect(apiClient.agent.discardPending).toHaveBeenCalledWith(101));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      agentic_mode_enabled: false,
+      expected_version: 7,
+    }));
+    await waitFor(() => expect(apiClient.agent.discardPending).toHaveBeenCalledWith(101, 7));
   });
 });

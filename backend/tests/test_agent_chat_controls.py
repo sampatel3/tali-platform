@@ -27,6 +27,7 @@ def _user(db, org) -> User:
     u = User(
         email=f"ctl-{id(db)}@x.test", hashed_password="x", full_name="Rec",
         organization_id=org.id, is_active=True, is_verified=True, is_superuser=False,
+        role="owner",
     )
     db.add(u)
     db.flush()
@@ -60,6 +61,24 @@ def _active_task(db, org, role) -> Task:
 
 def _run(db, role, user, name, args):
     return tools.dispatch_tool(name, args, db=db, role=role, user=user)
+
+
+def test_kick_cycle_dispatches_the_committed_role_revision(db):
+    org = _org(db)
+    role = _role(db, org, agentic=True, budget=5000)
+    role.version = 7
+    db.flush()
+
+    with patch(
+        "app.tasks.agent_tasks.agent_cohort_tick_role.delay"
+    ) as dispatch:
+        assert _controls._kick_cycle(role, activation=False) is True
+
+    dispatch.assert_called_once_with(
+        role.id,
+        activation=False,
+        dispatch_role_version=7,
+    )
 
 
 @patch.object(_controls, "_kick_cycle")
@@ -168,6 +187,36 @@ def test_activate_dispatch_failure_restores_native_activation_state(kick, db):
     assert role.agent_bootstrap_status == "failed"
     assert role.agent_bootstrap_error == "agent bootstrap dispatch failed"
     kick.assert_called_once_with(role, activation=True)
+
+
+@patch.object(_controls, "_kick_cycle")
+def test_activation_dispatch_failure_preserves_newer_role_revision(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=False, budget=5000)
+    _active_task(db, org, role)
+    db.flush()
+
+    def _failed_after_newer_change(dispatched_role, *, activation=False):
+        assert activation is True
+        dispatched_role.name = "Renamed in newer UI"
+        dispatched_role.monthly_usd_budget_cents = 9_000
+        dispatched_role.version = int(dispatched_role.version or 1) + 1
+        db.commit()
+        return False
+
+    kick.side_effect = _failed_after_newer_change
+    res = _run(db, role, user, "set_agent_state", {"action": "activate"})
+
+    assert res["ok"] is False and res["reason"] == "dispatch_failed"
+    assert res["compensation_skipped"] is True
+    db.refresh(role)
+    assert role.version == 3
+    assert role.name == "Renamed in newer UI"
+    assert role.monthly_usd_budget_cents == 9_000
+    assert role.agentic_mode_enabled is True
+    assert role.agent_bootstrap_status == "starting"
+    assert role.agent_bootstrap_error is None
 
 
 @patch("app.tasks.assessment_tasks.generate_assessment_task_for_role.delay")
@@ -355,3 +404,39 @@ def test_budget_resume_dispatch_failure_restores_pause(kick, db):
     assert role.agent_bootstrap_status == "failed"
     assert role.agent_bootstrap_error == "agent bootstrap dispatch failed"
     kick.assert_called_once_with(role)
+
+
+@patch.object(_controls, "_kick_cycle")
+def test_budget_resume_dispatch_failure_preserves_newer_role_revision(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True, budget=100)
+    role.agent_paused_at = datetime.now(timezone.utc)
+    role.agent_paused_reason = "monthly USD cap reached"
+    db.flush()
+
+    def _failed_after_newer_change(dispatched_role, *, activation=False):
+        assert activation is False
+        dispatched_role.name = "Edited after resume"
+        dispatched_role.version = int(dispatched_role.version or 1) + 1
+        db.commit()
+        return False
+
+    kick.side_effect = _failed_after_newer_change
+    res = _run(
+        db,
+        role,
+        user,
+        "adjust_agent_settings",
+        {"monthly_budget_cents": 7500},
+    )
+
+    assert res["resumed"] is False
+    assert res["compensation_skipped"] is True
+    assert "newer job settings" in (res["resume_error"] or "")
+    db.refresh(role)
+    assert role.version == 3
+    assert role.name == "Edited after resume"
+    assert role.agent_paused_at is None
+    assert role.agent_bootstrap_status == "starting"
+    assert role.agent_bootstrap_error is None

@@ -134,6 +134,17 @@ def _role_pause_state(role_id: int) -> tuple:
         sess.close()
 
 
+def _role_version(role_id: int) -> int:
+    from tests.conftest import TestingSessionLocal
+
+    sess = TestingSessionLocal()
+    try:
+        role = sess.query(Role).filter(Role.id == role_id).one()
+        return int(role.version)
+    finally:
+        sess.close()
+
+
 def _decision_status(decision_id: int) -> str:
     from tests.conftest import TestingSessionLocal
 
@@ -190,7 +201,9 @@ def test_resume_all_clears_pause_and_wakes_under_budget_roles(client, monkeypatc
     wakeups: list[tuple[int, bool]] = []
     monkeypatch.setattr(
         "app.tasks.agent_tasks.agent_cohort_tick_role.delay",
-        lambda role_id, *, activation: wakeups.append((role_id, activation)),
+        lambda role_id, *, activation, **_kwargs: wakeups.append(
+            (role_id, activation)
+        ),
     )
 
     headers, email = auth_headers(client)
@@ -302,7 +315,11 @@ def test_pause_one_role_keeps_pending_decisions(client):
     role_id = seeded["role_ids"][0]
     decision_id = _seed_pending_decision(seeded["org_id"], role_id)
 
-    resp = client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    resp = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["paused"] is True
@@ -323,9 +340,18 @@ def test_pause_one_role_is_idempotent(client):
     _attach_user_to_org(email, seeded["org_id"])
     role_id = seeded["role_ids"][0]
 
-    client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    first = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
     first_paused_at = _role_pause_state(role_id)[0]
-    second = client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    second = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": first.json()["version"]},
+        headers=headers,
+    )
     assert second.status_code == 200
     # The pause timestamp doesn't move on a repeat pause.
     assert _role_pause_state(role_id)[0] == first_paused_at
@@ -347,7 +373,11 @@ def test_pause_one_role_requires_enabled_agent(client):
     finally:
         sess.close()
 
-    resp = client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    resp = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    )
     assert resp.status_code == 409
 
 
@@ -366,10 +396,19 @@ def test_resume_one_role_clears_pause(client, monkeypatch):
     _attach_user_to_org(email, seeded["org_id"])
     role_id = seeded["role_ids"][0]
 
-    client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    paused = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    )
+    assert paused.status_code == 200, paused.text
     assert _role_pause_state(role_id)[0] is not None
 
-    resp = client.post(f"/api/v1/roles/{role_id}/agent/resume", headers=headers)
+    resp = client.post(
+        f"/api/v1/roles/{role_id}/agent/resume",
+        json={"expected_version": paused.json()["version"]},
+        headers=headers,
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["resumed"] is True
@@ -394,7 +433,12 @@ def test_resume_one_role_returns_503_and_stays_paused_when_runtime_unready(clien
     seeded = _seed_org_with_agent_roles("Per-role Unready Org", role_names=["A"])
     _attach_user_to_org(email, seeded["org_id"])
     role_id = seeded["role_ids"][0]
-    client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    paused = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    )
+    assert paused.status_code == 200, paused.text
 
     with (
         patch("app.platform.startup_validation.is_production_like", return_value=True),
@@ -403,7 +447,11 @@ def test_resume_one_role_returns_503_and_stays_paused_when_runtime_unready(clien
             return_value={"ready": False, "reason": "heartbeat_stale"},
         ),
     ):
-        resp = client.post(f"/api/v1/roles/{role_id}/agent/resume", headers=headers)
+        resp = client.post(
+            f"/api/v1/roles/{role_id}/agent/resume",
+            json={"expected_version": paused.json()["version"]},
+            headers=headers,
+        )
 
     assert resp.status_code == 503, resp.text
     assert "heartbeat_stale" in resp.text
@@ -425,7 +473,10 @@ def test_turn_off_keeps_pending_decisions_by_default(client):
 
     resp = client.patch(
         f"/api/v1/roles/{role_id}",
-        json={"agentic_mode_enabled": False},
+        json={
+            "agentic_mode_enabled": False,
+            "expected_version": _role_version(role_id),
+        },
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
@@ -446,13 +497,21 @@ def test_explicit_discard_after_turn_off_clears_queue(client):
     role_id = seeded["role_ids"][0]
     decision_id = _seed_pending_decision(seeded["org_id"], role_id)
 
-    client.patch(
+    turned_off = client.patch(
         f"/api/v1/roles/{role_id}",
-        json={"agentic_mode_enabled": False},
+        json={
+            "agentic_mode_enabled": False,
+            "expected_version": _role_version(role_id),
+        },
         headers=headers,
     )
     resp = client.post(
-        "/api/v1/agent-decisions/discard", json={"role_id": role_id}, headers=headers
+        "/api/v1/agent-decisions/discard",
+        json={
+            "role_id": role_id,
+            "expected_version": turned_off.json()["version"],
+        },
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["discarded"] == 1

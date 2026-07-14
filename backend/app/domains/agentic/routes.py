@@ -29,17 +29,33 @@ from ...actions import approve_decision as approve_decision_action
 from ...actions import override_decision as override_decision_action
 from ...actions.types import Actor
 from ...agent_runtime import budget_guard
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
 from ...domains.assessments_runtime.pipeline_service import (
     is_post_handover_workable_stage,
 )
+from ...domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ...domains.assessments_runtime.role_support import is_resolved
-from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
-from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
 )
+from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
+from ...services.role_concurrency import (
+    assert_role_version,
+    bump_role_version,
+    role_query_for_update,
+)
+from ...services.role_change_audit import (
+    ROLE_CHANGE_ACTION_AGENT_PAUSED,
+    ROLE_CHANGE_ACTION_AGENT_RESUMED,
+    add_role_change_event,
+    capture_role_change_snapshot,
+    latest_role_change_actor,
+)
+from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.agent_run import AgentRun
@@ -49,6 +65,7 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...models.user import User
 from ...platform.database import get_db
+from ...platform.request_context import get_request_id
 from ._activity_feed import (
     AgentActivityPayload,
     build_activity_feed,
@@ -224,10 +241,15 @@ class OverrideBody(BaseModel):
 
 class DiscardBody(BaseModel):
     role_id: int
+    expected_version: int = Field(ge=1)
 
 
 class RunNowBody(BaseModel):
     application_id: Optional[int] = None
+
+
+class RoleVersionCommand(BaseModel):
+    expected_version: int = Field(ge=1)
 
 
 class AgentStatusActivity(BaseModel):
@@ -798,6 +820,13 @@ def approve(
         )
         .first()
     )
+    if pre_decision is not None:
+        require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=int(pre_decision.role_id),
+            permission=JobPermission.CONTROL_AGENT,
+        )
     if pre_decision is not None and pre_decision.status == "pending" and not force:
         from ...services import decision_staleness
         try:
@@ -879,6 +908,21 @@ def override(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    target = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if target is not None:
+        require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=int(target.role_id),
+            permission=JobPermission.CONTROL_AGENT,
+        )
     try:
         if (body.override_action or "") == "skip_assessment_advance":
             # "Skip & advance" no longer advances + writes Workable directly
@@ -983,6 +1027,12 @@ def re_evaluate(
     )
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(decision.role_id),
+        permission=JobPermission.CONTROL_AGENT,
+    )
     if decision.status != "pending":
         raise HTTPException(
             status_code=409,
@@ -1105,17 +1155,34 @@ def discard_pending_for_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == body.role_id,
-            Role.organization_id == current_user.organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .first()
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=body.role_id,
+        permission=JobPermission.CONTROL_AGENT,
     )
-    if role is None:
-        raise HTTPException(status_code=404, detail=f"role {body.role_id} not found")
+    assert_role_version(
+        role,
+        expected_version=body.expected_version,
+        current_role=lambda: {
+            "id": int(role.id),
+            "version": int(role.version or 1),
+            "agentic_mode_enabled": bool(role.agentic_mode_enabled),
+        },
+        changed_by=lambda: latest_role_change_actor(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=int(role.id),
+        ),
+    )
+    if bool(role.agentic_mode_enabled):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pending decisions can be discarded from Turn off only while "
+                "the agent remains disabled at that exact job version."
+            ),
+        )
 
     pending = (
         db.query(AgentDecision)
@@ -1222,6 +1289,24 @@ def bulk_approve(
     """
     requested = list(dict.fromkeys(int(x) for x in body.decision_ids))  # de-dupe, preserve order
     note = (body.note or "").strip() or None
+    role_ids = {
+        int(role_id)
+        for (role_id,) in db.query(AgentDecision.role_id)
+        .filter(
+            AgentDecision.id.in_(requested),
+            AgentDecision.organization_id == current_user.organization_id,
+        )
+        .distinct()
+        .all()
+        if role_id is not None
+    }
+    for role_id in sorted(role_ids):
+        require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=role_id,
+            permission=JobPermission.CONTROL_AGENT,
+        )
     try:
         result = approve_decision_action.enqueue_batch(
             db,
@@ -1287,6 +1372,15 @@ def bulk_override(
         )
         .all()
     }
+    for role_id in sorted(
+        {int(row.role_id) for row in rows.values() if row.role_id is not None}
+    ):
+        require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=role_id,
+            permission=JobPermission.CONTROL_AGENT,
+        )
     accepted: list[int] = []
     failures: list[BulkApproveFailure] = []
     for decision_id in requested:
@@ -1548,6 +1642,12 @@ def run_now(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     role = (
         db.query(Role)
         .filter(
@@ -1559,6 +1659,11 @@ def run_now(
     )
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+    if not bool(role.agentic_mode_enabled):
+        raise HTTPException(
+            status_code=409,
+            detail="agent is not enabled for this role",
+        )
     if role.agent_paused_at is not None:
         return RunNowResult(
             role_id=role_id,
@@ -1578,6 +1683,57 @@ def run_now(
 MANUAL_PAUSE_REASON = "paused by recruiter"
 
 
+def _compensate_failed_agent_dispatch(
+    db: Session,
+    *,
+    role_id: int,
+    dispatched_version: int,
+    current_user: User,
+) -> None:
+    """Pause a failed resume without overwriting a later recruiter action."""
+
+    role = (
+        role_query_for_update(
+            db,
+            role_id=role_id,
+            organization_id=int(current_user.organization_id),
+        )
+        .populate_existing()
+        .first()
+    )
+    # The dispatch result belongs to the state that was just resumed. If a
+    # recruiter deleted, disabled, or independently paused the role after that
+    # commit, their newer control is already the safe terminal state.
+    if (
+        role is None
+        or int(role.version or 1) != int(dispatched_version)
+        or not bool(role.agentic_mode_enabled)
+        or role.agent_paused_at is not None
+    ):
+        db.commit()
+        return
+
+    compensation_before = capture_role_change_snapshot(role)
+    compensation_from = int(role.version or 1)
+    budget_guard.pause_role(db, role=role, reason="agent bootstrap dispatch failed")
+    role.agent_bootstrap_status = "failed"
+    role.agent_bootstrap_error = "agent bootstrap dispatch failed"
+    role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
+    compensation_to = bump_role_version(role)
+    add_role_change_event(
+        db,
+        role=role,
+        before=compensation_before,
+        action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+        actor_user_id=int(current_user.id),
+        from_version=compensation_from,
+        to_version=compensation_to,
+        reason="agent bootstrap dispatch failed",
+        request_id=get_request_id(),
+    )
+    db.commit()
+
+
 class BulkAgentPauseResult(BaseModel):
     """Outcome of an org-wide pause-all / resume-all sweep."""
 
@@ -1589,7 +1745,7 @@ class BulkAgentPauseResult(BaseModel):
 @router.post("/agent/pause-all", response_model=BulkAgentPauseResult)
 def pause_all_agents(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Soft-pause every agent-enabled role in the org in one shot.
 
@@ -1608,12 +1764,28 @@ def pause_all_agents(
             Role.deleted_at.is_(None),
             Role.agentic_mode_enabled.is_(True),
         )
+        .order_by(Role.id)
+        .with_for_update(of=Role)
         .all()
     )
     affected = 0
     for role in roles:
         if role.agent_paused_at is None:
+            audit_before = capture_role_change_snapshot(role)
+            audit_from = int(role.version or 1)
             budget_guard.pause_role(db, role=role, reason=MANUAL_PAUSE_REASON)
+            audit_to = bump_role_version(role)
+            add_role_change_event(
+                db,
+                role=role,
+                before=audit_before,
+                action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+                actor_user_id=int(current_user.id),
+                from_version=audit_from,
+                to_version=audit_to,
+                reason=MANUAL_PAUSE_REASON,
+                request_id=get_request_id(),
+            )
             affected += 1
     if affected:
         db.commit()
@@ -1623,7 +1795,7 @@ def pause_all_agents(
 @router.post("/agent/resume-all", response_model=BulkAgentPauseResult)
 def resume_all_agents(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Resume every paused agent-enabled role that's back under its cap.
 
@@ -1645,33 +1817,51 @@ def resume_all_agents(
             Role.agentic_mode_enabled.is_(True),
             Role.agent_paused_at.isnot(None),
         )
+        .order_by(Role.id)
+        .with_for_update(of=Role)
         .all()
     )
-    resumed_roles: list[Role] = []
+    resumed_roles: list[tuple[int, int]] = []
     for role in roles:
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         if budget_guard.resume_if_under_budget(db, role=role, explicit=True):
-            resumed_roles.append(role)
+            audit_to = bump_role_version(role)
+            add_role_change_event(
+                db,
+                role=role,
+                before=audit_before,
+                action=ROLE_CHANGE_ACTION_AGENT_RESUMED,
+                actor_user_id=int(current_user.id),
+                from_version=audit_from,
+                to_version=audit_to,
+                reason="bulk resume requested by recruiter",
+                request_id=get_request_id(),
+            )
+            resumed_roles.append((int(role.id), int(audit_to)))
     if resumed_roles:
         db.commit()
 
     dispatch_failed = 0
-    for role in resumed_roles:
+    for role_id, dispatched_version in resumed_roles:
         try:
             from ...tasks.agent_tasks import agent_cohort_tick_role
 
-            agent_cohort_tick_role.delay(int(role.id), activation=False)
+            agent_cohort_tick_role.delay(
+                role_id,
+                activation=False,
+                dispatch_role_version=dispatched_version,
+            )
         except Exception:
             logger.exception(
-                "Failed to enqueue bulk-resume cycle for role_id=%s", role.id
+                "Failed to enqueue bulk-resume cycle for role_id=%s", role_id
             )
-            budget_guard.pause_role(
-                db, role=role, reason="agent bootstrap dispatch failed"
+            _compensate_failed_agent_dispatch(
+                db,
+                role_id=role_id,
+                dispatched_version=dispatched_version,
+                current_user=current_user,
             )
-            role.agent_bootstrap_status = "failed"
-            role.agent_bootstrap_error = "agent bootstrap dispatch failed"
-            role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
-            db.add(role)
-            db.commit()
             dispatch_failed += 1
 
     affected = len(resumed_roles) - dispatch_failed
@@ -1686,6 +1876,7 @@ class RoleAgentPauseResult(BaseModel):
     """Outcome of a per-role manual pause / resume."""
 
     role_id: int
+    version: int
     paused: bool  # is the role paused after this call?
     resumed: bool = False  # did this call actually clear a pause?
     reason: Optional[str] = None
@@ -1694,6 +1885,7 @@ class RoleAgentPauseResult(BaseModel):
 @router.post("/roles/{role_id}/agent/pause", response_model=RoleAgentPauseResult)
 def pause_role_agent(
     role_id: int,
+    body: RoleVersionCommand,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1707,6 +1899,12 @@ def pause_role_agent(
     indefinitely and doesn't auto-resume — neither path discards the queue.
     Idempotent: pausing an already-paused role is a no-op.
     """
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     role = (
         db.query(Role)
         .filter(
@@ -1714,19 +1912,53 @@ def pause_role_agent(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
         )
+        .with_for_update(of=Role)
         .first()
     )
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+    assert_role_version(
+        role,
+        expected_version=body.expected_version,
+        current_role=lambda: {
+            "id": int(role.id),
+            "version": int(role.version or 1),
+            "agentic_mode_enabled": bool(role.agentic_mode_enabled),
+            "agent_paused_at": role.agent_paused_at.isoformat()
+            if role.agent_paused_at
+            else None,
+            "agent_paused_reason": role.agent_paused_reason,
+        },
+        changed_by=lambda: latest_role_change_actor(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=role_id,
+        ),
+    )
     if not bool(role.agentic_mode_enabled):
         raise HTTPException(
             status_code=409, detail="agent is not enabled for this role"
         )
     if role.agent_paused_at is None:
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         budget_guard.pause_role(db, role=role, reason=MANUAL_PAUSE_REASON)
+        audit_to = bump_role_version(role)
+        add_role_change_event(
+            db,
+            role=role,
+            before=audit_before,
+            action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+            actor_user_id=int(current_user.id),
+            from_version=audit_from,
+            to_version=audit_to,
+            reason=MANUAL_PAUSE_REASON,
+            request_id=get_request_id(),
+        )
         db.commit()
     return RoleAgentPauseResult(
         role_id=role_id,
+        version=int(role.version or 1),
         paused=role.agent_paused_at is not None,
         reason=role.agent_paused_reason,
     )
@@ -1735,6 +1967,7 @@ def pause_role_agent(
 @router.post("/roles/{role_id}/agent/resume", response_model=RoleAgentPauseResult)
 def resume_role_agent(
     role_id: int,
+    body: RoleVersionCommand,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1746,6 +1979,12 @@ def resume_role_agent(
     resume we kick an immediate review cycle so the recruiter doesn't wait up
     to 60 minutes for the next beat — mirroring the PATCH resume path.
     """
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     role = (
         db.query(Role)
         .filter(
@@ -1753,10 +1992,29 @@ def resume_role_agent(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
         )
+        .with_for_update(of=Role)
         .first()
     )
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+    assert_role_version(
+        role,
+        expected_version=body.expected_version,
+        current_role=lambda: {
+            "id": int(role.id),
+            "version": int(role.version or 1),
+            "agentic_mode_enabled": bool(role.agentic_mode_enabled),
+            "agent_paused_at": role.agent_paused_at.isoformat()
+            if role.agent_paused_at
+            else None,
+            "agent_paused_reason": role.agent_paused_reason,
+        },
+        changed_by=lambda: latest_role_change_actor(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=role_id,
+        ),
+    )
     # Surface a concrete production-runtime failure on the explicit endpoint.
     # The shared budget_guard repeats this check at the mutation boundary so
     # non-HTTP resume paths fail closed too; this preflight exists to return an
@@ -1781,24 +2039,41 @@ def resume_role_agent(
                     f"{readiness_message(readiness)}. The role remains paused."
                 ),
             )
+    audit_before = capture_role_change_snapshot(role)
+    audit_from = int(role.version or 1)
     resumed = budget_guard.resume_if_under_budget(db, role=role, explicit=True)
     if resumed:
+        audit_to = bump_role_version(role)
+        add_role_change_event(
+            db,
+            role=role,
+            before=audit_before,
+            action=ROLE_CHANGE_ACTION_AGENT_RESUMED,
+            actor_user_id=int(current_user.id),
+            from_version=audit_from,
+            to_version=audit_to,
+            reason="resume requested by recruiter",
+            request_id=get_request_id(),
+        )
         db.commit()
         try:
             from ...tasks.agent_tasks import agent_cohort_tick_role
 
-            agent_cohort_tick_role.delay(int(role.id), activation=False)
+            agent_cohort_tick_role.delay(
+                int(role.id),
+                activation=False,
+                dispatch_role_version=int(audit_to),
+            )
         except Exception:
             logger.exception(
                 "Failed to enqueue resume cycle for role_id=%s", role.id
             )
-            budget_guard.pause_role(
-                db, role=role, reason="agent bootstrap dispatch failed"
+            _compensate_failed_agent_dispatch(
+                db,
+                role_id=int(role.id),
+                dispatched_version=int(audit_to),
+                current_user=current_user,
             )
-            role.agent_bootstrap_status = "failed"
-            role.agent_bootstrap_error = "agent bootstrap dispatch failed"
-            role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
-            db.commit()
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -1808,6 +2083,7 @@ def resume_role_agent(
             )
     return RoleAgentPauseResult(
         role_id=role_id,
+        version=int(role.version or 1),
         paused=role.agent_paused_at is not None,
         resumed=resumed,
         reason=role.agent_paused_reason,
