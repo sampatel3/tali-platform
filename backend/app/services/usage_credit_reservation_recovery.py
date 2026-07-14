@@ -147,9 +147,15 @@ def release_stale_credit_reservations(
         )
         .order_by(BillingCreditLedger.created_at.asc(), BillingCreditLedger.id.asc())
         .limit(batch_limit)
-        .with_for_update(skip_locked=True)
+        # The settlement anti-join has a nullable side, which PostgreSQL will
+        # not lock.  Lease only the base hold rows selected for recovery.
+        .with_for_update(of=BillingCreditLedger, skip_locked=True)
         .all()
     )
+    # Concurrent Beat redeliveries can lease disjoint hold rows for the same
+    # organizations. Acquire the downstream Organization locks in one global
+    # order so two recovery batches cannot form an A->B / B->A deadlock.
+    holds.sort(key=lambda hold: (int(hold.organization_id), int(hold.id)))
 
     released = 0
     released_credits = 0
