@@ -16,6 +16,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services.role_criteria_service import render_role_intent_block
+from ..services.ats_context_service import application_ats_context
 from .urls import application_url, candidate_url, role_url
 
 # Score keys exposed via ``search_applications.score_type`` and
@@ -104,6 +105,7 @@ def application_summary(
     """
     candidate = app.candidate
     role = app.role
+    ats_context = application_ats_context(app)
     return {
         "application_id": app.id,
         "candidate_id": app.candidate_id,
@@ -117,7 +119,9 @@ def application_summary(
         "application_outcome": app.application_outcome,
         "pipeline_stage_updated_at": _isoformat(app.pipeline_stage_updated_at),
         "workable_stage": app.workable_stage,
+        "bullhorn_status": getattr(app, "bullhorn_status", None),
         "external_stage_normalized": app.external_stage_normalized,
+        "ats_context": ats_context,
         "taali_score": app.taali_score_cache_100,
         "pre_screen_score": app.pre_screen_score_100,
         "rank_score": app.rank_score,
@@ -200,6 +204,8 @@ def candidate_detail(candidate: Candidate) -> dict[str, Any]:
                 "pipeline_stage": a.pipeline_stage,
                 "application_outcome": a.application_outcome,
                 "workable_stage": a.workable_stage,
+                "bullhorn_status": getattr(a, "bullhorn_status", None),
+                "ats_context": application_ats_context(a),
                 "taali_score": a.taali_score_cache_100,
                 "pre_screen_score": a.pre_screen_score_100,
                 "frontend_url": application_url(a.id, role_id=a.role_id),
@@ -222,7 +228,9 @@ def comparison_row(app: CandidateApplication) -> dict[str, Any]:
         "pipeline_stage": app.pipeline_stage,
         "application_outcome": app.application_outcome,
         "workable_stage": app.workable_stage,
+        "bullhorn_status": getattr(app, "bullhorn_status", None),
         "external_stage_normalized": app.external_stage_normalized,
+        "ats_context": application_ats_context(app),
         "scores": {
             "taali": app.taali_score_cache_100,
             "pre_screen": app.pre_screen_score_100,

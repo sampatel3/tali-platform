@@ -337,6 +337,18 @@ def run(
     decision.resolution_note = note
     decision.human_disposition = "approved"
 
+    if role is not None:
+        try:
+            from ..agent_runtime import calibration
+
+            calibration.save(db, role=role, updates={"decisions_approved": 1})
+        except Exception:
+            import logging
+
+            logging.getLogger("taali.actions.approve_decision").exception(
+                "approval calibration counter failed (decision_id=%s)", decision.id
+            )
+
     # Realised-outcome learning. The pipeline transition fired by the action
     # dispatch above already ran the outcome_learning hooks, but at that point
     # this decision was still ``processing`` — so the hooks' approved-decision

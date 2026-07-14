@@ -78,6 +78,10 @@ def _make_role(db, org: Organization) -> Role:
         # Phase 7: keep send_assessment auto-execute for these existing
         # tests; HITL behaviour is covered by tests/cohort_planner/.
         auto_promote=True,
+        # Direct-dispatch tests exercise the full legacy catalogue. Production
+        # roles with no explicit allowlist receive the narrower prompt-aligned
+        # default; dedicated governance tests cover that fail-closed behavior.
+        agent_action_allowlist=sorted(tool_registry.GOVERNED_ACTION_TOOL_NAMES),
     )
     db.add(role)
     db.flush()
@@ -223,6 +227,48 @@ def test_agent_tools_catalogue_contains_expected_names():
     }.issubset(names)
 
 
+def test_default_role_tools_hide_legacy_mutations(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_action_allowlist = None
+    names = {tool["name"] for tool in tool_registry.tools_for_role(role)}
+    assert "create_application" not in names
+    assert "post_workable_note" not in names
+    assert "refresh_candidate_graph" not in names
+    assert "get_application" in names
+    assert "agent_run_complete" in names
+
+
+def test_dispatch_enforces_explicit_empty_action_allowlist(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_action_allowlist = []
+    run = _make_agent_run(db, role)
+    result = tool_registry.dispatch(
+        "score_cv", {"application_id": 123}, db=db, agent_run=run, role=role
+    )
+    assert result["status"] == "blocked_by_governance"
+
+
+def test_dispatch_enforces_configured_decision_budget(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_decision_budget_per_cycle = 1
+    app1 = _make_application(db, org=org, role=role, name="A1", email="a1@x.test")
+    app2 = _make_application(db, org=org, role=role, name="A2", email="a2@x.test")
+    run = _make_agent_run(db, role)
+    args = {"reasoning": "Below bar", "evidence": {}, "confidence": 0.9}
+    first = tool_registry.dispatch(
+        "queue_reject_decision", {**args, "application_id": app1.id}, db=db, agent_run=run, role=role
+    )
+    second = tool_registry.dispatch(
+        "queue_reject_decision", {**args, "application_id": app2.id}, db=db, agent_run=run, role=role
+    )
+    assert first["decision_id"]
+    assert second["status"] == "blocked_by_governance"
+    assert "decision budget" in second["reason"]
+
+
 def test_resend_assessment_invite_dispatch_invokes_action(db):
     """Agent's resend tool goes through the shared action when auto_promote=True."""
     org = _make_org(db)
@@ -252,6 +298,48 @@ def test_resend_assessment_invite_dispatch_invokes_action(db):
     assert kwargs["organization_id"] == org.id
     assert kwargs["assessment_id"] == int(assessment.id)
     assert result["status"] == "resent"
+
+
+def test_direct_candidate_contact_is_hard_capped_per_cycle(db):
+    """Auto-promote cannot use the direct path to bypass the one-contact cap."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app1 = _make_application(db, org=org, role=role, name="A1", email="a1@x.test")
+    app2 = _make_application(db, org=org, role=role, name="A2", email="a2@x.test")
+    assessment1 = _make_assessment(db, org=org, role=role, app=app1, token="one")
+    assessment2 = _make_assessment(db, org=org, role=role, app=app2, token="two")
+    run = _make_agent_run(db, role)
+
+    def _result(assessment_id):
+        return type(
+            "_R",
+            (),
+            {"as_dict": lambda self: {"assessment_id": assessment_id, "status": "resent", "detail": None}},
+        )()
+
+    with patch(
+        "app.actions.resend_assessment_invite.run",
+        side_effect=[_result(int(assessment1.id)), _result(int(assessment2.id))],
+    ) as mock_run:
+        first = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": int(assessment1.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+        second = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": int(assessment2.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert first["status"] == "resent"
+    assert second["status"] == "blocked_by_governance"
+    assert "high-risk action cap" in second["reason"]
+    assert mock_run.call_count == 1
 
 
 def test_resend_assessment_invite_dispatch_hitl_gate_queues_decision(db):

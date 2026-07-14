@@ -323,6 +323,9 @@ def test_constraint_change_is_opt_in_then_rescreens(client, db):
         # turn 2 — recruiter confirms → re-screen
         _resp([_tool("t2", "rescreen_role", {})], "tool_use"),
         _resp([_text("Re-screening now.")], "end_turn"),
+        # turn 3 — a consumed receipt cannot be replayed to spend again
+        _resp([_tool("t3", "rescreen_role", {})], "tool_use"),
+        _resp([_text("That confirmation was already used; I need a new preview.")], "end_turn"),
     ]
     with patch(
         "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
@@ -348,6 +351,41 @@ def test_constraint_change_is_opt_in_then_rescreens(client, db):
         assert r2.status_code == 200, r2.text
         assert stale.call_count == 1                              # opt-in → re-screen ran
 
+        r3 = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers, json={"message": "yes again"},
+        )
+        assert r3.status_code == 200, r3.text
+        assert stale.call_count == 1                              # receipt is single-use
+
+
+def test_same_turn_model_confirmation_cannot_start_paid_rescreen(client, db):
+    headers, email = auth_headers(client, organization_name="SameTurnGuardOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    _scored_app(db, org_id, role, score=72, name="Dana")
+    db.commit()
+
+    scripted = [
+        _resp(
+            [_tool("t1", "add_or_update_constraint", {"text": "Must know Rust", "bucket": "must"})],
+            "tool_use",
+        ),
+        # The model tries to manufacture confirmation in the same user turn.
+        _resp([_tool("t2", "rescreen_role", {})], "tool_use"),
+        _resp([_text("I need your confirmation in a new message before I spend.")], "end_turn"),
+    ]
+    with patch(
+        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+    ), patch("app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=1) as stale:
+        response = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "add Rust and rescreen"},
+        )
+    assert response.status_code == 200, response.text
+    stale.assert_not_called()
+
     from app.models.role_criterion import RoleCriterion
 
     chip = (
@@ -355,7 +393,44 @@ def test_constraint_change_is_opt_in_then_rescreens(client, db):
         .filter(RoleCriterion.role_id == role.id, RoleCriterion.deleted_at.is_(None))
         .one()
     )
-    assert "25,000" in chip.text
+    assert chip.text == "Must know Rust"
+
+
+def test_negative_later_message_cannot_be_treated_as_paid_confirmation(client, db):
+    headers, email = auth_headers(client, organization_name="NegativeConfirmOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    _scored_app(db, org_id, role, score=72, name="Dana")
+    db.commit()
+
+    scripted = [
+        _resp(
+            [_tool("t1", "add_or_update_constraint", {"text": "Must know Rust", "bucket": "must"})],
+            "tool_use",
+        ),
+        _resp([_text("This would re-screen one candidate. Run it?")], "end_turn"),
+        # Even if the model misreads the negative response, the server rail
+        # must refuse the paid action.
+        _resp([_tool("t2", "rescreen_role", {})], "tool_use"),
+        _resp([_text("I did not start it.")], "end_turn"),
+    ]
+    with patch(
+        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+    ), patch("app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=1) as stale:
+        first = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "add Rust"},
+        )
+        second = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "no, do not re-screen"},
+        )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    stale.assert_not_called()
 
 
 def test_list_conversations_and_timeline_merge_decision(client, db):

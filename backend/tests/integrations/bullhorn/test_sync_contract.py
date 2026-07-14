@@ -480,7 +480,9 @@ def test_class5_two_orgs_distinct_status_lists_round_trip_independently(db, monk
     db.refresh(app_a)
     db.refresh(app_b)
     assert app_a.bullhorn_status == "Interview Scheduled"
+    assert app_a.external_stage_normalized == "advanced"
     assert app_b.bullhorn_status == "Passed On"
+    assert app_b.external_stage_normalized == "rejected"
 
 
 def test_class5_unmapped_inbound_status_surfaces_needs_mapping_not_guessed(db):
@@ -504,6 +506,7 @@ def test_class5_unmapped_inbound_status_surfaces_needs_mapping_not_guessed(db):
     ).one()
     assert app.pipeline_stage == "applied"  # not guessed forward
     assert app.bullhorn_status == "Bespoke Client Stage"  # raw kept
+    assert app.external_stage_normalized is None  # explicit needs-mapping marker
     assert sm.unmapped_statuses(db, org) == ["Bespoke Client Stage"]  # surfaced
 
 
@@ -758,7 +761,9 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
     # needs-mapping — neither is guessed into a stage.
     by_sub = {a.bullhorn_job_submission_id: a for a in apps}
     assert by_sub[str(s2["id"])].pipeline_stage == "advanced"  # Interview Scheduled → advanced
+    assert by_sub[str(s2["id"])].external_stage_normalized == "advanced"
     assert by_sub[str(s1["id"])].pipeline_stage == "applied"  # New Lead unmapped → funnel top
+    assert by_sub[str(s1["id"])].external_stage_normalized is None
     assert sm.unmapped_statuses(db, org) == ["Bespoke Stage", "New Lead"]
     # The rejected-category status (s3) resolved the outcome.
     assert by_sub[str(s3["id"])].application_outcome == "rejected"

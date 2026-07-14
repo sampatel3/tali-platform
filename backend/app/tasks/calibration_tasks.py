@@ -77,12 +77,9 @@ def recalibrate_cv_match(lookback_days: int = 90) -> dict:
     (recruiter overrides + realized Workable outcomes). Runs nightly AFTER the
     terminal-scoring task so fresh scores are included.
 
-    NOTE: calibrator snapshots are written to local disk. On the single scoring
-    worker this co-locates them with where ``apply_calibrator`` reads at scoring
-    time and they're refit nightly, but they are NOT durable across deploys
-    (graceful fallback: scoring uses the raw score until the next refit). A
-    durable/shared snapshot store (S3/Tigris) is the follow-up to make this
-    deploy-proof and multi-worker-safe.
+    Snapshots are written locally and published to the configured S3-compatible
+    store. Scoring workers use a bounded read-through cache, so a new fit reaches
+    every worker without a deploy while local-only development still works.
     """
     from ..cv_matching.calibrators.recalibrate import recalibrate_all
 

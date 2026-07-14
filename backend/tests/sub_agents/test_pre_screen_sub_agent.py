@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app.sub_agents.base import SubAgentRequest
 from app.sub_agents.pre_screen import PRE_SCREEN_SUB_AGENT
+from app.models.role_criterion import RoleCriterion
 
 from .conftest import make_full_application
 
@@ -69,6 +70,45 @@ def test_runner_invoked_when_no_cached_score(db):
     assert result.ok is True
     assert result.output["score"] == 78.0
     assert result.tokens_used == 250
+
+
+def test_runner_receives_structured_role_requirements(db):
+    org, role, _, app = make_full_application(db)
+    db.add(
+        RoleCriterion(
+            role_id=int(role.id),
+            source="recruiter",
+            ordering=0,
+            weight=1.0,
+            must_have=True,
+            bucket="must",
+            text="Must have production Kubernetes experience",
+        )
+    )
+    db.flush()
+    req = SubAgentRequest(
+        organization_id=int(org.id), application_id=int(app.id), role_id=int(role.id)
+    )
+
+    class _FakePreScreenResult:
+        decision = "yes"
+        reason = "ok"
+        score = 80.0
+        cache_hit = False
+        input_tokens = 1
+        output_tokens = 1
+        cache_read_tokens = 0
+        cache_creation_tokens = 0
+
+    with patch(
+        "app.sub_agents.pre_screen.run_pre_screen", return_value=_FakePreScreenResult()
+    ) as runner:
+        PRE_SCREEN_SUB_AGENT.run(req, db=db)
+
+    requirements = runner.call_args.args[2]
+    assert len(requirements) == 1
+    assert requirements[0].requirement == "Must have production Kubernetes experience"
+    assert str(requirements[0].priority.value) == "must_have"
 
 
 def test_metering_context_is_forwarded_to_runner(db):

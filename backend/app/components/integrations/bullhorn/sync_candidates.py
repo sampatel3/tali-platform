@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 from ....domains.assessments_runtime.pipeline_service import (
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
+    normalize_pipeline_key,
     transition_outcome,
     transition_stage,
 )
@@ -189,12 +190,21 @@ def _apply_stage_mapping(
     app.bullhorn_status = sanitize_text_for_storage(remote_status) if remote_status else None
     app.external_stage_raw = sanitize_text_for_storage(remote_status) if remote_status else None
 
-    if is_resolved(app):
-        # Frozen: keep the remote status current for the trail, but do not move
-        # the Taali stage or re-open a decision.
-        return
+    # Clear first so a newly-unmapped Bullhorn status cannot retain a stale
+    # normalized stage from the previous sync.  Agent payloads treat
+    # raw-without-normalized as needs_mapping and fail closed for automation.
+    app.external_stage_normalized = None
 
     mapping = stage_map_mod.resolve_stage(db, org, remote_status)
+    if mapping is not None:
+        app.external_stage_normalized = normalize_pipeline_key(mapping.taali_stage)
+
+    if is_resolved(app):
+        # Frozen: keep the remote status current for the trail, but do not move
+        # the Taali stage or re-open a decision. The normalized read context is
+        # still refreshed above so agents do not call a known status unmapped.
+        return
+
     if mapping is None:
         # needs-mapping: do NOT guess. A freshly-created row already sits at the
         # funnel top from the create defaults; an existing row is left where the

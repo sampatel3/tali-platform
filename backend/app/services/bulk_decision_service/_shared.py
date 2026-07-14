@@ -22,6 +22,7 @@ from ...decision_policy.engine import DecisionInputs, evaluate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ..auto_threshold_service import resolve_role_fit_threshold
+from ..decision_evidence_service import must_have_blocked
 
 logger = logging.getLogger("taali.bulk_decision")
 
@@ -84,7 +85,7 @@ def _inputs_for(app, *, role_id, org_id, eff, has_task):
             "no_pending_assessment": True,
             "has_pending_assessment": False,
             "assessment_completed": False,
-            "must_have_blocked": False,
+            "must_have_blocked": must_have_blocked(app),
             "has_assessment_task": has_task,
         },
         effective_role_fit_threshold=eff,

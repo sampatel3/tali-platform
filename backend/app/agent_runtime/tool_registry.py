@@ -2004,6 +2004,125 @@ QUEUE_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Runtime-enforced governance.  Read-only grounding tools and the terminal tool
+# are always available; everything below can spend money, mutate state, enqueue
+# work, or contact a candidate/recruiter and therefore must pass the role's
+# action allowlist.  The default mirrors the system-prompt allowlist and
+# deliberately excludes the legacy create_application / post_workable_note /
+# refresh_candidate_graph tools until a role opts into them explicitly.
+GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "nl_search_candidates",
+        "graph_search_candidates",
+        "get_cohort_signals",
+        "score_cv",
+        "batch_score_cv",
+        "send_assessment",
+        "resend_assessment_invite",
+        "create_application",
+        "post_workable_note",
+        "refresh_candidate_graph",
+        "queue_advance_decision",
+        "queue_reject_decision",
+        "queue_skip_assessment_reject_decision",
+        "evaluate_policy",
+        "ask_recruiter",
+        "record_observation",
+    }
+)
+
+DEFAULT_AGENT_ACTION_ALLOWLIST: frozenset[str] = GOVERNED_ACTION_TOOL_NAMES.difference(
+    {"create_application", "post_workable_note", "refresh_candidate_graph"}
+)
+
+_HIGH_RISK_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
+    {"queue_advance_decision", "send_assessment", "resend_assessment_invite"}
+)
+_REJECT_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
+    {"queue_reject_decision", "queue_skip_assessment_reject_decision"}
+)
+MAX_HIGH_RISK_DECISIONS_PER_CYCLE = 1
+MAX_REJECT_DECISIONS_PER_CYCLE = 5
+
+
+def action_allowlist_for_role(role: Role) -> frozenset[str]:
+    """Resolve a role's explicit action allowlist or the safe platform default."""
+    configured = getattr(role, "agent_action_allowlist", None)
+    if configured is None:
+        return DEFAULT_AGENT_ACTION_ALLOWLIST
+    if not isinstance(configured, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(str(name).strip() for name in configured if str(name).strip())
+
+
+def tools_for_role(role: Role) -> list[dict[str, Any]]:
+    """Hide disallowed governed tools as well as blocking them at dispatch."""
+    allowed = action_allowlist_for_role(role)
+    return [
+        tool
+        for tool in AGENT_TOOLS
+        if tool.get("name") not in GOVERNED_ACTION_TOOL_NAMES
+        or tool.get("name") in allowed
+    ]
+
+
+def _governed_action_counts(agent_run: AgentRun) -> dict[str, int]:
+    counts = getattr(agent_run, "__governed_action_counts__", None)
+    if not isinstance(counts, dict):
+        counts = {"high_risk": 0, "reject": 0}
+        agent_run.__governed_action_counts__ = counts  # type: ignore[attr-defined]
+    return counts
+
+
+def _governed_action_key(name: str, arguments: dict[str, Any]) -> tuple[str, int]:
+    """Stable per-subject key for idempotent repeats within one cycle."""
+    subject_id = arguments.get("application_id")
+    if subject_id is None:
+        subject_id = arguments.get("assessment_id")
+    try:
+        normalized_id = int(subject_id or 0)
+    except (TypeError, ValueError):
+        normalized_id = 0
+    return name, normalized_id
+
+
+def _governance_block_reason(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    agent_run: AgentRun,
+    role: Role,
+) -> str | None:
+    if name in GOVERNED_ACTION_TOOL_NAMES and name not in action_allowlist_for_role(role):
+        return f"tool '{name}' is not allowed by role.agent_action_allowlist"
+
+    if name in QUEUE_DECISION_TOOL_NAMES:
+        decision_key = _governed_action_key(name, arguments)
+        prior_keys = getattr(agent_run, "__governed_decision_keys__", set())
+        is_exact_repeat = decision_key in prior_keys
+        configured_budget = getattr(role, "agent_decision_budget_per_cycle", None)
+        if (
+            configured_budget is not None
+            and int(agent_run.decisions_emitted or 0) >= int(configured_budget)
+            and not is_exact_repeat
+        ):
+            return f"per-cycle decision budget reached ({int(configured_budget)})"
+
+        counts = _governed_action_counts(agent_run)
+        if (
+            name in _HIGH_RISK_DECISION_TOOL_NAMES
+            and counts["high_risk"] >= MAX_HIGH_RISK_DECISIONS_PER_CYCLE
+            and not is_exact_repeat
+        ):
+            return "per-cycle high-risk action cap reached (1 send/advance)"
+        if (
+            name in _REJECT_DECISION_TOOL_NAMES
+            and counts["reject"] >= MAX_REJECT_DECISIONS_PER_CYCLE
+            and not is_exact_repeat
+        ):
+            return "per-cycle reject action cap reached (5)"
+    return None
+
 
 _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "get_application": _tool_get_application,
@@ -2046,7 +2165,34 @@ def dispatch(
     handler = _HANDLER_BY_NAME.get(name)
     if handler is None:
         raise KeyError(f"unknown agent tool: {name}")
-    return handler(db, agent_run=agent_run, role=role, args=arguments or {})
+    args = arguments or {}
+    blocked = _governance_block_reason(name, args, agent_run=agent_run, role=role)
+    if blocked is not None:
+        return {
+            "status": "blocked_by_governance",
+            "tool": name,
+            "reason": blocked,
+            "instruction": "Choose an allowed action or call agent_run_complete.",
+        }
+
+    before = int(agent_run.decisions_emitted or 0)
+    result = handler(db, agent_run=agent_run, role=role, args=args)
+    new_decision = int(agent_run.decisions_emitted or 0) > before
+    result_status = str(result.get("status") or "") if isinstance(result, dict) else ""
+    direct_candidate_contact = (
+        (name == "send_assessment" and result_status == "sent")
+        or (name == "resend_assessment_invite" and result_status == "resent")
+    )
+    if name in QUEUE_DECISION_TOOL_NAMES and (new_decision or direct_candidate_contact):
+        counts = _governed_action_counts(agent_run)
+        prior_keys = getattr(agent_run, "__governed_decision_keys__", set())
+        prior_keys.add(_governed_action_key(name, args))
+        agent_run.__governed_decision_keys__ = prior_keys  # type: ignore[attr-defined]
+        if name in _HIGH_RISK_DECISION_TOOL_NAMES:
+            counts["high_risk"] += 1
+        elif name in _REJECT_DECISION_TOOL_NAMES:
+            counts["reject"] += 1
+    return result
 
 
 def is_run_complete(result: Any) -> bool:

@@ -335,13 +335,13 @@ def test_tool_error_emits_is_error_frame(db):
 
 
 def test_max_tool_rounds_guard(db):
-    """Eight rounds of tool_use without a final answer should bail out cleanly."""
+    """A repeated identical tool plan should trip the no-progress breaker early."""
     user, org = _seed_user(db)
     plans = [
         _tool_use_plan(
             tool_id=f"toolu_{i}", tool_name="list_roles", args={}
         )
-        for i in range(20)  # generous; service should stop at MAX_TOOL_ROUNDS
+        for i in range(20)  # generous; the no-progress breaker should stop it
     ]
     fake_client = _FakeClient(plans)
 
@@ -357,10 +357,11 @@ def test_max_tool_rounds_guard(db):
             )
         )
 
-    # Expect at most MAX_TOOL_ROUNDS Anthropic calls.
-    from app.taali_chat.service import MAX_TOOL_ROUNDS
+    from app.taali_chat.service import MAX_IDENTICAL_TOOL_ROUNDS
 
-    assert len(fake_client.messages.calls) == MAX_TOOL_ROUNDS
+    # First call plus the configured number of identical retries. The final
+    # repeated response is paid/metered but its duplicate tool is not run.
+    assert len(fake_client.messages.calls) == MAX_IDENTICAL_TOOL_ROUNDS + 1
     assert any(f.startswith("3:") for f in frames), "expected error frame on guard trip"
     assert any(f.startswith("d:") for f in frames)
 

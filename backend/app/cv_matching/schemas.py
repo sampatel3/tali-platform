@@ -486,6 +486,10 @@ class CVMatchOutput(BaseModel):
     # c=fix). Empty on legacy engines; resolve_engine_version() maps those
     # from prompt_version. Surfaced under the score everywhere as provenance.
     engine_version: str = ""
+    # Stable family key used by the calibration extractor and runtime lookup.
+    # Persisting the exact synthesized id avoids trying to reconstruct it later
+    # from a mutable role name.
+    archetype_id: str | None = None
     skills_match_score: float = Field(default=0.0, ge=0, le=100)
     experience_relevance_score: float = Field(default=0.0, ge=0, le=100)
     dimension_scores: DimensionScores | None = None

@@ -21,6 +21,7 @@ Bounded by ``MAX_TOOL_ROUNDS`` so a runaway loop can't drain credits.
 from __future__ import annotations
 
 import logging
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -44,7 +45,7 @@ from ..platform.config import settings
 from ..llm.tool_pairs import sanitize_tool_pairs
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
-from ..services.usage_metering_service import record_event
+from ..services.usage_metering_service import InsufficientCreditsError, record_event, reserve
 from .system_prompt import PROMPT_VERSION, build_system_blocks
 from .tools import AGENT_CHAT_TOOLS, CARD_TYPES, MUTATION_CARD_TYPES, dispatch_tool
 
@@ -59,6 +60,8 @@ MAX_TOOL_ROUNDS = 8
 # analytical answers room; the terminal turn also appends a "say continue" note
 # if it still hits the ceiling, so the user never sees a bare mid-word cutoff.
 MAX_TOKENS_PER_ROUND = 4096
+MAX_IDENTICAL_TOOL_ROUNDS = 2
+MAX_CONSECUTIVE_ERROR_ROUNDS = 2
 
 
 def _extract_text(blocks: list[dict[str, Any]]) -> str:
@@ -187,16 +190,36 @@ def run_agent_response(
 
     usage = CallUsage()
     trace_id = uuid.uuid4().hex
-    # Skip the wrapper's per-call UsageEvent; we record one aggregate below
-    # (the orchestrator's metering pattern). claude_call_log rows still land.
-    meter = MeteringContext.skipped(metered_by="agent_chat", trace_id=trace_id)
+    # Per-call metering is independently committed by the wrapper, so a failed
+    # chat transaction cannot erase spend attribution.
+    meter = MeteringContext(
+        feature=Feature.AGENT_CHAT,
+        organization_id=int(organization.id),
+        role_id=int(role.id),
+        entity_id=str(conversation.id),
+        user_id=int(user.id),
+        trace_id=trace_id,
+    )
 
     collected_cards: list[dict[str, Any]] = []
     final_text = ""
     final_stop = None
     assistant_row: AgentConversationMessage | None = None
+    previous_tool_signature: str | None = None
+    identical_tool_rounds = 0
+    consecutive_error_rounds = 0
 
     for _round in range(MAX_TOOL_ROUNDS):
+        try:
+            reserve(
+                db,
+                organization_id=int(organization.id),
+                feature=Feature.AGENT_CHAT,
+            )
+        except InsufficientCreditsError:
+            final_text = "This organization does not have enough credits for another agent step."
+            final_stop = "insufficient_credits"
+            break
         try:
             response = one_call(
                 client,
@@ -245,12 +268,35 @@ def run_agent_response(
         )
 
         tool_results: list[dict[str, Any]] = []
+        signature = json.dumps(
+            [
+                {"name": b.get("name"), "input": b.get("input") or {}}
+                for b in blocks
+                if b.get("type") == "tool_use"
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if signature == previous_tool_signature:
+            identical_tool_rounds += 1
+        else:
+            identical_tool_rounds = 0
+        previous_tool_signature = signature
+        if identical_tool_rounds >= MAX_IDENTICAL_TOOL_ROUNDS:
+            final_text = "I stopped a repeated tool loop before it could waste more credits."
+            final_stop = "circuit_breaker"
+            break
+
+        tool_count = 0
+        error_count = 0
         for block in blocks:
             if block.get("type") != "tool_use":
                 continue
             tool_use_id = str(block.get("id") or "")
             name = str(block.get("name") or "")
             args = block.get("input") or {}
+            tool_count += 1
             try:
                 result = dispatch_tool(
                     name, args, db=db, role=role, user=user, conversation=conversation
@@ -262,13 +308,14 @@ def run_agent_response(
                 logger.exception("agent_chat tool %s failed: %s", name, exc)
                 result = {"error": str(exc), "tool": name}
                 is_error = True
-            import json as _json
+            if is_error:
+                error_count += 1
 
             tool_results.append(
                 {
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,
-                    "content": _json.dumps(result, default=str),
+                    "content": json.dumps(result, default=str),
                     "is_error": is_error,
                 }
             )
@@ -281,6 +328,14 @@ def run_agent_response(
             kind=MESSAGE_KIND_TOOL,
         )
         messages.append({"role": "user", "content": tool_results})
+        if tool_count > 0 and error_count == tool_count:
+            consecutive_error_rounds += 1
+        else:
+            consecutive_error_rounds = 0
+        if consecutive_error_rounds >= MAX_CONSECUTIVE_ERROR_ROUNDS:
+            final_text = "I stopped after repeated tool errors. Please try a narrower request."
+            final_stop = "circuit_breaker"
+            break
     else:
         # Exhausted rounds without a terminal answer.
         final_text = (
@@ -314,24 +369,6 @@ def run_agent_response(
     conversation.last_message_at = now
     conversation.updated_at = now
     db.flush()
-
-    try:
-        record_event(
-            db,
-            organization_id=int(organization.id),
-            feature=Feature.AGENT_CHAT,
-            model=model,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cache_read_tokens=usage.cache_read_tokens,
-            cache_creation_tokens=usage.cache_creation_tokens,
-            user_id=int(user.id),
-            role_id=int(role.id),
-            entity_id=str(conversation.id),
-            metadata={"feature": "agent_chat", "prompt_version": PROMPT_VERSION},
-        )
-    except Exception:
-        logger.exception("agent_chat: failed to record usage_event")
 
     return assistant_row
 

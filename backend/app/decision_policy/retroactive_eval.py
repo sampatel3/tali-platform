@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.role import Role
+from ..services.decision_evidence_service import must_have_blocked
 from .engine import DecisionInputs, evaluate
 
 
@@ -146,7 +147,7 @@ def disagreement_for_manual_event(
             "has_pending_assessment": False,
             "no_pending_assessment": True,
             "assessment_completed": app.assessment_score_cache_100 is not None,
-            "must_have_blocked": False,
+            "must_have_blocked": must_have_blocked(app),
         },
         manual_actions=[],  # disable skip — we WANT the policy to opine
     )

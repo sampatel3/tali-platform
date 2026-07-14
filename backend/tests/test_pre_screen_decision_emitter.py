@@ -549,6 +549,43 @@ def test_evaluate_auto_reject_triggers_on_agent_off_role_as_card_only(db):
     assert verdict["auto_disqualify_eligible"] is False  # card only — no Workable write-back
 
 
+def test_bullhorn_post_handover_candidate_is_never_auto_disqualified(db):
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    role.score_threshold = 50
+    role.auto_reject = True
+    app.bullhorn_job_submission_id = "js-advanced"
+    app.bullhorn_status = "Interview Scheduled"
+    app.external_stage_raw = "Interview Scheduled"
+    app.external_stage_normalized = "advanced"
+    app.pipeline_stage = "advanced"
+    app.pre_screen_recommendation = "Below threshold"
+    db.flush()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is True  # still carded for human review
+    assert verdict["auto_disqualify_eligible"] is False
+
+
+def test_unmapped_bullhorn_status_fails_closed_to_hitl(db):
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    role.score_threshold = 50
+    role.auto_reject = True
+    app.bullhorn_job_submission_id = "js-unmapped"
+    app.bullhorn_status = "Bespoke Client Review"
+    app.external_stage_raw = "Bespoke Client Review"
+    app.external_stage_normalized = None
+    app.pre_screen_recommendation = "Below threshold"
+    db.flush()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is True
+    assert verdict["auto_disqualify_eligible"] is False
+
+
 def test_evaluate_auto_reject_defers_when_fully_scored(db):
     """Once cv_match scoring has run, the pre-screen gate must defer to the
     agent's cv_match decision rather than firing on the (overwritten) score."""

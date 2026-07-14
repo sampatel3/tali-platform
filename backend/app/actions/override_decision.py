@@ -318,6 +318,18 @@ def run(
     decision.resolution_note = note
     decision.human_disposition = "overridden"
 
+    if role is not None:
+        try:
+            from ..agent_runtime import calibration
+
+            calibration.save(db, role=role, updates={"decisions_overridden": 1})
+        except Exception:
+            import logging
+
+            logging.getLogger("taali.actions.override_decision").exception(
+                "override calibration counter failed (decision_id=%s)", decision.id
+            )
+
     # Best-effort side effects (Workable writeback + recruiter-action graph
     # episode). Run inline by default; deferred to a Celery task when the
     # route passes ``collect_side_effects`` so the recruiter's click returns

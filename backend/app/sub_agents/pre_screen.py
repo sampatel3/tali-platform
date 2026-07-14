@@ -26,6 +26,7 @@ from ..services.fraud_detection import (
     build_fraud_signals_payload,
     detect_cv_copy_paste,
 )
+from ..services.role_requirement_service import build_pre_screen_requirements
 from ..services.workable_context_service import format_workable_context
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
@@ -190,6 +191,7 @@ class PreScreenSubAgent:
         result = run_pre_screen(
             cv_text,
             jd_text,
+            build_pre_screen_requirements(role),
             skip_cache=req.skip_cache,
             workable_context=workable_context or None,
             # Without this the runner falls back to metering={"skip": True}

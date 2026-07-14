@@ -229,31 +229,9 @@ def execute_pre_screen_only(
 
     from ..cv_matching import MODEL_VERSION as PRE_SCREEN_MODEL_VERSION
     from ..cv_matching.runner_pre_screen import run_pre_screen
-    from ..cv_matching.schemas import Priority, RequirementInput
+    from .role_requirement_service import build_pre_screen_requirements
 
-    requirements: list[RequirementInput] = []
-    for c in sorted((role.criteria or []), key=lambda c: getattr(c, "ordering", 0)):
-        if getattr(c, "deleted_at", None) is not None:
-            continue
-        text = str(c.text or "").strip()
-        if not text:
-            continue
-        bucket = str(getattr(c, "bucket", None) or ("must" if bool(c.must_have) else "preferred"))
-        # Constraints (timezone, start date, etc.) are pass/fail filters about
-        # logistics, not candidate quality. We surface them with MUST_HAVE
-        # priority so the pre-screen call flags mismatches prominently — the
-        # agent can decide whether the constraint is fatal or worth a chat.
-        if bucket in ("must", "constraint"):
-            priority = Priority.MUST_HAVE
-        else:
-            priority = Priority.STRONG_PREFERENCE
-        requirements.append(
-            RequirementInput(
-                id=f"crit_{int(c.id)}",
-                requirement=text,
-                priority=priority,
-            )
-        )
+    requirements = build_pre_screen_requirements(role)
 
     # Workable metadata (questionnaire answers, recruiter comments,
     # activity log, structured profile) often carries hard-constraint

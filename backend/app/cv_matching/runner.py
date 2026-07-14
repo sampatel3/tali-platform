@@ -403,6 +403,7 @@ def run_cv_match(
 
     output = CVMatchOutput(
         prompt_version=PROMPT_VERSION,
+        archetype_id=archetype.archetype_id if archetype is not None else None,
         skills_match_score=skills_match,
         experience_relevance_score=experience_relevance,
         dimension_scores=parsed.dimension_scores,

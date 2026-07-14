@@ -33,6 +33,7 @@ from ..decision_policy.schema import PolicyJson
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services.auto_threshold_service import resolve_role_fit_threshold
+from ..services.decision_evidence_service import must_have_blocked
 from ..sub_agents.base import SubAgentRequest, SubAgentResult
 from ..sub_agents.registry import get_sub_agent
 from .decision_translation import role_has_assessment_stage
@@ -176,10 +177,7 @@ def _flags_from_application(
         "assessment_completed": (
             scores.get("assessment_score") is not None
         ),
-        # ``must_have_blocked`` defaults False; the orchestrator can
-        # set it True from intent_parser ``disqualifying_signals`` once
-        # the matching pass is implemented (Phase 5+).
-        "must_have_blocked": False,
+        "must_have_blocked": must_have_blocked(app),
         "has_assessment_task": role_has_assessment_stage(role),
     }
 
@@ -300,13 +298,16 @@ def evaluate_for_application(
         "confidence": float(graph_output.get("confidence", 0.0) or 0.0),
     }
 
+    resolved_intent = parsed_intent or (
+        role_intent_extra.get("structured", {}) if role_intent_extra else {}
+    )
     inputs = DecisionInputs(
         application_id=int(application_id),
         role_id=int(role.id),
         organization_id=int(role.organization_id),
         scores=scores,
         graph_priors=graph_priors,
-        intent=parsed_intent or {},
+        intent=resolved_intent,
         flags=flags,
         manual_actions=actions,
         effective_role_fit_threshold=resolve_role_fit_threshold(db, role=role),

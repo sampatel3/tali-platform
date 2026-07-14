@@ -30,6 +30,12 @@ from . import draft_tasks as _draft_tasks
 from . import health as _health
 from . import impact as _impact
 from . import rescore as _rescore
+from .confirmations import (
+    attach_confirmation,
+    blocked_confirmation_result,
+    mark_confirmation_consumed,
+    require_later_turn_confirmation,
+)
 
 
 # Card payload ``type`` values the engine surfaces in message.actions.
@@ -66,8 +72,9 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "List candidates on this role by bucket, best score first. bucket: "
             "'above'/'below' (the effective threshold), 'advanced', 'rejected', "
             "'pending' (awaiting a decision), or 'all' (open apps). Each candidate "
-            "returns name, pre-screen score, Taali pipeline stage, AND its synced "
-            "`workable_stage` (e.g. 'Final Interview', 'Technical Interview'). Pass "
+            "returns name, pre-screen score, Taali pipeline stage, and a normalized "
+            "`ats_context` for native, Workable, or Bullhorn. It also returns the "
+            "synced `workable_stage` for Workable roles. Pass "
             "`workable_stage` to filter to a specific Workable stage — that's how you "
             "answer 'who's in final interview?' (Taali's pipeline_stage does NOT track "
             "Workable's interview stages; workable_stage is the source of truth). You can "
@@ -481,13 +488,17 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
     )
     funnel = {str(stage or "unknown"): int(n) for stage, n in stage_rows}
 
-    # Synced Workable-stage breakdown of the OPEN pool — Taali's pipeline_stage
-    # doesn't track Workable's internal interview stages, so this is how the agent
-    # answers "who's in final/technical interview". Counts the live (open) apps.
+    # Provider-neutral external-stage breakdown of the open pool.  Keep the
+    # Workable-specific field for backwards compatibility with the existing UI.
     workable_funnel: dict[str, int] = {}
+    ats_stage_funnel: dict[str, int] = {}
     for r in rows:
         key = r.workable_stage or "(unsynced)"
         workable_funnel[key] = workable_funnel.get(key, 0) + 1
+        provider = "bullhorn" if r.bullhorn_status else "workable" if r.workable_stage else "native"
+        raw_stage = r.bullhorn_status or r.workable_stage or r.pipeline_stage or "(unsynced)"
+        ats_key = f"{provider}:{raw_stage}"
+        ats_stage_funnel[ats_key] = ats_stage_funnel.get(ats_key, 0) + 1
 
     pending_rows = (
         db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
@@ -520,6 +531,7 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
         "constraints": _constraints.list_constraints(role),
         "funnel": funnel,
         "workable_stage_funnel": workable_funnel,
+        "ats_stage_funnel": ats_stage_funnel,
         "open_candidates": len(rows),
         "above_threshold": len(above),
         "below_threshold": len(below),
@@ -605,6 +617,14 @@ def _list_candidates(
         chosen = [r for r in chosen if _comment_match(r.comments, cc)]
 
     chosen = sorted(chosen, key=lambda r: (r.score if r.score is not None else -1), reverse=True)
+    from ..services.ats_context_service import application_ats_context
+
+    apps_by_id = {
+        int(app.id): app
+        for app in db.query(CandidateApplication)
+        .filter(CandidateApplication.id.in_([r.application_id for r in chosen[: int(limit)]] or [-1]))
+        .all()
+    }
     return {
         "bucket": bucket,
         "workable_stage_filter": workable_stage or None,
@@ -618,6 +638,8 @@ def _list_candidates(
                 "score": r.score,
                 "stage": r.pipeline_stage,
                 "workable_stage": r.workable_stage,
+                "bullhorn_status": r.bullhorn_status,
+                "ats_context": application_ats_context(apps_by_id[r.application_id]),
                 "pending_decision": r.pending_decision_type,
                 **({"comments": _compact_comments(r.comments)} if want_comments else {}),
             }
@@ -753,6 +775,12 @@ def dispatch_tool(
         )
         if result.get("invalidates_scores"):
             result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
+            estimate = result["would_rescreen"]
+            result = attach_confirmation(
+                result,
+                operation="rescreen_role",
+                payload={"role_id": int(role.id), "max_count": int(estimate.get("count") or 0)},
+            )
         return result
     if name == "remove_constraint":
         result = _constraints.remove_constraint(
@@ -760,24 +788,100 @@ def dispatch_tool(
         )
         if result.get("invalidates_scores"):
             result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
+            estimate = result["would_rescreen"]
+            result = attach_confirmation(
+                result,
+                operation="rescreen_role",
+                payload={"role_id": int(role.id), "max_count": int(estimate.get("count") or 0)},
+            )
         return result
     if name == "update_job_spec":
-        return _constraints.update_job_spec(
+        result = _constraints.update_job_spec(
             db, role, job_spec_text=str(args.get("job_spec_text") or "")
         )
+        if isinstance(result, dict) and result.get("would_rescreen"):
+            estimate = result["would_rescreen"]
+            result = attach_confirmation(
+                result,
+                operation="rescreen_role",
+                payload={"role_id": int(role.id), "max_count": int(estimate.get("count") or 0)},
+            )
+        return result
     if name == "rescreen_role":
+        if conversation is not None:
+            check = require_later_turn_confirmation(
+                db,
+                conversation=conversation,
+                operation="rescreen_role",
+                token=str(args.get("confirmation_token") or "") or None,
+            )
+            if not check.ok:
+                return blocked_confirmation_result("rescreen_role", check.reason)
+            if int(check.payload.get("role_id") or 0) != int(role.id):
+                return blocked_confirmation_result("rescreen_role", "The preview belongs to a different role.")
+            current = _constraints.estimate_rescreen(db, role)
+            if int(current.get("count") or 0) > int(check.payload.get("max_count") or 0):
+                return attach_confirmation(
+                    {
+                        "type": "rescreen_preview",
+                        "would_rescreen": current,
+                        "message": "The candidate count increased since approval; please confirm the updated scope.",
+                    },
+                    operation="rescreen_role",
+                    payload={"role_id": int(role.id), "max_count": int(current.get("count") or 0)},
+                )
         result = _constraints.rescreen_role(db, role)
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+        if conversation is not None:
+            result = mark_confirmation_consumed(result, check=check)
         return result
     if name == "rescore_candidates":
-        return _rescore.rescore_candidates(
+        confirm = bool(args.get("confirm") or False)
+        common = {
+            "scope": str(args.get("scope") or "all"),
+            "limit": int(args["limit"]) if args.get("limit") is not None else 10,
+            "threshold": float(args["threshold"]) if args.get("threshold") is not None else None,
+        }
+        if confirm and conversation is not None:
+            check = require_later_turn_confirmation(
+                db,
+                conversation=conversation,
+                operation="rescore_candidates",
+                token=str(args.get("confirmation_token") or "") or None,
+            )
+            if not check.ok:
+                return blocked_confirmation_result("rescore_candidates", check.reason)
+            current = _rescore.rescore_candidates(db, role, confirm=False, **common)
+            approved_scope = {
+                "scope": check.payload.get("scope"),
+                "limit": check.payload.get("limit"),
+                "threshold": check.payload.get("threshold"),
+            }
+            if (
+                int(check.payload.get("role_id") or 0) != int(role.id)
+                or approved_scope != common
+                or int(current.get("selected_count") or 0) > int(check.payload.get("max_count") or 0)
+            ):
+                return attach_confirmation(
+                    current,
+                    operation="rescore_candidates",
+                    payload={"role_id": int(role.id), "max_count": int(current.get("selected_count") or 0), **common},
+                )
+        result = _rescore.rescore_candidates(
             db,
             role,
-            scope=str(args.get("scope") or "all"),
-            limit=int(args["limit"]) if args.get("limit") is not None else 10,
-            threshold=float(args["threshold"]) if args.get("threshold") is not None else None,
-            confirm=bool(args.get("confirm") or False),
+            confirm=confirm,
+            **common,
         )
+        if confirm and conversation is not None:
+            result = mark_confirmation_consumed(result, check=check)
+        if not confirm and isinstance(result, dict) and result.get("type") == "rescore_preview":
+            result = attach_confirmation(
+                result,
+                operation="rescore_candidates",
+                payload={"role_id": int(role.id), "max_count": int(result.get("selected_count") or 0), **common},
+            )
+        return result
     if name == "get_criterion_breakdown":
         return _assessments.criterion_breakdown(db, role, int(args["criterion_id"]))
     if name == "rescreen_scoped":
@@ -788,11 +892,60 @@ def dispatch_tool(
         ids = [a["application_id"] for a in affected]
         if not ids:
             return {"type": "rescreen_started", "rescreening_count": 0, "scoped": True}
+        if conversation is not None:
+            check = require_later_turn_confirmation(
+                db,
+                conversation=conversation,
+                operation="rescreen_scoped",
+                token=str(args.get("confirmation_token") or "") or None,
+            )
+            if not check.ok:
+                return attach_confirmation(
+                    {
+                        "type": "rescreen_preview",
+                        "criterion_id": int(args["criterion_id"]),
+                        "statuses": list(statuses),
+                        "selected_count": len(ids),
+                        "est_cost_usd": round(len(ids) * 0.05, 2),
+                        "message": check.reason,
+                    },
+                    operation="rescreen_scoped",
+                    payload={
+                        "role_id": int(role.id),
+                        "criterion_id": int(args["criterion_id"]),
+                        "statuses": list(statuses),
+                        "max_count": len(ids),
+                    },
+                )
+            approved_statuses = tuple(str(s) for s in (check.payload.get("statuses") or []))
+            if (
+                int(check.payload.get("role_id") or 0) != int(role.id)
+                or int(check.payload.get("criterion_id") or 0) != int(args["criterion_id"])
+                or approved_statuses != statuses
+                or len(ids) > int(check.payload.get("max_count") or 0)
+            ):
+                return attach_confirmation(
+                    {
+                        "type": "rescreen_preview",
+                        "selected_count": len(ids),
+                        "est_cost_usd": round(len(ids) * 0.05, 2),
+                        "message": "The scope increased since approval; please confirm the updated count.",
+                    },
+                    operation="rescreen_scoped",
+                    payload={
+                        "role_id": int(role.id),
+                        "criterion_id": int(args["criterion_id"]),
+                        "statuses": list(statuses),
+                        "max_count": len(ids),
+                    },
+                )
         result = _constraints.rescreen_role(
             db, role, application_ids=ids,
             reason=f"agent_chat:scoped_rescreen:crit_{args['criterion_id']}",
         )
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+        if conversation is not None:
+            result = mark_confirmation_consumed(result, check=check)
         return result
     if name == "search_candidates":
         # Reuse the Search page's candidate search (Graphiti/GraphRAG via the MCP

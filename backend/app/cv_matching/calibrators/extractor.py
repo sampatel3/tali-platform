@@ -9,11 +9,9 @@ We avoid pandas to keep the cv_matching package numpy-free; records
 are plain dataclasses. A caller that wants pandas can convert the
 list themselves with ``pandas.DataFrame([asdict(r) for r in rows])``.
 
-Role-family resolution: the override table doesn't directly carry
-role_family, so the extractor delegates that mapping to a callable
-the caller supplies. The default mapper slugifies the role title.
-That's a reasonable starting point until role-archetype tagging is
-formalised — see the v4 roadmap for the formalisation plan.
+Role-family resolution prefers the exact ``archetype_id`` persisted in the
+score details, matching the key runtime calibration uses. Legacy rows fall
+back to a slug of ``Role.name``.
 """
 
 from __future__ import annotations
@@ -70,6 +68,13 @@ def _default_role_family_mapper(role_title: str | None) -> str:
     s = role_title.strip().lower()
     s = re.sub(r"[^a-z0-9]+", "_", s)
     return s.strip("_") or "unknown"
+
+
+def _role_family_for(details: dict, role, mapper: Callable[[str | None], str]) -> str:
+    """Use the persisted runtime key; fall back to the legacy role-name slug."""
+    return str(details.get("archetype_id") or "").strip() or mapper(
+        getattr(role, "name", None)
+    )
 
 
 def _classify_recruiter_action(
@@ -137,11 +142,11 @@ def extract_records(
 
         override_records: list[CalibrationRecord] = []
         for override, app, role in q.all():
-            role_family = mapper(getattr(role, "title", None))
+            details = getattr(app, "cv_match_details", {}) or {}
+            role_family = _role_family_for(details, role, mapper)
             if role_family_filter and role_family != role_family_filter:
                 continue
 
-            details = getattr(app, "cv_match_details", {}) or {}
             raw_scores = _extract_raw_scores(details, override)
             if not raw_scores:
                 continue
@@ -249,10 +254,10 @@ def _extract_outcome_records(
         action = _outcome_action(app)
         if action is None:
             continue
-        role_family = mapper(getattr(role, "title", None))
+        details = getattr(app, "cv_match_details", {}) or {}
+        role_family = _role_family_for(details, role, mapper)
         if role_family_filter and role_family != role_family_filter:
             continue
-        details = getattr(app, "cv_match_details", {}) or {}
         raw_scores = _extract_raw_scores(details, None)
         if not raw_scores:
             continue
