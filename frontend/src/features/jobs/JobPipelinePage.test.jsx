@@ -46,6 +46,7 @@ vi.mock('../../shared/api', () => ({
     deleteCriterion: vi.fn(),
     syncCriteriaWithWorkspace: vi.fn(),
     resetCriteriaToWorkspace: vi.fn(),
+    distribution: vi.fn(),
   },
   tasks: {
     list: vi.fn(),
@@ -149,6 +150,7 @@ describe('JobPipelinePage', () => {
     apiClient.roles.batchScoreStatus.mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0 } });
     apiClient.roles.fetchCvsStatus.mockResolvedValue({ data: { status: 'idle', total: 0, fetched: 0, errors: 0 } });
     apiClient.roles.batchPreScreenStatus.mockResolvedValue({ data: { status: 'idle', total: 0, processed: 0, errors: 0 } });
+    apiClient.roles.distribution.mockResolvedValue({ data: { published: false } });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
@@ -185,6 +187,27 @@ describe('JobPipelinePage', () => {
     renderPipeline();
     // A native role's header states it runs on Taali's own full ATS.
     expect(await screen.findByText('Full ATS')).toBeInTheDocument();
+  });
+
+  it('surfaces the public job page from the header when the role is published', async () => {
+    apiClient.roles.distribution.mockResolvedValue({
+      data: { published: true, apply_url: '/job/tok_abc123', share_urls: { apply_url: '/job/tok_abc123' } },
+    });
+    renderPipeline();
+
+    const viewLink = await screen.findByRole('link', { name: /View public page/i });
+    expect(viewLink).toHaveAttribute('href', '/job/tok_abc123');
+    expect(viewLink).toHaveAttribute('target', '_blank');
+    expect(screen.getByRole('button', { name: /Copy link/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Not published/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a quiet Not published state when the role has no public job page', async () => {
+    apiClient.roles.distribution.mockResolvedValue({ data: { published: false } });
+    renderPipeline();
+
+    expect(await screen.findByText(/Not published/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /View public page/i })).not.toBeInTheDocument();
   });
 
   it('demotes the manual Process mirror and flags the agent when it runs the role', async () => {

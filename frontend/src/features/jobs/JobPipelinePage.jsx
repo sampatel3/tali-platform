@@ -4,6 +4,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   BriefcaseBusiness,
   ChevronDown,
+  Copy,
+  ExternalLink,
   RefreshCw,
   Share2,
   Sparkles,
@@ -299,6 +301,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
+  // Public job-page state for the header actions. Reuses the distribution
+  // endpoint (the same data DistributeRolePanel reads) so the pipeline —
+  // the daily working surface — can reach the public job page directly
+  // instead of only from Requisitions. `null` = not fetched yet.
+  const [distribution, setDistribution] = useState(null);
   // Workspace chips loaded once per role-workspace load. Used by the
   // role page chip editor for the "Show hidden" suppressed-chips view
   // (we need the workspace text/bucket for chips the recruiter has
@@ -1153,6 +1160,38 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
+  // Public job page ({ published, apply_url }) from the distribution endpoint,
+  // fetched once per role so the header can offer "View public page" / "Copy
+  // link" when the role is live. Failures leave it null — the header simply
+  // omits the action rather than showing an error for a secondary affordance.
+  useEffect(() => {
+    if (!Number.isFinite(numericRoleId)) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await rolesApi.distribution(numericRoleId);
+        if (!cancelled) setDistribution(data || null);
+      } catch {
+        if (!cancelled) setDistribution(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [numericRoleId, rolesApi]);
+
+  const publicJobUrl = distribution?.published === true
+    ? (distribution.apply_url || distribution.share_urls?.apply_url || '')
+    : '';
+
+  const handleCopyPublicLink = useCallback(async () => {
+    if (!publicJobUrl) return;
+    try {
+      await navigator.clipboard.writeText(publicJobUrl);
+      showToast('Public job page link copied.', 'success');
+    } catch {
+      showToast('Copy failed. Copy the URL from the public page instead.', 'error');
+    }
+  }, [publicJobUrl, showToast]);
+
   const handleOpenRoleSettings = () => {
     document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   };
@@ -1418,6 +1457,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               >
                 {roleAgent.pending} pending → Home
               </button>
+            ) : null}
+            {/* Public job page access, straight from the pipeline. When the
+                role is published, jump to the live /job/{token} page or copy
+                its link; when it isn't, a quiet hint that publishing happens
+                from the requisition (no publish button here). */}
+            {publicJobUrl ? (
+              <>
+                <a
+                  className="btn btn-outline btn-sm"
+                  href={publicJobUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open the public job page in a new tab"
+                >
+                  <ExternalLink size={13} />
+                  View public page
+                </a>
+                <button type="button" className="btn btn-outline btn-sm" title="Copy the public job page link" onClick={handleCopyPublicLink}>
+                  <Copy size={13} />
+                  Copy link
+                </button>
+              </>
+            ) : distribution && distribution.published !== true ? (
+              <span className="btn btn-outline btn-sm is-muted" title="This role isn't published yet — publish it from its requisition to create a public job page." style={{ cursor: 'default', opacity: 0.75 }}>
+                Not published
+              </span>
             ) : null}
             <button type="button" className="btn btn-outline btn-sm" title="Share role" onClick={handleShareRole}>
               <Share2 size={13} />

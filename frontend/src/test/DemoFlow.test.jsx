@@ -221,30 +221,27 @@ describe('Demo flow redesign', () => {
       );
     });
 
-    expect(screen.getByRole('heading', { level: 2, name: /Try the five things/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: /Try the four things/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Jobs you’re hiring for/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Candidates flowing in/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Ask about your candidates/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Client-share profile/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Candidate workspace/i })).toBeInTheDocument();
 
     const jobsFrame = screen.getByTitle('Jobs you’re hiring for');
-    const candidatesFrame = screen.getByTitle('Candidates flowing in');
     const chatFrame = screen.getByTitle('Ask about your candidates');
     const profileFrame = screen.getByTitle('Client-share profile');
     const workspaceFrame = screen.getByTitle('Candidate workspace');
 
     expect(jobsFrame).toHaveAttribute('src', '/jobs?demo=1&showcase=1');
-    expect(candidatesFrame).toHaveAttribute('src', '/candidates?demo=1&showcase=1');
     expect(chatFrame).toHaveAttribute('src', '/showcase/chat');
     expect(profileFrame).toHaveAttribute('src', '/c/demo?view=client&k=demo-token&showcase=1');
     expect(workspaceFrame).toHaveAttribute('src', '/assessment/live?demo=1&showcase=1');
 
-    [jobsFrame, candidatesFrame, chatFrame, profileFrame, workspaceFrame].forEach((frame) => {
+    [jobsFrame, chatFrame, profileFrame, workspaceFrame].forEach((frame) => {
       expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
     });
 
-    expect(screen.getAllByText('Locked preview')).toHaveLength(5);
+    expect(screen.getAllByText('Locked preview')).toHaveLength(4);
     expect(screen.queryByText(/Open full size/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Platform' })).not.toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-welcome', expect.anything());
@@ -263,11 +260,10 @@ describe('Demo flow redesign', () => {
 
     const tablist = await screen.findByRole('tablist', { name: /Walkthrough views/i });
     const tabButtons = Array.from(tablist.querySelectorAll('button')).map((button) => button.textContent || '');
-    expect(tabButtons.length).toBe(5);
+    expect(tabButtons.length).toBe(4);
     expect(tabButtons[0]).toMatch(/Jobs/);
-    expect(tabButtons[1]).toMatch(/Candidates/);
-    expect(tabButtons[2]).toMatch(/Ask about your candidates/);
-    expect(tabButtons[3]).toMatch(/Candidate workspace/);
-    expect(tabButtons[4]).toMatch(/Client-share profile/);
+    expect(tabButtons[1]).toMatch(/Ask about your candidates/);
+    expect(tabButtons[2]).toMatch(/Candidate workspace/);
+    expect(tabButtons[3]).toMatch(/Client-share profile/);
   });
 });
