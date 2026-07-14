@@ -1,13 +1,14 @@
-// InterviewFeedbackSection — the "Interview feedback" block on the candidate
-// standing report's "Interview" tab. Recruiters record what happened in an
+// InterviewFeedbackSection — the structured feedback block on the candidate
+// standing report's "Notes & timeline" tab. Recruiters record what happened in an
 // interview: round, overall recommendation, a probe checklist auto-populated
 // from the candidate interview kit, and free-text notes. Entries list newest-first
 // with expandable detail; each is editable/deletable.
 //
 // Styling uses the shared Taali primitives plus the report's existing type and
 // spacing tokens, so controls behave consistently with the rest of the app.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 
+import { MotionDisclosure } from '../../shared/motion';
 import {
   Badge,
   Button,
@@ -91,6 +92,7 @@ const emptyForm = (kitProbes) => ({
 
 const FeedbackEntry = ({ entry, onEdit, onDelete, busy, readOnly }) => {
   const [open, setOpen] = useState(false);
+  const detailId = useId();
   const probes = Array.isArray(entry.probe_results) ? entry.probe_results : [];
   return (
     <Card className="p-4" data-kind="interview-feedback">
@@ -113,13 +115,15 @@ const FeedbackEntry = ({ entry, onEdit, onDelete, busy, readOnly }) => {
           variant="ghost"
           size="sm"
           className="mt-2"
+          aria-expanded={open}
+          aria-controls={detailId}
           onClick={() => setOpen((v) => !v)}
         >
           {open ? 'Hide detail' : 'Show detail'}
         </Button>
       ) : null}
-      {open ? (
-        <div className="mt-3 grid gap-3">
+      <MotionDisclosure open={open} id={detailId} className="mt-3">
+        <div className="grid gap-3">
           {entry.notes ? <div className="mc-notes-card-body">{entry.notes}</div> : null}
           {probes.length ? (
             <div>
@@ -137,10 +141,15 @@ const FeedbackEntry = ({ entry, onEdit, onDelete, busy, readOnly }) => {
             </div>
           ) : null}
         </div>
-      ) : null}
+      </MotionDisclosure>
       {!readOnly ? (
         <div className="mt-3 flex gap-2">
-          <Button variant="secondary" size="sm" onClick={() => onEdit(entry)} disabled={busy}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={(event) => onEdit(entry, event.currentTarget)}
+            disabled={busy}
+          >
             Edit
           </Button>
           <Button variant="danger" size="sm" onClick={() => onDelete(entry)} disabled={busy}>
@@ -161,6 +170,9 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const formId = useId();
+  const recordButtonRef = useRef(null);
+  const returnFocusRef = useRef(null);
 
   useEffect(() => {
     if (Array.isArray(initialFeedback)) setEntries(initialFeedback);
@@ -181,14 +193,16 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
     }
   };
 
-  const openCreate = () => {
+  const openCreate = (event) => {
+    returnFocusRef.current = event?.currentTarget || null;
     setEditingId(null);
     setForm(emptyForm(kitProbes));
     setFormOpen(true);
     setError('');
   };
 
-  const openEdit = (entry) => {
+  const openEdit = (entry, trigger = null) => {
+    returnFocusRef.current = trigger;
     setEditingId(entry.id);
     setForm({
       interview_round: entry.interview_round || 'screening',
@@ -211,6 +225,11 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
     setFormOpen(false);
     setEditingId(null);
     setForm(emptyForm(kitProbes));
+    window.requestAnimationFrame(() => {
+      const previousTrigger = returnFocusRef.current;
+      const focusTarget = previousTrigger?.isConnected ? previousTrigger : recordButtonRef.current;
+      focusTarget?.focus();
+    });
   };
 
   const setProbeResult = (index, result) => {
@@ -264,22 +283,29 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
   };
 
   return (
-    <div className="mc-prep-stage" data-section="interview-feedback">
+    <section className="mc-interview-feedback" data-section="interview-feedback" aria-labelledby="interview-feedback-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="mc-kicker">INTERVIEW FEEDBACK</div>
+          <div id="interview-feedback-heading" className="mc-kicker">INTERVIEW FEEDBACK</div>
           <p className="mt-1 text-sm text-[var(--taali-muted)]">
-            Record the outcome and notes from each round. The assessment scorecard remains separate.
+            Record the recommendation and notes from each interview round.
           </p>
         </div>
         {!formOpen && canSubmit ? (
-          <Button variant="primary" size="sm" onClick={openCreate}>
+          <Button
+            ref={recordButtonRef}
+            variant="primary"
+            size="sm"
+            aria-expanded={false}
+            aria-controls={formId}
+            onClick={openCreate}
+          >
             Record feedback
           </Button>
         ) : null}
       </div>
       <div className="mt-3 grid gap-2.5">
-        {entries.length === 0 ? (
+        {entries.length === 0 && !formOpen ? (
           <EmptyState
             title="No interview feedback yet"
             description={readOnly
@@ -305,7 +331,7 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
         <div className="mt-2 text-sm text-[var(--taali-danger)]" role="alert">{error}</div>
       ) : null}
 
-      {formOpen ? (
+      <MotionDisclosure open={formOpen} id={formId}>
         <Card className="mt-3 grid gap-4 p-4">
           <div className="grid gap-2">
             <label className="text-xs font-semibold text-[var(--taali-muted)]" htmlFor="interview-feedback-round">Round</label>
@@ -405,8 +431,8 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
             </Button>
           </div>
         </Card>
-      ) : null}
-    </div>
+      </MotionDisclosure>
+    </section>
   );
 };
 

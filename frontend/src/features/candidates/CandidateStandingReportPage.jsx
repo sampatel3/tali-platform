@@ -21,6 +21,7 @@ import {
 import { useToast } from '../../context/ToastContext';
 import {
   Button,
+  Card,
   Input,
   Panel,
   PageLoader,
@@ -95,10 +96,9 @@ const REPORT_TABS = [
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview', recruiterOnly: true },
-  // Notes are the single place for hiring-team context. The audit timeline is
-  // still available inside the tab, collapsed by default so it does not read
-  // like a second primary workflow.
-  { id: 'notes', label: 'Notes', recruiterOnly: true },
+  // Notes & timeline is the single place for hiring-team context, structured
+  // interview feedback, and the candidate's activity history.
+  { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
 ];
 
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
@@ -272,7 +272,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [noteForAgent, setNoteForAgent] = useState(true);
   const [eventsRefetchTick, setEventsRefetchTick] = useState(0);
   const [supportingLinkOpen, setSupportingLinkOpen] = useState(false);
-  const [auditTimelineOpen, setAuditTimelineOpen] = useState(false);
   // Optional supporting link, stored via the same note endpoint with kind
   // `link`. It defaults to agent-visible alongside the freeform note box.
   const [linkUrl, setLinkUrl] = useState('');
@@ -330,7 +329,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   useEffect(() => {
     setAssessmentContentMounted(requestedTab === 'assessment');
     setSupportingLinkOpen(false);
-    setAuditTimelineOpen(false);
   }, [routeApplicationKey, sharedRouteToken]);
 
   // Assessment-only tabs reveal once a completed assessment is linked.
@@ -1734,20 +1732,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </div>
           ) : null}
 
-          {/* Structured interview feedback — recruiters record what actually
-              happened (round, recommendation, probe results, notes). Hidden on
-              client shares (the payload strips it anyway);
-              read-only on recruiter share links (entries arrive with the
-              payload but the viewer is unauthenticated, so no record/edit). */}
-          {!isClientView && application?.id ? (
-            <InterviewFeedbackSection
-              applicationId={application.id}
-              interviewKit={application?.candidate_interview_kit}
-              initialFeedback={application?.interview_feedback}
-              rolesApi={rolesApi}
-              readOnly={isInterviewView}
-            />
-          ) : null}
         </div>
 
         <div
@@ -1881,69 +1865,79 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               : [];
 
             return (
-              <div className="mc-notes-single">
-                <div className="mc-kicker">HIRING TEAM NOTES</div>
-                  {recruiterNotes.length === 0 ? (
-                    <div className="mc-notes-empty">
-                      {isInterviewView
-                        ? 'No hiring team notes yet.'
-                        : 'No notes yet. Drop a note below — tell the hiring agent what it should know (e.g. “already interviewed, not suitable”). It lands in the audit timeline too.'}
+              <div className="mc-notes-layout">
+                <section className="mc-notes-workspace" aria-labelledby="candidate-notes-heading">
+                  <div className="mc-notes-section-head">
+                    <div>
+                      <div id="candidate-notes-heading" className="mc-kicker">HIRING TEAM NOTES</div>
+                      <p className="mc-notes-section-copy">
+                        Shared team context and structured interview outcomes for this candidate.
+                      </p>
                     </div>
+                  </div>
+                  {recruiterNotes.length === 0 ? (
+                    <Card className="mc-notes-empty-card">
+                      <div className="mc-notes-empty-title">No hiring team notes yet</div>
+                      <p className="mc-notes-empty-copy">
+                        {isInterviewView
+                          ? 'The hiring team has not added any shared context for this candidate.'
+                          : 'Add context for the hiring team, or guidance the Taali agent should consider.'}
+                      </p>
+                    </Card>
                   ) : (
-                    recruiterNotes.map((note) => {
-                      const isRanking = note.kind === 'ranking' && Number.isFinite(note.ranking);
-                      const isLink = note.kind === 'link' && note.linkUrl;
-                      return (
-                        <div key={note.key} className="mc-notes-card" data-kind={note.kind || 'note'}>
-                          <div className="mc-notes-card-head">
-                            <span className="mc-notes-card-who">
-                              {note.who}
-                              <span className="mc-notes-card-role"> · {note.role}</span>
-                            </span>
-                            <span className="mc-notes-card-time">{fmtRelative(note.time)}</span>
-                          </div>
-                          <div className="mc-notes-card-body">
-                            {isRanking ? (
-                              <span
-                                className="mc-notes-rank"
-                                style={{ color: 'var(--purple)', fontWeight: 600, marginRight: 6 }}
-                                title={`Ranked ${note.ranking} out of 5`}
-                              >
-                                ★ {note.ranking}/5
+                    <div className="mc-notes-feed">
+                      {recruiterNotes.map((note) => {
+                        const isRanking = note.kind === 'ranking' && Number.isFinite(note.ranking);
+                        const isLink = note.kind === 'link' && note.linkUrl;
+                        return (
+                          <Card as="article" key={note.key} className="mc-notes-card" data-kind={note.kind || 'note'}>
+                            <div className="mc-notes-card-head">
+                              <span className="mc-notes-card-who">
+                                {note.who}
+                                <span className="mc-notes-card-role"> · {note.role}</span>
                               </span>
-                            ) : null}
-                            {isLink ? (
-                              <a
-                                href={note.linkUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="mc-notes-link"
-                                style={{ color: 'var(--purple)', textDecoration: 'underline' }}
-                              >
-                                {note.linkLabel || note.body || note.linkUrl}
-                              </a>
-                            ) : (
-                              // For ranking, the body is the optional comment;
-                              // don't repeat it if it was only the auto label.
-                              (isRanking && note.body === `Ranking ${note.ranking}/5`)
-                                ? null
-                                : note.body
-                            )}
-                            {note.transcriptUrl && !isLink ? (
-                              <a
-                                href={note.transcriptUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="mc-notes-link"
-                                style={{ display: 'inline-block', marginTop: 6, color: 'var(--purple)', textDecoration: 'underline' }}
-                              >
-                                View full transcript ↗
-                              </a>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })
+                              <span className="mc-notes-card-time">{fmtRelative(note.time)}</span>
+                            </div>
+                            <div className="mc-notes-card-body">
+                              {isRanking ? (
+                                <span
+                                  className="mc-notes-rank"
+                                  title={`Ranked ${note.ranking} out of 5`}
+                                >
+                                  ★ {note.ranking}/5
+                                </span>
+                              ) : null}
+                              {isLink ? (
+                                <a
+                                  href={note.linkUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="mc-notes-link"
+                                >
+                                  {note.linkLabel || note.body || note.linkUrl}
+                                </a>
+                              ) : (
+                                // For ranking, the body is the optional comment;
+                                // don't repeat it if it was only the auto label.
+                                (isRanking && note.body === `Ranking ${note.ranking}/5`)
+                                  ? null
+                                  : note.body
+                              )}
+                              {note.transcriptUrl && !isLink ? (
+                                <a
+                                  href={note.transcriptUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="mc-notes-link mc-notes-transcript-link"
+                                >
+                                  View full transcript ↗
+                                </a>
+                              ) : null}
+                            </div>
+                          </Card>
+                        );
+                      })}
+                    </div>
                   )}
                   {/* Adding notes hits an auth-only endpoint, so the input is
                       recruiter-app only — share recipients see notes read-only.
@@ -1952,26 +1946,41 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   {isInterviewView ? null : (() => {
                     const canAddNote = Boolean(application?.id || assessmentId);
                     return (
-                    <div className="mc-notes-input">
+                    <Card as="section" className="mc-note-composer" aria-labelledby="candidate-note-composer-label">
+                      <label
+                        id="candidate-note-composer-label"
+                        className="mc-note-composer-label"
+                        htmlFor="candidate-team-note"
+                      >
+                        Add a hiring team note
+                      </label>
+                      <p id="candidate-team-note-help" className="mc-note-composer-help">
+                        Capture context that will help the team evaluate or follow up with this candidate.
+                      </p>
                       <Textarea
+                        id="candidate-team-note"
                         value={noteDraft}
                         onChange={(event) => setNoteDraft(event.target.value)}
                         placeholder={canAddNote
-                          ? 'Add a note on this candidate — e.g. “already interviewed, not suitable” or “lacks the technical depth”…'
+                          ? 'Write a note for the hiring team…'
                           : 'Notes open once this candidate has an application record.'}
                         disabled={!canAddNote || savingNote}
-                        rows={3}
+                        rows={4}
+                        aria-describedby="candidate-team-note-help"
                       />
-                      <label className="mc-notes-agent-toggle">
-                        <input
-                          type="checkbox"
-                          checked={noteForAgent}
-                          onChange={(event) => setNoteForAgent(event.target.checked)}
-                          disabled={!canAddNote || savingNote}
-                        />
-                        <span>Visible to the hiring agent — it’ll weigh this as standing guidance on this candidate.</span>
-                      </label>
-                      <div className="mc-notes-input-actions">
+                      <div className="mc-note-composer-footer">
+                        <label className="mc-notes-agent-toggle">
+                          <input
+                            type="checkbox"
+                            checked={noteForAgent}
+                            onChange={(event) => setNoteForAgent(event.target.checked)}
+                            disabled={!canAddNote || savingNote}
+                          />
+                          <span>
+                            <strong>Use as Taali agent guidance</strong>
+                            <small>The agent will consider this note in future recommendations.</small>
+                          </span>
+                        </label>
                         <Button
                           variant="primary"
                           size="sm"
@@ -1983,7 +1992,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                           Add note
                         </Button>
                       </div>
-                    </div>
+                    </Card>
                     );
                   })()}
 
@@ -2009,16 +2018,24 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         <span className="mc-audit-count">Optional</span>
                       </button>
                       <MotionDisclosure open={supportingLinkOpen} id="candidate-supporting-link">
-                        <div className="mc-notes-input">
-                          <div style={{ display: 'grid', gap: 8 }}>
+                        <Card className="mc-supporting-link-card">
+                          <div className="mc-supporting-link-fields">
+                            <label className="mc-note-composer-label" htmlFor="candidate-supporting-link-url">
+                              URL
+                            </label>
                             <Input
+                              id="candidate-supporting-link-url"
                               type="url"
                               value={linkUrl}
                               onChange={(event) => setLinkUrl(event.target.value)}
                               placeholder="https://… (portfolio, GitHub, reference)"
                               disabled={savingLink}
                             />
+                            <label className="mc-note-composer-label" htmlFor="candidate-supporting-link-label">
+                              Label <span className="mc-field-optional">Optional</span>
+                            </label>
                             <Input
+                              id="candidate-supporting-link-label"
                               type="text"
                               value={linkLabel}
                               onChange={(event) => setLinkLabel(event.target.value)}
@@ -2038,9 +2055,25 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                               Add link
                             </Button>
                           </div>
-                        </div>
+                        </Card>
                       </MotionDisclosure>
                     </div>
+                  ) : null}
+
+                  {/* Structured feedback belongs with team notes and outcomes,
+                      while remaining a distinct record (round, recommendation,
+                      probes). Client shares hide it; recruiter shares are
+                      read-only. The candidate-scoped key clears local drafts
+                      when navigating between candidate records. */}
+                  {!isClientView && application?.id ? (
+                    <InterviewFeedbackSection
+                      key={`interview-feedback-${application.id}`}
+                      applicationId={application.id}
+                      interviewKit={application?.candidate_interview_kit}
+                      initialFeedback={application?.interview_feedback}
+                      rolesApi={rolesApi}
+                      readOnly={isInterviewView}
+                    />
                   ) : null}
 
                   {/* Questionnaire — the candidate's own Workable/LinkedIn-apply
@@ -2053,10 +2086,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         const answer = String(entry?.answer || '').trim();
                         if (!question && !answer) return null;
                         return (
-                          <div key={`wk-answer-${idx}`} className="mc-notes-card">
+                          <Card as="article" key={`wk-answer-${idx}`} className="mc-notes-card">
                             {question ? <div className="mc-notes-card-who">{question}</div> : null}
                             {answer ? <div className="mc-notes-card-body">{answer}</div> : null}
-                          </div>
+                          </Card>
                         );
                       })}
                     </>
@@ -2071,7 +2104,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         if (!body) return null;
                         const author = String(comment?.author || '').trim() || 'Workable';
                         return (
-                          <div key={`wk-comment-${comment?.created_at || idx}-${idx}`} className="mc-notes-card">
+                          <Card as="article" key={`wk-comment-${comment?.created_at || idx}-${idx}`} className="mc-notes-card">
                             <div className="mc-notes-card-head">
                               <span className="mc-notes-card-who">
                                 {author}
@@ -2080,37 +2113,39 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                               <span className="mc-notes-card-time">{fmtRelative(comment?.created_at)}</span>
                             </div>
                             <div className="mc-notes-card-body">{body}</div>
-                          </div>
+                          </Card>
                         );
                       })}
                     </>
                   ) : null}
+                </section>
 
-                  {/* Audit timeline — collapsed by default at the bottom so it
-                      doesn't dominate the Notes tab; expand for the full log. */}
-                  <div
-                    className="mc-audit-collapse"
-                    data-open={auditTimelineOpen ? 'true' : 'false'}
-                  >
-                    <button
-                      type="button"
-                      className="mc-audit-summary"
-                      aria-expanded={auditTimelineOpen}
-                      aria-controls="candidate-audit-timeline"
-                      onClick={() => setAuditTimelineOpen((open) => !open)}
-                    >
-                      <span className="mc-kicker" style={{ margin: 0 }}>AUDIT TIMELINE</span>
-                      <span className="mc-audit-count">
-                        {applicationEvents.length + workableActivity.length} event{(applicationEvents.length + workableActivity.length) === 1 ? '' : 's'}
-                      </span>
-                    </button>
-                  <MotionDisclosure open={auditTimelineOpen} id="candidate-audit-timeline">
-                  {applicationEvents.length === 0 ? (
-                    <div className="mc-notes-empty" style={{ marginTop: 12 }}>
-                      Audit events will appear here as the candidate moves through the pipeline.
+                {/* The timeline is a permanent right-hand rail on wide report
+                    layouts. Main content remains first in the DOM, and CSS
+                    stacks this aside underneath it on narrower viewports. */}
+                <Card
+                  as="aside"
+                  className="mc-notes-timeline-rail"
+                  aria-labelledby="candidate-timeline-heading"
+                >
+                  <div className="mc-notes-timeline-head">
+                    <div>
+                      <div id="candidate-timeline-heading" className="mc-kicker">ACTIVITY TIMELINE</div>
+                      <p className="mc-notes-timeline-copy">Pipeline updates in chronological context.</p>
                     </div>
-                  ) : (
-                    <div className="mc-audit-timeline" style={{ marginTop: 12 }}>
+                    <span className="mc-audit-count">
+                      {applicationEvents.length + workableActivity.length} event{(applicationEvents.length + workableActivity.length) === 1 ? '' : 's'}
+                    </span>
+                  </div>
+
+                  {(applicationEvents.length + workableActivity.length) === 0 ? (
+                    <p className="mc-notes-timeline-empty">
+                      Activity will appear here as the candidate moves through the pipeline.
+                    </p>
+                  ) : null}
+
+                  {applicationEvents.length > 0 ? (
+                    <div className="mc-audit-timeline">
                       {applicationEvents.slice(0, 12).map((event, idx) => {
                         const type = String(event?.event_type || 'activity').replace(/_/g, ' ');
                         const meta = event?.metadata || {};
@@ -2136,11 +2171,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         );
                       })}
                     </div>
-                  )}
+                  ) : null}
 
                   {workableActivity.length > 0 ? (
-                    <>
-                      <div className="mc-kicker" style={{ marginTop: 18 }}>WORKABLE ACTIVITY</div>
+                    <section className="mc-notes-workable-activity" aria-labelledby="candidate-workable-activity-heading">
+                      <div id="candidate-workable-activity-heading" className="mc-kicker">WORKABLE ACTIVITY</div>
                       <div className="mc-audit-timeline">
                         {workableActivity.map((entry, idx) => {
                           const action = String(entry?.action || '').replace(/_/g, ' ').trim();
@@ -2164,10 +2199,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                           );
                         })}
                       </div>
-                    </>
+                    </section>
                   ) : null}
-                  </MotionDisclosure>
-                  </div>
+                </Card>
               </div>
             );
           })()}
