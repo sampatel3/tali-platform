@@ -47,7 +47,10 @@ describe('Jobs navigation menu', () => {
 
     expect(screen.getByRole('menuitem', { name: /All jobs/i })).toHaveAttribute('href', '/jobs');
     expect(screen.getByRole('menuitem', { name: /Create a job/i })).toHaveAttribute('href', '/requisitions');
-    expect(screen.getByRole('menuitem', { name: /Job board/i })).toHaveAttribute('href', '/careers/deep-light');
+    const jobBoardLink = screen.getByRole('menuitem', { name: /Job board/i });
+    expect(jobBoardLink).toHaveAttribute('href', '/careers/deep-light');
+    expect(jobBoardLink).toHaveAttribute('target', '_blank');
+    expect(jobBoardLink).toHaveAttribute('rel', 'noreferrer');
     expect(screen.queryByText(/^Requisitions?$/i)).not.toBeInTheDocument();
   });
 });
