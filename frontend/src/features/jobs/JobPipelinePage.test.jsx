@@ -158,6 +158,7 @@ describe('JobPipelinePage', () => {
     apiClient.roles.sisterScoringStatus.mockResolvedValue({
       data: { status: 'completed', progress_percent: 100, counts: { done: 2 } },
     });
+    apiClient.agent.listDecisions.mockResolvedValue({ data: [] });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
@@ -227,45 +228,44 @@ describe('JobPipelinePage', () => {
     expect(screen.queryByRole('button', { name: /Process \d+ candidate/i })).not.toBeInTheDocument();
   });
 
-  it('surfaces the public job page from the header when the role is published', async () => {
-    apiClient.roles.distribution.mockResolvedValue({
-      data: { published: true, apply_url: '/job/tok_abc123', share_urls: { apply_url: '/job/tok_abc123' } },
+  it('removes manual sourcing, processing, syncing and distribution work from the role page', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: { ...baseRole, agentic_mode_enabled: true, workable_job_id: 'AI-ENG' },
     });
     renderPipeline();
 
-    const viewLink = await screen.findByRole('link', { name: /View public page/i });
-    expect(viewLink).toHaveAttribute('href', '/job/tok_abc123');
-    expect(viewLink).toHaveAttribute('target', '_blank');
-    expect(screen.getByRole('button', { name: /Copy link/i })).toBeInTheDocument();
+    await screen.findByRole('heading', { name: /AI Native Engineer/i });
+    expect(screen.queryByRole('link', { name: /^Find candidates$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add sourced/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Process \d+ candidate/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sync from Workable/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Invite candidate/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/Not published/i)).not.toBeInTheDocument();
+    expect(apiClient.roles.distribution).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
+    await screen.findByRole('heading', { name: /Role specification/i });
+    expect(screen.queryByText(/Distribute this role/i)).not.toBeInTheDocument();
   });
 
-  it('shows a quiet Not published state when the role has no public job page', async () => {
-    apiClient.roles.distribution.mockResolvedValue({ data: { published: false } });
+  it('uses six canonical kanban columns and folds completed assessments into Invited', async () => {
     renderPipeline();
+    await switchToPipelineView();
 
-    expect(await screen.findByText(/Not published/i)).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /View public page/i })).not.toBeInTheDocument();
-  });
-
-  it('demotes the manual Process mirror and flags the agent when it runs the role', async () => {
-    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
-    renderPipeline();
-
-    // "The agent's got it" indicator appears in the candidates toolbar.
-    expect(await screen.findByText(/Agent is running this role/i)).toBeInTheDocument();
-    // The manual Process button stays available but drops from the purple
-    // primary to a muted outline so it no longer competes with the agent.
-    const processBtn = screen.getByRole('button', { name: /Process \d+ candidate/i });
-    expect(processBtn).toHaveClass('btn-outline');
-    expect(processBtn).not.toHaveClass('btn-purple');
-  });
-
-  it('keeps the manual Process button as the primary action when the agent is off', async () => {
-    renderPipeline();
-    const processBtn = await screen.findByRole('button', { name: /Process \d+ candidate/i });
-    expect(processBtn).toHaveClass('btn-purple');
-    expect(screen.queryByText(/Agent is running this role/i)).not.toBeInTheDocument();
+    await screen.findByText('Priya Anand');
+    const columns = document.querySelectorAll('.kanban-col');
+    expect(columns).toHaveLength(6);
+    expect(Array.from(columns, (column) => column.dataset.stage)).toEqual([
+      'sourced',
+      'applied',
+      'scored',
+      'invited',
+      'advanced',
+      'rejected',
+    ]);
+    expect(screen.queryByText(/^Completed$/)).not.toBeInTheDocument();
+    const invitedColumn = document.querySelector('.kanban-col[data-stage="invited"]');
+    expect(within(invitedColumn).getByText('Priya Anand')).toBeInTheDocument();
   });
 
   it('shows stage-aware card signals instead of pre-screen scores in early stages', async () => {
@@ -288,6 +288,43 @@ describe('JobPipelinePage', () => {
     await waitFor(() => {
       expect(within(reviewCard).getByText('64')).toBeInTheDocument();
     });
+  });
+
+  it('renders an em dash rather than a fabricated zero for unscored kanban cards', async () => {
+    apiClient.roles.listApplications.mockResolvedValue({
+      data: [{
+        ...baseApplications[0],
+        taali_score: null,
+        cv_match_score: null,
+        pre_screen_score: null,
+      }],
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const card = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    expect(within(card).getByText('CV —')).toBeInTheDocument();
+    expect(within(card).queryByText('0')).not.toBeInTheDocument();
+  });
+
+  it('keeps agent recommendations compact instead of rendering long reasoning in the kanban', async () => {
+    const longReasoning = 'Strong technical profile with directly relevant skills. '.repeat(30);
+    apiClient.agent.listDecisions.mockResolvedValue({
+      data: [{
+        id: 501,
+        application_id: 2,
+        recommendation: 'reject',
+        reasoning: longReasoning,
+      }],
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    expect(await within(reviewCard).findByText('Reject')).toBeInTheDocument();
+    expect(within(reviewCard).getByRole('button', { name: /^Approve$/i })).toBeInTheDocument();
+    expect(within(reviewCard).getByRole('button', { name: /^Override$/i })).toBeInTheDocument();
+    expect(within(reviewCard).queryByText(longReasoning)).not.toBeInTheDocument();
   });
 
   it('never invents an agent recommendation from the score when no decision is queued', async () => {
@@ -320,11 +357,12 @@ describe('JobPipelinePage', () => {
     await switchToPipelineView();
 
     const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    const appliedLink = within(appliedCard).getByRole('link', { name: /Open Sam Patel/i });
     // Modifier-clicking a kanban card still falls through to the link's
     // default behaviour (open in new tab), so the href is preserved.
-    expect(appliedCard).toHaveAttribute('href', '/candidates/1?from=jobs/101');
+    expect(appliedLink).toHaveAttribute('href', '/candidates/1?from=jobs/101');
 
-    fireEvent.click(appliedCard);
+    fireEvent.click(appliedLink);
 
     // Plain click opens the triage drawer in-place — recruiters do most
     // of their move-stage / send-assessment / reject work without ever
@@ -345,7 +383,7 @@ describe('JobPipelinePage', () => {
 
     // Open the triage drawer for Sam, then reject.
     const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
-    fireEvent.click(appliedCard);
+    fireEvent.click(within(appliedCard).getByRole('link', { name: /Open Sam Patel/i }));
     await screen.findByText(/Closes the application/i);
 
     // listApplications ran twice on cold load (open + rejected). Rejecting must
@@ -413,15 +451,15 @@ Banking transformation experience
 
     // Open the Job Specification tab to access the formatted description. (The
     // role description is now edited inline via <RoleSpecEditPanel>; the
-    // formatted, non-flattened spec body lives in the "Read full description"
+    // formatted, non-flattened spec body lives in the source-description
     // section below — asserted next.)
     fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
 
     expect(screen.queryByText(/keeps recruiter scoring/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Read full description/i }));
+    fireEvent.click(screen.getByRole('button', { name: /View description/i }));
 
-    expect(screen.getByText(/Workable ingested job spec/i)).toBeInTheDocument();
+    expect(screen.getByText(/Workable source description/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open source posting/i })).toHaveAttribute('href', 'https://deeplight.workable.com/jobs/5757335/candidates/new');
     const querySectionTitle = (label) => screen.queryByText((_, element) => (
       element?.classList?.contains('role-sec-title') && element.textContent.includes(label)
@@ -576,7 +614,7 @@ Banking transformation experience
     // The pipeline-activity timeline that previously lived under this label
     // was a leftover from the v1 5-tab layout and is gone in v2.
     fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
-    expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /View description/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();
 

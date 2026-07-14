@@ -8,12 +8,14 @@ import {
   awaitingHitlFromDecisions,
   invitedStageValue,
 } from '../metrics';
+import { MotionNumber } from '../motion';
 import './FunnelBoard.css';
 
 const OUTCOME_KEYS = new Set(['advanced', 'rejected']);
+const formatFunnelValue = (value) => formatCount(Math.round(Number(value) || 0));
 
 // Shared B2 funnel board — stage counts on top
-// (Applied · Scored · Invited · Completed · Advanced │ Rejected), with an
+// (Sourced · Applied · Scored · Invited · Advanced │ Rejected), with an
 // "awaiting your decision" row beneath. Under each stage that row stacks the
 // agent's pending decisions by type ("25 send assessment", "8 advance",
 // "3 pre-screen reject"…) plus a "N decision pending" chip for candidates the
@@ -82,7 +84,9 @@ export const FunnelBoard = ({
                 className={`fb-st${stage.key === 'advanced' ? ' is-out-start' : ''}${OUTCOME_KEYS.has(stage.key) ? ' is-out' : ''}`}
               >
                 <div className="fb-l">{stage.label}</div>
-                <div className={`fb-v${tone === 'attn' ? ' attn' : ''}${tone === 'term' ? ' term' : ''}`}>{formatCount(value)}</div>
+                <div className={`fb-v${tone === 'attn' ? ' attn' : ''}${tone === 'term' ? ' term' : ''}`}>
+                  <MotionNumber value={value} format={formatFunnelValue} />
+                </div>
                 <div className="fb-stchips">
                   {OUTCOME_KEYS.has(stage.key) ? (
                     <span className="fb-dnone">outcome</span>
@@ -135,7 +139,9 @@ export const FunnelBoard = ({
               key={stage.key}
               className={`fb-st${stage.key === 'advanced' ? ' is-out-start' : ''}${OUTCOME_KEYS.has(stage.key) ? ' is-out' : ''}`}
             >
-              <div className={`fb-v${tone === 'attn' ? ' attn' : ''}${tone === 'term' ? ' term' : ''}`}>{formatCount(value)}</div>
+              <div className={`fb-v${tone === 'attn' ? ' attn' : ''}${tone === 'term' ? ' term' : ''}`}>
+                <MotionNumber value={value} format={formatFunnelValue} />
+              </div>
               <div className="fb-l">{stage.label}</div>
             </div>
           );
