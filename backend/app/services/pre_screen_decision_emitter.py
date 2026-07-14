@@ -37,6 +37,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.role import Role
 from ..platform.config import settings
+from .decision_presentation_service import normalize_candidate_summary
 
 logger = logging.getLogger("taali.pre_screen_decision_emitter")
 
@@ -230,9 +231,23 @@ def queue_pre_screen_reject(
         if existing_pending is not None:
             return existing_pending
 
-        body = {"pre_screen_score_100": pre_screen_score, "threshold_100": threshold}
-        if evidence:
-            body.update(evidence)
+        body = dict(evidence or {})
+        body.update({
+            "pre_screen_score_100": pre_screen_score,
+            "threshold_100": threshold,
+            "source": "pre_screen_threshold",
+            "decision_source": "policy",
+            "decision_trigger": "pre_screen_auto_reject_eligible",
+            "policy_reasoning": "Candidate did not clear the configured pre-screen threshold.",
+        })
+        pre_screen_blob = (
+            application.pre_screen_evidence
+            if isinstance(getattr(application, "pre_screen_evidence", None), dict)
+            else {}
+        )
+        candidate_summary = normalize_candidate_summary(pre_screen_blob.get("summary"))
+        if candidate_summary:
+            body["candidate_summary"] = candidate_summary
 
         decision = AgentDecision(
             organization_id=int(organization_id),
@@ -385,6 +400,9 @@ def queue_knockout_reject(
         )
         body: dict[str, Any] = {
             "source": "knockout_screening",
+            "decision_source": "policy",
+            "decision_trigger": "knockout_screening",
+            "policy_reasoning": clean_reason,
             "failed_question_ids": list(failed_question_ids or []),
         }
         if disqualification_reason_id is not None:
@@ -1308,7 +1326,9 @@ def backfill_summaries_from_cvmatch(
             continue
         if not dry_run:
             new_ev = dict(ev)
-            new_ev["summary"] = cv_summary[:240]
+            # Preserve the Claude-authored synthesis. The scoring prompt owns
+            # concision; this historical backfill must not silently clip it.
+            new_ev["summary"] = cv_summary
             app.pre_screen_evidence = new_ev
         updated += 1
     if updated and not dry_run:

@@ -123,11 +123,11 @@ def test_to_output_complete_report():
 
     assert out.role_fit_score == 72.0            # from call 1 (lean)
     assert out.requirements_match_score == 72.0  # kept == overall so recompute can't override
-    assert out.engine_version == "2.1.0"         # stamped provenance
-    assert out.prompt_version == "holistic_v2"
+    assert out.engine_version == holistic.HOLISTIC_ENGINE_VERSION  # stamped provenance
+    assert out.prompt_version == holistic.HOLISTIC_PROMPT_VERSION
     assert out.scoring_status == ScoringStatus.OK
     assert out.matching_skills == ["PySpark", "Delta Lake"]  # call 1
-    assert out.summary.startswith("Solid fit — ")
+    assert out.summary == "Solid fit — Strong hands-on pipeline work."
 
     # report (call 2)
     assert out.candidate_snapshot is not None
@@ -144,6 +144,28 @@ def test_to_output_complete_report():
 
     # token usage sums both calls
     assert out.input_tokens == 3000 and out.output_tokens == 1800
+
+
+def test_holistic_summary_contract_is_model_authored_and_lossless():
+    system = holistic._SCORE_SYS
+    assert "2-3 concise plain-English sentences" in system
+    assert "aiming for about 75 words" in system
+    assert "not a hard word cutoff" in system
+    assert "one or two most material gaps or uncertainties" in system
+    assert "structured candidate report below carries that detail" in system
+
+    schema = _LeanScore.model_json_schema()["properties"]
+    assert schema["verdict"]["maxLength"] == 60
+    assert schema["reasoning"]["maxLength"] == 1000
+
+    reasoning = (
+        "Production-scale Lakehouse ownership and dimensional-modelling depth are well evidenced "
+        "across complex data programmes. The material uncertainty is direct knowledge-graph and "
+        "ontology delivery, which the CV does not demonstrate."
+    )
+    lean = _lean().model_copy(update={"verdict": "Partial fit", "reasoning": reasoning})
+    out = _to_output(lean, _report(), _deriv(), "trace", _fake_res(None), _fake_res(None))
+    assert out.summary == f"Partial fit — {reasoning}"
 
 
 def test_to_output_empty_report_degrades_gracefully():

@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, or_
+from sqlalchemy import case, desc, or_
 from sqlalchemy.orm import Session
 
 from ...actions import approve_decision as approve_decision_action
@@ -35,6 +35,10 @@ from ...domains.assessments_runtime.pipeline_service import (
 )
 from ...domains.assessments_runtime.role_support import is_resolved
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
+from ...services.decision_presentation_service import (
+    build_decision_explanation,
+    candidate_summary_for,
+)
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.agent_run import AgentRun
@@ -111,6 +115,11 @@ class AgentDecisionPayload(BaseModel):
     recommendation: str
     status: str
     reasoning: str
+    # The causal reason for the action and the compact candidate synthesis are
+    # deliberately separate.  ``reasoning`` is retained for API compatibility;
+    # new recruiter surfaces should render these two fields instead.
+    decision_explanation: dict[str, Any]
+    candidate_summary: Optional[str] = None
     evidence: Optional[dict[str, Any]] = None
     confidence: Optional[float] = None
     model_version: str
@@ -392,6 +401,8 @@ def _decision_to_payload(
         recommendation=str(decision.recommendation),
         status=str(decision.status),
         reasoning=humanize_reasoning(str(decision.reasoning)),
+        decision_explanation=build_decision_explanation(decision, application),
+        candidate_summary=candidate_summary_for(decision, application),
         evidence=decision.evidence,
         confidence=confidence_value,
         model_version=str(decision.model_version),
@@ -481,7 +492,7 @@ def list_agent_decisions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved", "decided"):
+    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved", "decided", "current"):
         raise HTTPException(status_code=422, detail=f"unsupported status={status!r}")
 
     query = (
@@ -523,6 +534,21 @@ def list_agent_decisions(
             query = query.filter(
                 AgentDecision.status.in_(("approved", "overridden"))
             )
+        elif status == "current":
+            # Candidate-report lens: an actionable recommendation wins over
+            # history; otherwise retain the last decision a human actually
+            # made. Purge artefacts (discarded/expired) must never displace it.
+            query = query.filter(
+                AgentDecision.status.in_(
+                    (
+                        "pending",
+                        "processing",
+                        "reverted_for_feedback",
+                        "approved",
+                        "overridden",
+                    )
+                )
+            )
         else:
             query = query.filter(AgentDecision.status == status)
     # Snooze: when listing pending, hide rows whose snooze hasn't elapsed.
@@ -555,7 +581,24 @@ def list_agent_decisions(
     # every row written in one bulk-scoring transaction shares an identical value.
     # Order by the unique primary key as a tiebreaker to give a total, stable order —
     # otherwise tied rows shuffle on every reload and the LIMIT cutoff flickers.
-    query = query.order_by(desc(AgentDecision.created_at), desc(AgentDecision.id)).limit(limit)
+    if status == "current":
+        live_first = case(
+            (
+                AgentDecision.status.in_(
+                    ("pending", "processing", "reverted_for_feedback")
+                ),
+                0,
+            ),
+            else_=1,
+        )
+        query = query.order_by(
+            live_first, desc(AgentDecision.created_at), desc(AgentDecision.id)
+        )
+    else:
+        query = query.order_by(
+            desc(AgentDecision.created_at), desc(AgentDecision.id)
+        )
+    query = query.limit(limit)
     rows = query.all()
 
     # A2: compute staleness per row. Only meaningful for ``pending``

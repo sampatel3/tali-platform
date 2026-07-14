@@ -100,6 +100,49 @@ describe('AgentDecisionCard reject consequence copy', () => {
   });
 });
 
+describe('AgentDecisionCard decision narrative', () => {
+  it('shows a policy cause separately from the complete candidate summary', () => {
+    renderCard({
+      ...baseDecision,
+      confidence: 1,
+      candidate_summary: '18 years in Lakehouse and dimensional modelling. The material gap is unproven knowledge-graph delivery.',
+      decision_explanation: {
+        source: 'policy',
+        summary: 'Reject recommended because 2 must-have requirements were marked missing.',
+        context: 'The 72 role-fit score cleared the 55 threshold; the hard must-have rule took priority.',
+        factors: [
+          { label: 'Knowledge graph development', status: 'missing' },
+          { label: 'Ontology and taxonomy design', status: 'missing' },
+        ],
+      },
+    });
+
+    expect(screen.getByText(/^Policy recommends$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Confidence 100%/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/2 must-have requirements were marked missing/i)).toBeInTheDocument();
+    expect(screen.getByText('Knowledge graph development')).toBeInTheDocument();
+    expect(screen.getByText(
+      '18 years in Lakehouse and dimensional modelling. The material gap is unproven knowledge-graph delivery.',
+    )).toBeInTheDocument();
+    expect(screen.getByText('CANDIDATE SUMMARY')).toBeInTheDocument();
+  });
+
+  it('retains confidence wording for genuine agent judgment', () => {
+    renderCard({
+      ...baseDecision,
+      confidence: 0.84,
+      decision_explanation: {
+        source: 'agent',
+        summary: 'Reject recommended after reviewing the conflicting evidence.',
+        factors: [],
+      },
+      candidate_summary: 'Partial role fit.',
+    });
+
+    expect(screen.getByText(/Agent recommends · Confidence 84%/i)).toBeInTheDocument();
+  });
+});
+
 describe('AgentDecisionCard button design-system contract', () => {
   it('renders report and pipeline navigation as canonical secondary links', () => {
     renderCard(baseDecision);

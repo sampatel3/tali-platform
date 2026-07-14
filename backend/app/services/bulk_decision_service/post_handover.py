@@ -30,7 +30,7 @@ from ...models.agent_run import AgentRun
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ..auto_threshold_service import resolve_role_fit_threshold
-from ._shared import _inputs_for, _recruiter_reasoning
+from ._shared import _inputs_for, _policy_evidence, _recruiter_reasoning
 
 logger = logging.getLogger("taali.bulk_decision")
 
@@ -100,22 +100,24 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
 
         role_fit = inputs.scores["role_fit_score"]
         pre_screen = inputs.scores["pre_screen_score"]
-        policy_basis = (
-            f"role-fit {role_fit:.0f} vs threshold "
-            f"{eff if eff is not None else 'default'} (pre-screen {pre_screen:.0f}) "
-            f"→ {decision_type}; recruiter advanced in Workable ({app.workable_stage})"
+        evidence = _policy_evidence(
+            app,
+            verdict=verdict,
+            decision_type=decision_type,
+            role_fit=role_fit,
+            pre_screen=pre_screen,
+            eff=eff,
+            role=role,
+            has_task=has_task,
+            source="post_handover_second_opinion",
         )
+        policy_basis = (
+            evidence["policy_basis"]
+            + f" Recruiter already advanced the candidate in Workable ({app.workable_stage})."
+        )
+        evidence["policy_basis"] = policy_basis
+        evidence["workable_stage"] = app.workable_stage
         reasoning = _recruiter_reasoning(app) or f"Deterministic policy: {policy_basis}"
-        evidence = {
-            "role_fit_score": role_fit,
-            "pre_screen_score": pre_screen,
-            "effective_threshold": eff,
-            "rule_path": verdict.rule_path,
-            "engine_verdict": verdict.decision_type,
-            "policy_basis": policy_basis,
-            "source": "post_handover_second_opinion",
-            "workable_stage": app.workable_stage,
-        }
         run = AgentRun(
             organization_id=int(role.organization_id),
             role_id=int(role.id),

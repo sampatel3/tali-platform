@@ -85,6 +85,25 @@ describe('DecisionRail score ring', () => {
   });
 });
 
+describe('DecisionRail recommendation attribution', () => {
+  it('labels deterministic recommendations as policy and omits model confidence', () => {
+    renderRail({
+      decision: {
+        ...baseDecision,
+        confidence: 1,
+        decision_explanation: { source: 'policy', summary: 'Advance recommended.' },
+      },
+    });
+    expect(screen.getByText('Policy recommends')).toBeInTheDocument();
+    expect(screen.queryByText(/Confidence 100%/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps confidence on agent judgment', () => {
+    renderRail();
+    expect(screen.getByText(/Agent recommends · Confidence 90%/i)).toBeInTheDocument();
+  });
+});
+
 describe('DecisionRail reject consequence copy', () => {
   const rejectDecision = {
     id: 9,

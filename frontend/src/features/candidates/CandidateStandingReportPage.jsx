@@ -34,6 +34,7 @@ import { useReportInFlight } from './useReportInFlight';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
+import { normaliseDecisionText } from '../../shared/decisions/decisionText';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
@@ -437,7 +438,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         setAgentDecision(null);
         setApplicationEvents(sharedEvents);
       } else {
-        // Recruiter path: events and the pending decision only need the
+        // Recruiter path: events and the latest decision only need the
         // route's application id (== numericApplicationId), so fire them in the
         // SAME wave as getApplication instead of waterfalling after it — one
         // fewer full UAE→us-east4 round-trip on every open. Only the assessment
@@ -454,11 +455,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           rolesApi?.listApplicationEvents && Number.isFinite(numericApplicationId)
             ? rolesApi.listApplicationEvents(numericApplicationId).catch(() => null)
             : Promise.resolve(null),
-          // The candidate's own pending agent decision for the DecisionRail.
+          // The candidate's latest decision for the DecisionRail + explanation.
+          // Include resolved rows so approving a decision does not erase why it
+          // was made from the standing report.
           // A failure here must not blank the report, so swallow it to null.
           apiClient.agent?.listDecisions && Number.isFinite(numericApplicationId)
             ? apiClient.agent
-                .listDecisions({ application_id: numericApplicationId, status: 'pending', limit: 1 })
+                .listDecisions({ application_id: numericApplicationId, status: 'current', limit: 1 })
                 .catch(() => null)
             : Promise.resolve(null),
         ]);
@@ -502,14 +505,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   }, [assessmentsApi, backFromRoleId, isShareRoute, numericApplicationId, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
 
-  // Refetch JUST the candidate's pending decision (after an approve / override /
+  // Refetch JUST the candidate's latest decision (after an approve / override /
   // teach) without reloading the whole report. Recruiter-view only.
   const loadAgentDecision = useCallback(async () => {
     if (isShareRoute || !apiClient.agent?.listDecisions || !numericApplicationId) return;
     try {
       const res = await apiClient.agent.listDecisions({
         application_id: numericApplicationId,
-        status: 'pending',
+        status: 'current',
         limit: 1,
       });
       setAgentDecision(Array.isArray(res?.data) ? (res.data[0] || null) : null);
@@ -1291,9 +1294,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               {!isClientView && agentDecision ? (
                 <VerdictDetail decision={agentDecision} />
               ) : reportModel?.recruiterSummaryText ? (
-                <section className="mc-why" aria-label="Why this verdict">
-                  <div className="mc-kicker">WHY THIS VERDICT</div>
-                  <p className="mc-why-reason">{reportModel.recruiterSummaryText}</p>
+                <section className="mc-why" aria-label="Candidate summary">
+                  <div className="mc-kicker">CANDIDATE SUMMARY</div>
+                  <p className="mc-why-reason">
+                    {normaliseDecisionText(reportModel.recruiterSummaryText)}
+                  </p>
                 </section>
               ) : null}
 

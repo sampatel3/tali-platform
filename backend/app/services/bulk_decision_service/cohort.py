@@ -34,7 +34,7 @@ from ...models.agent_run import AgentRun
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ..auto_threshold_service import resolve_role_fit_threshold
-from ._shared import _inputs_for, _no_assessment_note, _recruiter_reasoning
+from ._shared import _inputs_for, _policy_evidence, _recruiter_reasoning
 
 logger = logging.getLogger("taali.bulk_decision")
 
@@ -178,9 +178,17 @@ def _reconcile_stale_pending(db: Session, *, role: Role, eff, has_task: bool) ->
         if new_type is not None and new_type != d.decision_type:
             d.status = "discarded"
             d.resolved_at = now
+            prior_evidence = d.evidence if isinstance(d.evidence, dict) else {}
+            prior_threshold = prior_evidence.get("effective_threshold")
+            if prior_threshold != eff:
+                why = (
+                    f"threshold changed from {prior_threshold if prior_threshold is not None else 'n/a'} "
+                    f"to {round(eff) if eff is not None else 'n/a'}"
+                )
+            else:
+                why = "policy inputs changed"
             d.resolution_note = (
-                f"threshold recalibrated to {round(eff) if eff is not None else 'n/a'}; "
-                f"re-deciding ({d.decision_type} → {new_type})"
+                f"{why}; re-deciding ({d.decision_type} → {new_type})"
             )[:500]
             discarded += 1
     if discarded:
@@ -316,26 +324,22 @@ def decide_role_cohort(
         # Audit basis: the threshold comparison that drove the verdict.
         # Kept in evidence (not the recruiter-facing reasoning) so the
         # headline reads like the candidate report, not policy mechanics.
-        policy_basis = (
-            f"role-fit {role_fit:.0f} vs threshold "
-            f"{eff if eff is not None else 'default'} (pre-screen {pre_screen:.0f}) "
-            f"→ {decision_type}"
-            + _no_assessment_note(role, has_task)
+        evidence = _policy_evidence(
+            app,
+            verdict=verdict,
+            decision_type=decision_type,
+            role_fit=role_fit,
+            pre_screen=pre_screen,
+            eff=eff,
+            role=role,
+            has_task=has_task,
+            source="bulk_decision",
         )
+        policy_basis = evidence["policy_basis"]
         # Recruiter headline = the CV-match narrative (same source as the
         # report hero); fall back to the audit basis when none exists so
         # queue_decision's non-blank guard always passes.
         reasoning = _recruiter_reasoning(app) or f"Deterministic policy: {policy_basis}"
-        evidence = {
-            "role_fit_score": role_fit,
-            "pre_screen_score": pre_screen,
-            "effective_threshold": eff,
-            "has_assessment_task": has_task,
-            "rule_path": verdict.rule_path,
-            "engine_verdict": verdict.decision_type,
-            "policy_basis": policy_basis,
-            "source": "bulk_decision",
-        }
         if post_handover:
             evidence["workable_stage"] = app.workable_stage
         try:

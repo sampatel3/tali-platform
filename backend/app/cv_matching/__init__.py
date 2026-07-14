@@ -10,13 +10,17 @@ and (when relevant) ``MODEL_VERSION``.
 
 from ..llm.models import FAST_MODEL
 
+# v19: candidate summary is a 2-3 sentence Claude-authored synthesis; detailed
+# evidence stays in the structured report. The prompt/schema reject pathological
+# overlong model output rather than presentation code truncating stored prose.
+#
 # v18: graded per-requirement scoring. The main call is unchanged; a focused
 # second pass (``cv_matching.graded``) grades each requirement 0-100 and the
 # aggregation uses that continuous score instead of the binary status × tier
 # weighting (which double-penalised strong substitutes and discarded evidence
 # the coarse model abstained on). Bumping the version invalidates the score
 # cache so live scores pick up the graded layer.
-PROMPT_VERSION = "cv_match_v18"
+PROMPT_VERSION = "cv_match_v19"
 MODEL_VERSION = FAST_MODEL
 
 

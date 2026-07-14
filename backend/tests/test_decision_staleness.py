@@ -473,6 +473,12 @@ def test_list_agent_decisions_route_returns_pending_with_staleness(db):
     from app.domains.agentic import routes as agentic_routes
 
     org, role, _, app = _seed(db)
+    app.cv_match_details = {
+        "summary": (
+            "Strong production Python and CI ownership. "
+            "The full report contains a longer evidence walkthrough."
+        )
+    }
     _queue(db, org, role, app)
 
     current_user = SimpleNamespace(organization_id=int(org.id), id=1)
@@ -496,6 +502,13 @@ def test_list_agent_decisions_route_returns_pending_with_staleness(db):
     assert p.confidence_band in {"high", "medium", "low", None}
     assert p.age_seconds >= 0
     assert p.is_stale is False  # fresh decision
+    # Decision cause and candidate synthesis are separate API concepts.
+    assert p.decision_explanation["source"] == "agent"
+    assert p.decision_explanation["summary"] == "Strong CV."
+    assert p.candidate_summary == (
+        "Strong production Python and CI ownership. "
+        "The full report contains a longer evidence walkthrough."
+    )
 
 
 def test_approve_route_409s_on_stale_decision(db):

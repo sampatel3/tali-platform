@@ -17,11 +17,17 @@ import re
 
 from sqlalchemy.orm import Session
 
+from ...agent_runtime.decision_translation import (
+    resolve_persisted_decision_type,
+    role_has_assessment_stage,
+)
+from ...decision_policy.engine import evaluate
 from ...models.agent_decision import AgentDecision
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ..auto_threshold_service import resolve_role_fit_threshold
-from ._shared import _recruiter_reasoning, _role_fit_score
+from ..decision_presentation_service import normalize_candidate_summary
+from ._shared import _inputs_for, _policy_evidence, _recruiter_reasoning, _role_fit_score
 
 logger = logging.getLogger("taali.bulk_decision")
 
@@ -38,6 +44,20 @@ _VERDICT_GATE_WORDS = re.compile(
 # Only these two verdicts auto-correct, and only between each other. advance /
 # skip_assessment_reject / anything else is always left for the recruiter.
 _AUTO_CORRECTABLE = {"reject", "send_assessment"}
+_STALE_CAUSAL_KEYS = {
+    "candidate_summary",
+    "decision_factors",
+    "decision_point",
+    "decision_source",
+    "decision_trigger",
+    "engine_verdict",
+    "has_assessment_task",
+    "policy_basis",
+    "policy_confidence",
+    "policy_reasoning",
+    "policy_revision_id",
+    "rule_path",
+}
 
 
 def _verdict_has_independent_gate(decision: AgentDecision) -> bool:
@@ -45,7 +65,12 @@ def _verdict_has_independent_gate(decision: AgentDecision) -> bool:
     see (location/salary/visa/fraud, or a structured must-have gap) — leave it
     for the recruiter rather than auto-flipping on a score change."""
     ev = decision.evidence if isinstance(decision.evidence, dict) else {}
-    if ev.get("must_have_gaps") or ev.get("must_have_blocked"):
+    if (
+        ev.get("must_have_gaps")
+        or ev.get("must_have_blocked")
+        or ev.get("decision_trigger") == "must_have_blocked"
+        or ev.get("decision_factors")
+    ):
         return True
     blob = f"{decision.reasoning or ''} {json.dumps(ev, default=str)}"
     return bool(_VERDICT_GATE_WORDS.search(blob))
@@ -112,13 +137,89 @@ def auto_correct_stale_verdict(
         decision.prompt_version = "single_threshold_v1"
         decision.confidence = 1.0
         ev = dict(decision.evidence) if isinstance(decision.evidence, dict) else {}
+        # A changed verdict cannot retain the prior rule path/factors. Doing so
+        # makes the presenter literally explain the opposite action. Re-run the
+        # deterministic engine for a complete fresh snapshot; the compact
+        # fallback is only for test/mocked or best-effort recompute failures.
+        for key in _STALE_CAUSAL_KEYS:
+            ev.pop(key, None)
+        has_task = role_has_assessment_stage(role)
+        fresh_evidence = None
+        try:
+            inputs = _inputs_for(
+                app,
+                role_id=int(role.id),
+                org_id=int(role.organization_id),
+                eff=eff,
+                has_task=has_task,
+            )
+            if inputs is not None:
+                fresh_verdict = evaluate(inputs, db=db)
+                fresh_type = resolve_persisted_decision_type(
+                    fresh_verdict.decision_type,
+                    has_assessment_task=has_task,
+                )
+                if fresh_type == new_type:
+                    fresh_evidence = _policy_evidence(
+                        app,
+                        verdict=fresh_verdict,
+                        decision_type=new_type,
+                        role_fit=float(inputs.scores["role_fit_score"]),
+                        pre_screen=float(inputs.scores["pre_screen_score"]),
+                        eff=eff,
+                        role=role,
+                        has_task=has_task,
+                        source="rescore_auto_correction",
+                    )
+        except Exception:  # pragma: no cover - compact fallback below is safe
+            fresh_evidence = None
+        if fresh_evidence is None:
+            score = _role_fit_score(app)
+            trigger = (
+                "role_fit_score <= role_fit_max"
+                if new_type == "reject"
+                else "role_fit_score >= role_fit_min"
+            )
+            action = "Reject" if new_type == "reject" else "Send an assessment"
+            relation = "at or below" if new_type == "reject" else "at or above"
+            policy_reasoning = (
+                f"{action} because role fit {score:.0f} is {relation} the "
+                f"configured threshold {eff:.0f}."
+                if score is not None and eff is not None
+                else f"{action} under the current role-fit policy."
+            )
+            details = getattr(app, "cv_match_details", None)
+            candidate_summary = normalize_candidate_summary(
+                details.get("summary") if isinstance(details, dict) else None
+            )
+            fresh_evidence = {
+                "role_fit_score": score,
+                "effective_threshold": eff,
+                "has_assessment_task": has_task,
+                "rule_path": [
+                    f"point:{'reject' if new_type == 'reject' else 'send_assessment'}",
+                    f"rule:fired:{trigger}",
+                ],
+                "engine_verdict": (
+                    "queue_reject_decision"
+                    if new_type == "reject"
+                    else "queue_send_assessment"
+                ),
+                "policy_reasoning": policy_reasoning,
+                "policy_basis": policy_reasoning,
+                "decision_trigger": trigger,
+                "decision_source": "policy",
+                "source": "rescore_auto_correction",
+            }
+            if candidate_summary:
+                fresh_evidence["candidate_summary"] = candidate_summary
+        ev.update(fresh_evidence)
         ev.update(
             {
                 "auto_corrected_from": prior_type,
                 "auto_corrected_reason": "re-score flipped the deterministic verdict",
                 "role_fit_score": _role_fit_score(app),
                 "effective_threshold": eff,
-                "source": "rescore_auto_correction",
             }
         )
         decision.evidence = ev

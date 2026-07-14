@@ -207,6 +207,24 @@ def test_runner_returns_canonical_output(monkeypatch):
     assert sent["tools"][0]["input_schema"]["type"] == "object"
 
 
+def test_runner_preserves_the_complete_claude_summary(monkeypatch):
+    monkeypatch.setenv("CV_MATCH_GRADED", "off")
+    payload = _payload()
+    generated_summary = (
+        "Strong fit based on production-grade distributed-data architecture, dimensional-modelling "
+        "ownership, cross-cloud platform leadership, and measurable delivery at enterprise scale. "
+        "The single material uncertainty is hands-on semantic-layer and knowledge-graph delivery "
+        "within the target environment."
+    )
+    assert 280 < len(generated_summary) < 500
+    payload["summary"] = generated_summary
+
+    out = _run_with_payload(monkeypatch, payload)
+
+    assert out.scoring_status == ScoringStatus.OK
+    assert out.summary == generated_summary
+
+
 def _payload_with_integrity(
     *,
     claims: list[dict] | None = None,
@@ -521,3 +539,20 @@ def test_all_criteria_assessed_no_synthesis():
     assert len(result.requirements_assessment) == 2
     for a in result.requirements_assessment:
         assert "not assessed" not in a.reasoning
+
+
+def test_model_cannot_promote_preferred_requirement_to_must_have():
+    """Priority belongs to the recruiter input, not the model's echoed field.
+
+    A model-emitted must-have used to survive validation and later activate the
+    deterministic hard-reject rail even when the role configured it preferred.
+    """
+    result = CVMatchResult.model_validate(_payload_with_assessment_ids(["r1"]))
+    requirements = [_req("r1", priority="strong_preference")]
+
+    assert result.requirements_assessment[0].priority == Priority.MUST_HAVE
+    validate_cross_field_consistency(result, requirements=requirements)
+
+    assessment = result.requirements_assessment[0]
+    assert assessment.priority == Priority.STRONG_PREFERENCE
+    assert assessment.requirement == "some requirement"

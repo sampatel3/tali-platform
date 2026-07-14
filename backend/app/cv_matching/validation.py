@@ -153,6 +153,7 @@ def validate_cross_field_consistency(
 
     if requirements:
         recruiter_ids = {r.id for r in requirements}
+        requirements_by_id = {r.id: r for r in requirements}
         # Drop model-emitted assessments whose id isn't a recruiter id. A
         # typo'd / case-drifted requirement_id would otherwise survive in
         # ``requirements_assessment`` *and* get a synthesised placeholder
@@ -169,6 +170,19 @@ def validate_cross_field_consistency(
                 if a.requirement_id in recruiter_ids
             ]
             seen_ids = seen_ids & recruiter_ids
+
+        # Priority and requirement text are recruiter-owned inputs, never model
+        # judgments.  The model is asked to echo them for readability but may
+        # promote "preferred" to "must_have"; persisting that echo lets the
+        # downstream hard-reject policy silently rewrite recruiter intent.
+        # Canonicalize every surviving assessment before aggregation/persist.
+        for assessment in result.requirements_assessment:
+            canonical = requirements_by_id.get(assessment.requirement_id)
+            if canonical is None:
+                continue
+            assessment.priority = canonical.priority
+            assessment.requirement = canonical.requirement
+
         missing = recruiter_ids - seen_ids
         if missing:
             # **2026-05-22 — cost-optimization**. Previously raised
@@ -195,7 +209,6 @@ def validate_cross_field_consistency(
                     f"{sorted(missing)}"
                 )
             # Partial miss → fill in placeholders, don't reject.
-            requirements_by_id = {r.id: r for r in requirements}
             for missing_id in missing:
                 req = requirements_by_id[missing_id]
                 result.requirements_assessment.append(

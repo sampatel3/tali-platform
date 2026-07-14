@@ -1,0 +1,94 @@
+.decision-narrative {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.decision-narrative-block {
+  min-width: 0;
+}
+
+.decision-narrative-decision {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--purple-soft) 55%, var(--bg-2));
+}
+
+.decision-narrative-candidate {
+  padding: 0 2px;
+}
+
+.decision-narrative-kicker {
+  margin-bottom: 6px;
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+}
+
+.decision-narrative-candidate .decision-narrative-kicker {
+  color: var(--mute);
+}
+
+.decision-narrative-primary,
+.decision-narrative-summary,
+.decision-narrative-context {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-body-lg);
+  line-height: 1.55;
+}
+
+.decision-narrative-primary {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.decision-narrative-context {
+  margin-top: 8px;
+  color: var(--mute);
+  font-size: var(--fs-body);
+}
+
+.decision-narrative-factors {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.decision-narrative-factors li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in oklab, var(--purple) 12%, var(--line));
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+}
+
+.decision-narrative-factors b {
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .decision-narrative-decision {
+    padding: 11px 12px;
+  }
+
+  .decision-narrative-factors li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
