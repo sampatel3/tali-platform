@@ -8,15 +8,18 @@ the current calendar month and refuse if over
 ``role.monthly_usd_budget_cents``. Pauses the role on hit and is
 checked from every Anthropic-spending entry point that has role context
 — when agentic mode is on, this budget covers everything the platform
-does for that role, not just the agent. This is the *only* condition
-that should ever auto-pause a role.
+does for that role, not just the agent. Runtime safety can also pause a role
+when platform credits are depleted or an activation bootstrap exhausts its
+retries; every automatic hold requires its underlying condition to be healthy
+before a resume can clear it.
 
 Per-cycle limits are intentionally enforced at the boundaries that own them:
 ``orchestrator.run_cycle`` enforces ``agent_token_budget_per_cycle`` before and
 after each paid call, while ``tool_registry.dispatch`` enforces
 ``agent_decision_budget_per_cycle`` plus the candidate-facing action caps. They
-abort one cycle but never permanently pause a role.  The monthly cap below is
-the only condition that auto-pauses a role.
+abort one cycle but never permanently pause a role. The monthly cap below is
+the recurring spend guard; bootstrap and credit safety holds are enforced at
+their respective task boundaries.
 
 Org-level credit balance is enforced separately by the existing
 ``usage_metering_service`` ledger.
@@ -36,6 +39,23 @@ from ..models.usage_event import UsageEvent
 
 
 DEFAULT_USD_BUDGET_MONTHLY_CENTS = 5_000  # $50.00
+MANUAL_PAUSE_REASON = "paused by recruiter"
+
+
+def is_manual_pause_reason(reason: str | None) -> bool:
+    """Recognize canonical and legacy recruiter-authored pause labels.
+
+    Older rows/UI versions used "paused by you" or "manual pause". Treating
+    those as system holds would let the recovery sweep undo an explicit human
+    stop, so automatic callers use this conservative classifier.
+    """
+    normalized = " ".join(str(reason or "").strip().lower().split())
+    return normalized in {
+        MANUAL_PAUSE_REASON,
+        "paused by you",
+        "manual pause",
+        "manually paused by recruiter",
+    }
 
 
 @dataclass(frozen=True)
@@ -64,7 +84,11 @@ def micro_to_cents(micro) -> int:
 
 
 def role_monthly_usd_cents(role: Role) -> int:
-    return int(role.monthly_usd_budget_cents or DEFAULT_USD_BUDGET_MONTHLY_CENTS)
+    raw_cap = getattr(role, "monthly_usd_budget_cents", None)
+    if raw_cap is None:
+        return DEFAULT_USD_BUDGET_MONTHLY_CENTS
+    parsed_cap = int(raw_cap)
+    return parsed_cap if parsed_cap > 0 else DEFAULT_USD_BUDGET_MONTHLY_CENTS
 
 
 def spend_by_role_map(db: Session, *, organization_id: int) -> dict:
@@ -117,7 +141,17 @@ def month_to_date_spend_cents(db: Session, *, role: Role) -> int:
     Same unit as ``Role.monthly_usd_budget_cents`` so the cap check and
     every customer-facing display reconcile.
     """
-    spent_micro = (
+    return micro_to_cents(month_to_date_spend_microcredits(db, role=role))
+
+
+def month_to_date_spend_microcredits(db: Session, *, role: Role) -> int:
+    """Exact month-to-date charged spend for admission math.
+
+    Budget displays use whole cents, but projected job admission must retain
+    micro-credit precision or a near-cap role can squeeze in one extra call via
+    cents truncation.
+    """
+    return int(
         db.query(func.coalesce(func.sum(UsageEvent.credits_charged), 0))
         .filter(
             UsageEvent.organization_id == role.organization_id,
@@ -127,7 +161,56 @@ def month_to_date_spend_cents(db: Session, *, role: Role) -> int:
         .scalar()
         or 0
     )
-    return micro_to_cents(spent_micro)
+
+
+def active_score_commitment_count(db: Session, *, role: Role) -> int:
+    """Pending/running score jobs whose usage has not necessarily landed yet."""
+    from ..models.cv_score_job import (
+        SCORE_JOB_PENDING,
+        SCORE_JOB_RUNNING,
+        CvScoreJob,
+    )
+
+    return int(
+        db.query(func.count(CvScoreJob.id))
+        .filter(
+            CvScoreJob.role_id == int(role.id),
+            CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
+        )
+        .scalar()
+        or 0
+    )
+
+
+def remaining_role_admission_microcredits(
+    db: Session,
+    *,
+    role: Role,
+    per_active_score_job: int,
+) -> int | None:
+    """Remaining cap after actual spend and projected in-flight score jobs.
+
+    ``None`` means the role has no configured monthly cap. A legacy zero value
+    uses the documented $50 fallback; it must never become an unlimited hard-
+    admission path while the cycle-level check sees a finite cap. This is a
+    bounded admission reservation rather than a durable monetary hold: active
+    ``CvScoreJob`` rows are the existing durable evidence of committed work,
+    and each is conservatively valued at the caller's SCORE reservation.
+    """
+    raw_cap = getattr(role, "monthly_usd_budget_cents", None)
+    if raw_cap is None:
+        return None
+    effective_cap = (
+        int(raw_cap)
+        if int(raw_cap) > 0
+        else DEFAULT_USD_BUDGET_MONTHLY_CENTS
+    )
+    cap_micro = effective_cap * 10_000
+    spent_micro = month_to_date_spend_microcredits(db, role=role)
+    active_commitment = active_score_commitment_count(db, role=role) * max(
+        int(per_active_score_job), 0
+    )
+    return max(cap_micro - spent_micro - active_commitment, 0)
 
 
 def month_to_date_raw_cost_cents(db: Session, *, role: Role) -> int:
@@ -168,8 +251,6 @@ def check_monthly_usd(db: Session, *, role: Role) -> BudgetCheck:
     on this role, not just the autonomous agent.
     """
     cap_cents = role_monthly_usd_cents(role)
-    if cap_cents <= 0:
-        return BudgetCheck(ok=True)  # 0 means unset
     spent_cents = month_to_date_spend_cents(db, role=role)
     if spent_cents >= cap_cents:
         return BudgetCheck(
@@ -185,29 +266,65 @@ def pause_role(db: Session, *, role: Role, reason: str) -> None:
     db.add(role)
 
 
-def resume_if_under_budget(db: Session, *, role: Role) -> bool:
-    """Clear a budget-triggered pause once the role is back under its cap.
+def resume_if_under_budget(
+    db: Session, *, role: Role, explicit: bool = False
+) -> bool:
+    """Clear an agent hold once budget and runtime readiness are healthy.
 
-    The inverse of :func:`pause_role`. The monthly USD cap is the *only*
-    thing that auto-pauses a role (see module docstring), so a paused but
-    still agent-enabled role is by definition budget-paused. When the
-    recruiter raises ``monthly_usd_budget_cents`` above month-to-date
-    spend, the role should resume on its own — the cohort sweep skips
-    paused roles (``agent_paused_at IS NULL``), so without this the raised
-    cap has no effect until the recruiter manually toggles the agent
-    off/on.
+    The inverse of :func:`pause_role`. A role can be held by its monthly cap,
+    depleted platform credits, a failed bootstrap, or an explicit soft pause.
+    In every case this helper clears the hold only after both the monthly cap
+    and the complete production-readiness probe are green. The cohort sweep
+    skips paused roles (``agent_paused_at IS NULL``), so the caller must also
+    queue an immediate cycle after a successful resume.
 
     Acts only when the role is still agent-enabled (a manually disabled
-    agent stays off), currently paused, and *now genuinely under the cap*
-    — so the next cycle won't immediately re-pause and emit a confusing
-    pause event. Returns ``True`` when a pause was actually cleared, so the
-    caller can kick an immediate cycle instead of waiting for the beat.
+    agent stays off), currently paused, *now genuinely under the cap*, and its
+    production runtime is ready. Automatic callers (for example, a budget
+    field edit) use the fail-safe default ``explicit=False``; that mode never
+    clears a recruiter-authored manual pause. Explicit Resume/Turn-on surfaces
+    must opt in with ``explicit=True``. Keeping the readiness check at this
+    shared mutation boundary makes every resume surface fail closed:
+    direct/resume-all routes, budget-cap PATCHes, chat settings, and
+    recruiter-answer writeback.
+    Returns ``True`` when a pause was actually cleared, so the caller can kick
+    an immediate cycle instead of waiting for the beat.
     """
     if role.agent_paused_at is None or not bool(role.agentic_mode_enabled):
         return False
+    if not explicit and is_manual_pause_reason(role.agent_paused_reason):
+        return False
     if not check_monthly_usd(db, role=role).ok:
         return False
+    try:
+        from ..services.agent_activation_readiness import activation_readiness
+
+        readiness = activation_readiness(role)
+    except Exception:
+        # Resume is a state-changing promise that work can run. An unexpected
+        # readiness-probe failure must leave the role paused, not optimistically
+        # clear the only guard that stops the cohort sweep.
+        import logging
+
+        logging.getLogger("taali.agent.budget_guard").exception(
+            "agent resume readiness probe failed role_id=%s", role.id
+        )
+        return False
+    if not readiness.get("ready"):
+        import logging
+
+        logging.getLogger("taali.agent.budget_guard").warning(
+            "agent resume withheld: runtime unready role_id=%s reasons=%s",
+            role.id,
+            readiness.get("reasons"),
+        )
+        return False
+    now = datetime.now(timezone.utc)
     role.agent_paused_at = None
     role.agent_paused_reason = None
+    role.agent_bootstrap_status = "starting"
+    role.agent_bootstrap_error = None
+    role.agent_bootstrap_started_at = now
+    role.agent_bootstrap_completed_at = None
     db.add(role)
     return True

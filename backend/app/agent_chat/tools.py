@@ -262,7 +262,13 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Activate (turn on / resume) or pause this role's agent. Use when the "
             "recruiter asks to start, restart, resume, re-enable, or pause the agent. "
-            "Activating needs a monthly budget set — if none, ask for one."
+            "First activation preserves the role's action-level automation policy "
+            "and persists one durable "
+            "command that generates, battle-tests and approves the assessment before "
+            "turning the role on; it never needs a second draft-approval click. The "
+            "role stays honestly off while that work or production readiness retries. "
+            "Activating needs a monthly budget. A manual pause never clears until an "
+            "explicit resume."
         ),
         "input_schema": {
             "type": "object",
@@ -281,14 +287,18 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Adjust this role agent's settings. Only set the fields the recruiter "
             "asks to change. monthly_budget_cents = monthly spend cap in cents "
-            "(e.g. 5000 = $50/mo). auto_reject = execute reject decisions without "
-            "review. auto_reject_pre_screen = narrower: only pre-screen-stage "
-            "rejects execute immediately; scored-candidate rejects still queue "
-            "for review. auto_promote = send assessments without review. "
+            "(e.g. 5000 = $50/mo). auto_reject and the narrower "
+            "auto_reject_pre_screen can execute ONLY deterministic pre-screen "
+            "failures; LLM/full-score/assessment reject recommendations always "
+            "require human confirmation. auto_send_assessment, "
+            "auto_resend_assessment, and auto_advance independently control "
+            "the reversible positive actions. auto_promote remains a legacy "
+            "aggregate alias for clients that have not set granular choices. "
             "auto_skip_assessment = bypass the assessment stage entirely; strong "
             "candidates queue as advance-to-interview decisions instead of "
             "receiving an assessment invite. Raising the "
-            "budget can resume a budget-paused agent."
+            "budget can resume an automatic budget/credit hold after readiness "
+            "passes, but never clears a recruiter-authored manual pause."
         ),
         "input_schema": {
             "type": "object",
@@ -297,6 +307,9 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
                 "auto_reject": {"type": ["boolean", "null"]},
                 "auto_reject_pre_screen": {"type": ["boolean", "null"]},
                 "auto_promote": {"type": ["boolean", "null"]},
+                "auto_send_assessment": {"type": ["boolean", "null"]},
+                "auto_resend_assessment": {"type": ["boolean", "null"]},
+                "auto_advance": {"type": ["boolean", "null"]},
                 "auto_skip_assessment": {"type": ["boolean", "null"]},
             },
         },
@@ -433,11 +446,12 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "list_draft_tasks",
         "description": (
-            "List the auto-generated assessment-task DRAFTS awaiting review on "
-            "THIS role (the agent authored them from the JD; they're not live "
-            "until approved). Returns a review card the recruiter can approve or "
-            "reject-with-feedback in-chat. Call when the recruiter asks about "
-            "tasks/assessments, or proactively mention drafts when there are any."
+            "List auto-generated assessment-task drafts on THIS role. If the result "
+            "has automatic_activation=true, the saved Turn-on command is validating "
+            "and approving the draft: report progress and NEVER ask for a second "
+            "approval or revision click. Otherwise this is an optional manual review "
+            "card the recruiter can approve or reject-with-feedback when they ask "
+            "about tasks/assessments."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -521,6 +535,9 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
             "auto_reject": bool(role.auto_reject),
             "auto_reject_pre_screen": bool(role.auto_reject_pre_screen),
             "auto_promote": bool(role.auto_promote),
+            "auto_send_assessment": getattr(role, "auto_send_assessment", None),
+            "auto_resend_assessment": getattr(role, "auto_resend_assessment", None),
+            "auto_advance": getattr(role, "auto_advance", None),
             "auto_skip_assessment": bool(role.auto_skip_assessment),
         },
         "threshold": {
@@ -975,7 +992,12 @@ def dispatch_tool(
         )
         return {"type": "candidate_evidence", **payload}
     if name == "set_agent_state":
-        return _controls.set_agent_state(db, role, action=str(args.get("action") or ""))
+        return _controls.set_agent_state(
+            db,
+            role,
+            action=str(args.get("action") or ""),
+            user_id=int(user.id),
+        )
     if name == "adjust_agent_settings":
         mbc = args.get("monthly_budget_cents")
         return _controls.adjust_agent_settings(
@@ -985,6 +1007,9 @@ def dispatch_tool(
             auto_reject=args.get("auto_reject"),
             auto_reject_pre_screen=args.get("auto_reject_pre_screen"),
             auto_promote=args.get("auto_promote"),
+            auto_send_assessment=args.get("auto_send_assessment"),
+            auto_resend_assessment=args.get("auto_resend_assessment"),
+            auto_advance=args.get("auto_advance"),
             auto_skip_assessment=args.get("auto_skip_assessment"),
         )
     if name == "list_draft_tasks":

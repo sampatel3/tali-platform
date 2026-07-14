@@ -1,9 +1,8 @@
 """Role distribution API — copy-paste artefacts + a public job-board XML feed.
 
-- ``GET /roles/{role_id}/distribution`` (recruiter-auth): the deterministic
-  distribution artefacts for a PUBLISHED role — a LinkedIn post, share-intent
-  URLs, and the org careers-feed URL. An unpublished role returns
-  ``{"published": false}`` (200) so the UI can prompt to publish.
+- ``GET /roles/{role_id}/distribution`` (recruiter-auth): deterministic
+  distribution artefacts only for a published page whose native intake is live.
+  Published previews report ``distribution_ready=false`` without share URLs.
 - ``GET /careers/{slug}/feed.xml`` (no auth, mounted under ``/api/v1/public``):
   a ``JobPosting``-schema XML feed built from the SAME open job pages the public
   careers board serves, for Indeed / Google Jobs to pull.
@@ -29,6 +28,7 @@ from ...services.distribution_service import (
     build_distribution_artefacts,
     build_job_posting_feed_xml,
 )
+from ...services.job_page_lifecycle import native_intake_state
 
 router = APIRouter(tags=["Distribution"])
 public_router = APIRouter(prefix="/api/v1/public", tags=["Distribution"])
@@ -74,19 +74,37 @@ def get_role_distribution(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Distribution artefacts for a published role. 404 for a foreign role;
-    ``{"published": false}`` when the role has no open public job page yet."""
+    """Distribution artefacts only when the page can accept applications.
+
+    A published preview is reported separately from a distribution-ready live
+    role, so clients cannot copy/promote a dead apply URL while activation is
+    pending, the agent is off/paused, or a linked ATS job is no longer live.
+    """
     role = get_role(role_id, current_user.organization_id, db)
     page = _open_page_for_role(db, role)
     if page is None:
-        return {"published": False}
+        return {
+            "published": False,
+            "distribution_ready": False,
+            "reason": "not_published",
+        }
+    intake = native_intake_state(role)
+    if not settings.ATS_PUBLIC_APPLY_ENABLED:
+        intake = {"ready": False, "reason": "public_apply_disabled"}
+    if not intake.get("ready"):
+        return {
+            "published": True,
+            "distribution_ready": False,
+            "reason": intake.get("reason") or "intake_unavailable",
+        }
     org = db.query(Organization).filter(Organization.id == role.organization_id).first()
-    return build_distribution_artefacts(
+    artefacts = build_distribution_artefacts(
         page,
         apply_url=_job_page_url(page.token),
         feed_url=_feed_url(org.slug if org else None),
         org_name=org.name if org else None,
     )
+    return {**artefacts, "distribution_ready": True, "reason": None}
 
 
 @public_router.get("/careers/{slug}/feed.xml")
@@ -104,8 +122,10 @@ def careers_feed(
         if slug
         else None
     )
-    pages: list[JobPage] = (
-        db.query(JobPage)
+    page_roles: list[tuple[JobPage, Role]] = (
+        db.query(JobPage, Role)
+        .join(RoleBrief, RoleBrief.id == JobPage.brief_id)
+        .join(Role, Role.id == RoleBrief.role_id)
         .filter(
             JobPage.organization_id == org.id,
             JobPage.status == JOB_PAGE_STATUS_OPEN,
@@ -113,6 +133,11 @@ def careers_feed(
         .order_by(JobPage.published_at.desc(), JobPage.id.desc())
         .all()
         if org is not None
+        else []
+    )
+    pages = (
+        [page for page, role in page_roles if native_intake_state(role).get("ready")]
+        if settings.ATS_PUBLIC_APPLY_ENABLED
         else []
     )
     xml = build_job_posting_feed_xml(

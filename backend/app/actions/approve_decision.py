@@ -293,13 +293,14 @@ def run(
             duration_minutes=int(ev.get("duration_minutes") or 90),
         )
         # send_assessment can no-op (misconfigured / insufficient_credits /
-        # blocked / already_exists). Only "sent" / "already_exists" mean the
-        # candidate is actually invited — anything else must NOT close the
+        # blocked / already_exists). "queued" means a durable delivery intent
+        # exists; provider success will perform the invited transition. Anything
+        # else must NOT close the
         # decision as approved (it never sent), so raise a clear, actionable
         # error. The approve runner returns the decision to the queue with
         # this message instead of silently looping (mirrors the override path).
         send_status = getattr(send_result, "status", None)
-        if send_status not in ("sent", "already_exists"):
+        if send_status not in ("queued", "sent", "already_exists"):
             raise HTTPException(
                 status_code=409,
                 detail=(

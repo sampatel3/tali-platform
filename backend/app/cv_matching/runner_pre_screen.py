@@ -258,12 +258,42 @@ def run_pre_screen(
     # (direct/test calls with a bare client) we skip so the bare client
     # doesn't choke on the metering kwarg.
     if metering_context:
+        if (
+            metering_context.get("organization_id") is not None
+            and metering_context.get("role_id") is not None
+            and not metering_context.get("credit_reservation")
+        ):
+            try:
+                from ..services.pre_screen_usage_admission import (
+                    reserve_pre_screen_usage,
+                )
+
+                reservation = reserve_pre_screen_usage(
+                    metering_context,
+                    trace_id=trace_id,
+                )
+                if reservation is not None:
+                    metering_context = dict(metering_context)
+                    metering_context["credit_reservation"] = (
+                        reservation.as_metering_payload()
+                    )
+            except Exception as exc:
+                logger.info("Pre-screen budget admission blocked: %s", exc)
+                return PreScreenResult(
+                    decision="error",
+                    reason=f"budget_admission_failed: {exc}"[:240],
+                    prompt_version=PRE_SCREEN_PROMPT_VERSION,
+                    model_version=MODEL_VERSION,
+                    trace_id=trace_id,
+                    cache_hit=False,
+                )
         pre_metering = MeteringContext(
             feature="prescreen",
             organization_id=metering_context.get("organization_id"),
             role_id=metering_context.get("role_id"),
             entity_id=metering_context.get("entity_id"),
             user_id=metering_context.get("user_id"),
+            credit_reservation=metering_context.get("credit_reservation"),
         )
     else:
         pre_metering = MeteringContext.skipped(metered_by="direct_call_no_context")

@@ -27,6 +27,7 @@ from ...models.share_link import SHARE_LINK_MODE_CLIENT, ShareLink
 from ...models.task import Task
 from ...platform.config import settings
 from ...services.assessment_repository_service import AssessmentRepositoryService
+from ...services.agent_policy_settings import apply_workspace_agent_defaults
 from ...services.pre_screening_snapshot import pre_screen_snapshot
 from . import outbox
 from .schemas import WorkableCandidate
@@ -115,6 +116,11 @@ def _resolve_or_provision_role(
             .first()
         )
     if role is None:
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == int(organization_id))
+            .one_or_none()
+        )
         role = Role(
             organization_id=organization_id,
             name=job_title
@@ -122,6 +128,7 @@ def _resolve_or_provision_role(
             source="workable_marketplace",
             workable_job_id=job_shortcode,
         )
+        apply_workspace_agent_defaults(role, org)
         db.add(role)
         db.flush()
     return role
@@ -195,16 +202,21 @@ def provision_assessment(
     candidate their link. Enqueues a 'pending' callback. Returns the row."""
     task = _resolve_task(db, organization_id, test_id)
 
-    gate = get_assessment_creation_gate(organization_id, db, lock_organization=True)
+    role = _resolve_or_provision_role(
+        db, organization_id, job_shortcode=job_shortcode, job_title=job_title
+    )
+    gate = get_assessment_creation_gate(
+        organization_id,
+        db,
+        role_id=int(role.id),
+        lock_organization=True,
+    )
     if not gate.get("can_create"):
         raise ProviderError(402, gate.get("message") or "Assessment quota exhausted")
     org = gate.get("organization") or db.query(Organization).filter(
         Organization.id == organization_id
     ).first()
 
-    role = _resolve_or_provision_role(
-        db, organization_id, job_shortcode=job_shortcode, job_title=job_title
-    )
     cand = _find_or_create_candidate(db, organization_id, candidate)
     application = _find_or_create_application(db, organization_id, cand.id, role.id)
 
@@ -242,29 +254,24 @@ def provision_assessment(
         callback_url=callback_url,
         payload={"status": "pending"},
     )
+    if org:
+        # The Assessment row is also the durable email-invite outbox. Record
+        # this before the one producer commit so provisioning can never succeed
+        # without a recoverable candidate-delivery intent.
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
+            candidate_email=cand.email,
+            candidate_name=cand.full_name or cand.email,
+            position=task.name or "Technical assessment",
+            reply_to=None,
+            pipeline_source="agent",
+            pipeline_actor_type="system",
+            pipeline_reason="Workable marketplace assessment invite sent",
+            pipeline_metadata={"assessment_mode": "workable_marketplace"},
+        )
     db.commit()
     db.refresh(assessment)
-
-    # Email the candidate their assessment link (best-effort; never block the
-    # provisioning response on email/Workable side-effects).
-    try:
-        if org:
-            dispatch_assessment_invite(
-                assessment=assessment,
-                org=org,
-                candidate_email=cand.email,
-                candidate_name=cand.full_name or cand.email,
-                position=task.name or "Technical assessment",
-                reply_to=None,
-            )
-            db.commit()
-            db.refresh(assessment)
-    except Exception:
-        db.rollback()
-        logger.exception(
-            "workable provider: invite dispatch failed for assessment %s",
-            assessment.id,
-        )
 
     return assessment
 

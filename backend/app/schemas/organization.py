@@ -22,6 +22,9 @@ class WorkableConfigBase(BaseModel):
     # that still send the field don't get rejected — it's a no-op.
     sync_interval_minutes: int = Field(default=15, ge=5, le=1440)
     invite_stage_name: str = Field(default="", min_length=0, max_length=200)
+    # Default destination for autonomous candidate advances. A recruiter-picked
+    # target on a manual decision always takes precedence.
+    interview_stage_name: str = Field(default="", min_length=0, max_length=200)
     auto_reject_enabled: bool = False
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
@@ -37,6 +40,7 @@ class WorkableConfigUpdate(BaseModel):
     default_sync_mode: Optional[Literal["metadata", "full"]] = None
     sync_interval_minutes: Optional[int] = Field(default=None, ge=5, le=1440)
     invite_stage_name: Optional[str] = Field(default=None, min_length=0, max_length=200)
+    interview_stage_name: Optional[str] = Field(default=None, min_length=0, max_length=200)
     auto_reject_enabled: Optional[bool] = None
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
@@ -104,8 +108,8 @@ class AgentDefaultsAutonomy(BaseModel):
     detail Agent settings tab. New roles inherit these defaults."""
 
     auto_invite_above: bool = True
-    auto_reject_below: bool = True
-    auto_advance_high_score: bool = False
+    auto_reject_below: bool = False
+    auto_advance_high_score: bool = True
     passive_outbound: bool = False
 
 
@@ -115,9 +119,44 @@ class AgentDefaults(BaseModel):
     Agent settings tab take precedence over these."""
 
     enabled: bool = True
-    budget_cents: int = Field(default=5000, ge=0)
+    budget_cents: int = Field(default=5000, ge=1)
     pause_threshold_pct: int = Field(default=80, ge=0, le=100)
     autonomy: AgentDefaultsAutonomy = Field(default_factory=AgentDefaultsAutonomy)
+    # Canonical action-level controls. ``None`` preserves older saved payloads:
+    # the backend translates their nested ``autonomy`` values on inheritance.
+    auto_send_assessment: Optional[bool] = None
+    auto_resend_assessment: Optional[bool] = None
+    auto_advance: Optional[bool] = None
+    auto_reject_pre_screen: Optional[bool] = None
+    auto_skip_assessment: Optional[bool] = None
+    threshold_mode: Optional[Literal["manual", "auto"]] = None
+    agent_action_allowlist: Optional[List[str]] = None
+    agent_token_budget_per_cycle: Optional[int] = Field(
+        default=None, ge=1_000, le=500_000
+    )
+    agent_decision_budget_per_cycle: Optional[int] = Field(
+        default=None, ge=1, le=200
+    )
+
+
+class AgentDefaultsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    budget_cents: Optional[int] = Field(default=None, ge=1)
+    pause_threshold_pct: Optional[int] = Field(default=None, ge=0, le=100)
+    autonomy: Optional[AgentDefaultsAutonomy] = None
+    auto_send_assessment: Optional[bool] = None
+    auto_resend_assessment: Optional[bool] = None
+    auto_advance: Optional[bool] = None
+    auto_reject_pre_screen: Optional[bool] = None
+    auto_skip_assessment: Optional[bool] = None
+    threshold_mode: Optional[Literal["manual", "auto"]] = None
+    agent_action_allowlist: Optional[List[str]] = None
+    agent_token_budget_per_cycle: Optional[int] = Field(
+        default=None, ge=1_000, le=500_000
+    )
+    agent_decision_budget_per_cycle: Optional[int] = Field(
+        default=None, ge=1, le=200
+    )
 
 
 class AiToolingConfig(BaseModel):
@@ -135,7 +174,7 @@ class AiToolingConfigUpdate(BaseModel):
     no_ai_baseline_enabled: Optional[bool] = None
     claude_credit_per_candidate_usd: Optional[float] = Field(default=None, ge=0, le=1000)
     session_timeout_minutes: Optional[int] = Field(default=None, ge=15, le=240)
-    agent_defaults: Optional[AgentDefaults] = None
+    agent_defaults: Optional[AgentDefaultsUpdate] = None
 
 
 class NotificationPreferences(BaseModel):

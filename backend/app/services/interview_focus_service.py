@@ -12,6 +12,12 @@ from ..components.integrations.claude.model_fallback import (
     is_model_not_found_error,
 )
 from ..platform.config import settings
+from .pricing_service import Feature
+from .provider_usage_admission import (
+    release_provider_usage,
+    reserve_provider_usage,
+    with_credit_reservation,
+)
 
 logger = logging.getLogger("taali.interview_focus")
 
@@ -226,13 +232,50 @@ def generate_interview_focus_sync(
         model_used = resolved_model
         last_model_error: Exception | None = None
         for candidate_model in model_candidates:
+            reservation = None
+            attempt_metering = call_metering
+            meter_role_id = call_metering.get("role_id")
+            if meter_org_id is not None and meter_role_id is not None:
+                try:
+                    reservation = reserve_provider_usage(
+                        organization_id=int(meter_org_id),
+                        role_id=int(meter_role_id),
+                        feature=Feature.INTERVIEW_FOCUS,
+                        trace_id=(
+                            str(call_metering.get("trace_id"))
+                            if call_metering.get("trace_id")
+                            else f"interview-focus:role:{int(meter_role_id)}"
+                        ),
+                        entity_id=str(
+                            call_metering.get("entity_id")
+                            or f"role:{int(meter_role_id)}"
+                        ),
+                        sub_feature="role_interview_focus",
+                        metadata={"model_attempt": candidate_model},
+                    )
+                except Exception as exc:
+                    # This is an optional recruiter-support artefact; the
+                    # deterministic pack builder remains usable. Never call the
+                    # provider when the org balance, role cap, or hold write
+                    # cannot be guaranteed.
+                    logger.warning(
+                        "Interview focus blocked by usage admission "
+                        "(role_id=%s model=%s): %s",
+                        meter_role_id,
+                        candidate_model,
+                        exc,
+                    )
+                    return None
+                attempt_metering = with_credit_reservation(
+                    call_metering, reservation
+                )
             try:
                 response = client.messages.create(
                     model=candidate_model,
                     max_tokens=1400,
                     system="You are an expert recruiter. Respond ONLY with valid JSON.",
                     messages=[{"role": "user", "content": prompt}],
-                    metering=call_metering,
+                    metering=attempt_metering,
                 )
                 model_used = candidate_model
                 if candidate_model != resolved_model:
@@ -243,6 +286,13 @@ def generate_interview_focus_sync(
                     )
                 break
             except Exception as exc:
+                # The real metered wrapper releases on SDK errors. This
+                # idempotent fallback also covers injected/mocked clients and a
+                # failure before the wrapper takes ownership of the request.
+                release_provider_usage(
+                    reservation,
+                    reason=f"interview_focus_call_failed:{type(exc).__name__}",
+                )
                 if is_model_not_found_error(exc):
                     last_model_error = exc
                     logger.warning(

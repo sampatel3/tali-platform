@@ -131,27 +131,46 @@ const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role
   return acc;
 }, { active: 0, filled: 0, filled_external: 0, cancelled: 0, total: 0 });
 
-const isRoleDraft = (role) => (
-  !role?.workable_job_id
-  && !role?.job_spec_present
-  && Number(role?.applications_count || 0) === 0
+const roleJobStatus = (role) => String(role?.job_status || '').trim().toLowerCase();
+const hasNativeLifecycle = (role) => Object.prototype.hasOwnProperty.call(JOB_STATUS_META, roleJobStatus(role));
+
+const isRoleDraft = (role) => {
+  if (hasNativeLifecycle(role)) return roleJobStatus(role) === 'draft';
+  // Compatibility fallback for old manual roles created before job_status was
+  // persisted. Once a canonical lifecycle exists, it is always authoritative.
+  return String(role?.source || '').toLowerCase() !== 'workable'
+    && !role?.workable_job_id
+    && !role?.job_spec_present
+    && Number(role?.applications_count || 0) === 0;
+};
+
+const workableState = (role) => String(role?.workable_job_state || '').trim().toLowerCase();
+const isWorkableBackedRole = (role) => (
+  String(role?.source || '').toLowerCase() === 'workable'
+  || Boolean(role?.workable_job_id)
+  || role?.role_kind === 'sister'
 );
 
-// Live == the Workable job is published (actively recruiting / posted to job
-// boards). Manual/Taali roles have no Workable state and are never "live".
-const isRoleLive = (role) => String(role?.workable_job_state || '').toLowerCase() === 'published';
+// A Workable-backed role follows the provider's authoritative publish state.
+// A native role is Live only while its intake lifecycle is open; when the API
+// supplies `is_published`, that readiness signal prevents a preview page or a
+// paused/off agent from being presented as accepting applications.
+const isRoleLive = (role) => {
+  if (role?.workable_job_live != null) return role.workable_job_live === true;
+  if (isWorkableBackedRole(role)) return workableState(role) === 'published';
+  if (!hasNativeLifecycle(role)) return false;
+  if (roleJobStatus(role) !== 'open') return false;
+  return role?.is_published == null ? true : role.is_published === true;
+};
 
-// Grey only when the external lifecycle explicitly says the posting is no
-// longer active. The backend boolean is authoritative and also carries an ATS
-// owner's state onto sister roles. The state fallback supports older payloads;
-// missing/unknown state is not proof that a posting is inactive.
-const isRoleDimmed = (role) => (
-  role?.workable_job_live != null
-    ? role.workable_job_live === false
-    : NON_LIVE_WORKABLE_STATES.has(
-      String(role?.workable_job_state || '').trim().toLowerCase(),
-    )
-);
+// Dimming represents the posting lifecycle, independently of whether the
+// agent is on, paused, or off. Explicit ATS state remains authoritative for
+// Workable and sister roles; native roles follow their persisted job status.
+const isRoleDimmed = (role) => {
+  if (role?.workable_job_live != null) return role.workable_job_live === false;
+  if (isWorkableBackedRole(role) && NON_LIVE_WORKABLE_STATES.has(workableState(role))) return true;
+  return hasNativeLifecycle(role) ? roleJobStatus(role) !== 'open' : false;
+};
 
 const filterRoleBySource = (role, sourceFilter) => {
   if (sourceFilter === 'live') return isRoleLive(role);
@@ -902,6 +921,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   // "AGENT PAUSED", not "AGENT ON".
                   const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
                   const agentActive = agentEnabled && !agentPaused;
+                  const activationIntent = role?.assessment_task_provisioning?.activation_intent;
+                  const activationStatus = String(activationIntent?.status || '');
+                  const activationQueued = !agentEnabled
+                    && ['pending', 'retry_wait'].includes(activationStatus);
+                  const activationBlocked = !agentEnabled && activationStatus === 'blocked';
                   // Live agent status from the /roles/{id}/agent/status fan-out.
                   // When loaded, the indicator shows the canvas-spec
                   // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
@@ -949,8 +973,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         {roleLive ? (
                           <span
                             className="job-star is-locked"
-                            aria-label="Live role · always in continuous sync"
-                            title="Live role · always in continuous sync (auto-starred)"
+                            aria-label={workableRole ? 'Live Workable role · always in continuous sync' : 'Live native role · monitored continuously'}
+                            title={workableRole ? 'Live Workable role · always in continuous sync (auto-starred)' : 'Live native role · monitored continuously (auto-starred)'}
                             style={{
                               padding: 2,
                               marginTop: 2,
@@ -1004,7 +1028,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                                 {JOB_STATUS_META[role.job_status].label}
                               </span>
                             ) : null}
-                            {role?.is_published ? (
+                            {role?.is_published && roleLive ? (
                               <span
                                 className="job-live-badge"
                                 title="Public job page is live — candidates can apply"
@@ -1050,6 +1074,21 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                                 ? `ON · cap $${Math.round(agentBudget)}`
                                 : 'ON'}
                           </AgentLoop>
+                        ) : activationQueued ? (
+                          <span
+                            className="job-agent-pill is-queued"
+                            title="Turn on is saved; the backend is validating and preparing this role"
+                          >
+                            <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
+                            TURN-ON QUEUED
+                          </span>
+                        ) : activationBlocked ? (
+                          <span
+                            className="job-agent-pill is-needs-input"
+                            title={activationIntent?.last_error || 'Turn on needs recruiter input'}
+                          >
+                            NEEDS INPUT
+                          </span>
                         ) : (
                           <span className="job-agent-pill is-off" title="Agent off">OFF</span>
                         )}

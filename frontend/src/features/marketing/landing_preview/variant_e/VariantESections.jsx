@@ -142,8 +142,8 @@ const CONTROL_POINTS = [
     p: 'Same inputs, same call, every time — each one citing the requirements, transcript and rubric behind it.',
   },
   {
-    h: 'Yours to approve, override, or teach',
-    p: 'Every consequential call waits for you. Override it and your call becomes the agent’s next training signal.',
+    h: 'Hard calls are yours to approve, override, or teach',
+    p: 'On-policy reversible steps move automatically. Ambiguous, off-policy, and irreversible outcomes wait for you; overrides become the agent’s next training signal.',
   },
   {
     h: 'A full audit trail',
@@ -168,8 +168,8 @@ export const ControlSection = () => {
               </div>
               <h2 className="lve-h2">The agent advises. <em>You decide.</em></h2>
               <p className="lve-sub">
-                Every consequential call is deterministic, evidence-linked, and yours to approve, override, or
-                teach. Pair every AI claim with human control.
+                On-policy reversible steps execute automatically. Ambiguous, off-policy, and irreversible outcomes
+                are deterministic, evidence-linked, and yours to approve, override, or teach.
               </p>
               <div className="lve-control-points">
                 {CONTROL_POINTS.map((point) => (

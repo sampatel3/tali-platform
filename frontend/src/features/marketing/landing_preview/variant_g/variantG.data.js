@@ -16,9 +16,9 @@ export const CANDIDATES = [
 export const FUNNEL = [
   {
     n: '01',
-    key: 'Source',
-    body: 'Plugs into your ATS. Every candidate, role and JD flows in.',
-    viz: { kind: 'chips', chips: [{ label: 'workable', variant: 'plain' }, { label: 'bullhorn', variant: 'plain' }, { label: 'greenhouse', variant: 'plain' }] },
+    key: 'Intake',
+    body: 'Applicants flow in from your live Taali job page and connected ATS. Outbound uses only a lawful audience and campaign you approve.',
+    viz: { kind: 'chips', chips: [{ label: 'taali apply', variant: 'plain' }, { label: 'workable', variant: 'plain' }, { label: 'bullhorn', variant: 'plain' }] },
   },
   {
     n: '02',

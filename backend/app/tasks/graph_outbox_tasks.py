@@ -7,8 +7,9 @@ This task ships the pending rows to Graphiti with retry/backoff.
 
 Two layers of retry, deliberately:
 - *Per row* (inside ``episode_outbox.drain``): a send that doesn't land
-  leaves the row ``pending`` (until a cap), so the NEXT beat tick retries
-  it. This is the durable layer — the signal is never dropped.
+  leaves the row ``pending`` with bounded exponential cooldown, so a future
+  beat tick retries it. Provider, budget, and metering outages never exhaust
+  into terminal failure; only an invalid payload does.
 - *Per task* (``self.retry`` below): only for an unexpected failure in the
   drain machinery itself (e.g. DB blip opening the session). Bounded
   backoff; on exhaustion the beat schedule re-runs it anyway.
@@ -45,10 +46,10 @@ def _retry_countdown(retries: int) -> int:
 def drain_graph_episode_outbox(self, batch_size: int = 200) -> dict:
     """Send pending ``graph_episode_outbox`` rows to Graphiti.
 
-    Idempotent: rows already ``sent`` are excluded from the drain query, so
-    re-running never double-processes (and Graphiti dedups by content as a
-    second backstop). No-op when Graphiti is unconfigured — rows are left
-    untouched for a future drain.
+    Idempotent: rows already ``sent`` are excluded and pending rows are locked
+    with ``SKIP LOCKED``, so competing drains do not double-process (Graphiti
+    content dedup is a second backstop). No-op when Graphiti is unconfigured —
+    rows are left untouched for a future drain.
     """
     from ..candidate_graph import episode_outbox
 

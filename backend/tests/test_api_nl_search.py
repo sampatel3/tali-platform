@@ -83,6 +83,7 @@ def test_nl_query_routes_through_runner_and_echoes_parsed_filter(client):
     mocked.assert_called_once()
     kwargs = mocked.call_args.kwargs
     assert kwargs["nl_query"] == "candidates with AWS Glue experience"
+    assert kwargs["role_id"] is None
     assert kwargs["rerank_enabled"] is False
     assert kwargs["include_subgraph"] is False
 
@@ -117,6 +118,53 @@ def test_rerank_false_propagates_to_runner(client):
         )
     assert resp.status_code == 200
     assert mocked.call_args.kwargs["rerank_enabled"] is False
+
+
+def test_single_role_nl_query_is_role_scoped_and_role_metered(client):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        return_value=_stub_search_output(),
+    ) as mocked:
+        resp = client.get(
+            "/api/v1/applications?nl_query=python&role_id=77",
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    kwargs = mocked.call_args.kwargs
+    assert kwargs["role_id"] == 77
+    assert "candidate_applications.role_id" in str(kwargs["base_query"])
+
+
+def test_multi_role_nl_query_remains_workspace_metered(client):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        return_value=_stub_search_output(),
+    ) as mocked:
+        resp = client.get(
+            "/api/v1/applications?nl_query=python&role_ids=77,88",
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert mocked.call_args.kwargs["role_id"] is None
+
+
+def test_invalid_role_ids_fail_before_nl_provider_work(client):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        side_effect=AssertionError("provider-backed search must not run"),
+    ) as mocked:
+        resp = client.get(
+            "/api/v1/applications?nl_query=python&role_ids=77,nope",
+            headers=headers,
+        )
+
+    assert resp.status_code == 422, resp.text
+    mocked.assert_not_called()
 
 
 def test_legacy_search_is_ignored_when_nl_query_set(client):

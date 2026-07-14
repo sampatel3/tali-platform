@@ -110,7 +110,13 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     expect(await screen.findByRole('button', { name: /Syncing/i })).toBeDisabled();
-    expect(trackWorkableSync).toHaveBeenCalled();
+    // The context's active job can paint the Syncing state before the async
+    // organization load confirms that Workable is connected. Reattachment is
+    // intentionally gated on that confirmation, so wait for the effect rather
+    // than treating the already-visible status as proof it has run.
+    await waitFor(() => {
+      expect(trackWorkableSync).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('treats an already-running sync response as active work instead of an error', async () => {
@@ -210,6 +216,46 @@ describe('JobsPage Workable sync states', () => {
     // not the dark-purple "ON" pill — for an enabled-but-paused role.
     expect(await screen.findByText('PAUSED')).toBeInTheDocument();
     expect(document.querySelector('.job-agent-pill.is-on')).toBeNull();
+  });
+
+  it('keeps durable Turn-on progress visible without presenting the agent as ON', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          id: 110,
+          name: 'Queued Role',
+          agentic_mode_enabled: false,
+          assessment_task_provisioning: {
+            activation_intent: { status: 'pending', last_error: null },
+          },
+        },
+        {
+          ...baseRoles[0],
+          id: 111,
+          name: 'Blocked Role',
+          agentic_mode_enabled: false,
+          assessment_task_provisioning: {
+            activation_intent: {
+              status: 'blocked',
+              last_error: 'Confirm the preserved assessment task.',
+            },
+          },
+        },
+      ],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const queuedCard = (await screen.findByText('Queued Role')).closest('.job-card');
+    const blockedCard = screen.getByText('Blocked Role').closest('.job-card');
+    expect(within(queuedCard).getByText('TURN-ON QUEUED')).toBeInTheDocument();
+    expect(within(queuedCard).queryByText(/^ON/)).not.toBeInTheDocument();
+    expect(within(blockedCard).getByText('NEEDS INPUT')).toHaveAttribute(
+      'title',
+      'Confirm the preserved assessment task.',
+    );
+    expect(document.querySelectorAll('.job-agent-pill.is-on')).toHaveLength(0);
   });
 
   it('greys only explicitly non-live ATS roles, independently of agent state', async () => {
@@ -321,6 +367,34 @@ describe('JobsPage Workable sync states', () => {
     expect(within(syncedCard).queryByText('Full ATS')).toBeNull();
   });
 
+  it('uses native job_status for Live and Draft filters', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        { ...baseRoles[0], id: 201, name: 'Native Open', source: 'manual', job_status: 'open', workable_job_state: null },
+        { ...baseRoles[0], id: 202, name: 'Native Draft', source: 'manual', job_status: 'draft', job_spec_present: true, workable_job_state: null },
+        { ...baseRoles[0], id: 203, name: 'Provider Live', source: 'workable', job_status: null, workable_job_state: 'published' },
+      ],
+    });
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const nativeOpenCard = (await screen.findByText('Native Open')).closest('.job-card');
+    const nativeDraftCard = screen.getByText('Native Draft').closest('.job-card');
+    expect(nativeOpenCard).not.toHaveClass('not-live');
+    expect(nativeDraftCard).toHaveClass('not-live');
+    expect(screen.getByRole('button', { name: /^Live2$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Draft1$/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Live2$/i }));
+    expect(screen.getByText('Native Open')).toBeInTheDocument();
+    expect(screen.getByText('Provider Live')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Native Draft')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Draft1$/i }));
+    expect(await screen.findByText('Native Draft')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Native Open')).not.toBeInTheDocument());
+    expect(screen.queryByText('Provider Live')).not.toBeInTheDocument();
+  });
+
   it('paints the first page, then swaps in the full role list in the background', async () => {
     // A full first page (== the limit) signals there may be more roles, so the
     // hub follows up with an unlimited fetch and replaces the list. A small org
@@ -403,16 +477,19 @@ describe('JobsPage entrance motion', () => {
   it('shows a "Live" badge only on roles with a live public job page', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
-        { ...baseRoles[0], id: 101, name: 'Published Role', is_published: true },
+        { ...baseRoles[0], id: 101, name: 'Published Role', is_published: true, workable_job_state: 'published' },
         { ...baseRoles[0], id: 102, name: 'Unpublished Role', is_published: false },
+        { ...baseRoles[0], id: 103, name: 'Closed Preview', is_published: true, workable_job_state: 'closed' },
       ],
     });
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const liveCard = (await screen.findByText('Published Role')).closest('.job-card');
     const draftCard = screen.getByText('Unpublished Role').closest('.job-card');
+    const closedCard = screen.getByText('Closed Preview').closest('.job-card');
     expect(within(liveCard).getByText('Live')).toBeInTheDocument();
     expect(within(draftCard).queryByText('Live')).not.toBeInTheDocument();
+    expect(within(closedCard).queryByText('Live')).not.toBeInTheDocument();
   });
 
   it('does not re-fire the card stagger when a filter changes', async () => {

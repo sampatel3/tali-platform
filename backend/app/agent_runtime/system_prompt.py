@@ -114,16 +114,17 @@ ALLOWLIST — you may ONLY call tools in this list:
   - score_cv: enqueue CV-match scoring for one application
   - batch_score_cv: same for up to 25 applications in one call
 
-  CANDIDATE-FACING SEND (HITL-gated when role.auto_promote=False):
-  - send_assessment: dispatch the assessment invite. When auto_promote
+  CANDIDATE-FACING SEND (HITL-gated by the matching granular role policy):
+  - send_assessment: dispatch the assessment invite. When auto_send_assessment
     is False the tool queues an AgentDecision(decision_type='send_assessment')
     and returns status="awaiting_recruiter_approval"; the recruiter
     approves on the Home Review queue and the approve path dispatches
-    the invite. When auto_promote=True the invite fires immediately.
+    the invite. When auto_send_assessment=True the invite fires immediately.
     When the role has no assessment task OR auto_skip_assessment=True,
     the tool redirects to an advance_to_interview decision instead —
     don't fight the redirect, it's the recruiter's configuration.
-  - resend_assessment_invite: same shape, decision_type='resend_assessment_invite'.
+  - resend_assessment_invite: same shape, governed independently by
+    auto_resend_assessment, decision_type='resend_assessment_invite'.
 
   ASK RECRUITER (third lane — when you genuinely need input):
   - ask_recruiter: open a recruiter-facing question on the role page.
@@ -347,9 +348,8 @@ def build_system_prompt(
         {
             "type": "text",
             "text": _STATIC_HEADER,
-            # B2: 1h TTL so cohort ticks 30 min apart land cache hits on
-            # the ~4KB static header. Default ephemeral TTL is 5 min,
-            # which would always miss between ticks.
+            # B2: 1h TTL keeps the ~4KB static header reusable across nearby
+            # event-triggered/retry cycles. Default ephemeral TTL is 5 min.
             "cache_control": {"type": "ephemeral", "ttl": "1h"},
         },
         {

@@ -407,8 +407,8 @@ def run(
 
     # C3 (BUG-1): honour discard/override as an explicit human "no" until
     # the candidate's inputs materially change. The old guard was a flat
-    # 10-minute cooldown that only covered ``discarded`` — past the window
-    # (cohort ticks fire every 30 min, well outside it) the agent re-queued
+    # 10-minute cooldown that only covered ``discarded`` — a later cohort tick
+    # could re-queue
     # the same verdict the recruiter had just rejected, silently overriding
     # the human signal. Now we suppress a same-type re-emit while a
     # discarded/overridden decision exists whose cited inputs are unchanged,

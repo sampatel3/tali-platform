@@ -15,17 +15,15 @@ should see. ``organization_name`` is the poster (the consultancy / employer).
 """
 from __future__ import annotations
 
-import json
-import logging
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...deps import get_optional_current_user
+from ...cv_parsing.origins import CV_PARSE_ORIGIN_NATIVE_APPLY
 from ...models.candidate_application import CandidateApplication
-from ...models.job_page import JOB_PAGE_STATUS_CLOSED, JOB_PAGE_STATUS_OPEN, JobPage
+from ...models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
 from ...models.organization import Organization
 from ...models.role import Role
 from ...models.role_brief import RoleBrief
@@ -33,10 +31,17 @@ from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...services.rate_limit import check_rate_limit
+from ...services.job_page_lifecycle import role_accepts_native_applications
 from .apply_service import submit_application
+from .public_apply_support import (
+    APPLY_EMAIL_REQUIRED_MESSAGE as _APPLY_EMAIL_REQUIRED_MESSAGE,
+    attach_resume as _attach_resume,
+    find_existing_application as _find_existing_application,
+    parse_answers as _parse_answers,
+    role_requires_email as _role_requires_email,
+    usable_email as _usable_email,
+)
 from .screening_service import list_role_questions
-
-logger = logging.getLogger("taali.job_pages")
 
 public_router = APIRouter(prefix="/api/v1/public", tags=["Job pages"])
 
@@ -44,7 +49,6 @@ public_router = APIRouter(prefix="/api/v1/public", tags=["Job pages"])
 # generic on every apply outcome (knockout details stay server-side).
 _APPLY_RECEIVED_MESSAGE = "Thanks for applying — we've received your application."
 _APPLY_CLOSED_MESSAGE = "This job isn't accepting applications right now."
-_APPLY_RESUME_TYPE_MESSAGE = "Please upload your resume as a PDF or Word document."
 
 
 def _public_screening_questions(db: Session, org_id: int, role_id: int) -> list[dict]:
@@ -81,6 +85,34 @@ def _resolve_role_for_page(db: Session, page: JobPage) -> Role | None:
             Role.organization_id == page.organization_id,
         )
         .first()
+    )
+
+
+def _role_accepts_public_applications(role: Role | None) -> bool:
+    """Whether the materialized role is live for native public intake.
+
+    Requisition publish deliberately creates a DRAFT role; Turn on is the
+    explicit go-live transition.  The shared lifecycle policy also makes
+    Turn off/Pause and a non-live linked Workable job fail closed. It keys on
+    ``job_status`` rather than ``source`` because Workable adoption changes the
+    latter while retaining the same requisition page.
+    """
+    return role_accepts_native_applications(role)
+
+
+def _role_requires_resume(role: Role | None) -> bool:
+    """Resume policy for a public application.
+
+    A managed requisition always requires a readable CV whenever it is accepting
+    applications. Turn off/Pause now closes intake entirely, so no unscorable or
+    unexpectedly billable applications accumulate between agent runs. Preserve
+    the existing gate for any other agent-enabled role.
+    """
+    if role is None:
+        return False
+    return bool(
+        getattr(role, "source", None) == "requisition"
+        or getattr(role, "agentic_mode_enabled", False)
     )
 
 
@@ -121,7 +153,7 @@ def view_job_page(
     page = db.query(JobPage).filter(JobPage.token == token).first()
     # 404 for both "no such page" and a closed page — a closed listing should
     # read as gone, not as "exists but unavailable".
-    if page is None or page.status == JOB_PAGE_STATUS_CLOSED:
+    if page is None or page.status != JOB_PAGE_STATUS_OPEN:
         raise HTTPException(status_code=404, detail="Job not found")
 
     org = page.organization
@@ -137,7 +169,11 @@ def view_job_page(
     accepts_applications = bool(
         settings.ATS_PUBLIC_APPLY_ENABLED
         and page.status == JOB_PAGE_STATUS_OPEN
-        and role is not None
+        and _role_accepts_public_applications(role)
+    )
+    resume_required = bool(
+        accepts_applications
+        and _role_requires_resume(role)
     )
     return {
         "title": page.title,
@@ -152,6 +188,7 @@ def view_job_page(
         "status": page.status,
         "organization_name": org.name if org else None,
         "accepts_applications": accepts_applications,
+        "resume_required": resume_required,
         "screening_questions": screening_questions,
     }
 
@@ -189,6 +226,19 @@ def view_careers_board(
         .order_by(JobPage.published_at.desc(), JobPage.id.desc())
         .all()
     )
+    # Publishing creates a previewable page while the requisition Role remains
+    # DRAFT. Keep previews reachable by direct token, but do not advertise them
+    # on the public board until the durable Turn-on workflow makes the role OPEN
+    # with an enabled, unpaused agent.
+    pages = (
+        [
+            page
+            for page in pages
+            if _role_accepts_public_applications(_resolve_role_for_page(db, page))
+        ]
+        if settings.ATS_PUBLIC_APPLY_ENABLED
+        else []
+    )
 
     return {
         "organization_name": org.name,
@@ -217,70 +267,6 @@ def view_careers_board(
 # --------------------------------------------------------------------------- #
 # Public apply (write) — flag-gated, rate-limited, no auth.
 # --------------------------------------------------------------------------- #
-
-# Resume upload limits — mirror the recruiter CV-upload path
-# (document_service.MAX_FILE_SIZE / the applications upload-cv route).
-_RESUME_ALLOWED_EXTENSIONS = {"pdf", "docx"}
-
-
-def _parse_answers(raw: str | None) -> dict:
-    """Parse the multipart ``answers`` field (a JSON object string) into a dict.
-    Empty/absent → ``{}``. A non-object or invalid JSON → 422 (friendly)."""
-    if raw is None or raw.strip() == "":
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=422, detail="Answers must be valid JSON.")
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=422, detail="Answers must be a JSON object.")
-    return parsed
-
-
-def _attach_resume(db: Session, application, org_id: int, upload: UploadFile) -> None:
-    """Store the resume via the shared CV path and stamp it on the application +
-    candidate. Reuses ``process_document_upload`` (validation, object storage,
-    text extraction) and the #895 PDF hygiene stash. Raises HTTP 422 (friendly)
-    for a wrong file type."""
-    from datetime import datetime, timezone
-
-    from ...services.document_hygiene import stash_pdf_hygiene_on_application
-    from ...services.document_service import (
-        load_stored_document_bytes,
-        process_document_upload,
-        sanitize_text_for_storage,
-    )
-
-    filename = (upload.filename or "").strip()
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in _RESUME_ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=422, detail=_APPLY_RESUME_TYPE_MESSAGE)
-
-    result = process_document_upload(
-        upload=upload,
-        entity_id=int(application.id),
-        doc_type="cv",
-        allowed_extensions=_RESUME_ALLOWED_EXTENSIONS,
-    )
-    now = datetime.now(timezone.utc)
-    text = sanitize_text_for_storage(result["extracted_text"])
-    application.cv_file_url = result["file_url"]
-    application.cv_filename = result["filename"]
-    application.cv_text = text
-    application.cv_uploaded_at = now
-    if application.candidate:
-        application.candidate.cv_file_url = result["file_url"]
-        application.candidate.cv_filename = result["filename"]
-        application.candidate.cv_text = text
-        application.candidate.cv_uploaded_at = now
-    # #895 PDF-ingest hardening (best-effort; never blocks the apply).
-    try:
-        content = load_stored_document_bytes(result["file_url"])
-        if content:
-            stash_pdf_hygiene_on_application(application, content, ext)
-    except Exception:  # pragma: no cover - defensive; hygiene must never block
-        logger.warning("resume hygiene scan skipped for application_id=%s", application.id)
-
 
 @public_router.post("/job-pages/{token}/apply")
 def apply_to_job_page(
@@ -324,30 +310,64 @@ def apply_to_job_page(
         )
 
     page = db.query(JobPage).filter(JobPage.token == token).first()
-    if page is None or page.status == JOB_PAGE_STATUS_CLOSED:
+    if page is None or page.status != JOB_PAGE_STATUS_OPEN:
         raise HTTPException(status_code=404, detail="Job not found")
     role = _resolve_role_for_page(db, page)
     if role is None:
         raise HTTPException(status_code=404, detail=_APPLY_CLOSED_MESSAGE)
+    if not _role_accepts_public_applications(role):
+        raise HTTPException(status_code=404, detail=_APPLY_CLOSED_MESSAGE)
+    usable_email = _usable_email(email)
+    if _role_requires_email(role) and usable_email is None:
+        raise HTTPException(status_code=422, detail=_APPLY_EMAIL_REQUIRED_MESSAGE)
+    if usable_email is not None:
+        email = usable_email
+    has_resume = bool(resume is not None and (resume.filename or "").strip())
+    if _role_requires_resume(role) and not has_resume:
+        raise HTTPException(
+            status_code=422,
+            detail="Please upload a resume so your application can be evaluated.",
+        )
 
     parsed_answers = _parse_answers(answers)
 
     try:
-        result = submit_application(
-            db,
-            page.organization_id,
-            role,
-            full_name=full_name,
-            email=email,
-            phone=phone,
-            answers=parsed_answers,
-            source_name=source_name,
-        )
-        # Attach the resume only for a genuinely new application — never
-        # overwrite the CV of an existing (idempotent re-submit) application.
-        if result.created and resume is not None and (resume.filename or "").strip():
-            _attach_resume(db, result.application, page.organization_id, resume)
+        # One SAVEPOINT owns candidate resolution, application creation and CV
+        # extraction together.  ``submit_application`` itself uses a nested
+        # savepoint for identity races; this outer boundary ensures a later
+        # unreadable-resume refusal removes even a newly-resolved candidate.
+        with db.begin_nested():
+            result = submit_application(
+                db,
+                page.organization_id,
+                role,
+                full_name=full_name,
+                email=email,
+                phone=phone,
+                answers=parsed_answers,
+                source_name=source_name,
+            )
+            # Idempotent re-apply doubles as a safe repair path for legacy
+            # applications accepted before resume enforcement. Never overwrite a
+            # usable CV, but do let the candidate fill a missing/unreadable one so
+            # the autonomous pipeline can score it without recruiter intervention.
+            attached_resume = bool(
+                has_resume
+                and (
+                    result.created
+                    or not (getattr(result.application, "cv_text", None) or "").strip()
+                )
+            )
+            if attached_resume:
+                _attach_resume(db, result.application, page.organization_id, resume)
         db.commit()
+    except HTTPException:
+        # In particular, unreadable resume extraction happens after the
+        # idempotent application resolver has flushed candidate/application
+        # rows. Roll those provisional rows back so a 422 never counts as an
+        # accepted application.
+        db.rollback()
+        raise
     except IntegrityError:
         # Double-submit race: a concurrent request created the (candidate, role)
         # application between our read and insert. Recover the winning row and
@@ -356,6 +376,22 @@ def apply_to_job_page(
         existing = _find_existing_application(db, page.organization_id, role, email, phone)
         if existing is None:
             raise HTTPException(status_code=409, detail=_APPLY_CLOSED_MESSAGE)
+        attached_resume = bool(
+            has_resume and not (getattr(existing, "cv_text", None) or "").strip()
+        )
+        if attached_resume:
+            _attach_resume(db, existing, page.organization_id, resume)
+            db.commit()
+            knockout = (existing.screening_answers or {}).get("_knockout", {})
+            if bool(knockout.get("passed", True)):
+                from ...services.application_events import on_application_created
+
+                on_application_created(
+                    existing,
+                    score=True,
+                    score_force=True,
+                    parse_origin=CV_PARSE_ORIGIN_NATIVE_APPLY,
+                )
         return {
             "status": "received",
             "message": _APPLY_RECEIVED_MESSAGE,
@@ -363,18 +399,18 @@ def apply_to_job_page(
             "eeo_token": existing.eeo_token,
         }
 
-    # With a resume on a NEW, knockout-passing application, trigger the platform's
-    # normal parse + scoring flow (same entry point the recruiter CV upload uses).
-    # A knockout-failed application already carries a pending reject — no scoring.
-    if (
-        result.created
-        and result.knockout_passed
-        and resume is not None
-        and (resume.filename or "").strip()
-    ):
+    # Any newly-attached resume (fresh application or idempotent repair) enters
+    # the normal parse + scoring flow. A knockout-failed application already
+    # carries a pending reject, so it deliberately does not spend on scoring.
+    if attached_resume and result.knockout_passed:
         from ...services.application_events import on_application_created
 
-        on_application_created(result.application, score=True, score_force=True)
+        on_application_created(
+            result.application,
+            score=True,
+            score_force=True,
+            parse_origin=CV_PARSE_ORIGIN_NATIVE_APPLY,
+        )
 
     return {
         "status": "received",
@@ -448,24 +484,3 @@ def submit_eeo(
     )
     db.commit()
     return None
-
-
-def _find_existing_application(db, org_id, role, email, phone):
-    """Re-read the (candidate, role) application after an insert race, resolving
-    the candidate by the same identity keys apply used."""
-    from ...services.candidate_identity_service import resolve_candidate
-    from ...models.candidate_application import CandidateApplication
-
-    candidate = resolve_candidate(db, org_id, email=email, phone=phone)
-    if candidate is None:
-        return None
-    return (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.organization_id == org_id,
-            CandidateApplication.candidate_id == candidate.id,
-            CandidateApplication.role_id == role.id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .first()
-    )

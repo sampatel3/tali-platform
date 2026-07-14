@@ -20,6 +20,10 @@ from ...services.task_repo_service import (
     task_main_repo_path,
 )
 from ...services.assessment_repository_service import AssessmentRepositoryService
+from ...services.task_approval_service import (
+    TaskApprovalError,
+    approve_task_for_use,
+)
 from ...services.task_catalog import (
     canonical_task_catalog_dir,
     sync_template_task_specs,
@@ -267,9 +271,9 @@ def approve_generated_task(
 ):
     """Activate a generated draft so it can be assigned to candidates.
 
-    Sets ``is_active=True``, clears the ``needs_review`` flag, and ensures
-    the template repo exists (best-effort — a generated draft may not have
-    had its repo provisioned at generation time).
+    Provisions and verifies the exact template repository first, then sets
+    ``is_active=True`` and clears ``needs_review``. Repository failure is
+    fail-closed: the draft remains inactive and can be retried safely.
     """
     task = (
         db.query(Task)
@@ -282,20 +286,28 @@ def approve_generated_task(
     if not extra.get("generated"):
         raise HTTPException(status_code=400, detail="Task is not a generated draft")
 
-    task.is_active = True
-    extra["needs_review"] = False
-    extra["approved_by_user_id"] = int(current_user.id)
-    task.extra_data = extra
     try:
-        db.flush()
-        try:
-            recreate_task_main_repo(task)
-            repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-            repo_service.create_template_repo(task)
-        except Exception:
-            logger.warning("repo (re)provision failed on approve for task %s", task.id, exc_info=True)
+        approve_task_for_use(
+            db,
+            task,
+            user_id=int(current_user.id),
+        )
         db.commit()
         db.refresh(task)
+    except TaskApprovalError as exc:
+        db.rollback()
+        logger.warning(
+            "generated task approval blocked by repository readiness task_id=%s: %s",
+            task.id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Task repository is not ready; the draft remains inactive. "
+                f"Retry approval after repository access recovers. {exc}"
+            ),
+        ) from exc
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to approve task")

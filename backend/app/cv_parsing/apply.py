@@ -73,6 +73,7 @@ def parse_and_store_cv_sections(
         metering["role_id"] = role_id
     if app_id:
         metering["entity_id"] = f"application:{app_id}"
+        metering["trace_id"] = f"cv-parse:application:{app_id}"
     if db is not None:
         metering["db"] = db
 

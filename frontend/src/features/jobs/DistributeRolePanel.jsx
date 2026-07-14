@@ -148,7 +148,7 @@ function Artefacts({ data }) {
   );
 }
 
-export function DistributeRolePanel({ roleId, defaultOpen = false }) {
+export function DistributeRolePanel({ roleId, jobStatus = null, defaultOpen = false }) {
   const { showToast } = useToast();
   const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState(null);
@@ -180,6 +180,15 @@ export function DistributeRolePanel({ roleId, defaultOpen = false }) {
   }, [open, loaded, loading, load]);
 
   const published = data?.published === true;
+  const distributionReady = data?.distribution_ready === true;
+  const previewOnly = String(jobStatus || '').toLowerCase() === 'draft';
+  const inactiveReason = {
+    agent_off: 'Distribution is paused because this role’s agent is off. Turn on the agent to reopen native applications and sharing.',
+    agent_paused: 'Distribution is paused with the role. Resume the agent to reopen native applications and sharing.',
+    ats_job_not_live: 'Distribution is unavailable because the linked ATS job is not live.',
+    public_apply_disabled: 'Distribution is unavailable because public applications are disabled for this role.',
+  }[String(data?.reason || '').toLowerCase()]
+    || 'Distribution is unavailable while this role is not accepting applications.';
 
   return (
     <div className="role-sec src-panel">
@@ -218,11 +227,21 @@ export function DistributeRolePanel({ roleId, defaultOpen = false }) {
             </div>
           ) : null}
 
-          {!error && loaded && !published ? (
+          {!error && loaded && !published && !previewOnly ? (
             <div className="src-warn">Publish this role to distribute it — a public job page is created on publish.</div>
           ) : null}
 
-          {!error && loaded && published ? <Artefacts data={data} /> : null}
+          {!error && loaded && previewOnly ? (
+            <div className="src-warn" role="status">
+              Preview only — this page is not accepting applications or listed in careers feeds until you Turn on the agent. Do not distribute it yet.
+            </div>
+          ) : null}
+
+          {!error && loaded && published && !previewOnly && !distributionReady ? (
+            <div className="src-warn" role="status">{inactiveReason}</div>
+          ) : null}
+
+          {!error && loaded && distributionReady ? <Artefacts data={data} /> : null}
         </div>
       ) : null}
     </div>

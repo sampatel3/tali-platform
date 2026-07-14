@@ -68,3 +68,32 @@ def test_deep_verification_reports_bounded_coverage_without_hiding_it(monkeypatc
     assert out.capped is True
     assert out.exhaustive is False
     assert out.warnings[-1].code == "verification_capped"
+
+
+def test_role_id_reaches_graph_predicate_execution(monkeypatch):
+    parsed = ParsedFilter(
+        graph_predicates=[{"type": "worked_at", "value": "Acme"}]
+    )
+    query = MagicMock()
+    query.with_entities.return_value.all.return_value = []
+    monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
+    monkeypatch.setattr(runner, "apply_parsed_filter", lambda *a, **k: query)
+    monkeypatch.setattr(runner, "apply_relevance_order", lambda q, _parsed: q)
+    captured = {}
+
+    def _execute(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(runner, "_execute_graph_predicates", _execute)
+
+    runner.run_search(
+        db=MagicMock(),
+        organization_id=3,
+        role_id=17,
+        nl_query="people who worked at Acme",
+        base_query=MagicMock(),
+    )
+
+    assert captured["organization_id"] == 3
+    assert captured["role_id"] == 17

@@ -16,11 +16,216 @@ from .celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+# A pending score can legitimately sit behind a large role batch for hours.
+# Re-dispatching it after the old 15-minute blanket cutoff duplicated live
+# queue work. A running score, by contrast, has already been claimed by a
+# worker and normally finishes in seconds to a few minutes. Keep both windows
+# deliberately conservative while still recovering a worker lost mid-call.
+DEFAULT_PENDING_STALE_MINUTES = 360
+DEFAULT_RUNNING_STALE_MINUTES = 60
+DEFAULT_BROKER_FAILURE_RETRY_MINUTES = 1
+# Keep the hard worker limit below the running-lease expiry. This ordering is
+# what guarantees the reaper does not reclaim a task Celery still considers
+# live, even if an upstream SDK call hangs indefinitely.
+SCORE_TASK_SOFT_LIMIT_SECONDS = 50 * 60
+SCORE_TASK_HARD_LIMIT_SECONDS = 55 * 60
+
+
+@celery_app.task(
+    name="app.tasks.scoring_tasks.recover_stuck_score_jobs",
+    queue="scoring",
+)
+def recover_stuck_score_jobs(
+    *,
+    limit: int = 100,
+    pending_stale_minutes: int = DEFAULT_PENDING_STALE_MINUTES,
+    running_stale_minutes: int = DEFAULT_RUNNING_STALE_MINUTES,
+    broker_failure_retry_minutes: int = DEFAULT_BROKER_FAILURE_RETRY_MINUTES,
+) -> dict:
+    """Recover score jobs whose dispatch/worker died without a terminal state.
+
+    Jobs are append-only: a stale pending/running attempt is marked ``error``
+    for audit and a fresh idempotent attempt is enqueued. A latest attempt that
+    already records ``broker_dispatch_failed`` is retried after a short cooling
+    period, which gives public applications a five-minute recovery path instead
+    of waiting for the hourly agent sweep. The role budget/credit/input gates
+    are re-applied by ``enqueue_score``.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import and_, or_
+
+    from ..models.candidate_application import CandidateApplication
+    from ..models.cv_score_job import (
+        CvScoreJob,
+        SCORE_JOB_ERROR,
+        SCORE_JOB_PENDING,
+        SCORE_JOB_RUNNING,
+    )
+    from ..platform.database import SessionLocal
+    from ..services.cv_score_orchestrator import enqueue_score
+
+    db = SessionLocal()
+    recovered = 0
+    skipped = 0
+    errors = 0
+    try:
+        now = datetime.now(timezone.utc)
+        pending_cutoff = now - timedelta(
+            minutes=max(1, int(pending_stale_minutes))
+        )
+        running_cutoff = now - timedelta(
+            minutes=max(1, int(running_stale_minutes))
+        )
+        broker_failure_cutoff = now - timedelta(
+            minutes=max(1, int(broker_failure_retry_minutes))
+        )
+        rows = (
+            db.query(
+                CvScoreJob.id,
+                CvScoreJob.application_id,
+                CvScoreJob.status,
+                CvScoreJob.requires_active_agent,
+                CvScoreJob.force_full_score,
+            )
+            .filter(
+                or_(
+                    and_(
+                        CvScoreJob.status == SCORE_JOB_PENDING,
+                        CvScoreJob.queued_at < pending_cutoff,
+                    ),
+                    and_(
+                        CvScoreJob.status == SCORE_JOB_RUNNING,
+                        CvScoreJob.started_at.isnot(None),
+                        CvScoreJob.started_at < running_cutoff,
+                    ),
+                    and_(
+                        CvScoreJob.status == SCORE_JOB_ERROR,
+                        CvScoreJob.error_message.like("broker_dispatch_failed:%"),
+                        CvScoreJob.finished_at.isnot(None),
+                        CvScoreJob.finished_at < broker_failure_cutoff,
+                    ),
+                )
+            )
+            .order_by(CvScoreJob.queued_at.asc(), CvScoreJob.id.asc())
+            .limit(max(1, int(limit)))
+            .all()
+        )
+        # The candidate query and this update are separate statements. Claim
+        # each row with a status+timestamp predicate so a worker moving a
+        # pending row to running between them wins; the reaper must never
+        # archive newly-active work based on its stale snapshot.
+        #
+        # More than one abandoned attempt can exist for the same application.
+        # Archive every row we successfully claim, but enqueue at most one
+        # replacement score.
+        app_authority: dict[int, tuple[bool, bool]] = {}
+        archived = 0
+        for (
+            row_id,
+            application_id,
+            status,
+            requires_active_agent,
+            force_full_score,
+        ) in rows:
+            if status == SCORE_JOB_ERROR:
+                latest_id = (
+                    db.query(CvScoreJob.id)
+                    .filter(CvScoreJob.application_id == int(application_id))
+                    .order_by(CvScoreJob.id.desc())
+                    .limit(1)
+                    .scalar()
+                )
+                if latest_id == int(row_id):
+                    app_authority[int(application_id)] = (
+                        bool(requires_active_agent),
+                        bool(force_full_score),
+                    )
+                continue
+            claim = db.query(CvScoreJob).filter(
+                CvScoreJob.id == int(row_id),
+                CvScoreJob.status == status,
+            )
+            if status == SCORE_JOB_PENDING:
+                claim = claim.filter(CvScoreJob.queued_at < pending_cutoff)
+            else:
+                claim = claim.filter(
+                    CvScoreJob.started_at.isnot(None),
+                    CvScoreJob.started_at < running_cutoff,
+                )
+            updated = claim.update(
+                {
+                    "status": SCORE_JOB_ERROR,
+                    "error_message": "stale_attempt_recovered",
+                    "finished_at": now,
+                },
+                synchronize_session=False,
+            )
+            if updated == 1:
+                archived += 1
+                app_authority[int(application_id)] = (
+                    bool(requires_active_agent),
+                    bool(force_full_score),
+                )
+        if archived:
+            db.commit()
+
+        for application_id in sorted(app_authority):
+            app = (
+                db.query(CandidateApplication)
+                .filter(CandidateApplication.id == application_id)
+                .first()
+            )
+            if app is None:
+                skipped += 1
+                continue
+            try:
+                requires_active_agent, force_full_score = app_authority[
+                    application_id
+                ]
+                if enqueue_score(
+                    db,
+                    app,
+                    force=False,
+                    bypass_pre_screen=force_full_score,
+                    requires_active_agent=requires_active_agent,
+                ) is None:
+                    skipped += 1
+                else:
+                    recovered += 1
+            except Exception:
+                # ``enqueue_score`` may fail after a flush/commit boundary.
+                # Reset the session so one failed redispatch cannot poison the
+                # remaining recovery batch.
+                db.rollback()
+                errors += 1
+                logger.exception(
+                    "stuck score redispatch failed application_id=%s",
+                    application_id,
+                )
+        return {
+            "status": "ok" if not errors else "partial",
+            "stale_attempts": archived,
+            "recovered": recovered,
+            "skipped": skipped,
+            "errors": errors,
+            "pending_stale_minutes": max(1, int(pending_stale_minutes)),
+            "running_stale_minutes": max(1, int(running_stale_minutes)),
+            "broker_failure_retry_minutes": max(
+                1, int(broker_failure_retry_minutes)
+            ),
+        }
+    finally:
+        db.close()
+
+
 @celery_app.task(
     name="app.tasks.scoring_tasks.score_application_job",
     bind=True,
     max_retries=0,
     queue="scoring",
+    soft_time_limit=SCORE_TASK_SOFT_LIMIT_SECONDS,
+    time_limit=SCORE_TASK_HARD_LIMIT_SECONDS,
 )
 def score_application_job(
     self,
@@ -47,7 +252,14 @@ def score_application_job(
     recruiter manually overrides a "pre-screened out" verdict).
     """
     from ..models.candidate_application import CandidateApplication
-    from ..models.cv_score_job import CvScoreJob, SCORE_JOB_ERROR
+    from ..models.cv_score_job import (
+        CvScoreJob,
+        SCORE_JOB_ERROR,
+        SCORE_JOB_PENDING,
+        SCORE_JOB_RUNNING,
+        SCORE_JOB_STALE,
+    )
+    from ..models.role import Role
     from ..platform.database import SessionLocal
     from ..services.cv_score_orchestrator import _execute_scoring, _latest_job
 
@@ -73,9 +285,52 @@ def score_application_job(
             )
             return {"status": "no_job", "application_id": application_id}
 
-        if job.status not in {"pending", "stale"}:
+        if job.status not in {SCORE_JOB_PENDING, SCORE_JOB_STALE}:
             # Another worker already picked this up — bail out.
             return {"status": "skipped", "application_id": application_id, "job_status": job.status}
+
+        # Autonomous authority is checked against a freshly locked Role in the
+        # same transaction that claims the job. Pause/Turn off therefore wins
+        # over any task that was still waiting in Redis; already-running work
+        # may finish, but no new provider call can start after the hold commits.
+        scoring_role = None
+        if bool(getattr(job, "requires_active_agent", True)):
+            scoring_role = (
+                db.query(Role)
+                .filter(
+                    Role.id == int(application.role_id),
+                    Role.organization_id == int(application.organization_id),
+                )
+                .with_for_update()
+                .populate_existing()
+                .one_or_none()
+                if application.role_id is not None
+                else None
+            )
+            if scoring_role is None:
+                job.status = SCORE_JOB_ERROR
+                job.error_message = "role_missing_before_scoring"
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {"status": "error", "application_id": application_id}
+            if (
+                not bool(scoring_role.agentic_mode_enabled)
+                or scoring_role.agent_paused_at is not None
+            ):
+                reason = (
+                    "deferred_agent_paused"
+                    if scoring_role.agent_paused_at is not None
+                    else "deferred_agent_off"
+                )
+                job.status = SCORE_JOB_STALE
+                job.error_message = reason
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {
+                    "status": reason,
+                    "application_id": application_id,
+                    "role_id": int(scoring_role.id),
+                }
 
         # Cooperative cancel. batch_score_role checks the same Redis flag
         # between fetch/enqueue phases, but once the per-app jobs are
@@ -87,10 +342,22 @@ def score_application_job(
         except Exception:  # pragma: no cover - defensive
             is_batch_score_cancelled = lambda _role_id: False  # type: ignore[assignment]
         if application.role_id is not None and is_batch_score_cancelled(int(application.role_id)):
-            job.status = SCORE_JOB_ERROR
-            job.error_message = "cancelled_by_recruiter"
-            job.finished_at = datetime.now(timezone.utc)
             try:
+                (
+                    db.query(CvScoreJob)
+                    .filter(
+                        CvScoreJob.id == int(job.id),
+                        CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_STALE]),
+                    )
+                    .update(
+                        {
+                            "status": SCORE_JOB_ERROR,
+                            "error_message": "cancelled_by_recruiter",
+                            "finished_at": datetime.now(timezone.utc),
+                        },
+                        synchronize_session=False,
+                    )
+                )
                 db.commit()
             except Exception:
                 db.rollback()
@@ -100,19 +367,203 @@ def score_application_job(
                 "role_id": int(application.role_id),
             }
 
+        # Persist a durable running lease *before* the expensive scoring call.
+        # Previously _execute_scoring changed this only in memory, so the DB
+        # kept showing "pending" throughout a 10-30s Anthropic call. The stale
+        # reaper could then mistake live work for an abandoned queue message.
+        # The conditional UPDATE also makes duplicate Celery deliveries safe:
+        # exactly one worker can move this attempt out of pending/stale.
+        lease_started_at = datetime.now(timezone.utc)
+        claimed = (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.id == int(job.id),
+                CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_STALE]),
+            )
+            .update(
+                {
+                    "status": SCORE_JOB_RUNNING,
+                    "started_at": lease_started_at,
+                    "error_message": None,
+                    "finished_at": None,
+                },
+                synchronize_session=False,
+            )
+        )
+        if claimed != 1:
+            db.rollback()
+            current_status = (
+                db.query(CvScoreJob.status)
+                .filter(CvScoreJob.id == int(job.id))
+                .scalar()
+            )
+            return {
+                "status": "skipped",
+                "application_id": application_id,
+                "job_status": current_status or "missing",
+            }
+        db.commit()
+        # Re-load after the lease commit so every subsequent write belongs to
+        # the scoring transaction, not the claim transaction.
+        job = db.query(CvScoreJob).filter(CvScoreJob.id == int(job.id)).first()
+        if job is None:  # pragma: no cover - deleted concurrently with app
+            return {"status": "no_job", "application_id": application_id}
+
+        # Persist the exact role-intent generation this attempt will score.
+        # Re-publish is allowed while the provider call is in flight; the
+        # post-call check below prevents that old-JD output from overwriting the
+        # freshly invalidated application score.
+        from ..services.role_intent_fingerprint import (
+            role_intent_fingerprint,
+            role_reconfiguration_is_active,
+        )
+
+        scoring_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(application.role_id),
+                Role.organization_id == int(application.organization_id),
+            )
+            .populate_existing()
+            .one_or_none()
+            if application.role_id is not None
+            else None
+        )
+        if scoring_role is None:
+            job.status = SCORE_JOB_ERROR
+            job.error_message = "role_missing_before_scoring"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"status": "error", "application_id": application_id}
+        scoring_intent_fingerprint = role_intent_fingerprint(scoring_role, db=db)
+        job.cache_key = f"role-intent:{scoring_intent_fingerprint}"
+        if role_reconfiguration_is_active(scoring_role):
+            # Keep this attempt as the latest durable stale marker. It will be
+            # picked up by the normal activation/cohort drain, not spent while
+            # the replacement task and role configuration are incomplete.
+            job.status = SCORE_JOB_STALE
+            job.error_message = "deferred_role_reconfiguration"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {
+                "status": "deferred_role_reconfiguration",
+                "application_id": application_id,
+            }
+        db.commit()
+
         try:
-            _execute_scoring(db, application=application, job=job, force_full_score=force_full_score)
+            _execute_scoring(
+                db,
+                application=application,
+                job=job,
+                force_full_score=bool(
+                    force_full_score
+                    or getattr(job, "force_full_score", False)
+                ),
+            )
+            # SessionLocal disables autoflush. Materialize the tentative score
+            # transaction before reloading the role generation; otherwise
+            # ``populate_existing`` can overwrite same-transaction role state
+            # and make an intent change look unchanged. The flush is not a
+            # commit, so the superseded branch below still rolls back every
+            # old-intent score/cache/job write atomically.
+            db.flush()
+            # The provider call may have overlapped a role re-publish. Reload
+            # the live role and compare against the durable generation captured
+            # above before any computed score is committed or can queue a
+            # candidate decision.
+            live_role = (
+                db.query(Role)
+                .filter(
+                    Role.id == int(scoring_role.id),
+                    Role.organization_id == int(scoring_role.organization_id),
+                )
+                .populate_existing()
+                .one_or_none()
+            )
+            live_fingerprint = (
+                role_intent_fingerprint(live_role, db=db)
+                if live_role is not None
+                else None
+            )
+            role_intent_superseded = bool(
+                live_role is None
+                or live_fingerprint != scoring_intent_fingerprint
+                or role_reconfiguration_is_active(live_role)
+            )
+            if role_intent_superseded:
+                db.rollback()  # discard every old-JD score/cache/application write
+                terminal_job = (
+                    db.query(CvScoreJob)
+                    .filter(CvScoreJob.id == int(job.id))
+                    .with_for_update()
+                    .one_or_none()
+                )
+                now = datetime.now(timezone.utc)
+                if terminal_job is not None:
+                    terminal_job.status = SCORE_JOB_ERROR
+                    terminal_job.error_message = "superseded_role_intent"
+                    terminal_job.finished_at = now
+                latest = _latest_job(db, int(application_id))
+                if latest is None or int(latest.id) == int(job.id) or latest.status != SCORE_JOB_STALE:
+                    db.add(
+                        CvScoreJob(
+                            application_id=int(application_id),
+                            role_id=int(scoring_role.id),
+                            status=SCORE_JOB_STALE,
+                            cache_key=(
+                                f"role-intent:{live_fingerprint}"
+                                if live_fingerprint
+                                else None
+                            ),
+                            error_message="rescore_after_role_reconfiguration",
+                            requires_active_agent=bool(
+                                getattr(job, "requires_active_agent", True)
+                            ),
+                            force_full_score=bool(
+                                getattr(job, "force_full_score", False)
+                                or force_full_score
+                            ),
+                            queued_at=now,
+                        )
+                    )
+                db.commit()
+                return {
+                    "status": "superseded_role_intent",
+                    "application_id": application_id,
+                    "role_id": int(scoring_role.id),
+                }
             # Post-execution cancel guard: _execute_scoring calls Claude
-            # synchronously (10-30s). If cancel fired DURING that call the
-            # cancel endpoint already marked this job as error in the DB
-            # (WHERE status='pending' — the job was never committed as
-            # 'running' so the DB still showed 'pending'). Without this
-            # check we'd commit status='done' + the score, overriding the
-            # cancel and writing an unwanted result to the application.
+            # synchronously (10-30s). If cancel fired DURING that call, the
+            # Redis flag is the cross-process interrupt signal. Without this
+            # check we'd commit status='done' + the score despite the request.
             if application.role_id is not None and is_batch_score_cancelled(
                 int(application.role_id)
             ):
-                db.rollback()  # discard score changes — the cancel marker stays
+                db.rollback()  # discard score changes
+                # Running leases are now visible in the DB, so the public
+                # cancel endpoint cannot rely on its pending-only bulk update
+                # to write the terminal marker for an in-flight call. Finalize
+                # this attempt here after discarding the computed score.
+                try:
+                    (
+                        db.query(CvScoreJob)
+                        .filter(
+                            CvScoreJob.id == int(job.id),
+                            CvScoreJob.status == SCORE_JOB_RUNNING,
+                        )
+                        .update(
+                            {
+                                "status": SCORE_JOB_ERROR,
+                                "error_message": "cancelled_by_recruiter",
+                                "finished_at": datetime.now(timezone.utc),
+                            },
+                            synchronize_session=False,
+                        )
+                    )
+                    db.commit()
+                except Exception:
+                    db.rollback()
                 return {
                     "status": "cancelled_mid_execution",
                     "application_id": application_id,
@@ -141,16 +592,15 @@ def score_application_job(
                         application_id,
                     )
             elif application.cv_match_score is not None:
-                # A real (re)score landed. Make sure the candidate ALWAYS carries
-                # its deterministic verdict as a pending HITL decision, the moment
-                # the score lands — decoupled from the agent cohort tick (which
-                # only runs on active roles, stranding paused-role candidates as
-                # "not yet decided"):
+                # A real (re)score landed. Materialise its deterministic verdict
+                # immediately. The shared autonomy dispatcher auto-executes
+                # reversible positives for a running auto-promote role and
+                # leaves safety-rail cases pending; paused/off roles still get a
+                # visible recommendation without being resumed:
                 #   1. existing pending card → auto-correct the SAFE subset in
                 #      place (reject<->send, no hard gate, never advance); gated/
                 #      advance ones keep their re-evaluate banner.
                 #   2. no card at all → queue the fresh verdict now.
-                # Fresh score → HITL (the recruiter approves; never auto-applied).
                 # Best-effort — never blocks scoring.
                 try:
                     from ..services.bulk_decision_service import (
@@ -209,7 +659,7 @@ def score_application_job(
                 refreshed_job = (
                     db.query(CvScoreJob).filter(CvScoreJob.id == job.id).first()
                 )
-                if refreshed_job is not None:
+                if refreshed_job is not None and refreshed_job.status == SCORE_JOB_RUNNING:
                     refreshed_job.status = SCORE_JOB_ERROR
                     refreshed_job.error_message = f"task_exception: {exc}"
                     refreshed_job.finished_at = datetime.now(timezone.utc)
@@ -382,7 +832,12 @@ def batch_score_role(
                     "fetch_failures": fetch_failures,
                     "pre_screened_out": pre_screened_out,
                 }
-            job = enqueue_score(db, app, force=include_scored)
+            job = enqueue_score(
+                db,
+                app,
+                force=include_scored,
+                requires_active_agent=False,
+            )
             if job is not None:
                 enqueued += 1
                 # When inline (no Celery), the job has already run by now —
@@ -419,7 +874,13 @@ def batch_score_role(
     name="app.tasks.scoring_tasks.sweep_stale_scores",
     queue="scoring",
 )
-def sweep_stale_scores(*, limit: int = 500) -> dict:
+def sweep_stale_scores(
+    *,
+    limit: int = 500,
+    role_id: int | None = None,
+    application_ids: list[int] | None = None,
+    explicit: bool = False,
+) -> dict:
     """Find applications whose scores are NULL despite having a CV, and
     enqueue them. Safety net for the hook-based invalidation in
     ``mark_role_scores_stale`` / ``mark_application_scores_stale`` —
@@ -438,7 +899,7 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
 
     Returns a dict with counts for telemetry.
     """
-    from sqlalchemy import and_, exists
+    from sqlalchemy import and_, exists, or_
 
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import CvScoreJob
@@ -456,7 +917,7 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
         # adds a new ``pending`` / ``running`` / ``done`` row instead
         # of converting the old stale one — so naive
         # ``status == "stale"`` queries would re-enqueue already-fixed
-        # apps every 30 min and burn token budget. The window query
+        # apps on every safety-net run and burn token budget. The window query
         # below scopes to the most-recent job per application.
         from sqlalchemy import desc, func
 
@@ -468,21 +929,55 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
             .group_by(CvScoreJob.application_id)
             .subquery()
         )
-        latest_jobs = (
+        latest_jobs_query = (
             db.query(CvScoreJob)
             .join(
                 latest_job_subq,
                 (CvScoreJob.application_id == latest_job_subq.c.application_id)
                 & (CvScoreJob.queued_at == latest_job_subq.c.max_queued),
             )
+            .join(Role, Role.id == CvScoreJob.role_id)
             .filter(CvScoreJob.status == "stale")
-            .order_by(desc(CvScoreJob.queued_at))
+        )
+        if explicit and role_id is None:
+            return {
+                "status": "error",
+                "reason": "explicit stale-score sweeps require role_id scope",
+                "examined": 0,
+                "enqueued": 0,
+                "skipped": 0,
+            }
+        if role_id is not None:
+            latest_jobs_query = latest_jobs_query.filter(
+                CvScoreJob.role_id == int(role_id)
+            )
+        if application_ids:
+            latest_jobs_query = latest_jobs_query.filter(
+                CvScoreJob.application_id.in_(
+                    [int(value) for value in application_ids]
+                )
+            )
+        if not explicit:
+            # The periodic global safety net is recovery, not fresh authority.
+            # Autonomous stale work is eligible only for a currently running
+            # role; explicit jobs retain their own recruiter authority.
+            latest_jobs_query = latest_jobs_query.filter(
+                or_(
+                    CvScoreJob.requires_active_agent.is_(False),
+                    and_(
+                        Role.agentic_mode_enabled.is_(True),
+                        Role.agent_paused_at.is_(None),
+                    ),
+                )
+            )
+        latest_jobs = (
+            latest_jobs_query.order_by(desc(CvScoreJob.queued_at))
             .limit(limit)
             .all()
         )
-        stale_app_ids = [j.application_id for j in latest_jobs if j.application_id]
 
-        for app_id in stale_app_ids:
+        for stale_job in latest_jobs:
+            app_id = int(stale_job.application_id)
             examined += 1
             app = (
                 db.query(CandidateApplication)
@@ -496,7 +991,17 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
                 skipped += 1
                 continue
             try:
-                job = enqueue_score(db, app, force=True)
+                job = enqueue_score(
+                    db,
+                    app,
+                    force=True,
+                    bypass_pre_screen=bool(stale_job.force_full_score),
+                    requires_active_agent=(
+                        False
+                        if explicit
+                        else bool(stale_job.requires_active_agent)
+                    ),
+                )
                 if job is not None:
                     enqueued += 1
                 else:
@@ -513,6 +1018,8 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
             "examined": examined,
             "enqueued": enqueued,
             "skipped": skipped,
+            "role_id": int(role_id) if role_id is not None else None,
+            "explicit": bool(explicit),
         }
     finally:
         db.close()

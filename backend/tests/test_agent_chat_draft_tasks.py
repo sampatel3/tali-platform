@@ -58,6 +58,7 @@ def _draft(db, org, role, *, name="Vendor Risk Task") -> Task:
         },
         extra_data={
             "generated": True, "needs_review": True,
+            "battle_test": {"verdict": "pass"},
             "decision_points": [{"id": "d1", "headline": "Classify risk tier"}],
             "deliverable": {"kind": "doc"},
         },
@@ -100,6 +101,31 @@ def test_list_draft_tasks_tool_returns_card(db):
     assert len(res["drafts"]) == 1
 
 
+def test_turn_on_owned_draft_is_progress_only_and_cannot_be_manually_approved(db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org)
+    role.agentic_mode_enabled = False
+    task = _draft(db, org, role)
+    from app.services.role_activation_intent import request_role_activation_intent
+
+    request_role_activation_intent(
+        role,
+        user_id=int(user.id),
+        monthly_budget_cents=5000,
+    )
+    db.commit()
+
+    card = dt.draft_review_card(db, role)
+    approval = dt.approve_draft(db, role, task.id, user_id=int(user.id))
+
+    assert card["automatic_activation"] is True
+    assert card["activation_status"] == "pending"
+    assert approval["ok"] is False
+    assert "no separate approval" in approval["error"].lower()
+    assert task.is_active is False
+
+
 def test_review_card_empty_when_no_drafts(db):
     org = _org(db)
     role = _role(db, org)
@@ -108,9 +134,11 @@ def test_review_card_empty_when_no_drafts(db):
 
 
 # --- approve ----------------------------------------------------------------
-@patch("app.services.assessment_repository_service.AssessmentRepositoryService")
-@patch("app.services.task_repo_service.recreate_task_main_repo")
-def test_approve_draft_activates(_repo, _svc, db):
+@patch(
+    "app.services.task_approval_service.provision_and_validate_task_repository",
+    return_value="mock://taali-assessments/vendor-risk",
+)
+def test_approve_draft_activates(_repo, db):
     org = _org(db)
     user = _user(db, org)
     role = _role(db, org)
@@ -122,6 +150,27 @@ def test_approve_draft_activates(_repo, _svc, db):
     assert task.is_active is True
     assert task.extra_data["needs_review"] is False
     assert task.extra_data["approved_by_user_id"] == int(user.id)
+    assert task.extra_data["repository_ready"]["repo_url"].startswith("mock://")
+
+
+@patch(
+    "app.services.task_approval_service.provision_and_validate_task_repository",
+    side_effect=RuntimeError("GitHub unavailable"),
+)
+def test_approve_draft_repo_failure_leaves_draft_inactive(_repo, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org)
+    task = _draft(db, org, role)
+    db.commit()
+
+    res = dt.approve_draft(db, role, task.id, user_id=int(user.id))
+
+    assert res["ok"] is False
+    db.refresh(task)
+    assert task.is_active is False
+    assert task.extra_data["needs_review"] is True
+    assert "approved_by_user_id" not in task.extra_data
 
 
 def test_approve_unknown_draft_fails(db):
@@ -172,6 +221,7 @@ def test_revise_draft_repersists_in_place(mock_revise, db):
     assert task.extra_data["last_revision"]["feedback"]
     # The structured answers reached the generator as guidance.
     assert "harder" in mock_revise.call_args.kwargs["feedback"].lower()
+    assert mock_revise.call_args.kwargs["role_id"] == role.id
 
 
 @patch("app.services.task_spec_generator.revise_task_spec")

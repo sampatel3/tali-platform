@@ -21,6 +21,7 @@ from ...actions import advance_stage as advance_stage_action
 from ...actions.types import Actor
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
+from ...cv_parsing.origins import CV_PARSE_ORIGIN_RECRUITER_UPLOAD
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
 from ...deps import get_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
@@ -528,9 +529,16 @@ def _create_application_assessment(
     db: Session,
     void_existing: Assessment | None = None,
     void_reason: str | None = None,
+    pipeline_event_type: str = "assessment_invite_sent",
+    pipeline_reason: str = "Assessment invite created",
+    pipeline_metadata: dict | None = None,
 ) -> Assessment:
     token = secrets.token_urlsafe(32)
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    candidate_email = app.candidate.email if app.candidate else None
+    if not candidate_email:
+        raise HTTPException(status_code=400, detail="Application has no candidate email")
+    candidate_name = app.candidate.full_name or app.candidate.email
     if void_existing is not None:
         void_existing.is_voided = True
         void_existing.voided_at = utcnow()
@@ -554,6 +562,20 @@ def _create_application_assessment(
         void_existing.superseded_by_assessment_id = assessment.id
 
     _provision_assessment_branch(assessment, task)
+    if org:
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
+            position=task.name or "Technical assessment",
+            pipeline_source="recruiter",
+            pipeline_actor_type="recruiter",
+            pipeline_actor_id=current_user.id,
+            pipeline_reason=pipeline_reason,
+            pipeline_metadata=dict(pipeline_metadata or {}),
+            pipeline_event_type=pipeline_event_type,
+        )
     db.commit()
     db.refresh(assessment)
 
@@ -564,25 +586,6 @@ def _create_application_assessment(
         .first()
     )
 
-    candidate_email = app.candidate.email if app.candidate else None
-    if not candidate_email:
-        raise HTTPException(status_code=400, detail="Application has no candidate email")
-    candidate_name = app.candidate.full_name or app.candidate.email
-
-    if org:
-        dispatch_assessment_invite(
-            assessment=assessment,
-            org=org,
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            position=task.name or "Technical assessment",
-        )
-        try:
-            db.commit()
-            db.refresh(assessment)
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to persist invite metadata for assessment_id=%s", assessment.id)
     return assessment
 
 
@@ -760,7 +763,14 @@ def create_sourced_candidate(
     # cheap, no-Claude bookkeeping. The auto-reject task itself hard-skips a
     # sourced stage (automation_tasks.run_application_auto_reject), and the
     # decision-creation emitters refuse a sourced app, so no card is ever made.
-    on_application_created(app, score=False)
+    # Sourced prospects authorize no paid parse work. This also protects a
+    # reactivated legacy row that happens to retain old CV text.
+    on_application_created(
+        app,
+        score=False,
+        allow_paid_work=False,
+        parse_origin=None,
+    )
 
     app = get_application(app.id, org_id, db)
     return application_to_response(app)
@@ -1609,6 +1619,15 @@ def list_applications_global(
 ):
     started_at = perf_counter()
 
+    # Parse role scope before any natural-language provider work. Besides
+    # failing malformed filters without spend, this lets a single-role search
+    # consume that role's budget instead of falling through to workspace-only
+    # admission.
+    requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
+    if role_id is not None:
+        requested_role_ids = [int(role_id), *requested_role_ids]
+    unique_role_ids = sorted(set(requested_role_ids))
+
     # Natural-language search: when nl_query is set, the parser drives
     # filtering. The legacy `search` param is ignored (chips are
     # authoritative — see UI). We compute a parsed filter, narrow the
@@ -1637,9 +1656,20 @@ def list_applications_global(
                 CandidateApplication.deleted_at.is_(None),
             )
         )
+        if len(unique_role_ids) == 1:
+            nl_base = nl_base.filter(
+                CandidateApplication.role_id == unique_role_ids[0]
+            )
+        elif unique_role_ids:
+            nl_base = nl_base.filter(
+                CandidateApplication.role_id.in_(unique_role_ids)
+            )
         nl_result = run_search(
             db=db,
             organization_id=int(current_user.organization_id),
+            # Only an unambiguous role scope may consume a role allowance.
+            # Multi-role and workspace searches remain workspace-metered.
+            role_id=unique_role_ids[0] if len(unique_role_ids) == 1 else None,
             nl_query=nl_query_clean,
             base_query=nl_base,
             rerank_enabled=bool(rerank),
@@ -1680,11 +1710,7 @@ def list_applications_global(
             base_query = base_query.filter(CandidateApplication.id.in_([-1]))
         else:
             base_query = base_query.filter(CandidateApplication.id.in_(nl_ids))
-    requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
-    if role_id is not None:
-        requested_role_ids = [int(role_id), *requested_role_ids]
-    if requested_role_ids:
-        unique_role_ids = sorted(set(requested_role_ids))
+    if unique_role_ids:
         if len(unique_role_ids) == 1:
             base_query = base_query.filter(CandidateApplication.role_id == unique_role_ids[0])
         else:
@@ -2423,11 +2449,13 @@ def upload_application_cv(
     app.cv_filename = result["filename"]
     app.cv_text = sanitize_text_for_storage(result["extracted_text"])
     app.cv_uploaded_at = now
+    app.cv_sections = None
     if app.candidate:
         app.candidate.cv_file_url = result["file_url"]
         app.candidate.cv_filename = result["filename"]
         app.candidate.cv_text = sanitize_text_for_storage(result["extracted_text"])
         app.candidate.cv_uploaded_at = now
+        app.candidate.cv_sections = None
     # New CV invalidates the agent's prior view of this candidate. Clear
     # both pre-screen and cv_match scores (the helper enqueues a stale
     # CvScoreJob row too, so the worker picks it back up). Without this
@@ -2445,7 +2473,13 @@ def upload_application_cv(
     # CV upload is a deliberate human action — implicit "score this".
     # Fan out scoring + interview pack + auto-reject pre-screen as
     # background tasks so the recruiter gets the page back immediately.
-    on_application_created(app, score=True, score_force=True)
+    on_application_created(
+        app,
+        score=True,
+        score_force=True,
+        requires_active_agent=False,
+        parse_origin=CV_PARSE_ORIGIN_RECRUITER_UPLOAD,
+    )
     return ApplicationCvUploadResponse(
         application_id=app.id,
         filename=result["filename"],
@@ -2504,7 +2538,12 @@ def generate_taali_cv_ai(
     app.cv_match_details = {PENDING_PDF_HYGIENE_KEY: _pending_pdf} if _pending_pdf else None
     app.cv_match_scored_at = None
     try:
-        job = enqueue_score(db, app, force=True)
+        job = enqueue_score(
+            db,
+            app,
+            force=True,
+            requires_active_agent=False,
+        )
     except Exception as exc:
         logger.exception("Failed to enqueue CV match scoring for application_id=%s", app.id)
         raise HTTPException(status_code=500, detail="Failed to enqueue CV scoring") from exc
@@ -3187,7 +3226,13 @@ def score_selected_applications(
             needs_cv_fetch.append(app.id)
             continue
 
-        job = enqueue_score(db, app, force=force, bypass_pre_screen=bypass_pre_screen)
+        job = enqueue_score(
+            db,
+            app,
+            force=force,
+            bypass_pre_screen=bypass_pre_screen,
+            requires_active_agent=False,
+        )
         if job is None:
             not_eligible += 1
         else:
@@ -3935,7 +3980,13 @@ def _run_fetch_then_score(
                     elif (app.source or "") == "workable":
                         _try_fetch_cv_from_workable(app, app.candidate, db, org)
                 if score_after and (app.cv_text or "").strip():
-                    enqueue_score(db, app, force=force, bypass_pre_screen=bypass_pre_screen)
+                    enqueue_score(
+                        db,
+                        app,
+                        force=force,
+                        bypass_pre_screen=bypass_pre_screen,
+                        requires_active_agent=False,
+                    )
             except Exception:
                 logger.exception(
                     "Background fetch+score failed for application_id=%s", app.id
@@ -4494,13 +4545,17 @@ def _run_sync_graph(org_id: int, *, refresh: bool = False) -> None:
                     # un-attributed call_log rows — reconciliation
                     # against Anthropic billing still closes, but the
                     # per-org usage tab misses the rows entirely.
+                    bill_role_id = graph_sync.latest_application_role_id_for_candidate(
+                        cand, db
+                    )
                     sent = graph_sync.sync_candidate(
                         cand,
                         db=db,
                         include_cv_text=True,
                         bill_organization_id=int(cand.organization_id)
                         if cand.organization_id is not None else None,
-                        bill_candidate_id=int(cand.id) if cand.id is not None else None,
+                        bill_role_id=bill_role_id,
+                        require_role_admission=bill_role_id is not None,
                     )
                     if sent == 0:
                         # Treat as error if Graphiti dropped everything (likely
@@ -5233,7 +5288,12 @@ def _run_process(
                             progress["score"]["scored"] = idx + 1
                             _set_process_progress(role_id, progress)
                             continue
-                    job = enqueue_score(db, app, force=include_scored)
+                    job = enqueue_score(
+                        db,
+                        app,
+                        force=include_scored,
+                        requires_active_agent=False,
+                    )
                     if job is not None and job.status == "error":
                         progress["score"]["errors"] += 1
                     _refresh_rank_score(app)
@@ -5324,6 +5384,7 @@ def _run_process(
                                 bill_organization_id=org_id,
                                 bill_role_id=role_id,
                                 bill_user_id=user_id,
+                                require_role_admission=True,
                             )
                             if sent == 0:
                                 # Graphiti returned no episodes — likely an
@@ -5589,6 +5650,7 @@ def create_assessment_for_application(
     creation_gate = get_assessment_creation_gate(
         current_user.organization_id,
         db,
+        role_id=int(role.id),
         lock_organization=True,
     )
     if not creation_gate.get("can_create"):
@@ -5598,35 +5660,6 @@ def create_assessment_for_application(
         raise _assessment_create_conflict_response(existing)
 
     try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason="Pipeline initialized before assessment create",
-        )
-        transition_stage(
-            db,
-            app=app,
-            to_stage="invited",
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Assessment invite created",
-        )
-        append_application_event(
-            db,
-            app=app,
-            event_type="assessment_invite_sent",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Task sent",
-            metadata={
-                "task_id": data.task_id,
-                "duration_minutes": data.duration_minutes,
-            },
-        )
         assessment = _create_application_assessment(
             app=app,
             role=role,
@@ -5634,6 +5667,10 @@ def create_assessment_for_application(
             duration_minutes=data.duration_minutes,
             current_user=current_user,
             db=db,
+            pipeline_metadata={
+                "task_id": data.task_id,
+                "duration_minutes": data.duration_minutes,
+            },
         )
         refresh_application_score_cache(app, db=db)
         db.commit()
@@ -5686,6 +5723,7 @@ def retake_assessment_for_application(
     creation_gate = get_assessment_creation_gate(
         current_user.organization_id,
         db,
+        role_id=int(role.id),
         exclude_assessment_id=existing.id,
         lock_organization=True,
     )
@@ -5693,37 +5731,6 @@ def retake_assessment_for_application(
         raise HTTPException(status_code=402, detail=creation_gate.get("message"))
 
     try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason="Pipeline initialized before assessment retake",
-        )
-        transition_stage(
-            db,
-            app=app,
-            to_stage="invited",
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Assessment retake created",
-        )
-        append_application_event(
-            db,
-            app=app,
-            event_type="assessment_retake_sent",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason="Task retake sent",
-            metadata={
-                "task_id": data.task_id,
-                "duration_minutes": data.duration_minutes,
-                "void_reason": data.void_reason,
-                "previous_assessment_id": existing.id,
-            },
-        )
         assessment = _create_application_assessment(
             app=app,
             role=role,
@@ -5733,6 +5740,14 @@ def retake_assessment_for_application(
             db=db,
             void_existing=existing,
             void_reason=data.void_reason,
+            pipeline_event_type="assessment_retake_sent",
+            pipeline_reason="Assessment retake created",
+            pipeline_metadata={
+                "task_id": data.task_id,
+                "duration_minutes": data.duration_minutes,
+                "void_reason": data.void_reason,
+                "previous_assessment_id": existing.id,
+            },
         )
         refresh_application_score_cache(app, db=db)
         db.commit()

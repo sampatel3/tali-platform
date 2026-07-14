@@ -37,6 +37,16 @@ class Assessment(Base):
             sqlite_where=text("role_id IS NOT NULL AND is_voided = 0"),
             postgresql_where=text("role_id IS NOT NULL AND is_voided = false"),
         ),
+        Index(
+            "ix_assessments_invite_email_recovery",
+            "invite_email_status",
+            "invite_email_next_attempt_at",
+        ),
+        Index(
+            "ix_assessments_invite_workable_handoff_recovery",
+            "invite_workable_handoff_status",
+            "invite_workable_handoff_next_attempt_at",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -89,10 +99,45 @@ class Assessment(Base):
     # Email-delivery tracking (Resend). ``invite_email_id`` is the Resend
     # message id captured at send time; the Resend webhook correlates
     # delivered/opened/bounced/complained events back to this row by it.
-    # ``invite_email_status`` is the latest lifecycle state:
-    # sent → delivered → opened/clicked, or bounced/complained.
+    # ``invite_email_status`` is the latest lifecycle state. Provider delivery
+    # moves sent → delivered → opened/clicked (or bounced/complained).
+    # The durable outbox additionally uses queued/retrying/retry_wait while a
+    # transient provider/broker failure is recovering; only permanent provider
+    # refusal is recorded as failed.
     invite_email_id = Column(String, nullable=True, index=True)
     invite_email_status = Column(String, nullable=True)
+    invite_email_send_generation = Column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    invite_email_confirmed_generation = Column(Integer, nullable=True)
+    invite_email_retry_count = Column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    invite_email_next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    invite_email_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    invite_email_last_error = Column(Text, nullable=True)
+    invite_email_reply_to = Column(String, nullable=True)
+    # Frozen local-pipeline transition intent.  Creating/queueing an invite must
+    # not claim that the candidate was contacted, so the producer records the
+    # requested actor/source here and the Resend-success writeback applies it in
+    # the same transaction that stamps ``invite_sent_at``.
+    invite_pipeline_transition = Column(JSON, nullable=True)
+    # Workable handoff is a second durable outbox, deliberately independent of
+    # email delivery.  Once Resend accepts a generation, the handoff worker can
+    # retry stage + note without ever submitting that email generation again.
+    invite_workable_handoff_status = Column(String, nullable=True)
+    invite_workable_handoff_generation = Column(Integer, nullable=True)
+    invite_workable_handoff_stage = Column(String, nullable=True)
+    invite_workable_handoff_retry_count = Column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    invite_workable_handoff_next_attempt_at = Column(
+        DateTime(timezone=True), nullable=True
+    )
+    invite_workable_handoff_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    invite_workable_handoff_last_error = Column(Text, nullable=True)
+    invite_workable_stage_moved_at = Column(DateTime(timezone=True), nullable=True)
+    invite_workable_note_posted_at = Column(DateTime(timezone=True), nullable=True)
     invite_delivered_at = Column(DateTime(timezone=True), nullable=True)
     invite_opened_at = Column(DateTime(timezone=True), nullable=True)
     invite_bounced_at = Column(DateTime(timezone=True), nullable=True)

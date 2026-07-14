@@ -44,12 +44,19 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from anthropic import Anthropic
 
+from ...platform.database import SessionLocal
 from ...services.metered_anthropic_client import MeteredAnthropicClient
+from ...services.pricing_service import Feature
+from ...services.usage_credit_reservations import (
+    CreditReservation,
+    reserve_credits,
+)
 
 logger = logging.getLogger("taali.assessments.interrogation")
 
@@ -440,6 +447,39 @@ def _parse_classifier_json(raw: str) -> Dict[str, Any]:
     return json.loads(text)
 
 
+def _reserve_classifier_call(
+    *,
+    organization_id: int,
+    assessment_id: Optional[int],
+    role_id: int,
+    trace_id: Optional[str],
+) -> CreditReservation:
+    """Hold one classifier call against both org credits and the role cap."""
+    logical_trace = (
+        str(trace_id).strip()
+        if trace_id is not None and str(trace_id).strip()
+        else f"assessment:{assessment_id or 'unknown'}:classifier"
+    )
+    with SessionLocal() as meter_db:
+        reservation = reserve_credits(
+            meter_db,
+            organization_id=int(organization_id),
+            feature=Feature.ASSESSMENT,
+            external_ref=(
+                f"usage-hold:{logical_trace}:{uuid.uuid4().hex}"
+            ),
+            metadata={
+                "sub_feature": "interrogation_classifier",
+                "assessment_id": assessment_id,
+                "trace_id": logical_trace,
+            },
+            role_id=int(role_id),
+            enforce_role_budget=True,
+        )
+        meter_db.commit()
+        return reservation
+
+
 def classify_response(
     *,
     decision_points: List[Dict[str, Any]],
@@ -448,6 +488,8 @@ def classify_response(
     api_key: str,
     organization_id: int,
     assessment_id: Optional[int] = None,
+    role_id: Optional[int] = None,
+    trace_id: Optional[str] = None,
     model: Optional[str] = None,
 ) -> ClassificationOutcome:
     """Run the classifier against ``candidate_message`` for every open
@@ -489,6 +531,8 @@ def classify_response(
     }
     if assessment_id is not None:
         classifier_meta["assessment_id"] = str(assessment_id)
+    if trace_id:
+        classifier_meta["trace_id"] = str(trace_id)
     metering: Dict[str, Any] = {
         "feature": "assessment",
         "organization_id": int(organization_id),
@@ -496,6 +540,36 @@ def classify_response(
     }
     if assessment_id is not None:
         metering["entity_id"] = f"assessment:{assessment_id}"
+    if role_id is not None:
+        metering["role_id"] = int(role_id)
+    if trace_id:
+        # Top-level drives ClaudeCallLog retry/reconciliation grouping; the
+        # nested copy above persists on UsageEvent metadata.
+        metering["trace_id"] = str(trace_id)
+
+    # A candidate turn can race other applications and assessment calls on
+    # the same role.  Check and hold at the provider boundary so a stale
+    # route-level `spent < cap` read cannot overrun the universal role cap.
+    # Legacy calls without role context retain their existing org-only path.
+    try:
+        if role_id is not None:
+            reservation = _reserve_classifier_call(
+                organization_id=int(organization_id),
+                assessment_id=assessment_id,
+                role_id=int(role_id),
+                trace_id=trace_id,
+            )
+            metering["credit_reservation"] = reservation.as_metering_payload()
+    except Exception as exc:  # noqa: BLE001 — fail closed before provider
+        logger.info(
+            "interrogation classifier admission blocked assessment=%s role=%s err=%s",
+            assessment_id,
+            role_id,
+            exc,
+        )
+        return ClassificationOutcome(
+            by_dp={}, model_used=chosen_model, error=f"budget_admission_failed: {exc}",
+        )
 
     user_payload = {
         "decision_points": _decision_points_for_classifier(decision_points),

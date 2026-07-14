@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 
 import { FleetView } from './FleetTab';
 
@@ -76,7 +77,9 @@ const activity = [
 ];
 
 const renderView = (props = {}) => render(
-  <FleetView panel={panel} activity={activity} {...props} />,
+  <MemoryRouter>
+    <FleetView panel={panel} activity={activity} {...props} />
+  </MemoryRouter>,
 );
 
 describe('FleetView', () => {
@@ -120,6 +123,13 @@ describe('FleetView', () => {
     expect(screen.getByText('Agent schedule')).toBeInTheDocument();
   });
 
+  it('opens the role-scoped Agent settings from each fleet card', () => {
+    renderView();
+
+    expect(screen.getByRole('link', { name: 'Open agent settings for Data Engineer' }))
+      .toHaveAttribute('href', '/jobs/1?view=role-fit');
+  });
+
   it('shows recent activity without embedding another decision-log table', () => {
     renderView();
 
@@ -147,7 +157,9 @@ describe('FleetView', () => {
       created_at: minutesAgo(3),
     }];
     const { container } = render(
-      <FleetView panel={unknownPanel} activity={codedActivity} />,
+      <MemoryRouter>
+        <FleetView panel={unknownPanel} activity={codedActivity} />
+      </MemoryRouter>,
     );
 
     expect(screen.getByRole('heading', { name: 'Unnamed role' })).toBeInTheDocument();

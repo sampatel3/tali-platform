@@ -31,7 +31,10 @@ from ...domains.assessments_runtime.pipeline_service import (
 from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .interrogation import render_opener
-from .submission_runtime import submit_assessment_impl
+from .submission_runtime import (
+    _durable_candidate_branch_snapshot,
+    submit_assessment_impl,
+)
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,10 @@ CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE = (
 )
 ORG_INSUFFICIENT_CREDITS_MESSAGE = (
     "No assessment credits available. Purchase credits before creating a new assessment."
+)
+ROLE_BUDGET_EXHAUSTED_MESSAGE = (
+    "This role's monthly AI budget cannot fund another assessment call. "
+    "Increase the role budget before continuing."
 )
 ORG_RESERVED_CREDITS_MESSAGE = (
     "All available credits are already reserved for pending assessments. Purchase more credits before creating another assessment."
@@ -153,7 +160,6 @@ def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment
     branch_name = getattr(assessment, "assessment_branch", None)
     if not repo_url or not branch_name:
         return False
-
     repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
     raw_repo_url = str(repo_url)
     if raw_repo_url.startswith("mock://"):
@@ -190,6 +196,69 @@ def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment
     except Exception:
         logger.exception("Failed to parse clone command output for assessment=%s", getattr(assessment, "id", None))
         return False
+
+
+def _recover_retry_sandbox_from_pushed_branch(
+    e2b: Any,
+    assessment: Assessment,
+    task: Task,
+) -> Any:
+    """Rebuild a killed scoring sandbox from the exact submitted Git head.
+
+    The submission runtime has already checked the durable push marker.  We
+    validate it again here, clone the candidate branch into a fresh sandbox,
+    and compare the cloned HEAD with the recorded submission SHA before any
+    tests or rubric providers can see the workspace.
+    """
+    snapshot = _durable_candidate_branch_snapshot(assessment)
+    if snapshot is None:
+        raise RuntimeError("candidate branch push checkpoint is unavailable")
+
+    sandbox = e2b.create_sandbox()
+    try:
+        if not _clone_assessment_branch_into_workspace(sandbox, assessment, task):
+            raise RuntimeError("failed to clone pushed candidate branch")
+
+        cloned_evidence = _collect_git_evidence_from_sandbox(
+            sandbox,
+            _workspace_repo_root(task),
+        )
+        cloned_head = str(cloned_evidence.get("head_sha") or "").strip()
+        if cloned_head != snapshot["head_sha"]:
+            raise RuntimeError(
+                "recovered candidate branch head does not match submission checkpoint"
+            )
+
+        bootstrap = _run_workspace_bootstrap(
+            e2b,
+            sandbox,
+            task,
+            _workspace_repo_root(task),
+        )
+        if not bootstrap.get("success") and bootstrap.get("must_succeed"):
+            raise RuntimeError("failed to bootstrap recovered candidate workspace")
+
+        append_assessment_timeline_event(
+            assessment,
+            "assessment_scoring_sandbox_recovered",
+            {
+                "source": "pushed_candidate_branch",
+                "branch": snapshot["branch"],
+                "head_sha": snapshot["head_sha"],
+                "bootstrap_ran": bool(bootstrap.get("ran")),
+                "bootstrap_success": bool(bootstrap.get("success")),
+            },
+        )
+        return sandbox
+    except Exception:
+        try:
+            e2b.close_sandbox(sandbox)
+        except Exception:
+            logger.exception(
+                "Failed to close rejected recovery sandbox assessment_id=%s",
+                getattr(assessment, "id", None),
+            )
+        raise
 
 
 def _read_sandbox_repo_files(sandbox: Any, repo_root: str, max_files: int = 200, max_bytes: int = 500_000) -> Dict[str, Any] | None:
@@ -563,7 +632,20 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
 
     scoring_failed = False
     try:
-        submit_assessment(assessment, final_code, int(assessment.tab_switch_count or 0), db)
+        # Defer the agent wake until after the timeout-specific terminal state is
+        # committed below.  Otherwise this path would enqueue once as a normal
+        # COMPLETED submission and again as COMPLETED_DUE_TO_TIMEOUT.
+        submit_assessment(
+            assessment,
+            final_code,
+            int(assessment.tab_switch_count or 0),
+            db,
+            wake_agent_on_commit=False,
+            # Relabel the row as COMPLETED_DUE_TO_TIMEOUT first, then dispatch
+            # retry. This avoids a fast worker racing the timeout commit and
+            # emitting the post-assessment wake twice.
+            enqueue_rubric_retry_on_commit=False,
+        )
     except HTTPException as exc:
         if exc.status_code == 409:
             # A racing candidate submit won the atomic claim — their real
@@ -594,6 +676,22 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
         assessment, "auto_submit_timeout_sweep", {"scoring_failed": scoring_failed}
     )
     db.commit()
+    grading_incomplete = bool(
+        getattr(assessment, "scoring_failed", False)
+        or getattr(assessment, "scoring_partial", False)
+    )
+    if grading_incomplete:
+        try:
+            from ...tasks.rubric_retry_tasks import retry_incomplete_rubric_scoring
+
+            retry_incomplete_rubric_scoring.delay(int(assessment.id))
+        except Exception:
+            logger.exception(
+                "Failed to enqueue timeout rubric retry assessment_id=%s; sweep will recover",
+                assessment.id,
+            )
+    if not grading_incomplete:
+        _wake_role_agent_after_assessment(assessment)
     return {"status": "finalized", "assessment_id": assessment.id, "scoring_failed": scoring_failed}
 
 
@@ -703,6 +801,7 @@ def get_assessment_creation_gate(
     organization_id: int,
     db: Session,
     *,
+    role_id: int | None = None,
     exclude_assessment_id: int | None = None,
     lock_organization: bool = False,
 ) -> Dict[str, Any]:
@@ -726,6 +825,10 @@ def get_assessment_creation_gate(
         InsufficientCreditsError,
         reserve as _meter_reserve,
     )
+    from ...services.usage_credit_reservations import (
+        InsufficientRoleBudgetError,
+        ensure_role_capacity,
+    )
 
     try:
         reservation = _meter_reserve(
@@ -741,6 +844,25 @@ def get_assessment_creation_gate(
             "reserved_pending_assessments": 0,
             "remaining_capacity": credits_balance - exc.required,
         }
+
+    if role_id is not None:
+        try:
+            ensure_role_capacity(
+                db,
+                organization_id=int(organization_id),
+                role_id=int(role_id),
+                required=int(reservation),
+            )
+        except InsufficientRoleBudgetError as exc:
+            return {
+                "can_create": False,
+                "reason": "role_monthly_budget_insufficient",
+                "message": ROLE_BUDGET_EXHAUSTED_MESSAGE,
+                "organization": org,
+                "credits_balance": credits_balance,
+                "reserved_pending_assessments": 0,
+                "remaining_capacity": int(exc.available),
+            }
 
     return {
         "can_create": True,
@@ -763,31 +885,55 @@ def get_assessment_start_gate(
     was_pending = assessment.status == AssessmentStatus.PENDING
     is_demo = bool(getattr(assessment, "is_demo", False))
     # Demo assessments and resumed-in-progress assessments don't gate on
-    # credits — only fresh starts do. In shadow mode (USAGE_METER_LIVE=False)
-    # the gate is also a no-op, since the ledger isn't being debited and
-    # we shouldn't block flows on a balance that isn't yet meaningful. The
-    # real usage-based gate runs in ``usage_metering_service.reserve()``
-    # before each Claude call when the meter is live.
-    if not was_pending or is_demo or not settings.USAGE_METER_LIVE:
+    # fresh-call capacity. The role ceiling remains active in shadow-meter
+    # mode because UsageEvents (and therefore monthly spend) still accrue.
+    if not was_pending or is_demo:
         return {"can_start": True, "reason": None, "message": None, "organization": None}
 
-    org_query = db.query(Organization).filter(Organization.id == assessment.organization_id)
-    if lock_organization:
-        org_query = org_query.with_for_update()
-    org = org_query.first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
+    org = None
+    if settings.USAGE_METER_LIVE:
+        org_query = db.query(Organization).filter(
+            Organization.id == assessment.organization_id
+        )
+        if lock_organization:
+            org_query = org_query.with_for_update()
+        org = org_query.first()
+        if not org:
+            raise HTTPException(status_code=404, detail="Organization not found")
 
-    if getattr(assessment, "credit_consumed_at", None) is not None:
-        return {"can_start": True, "reason": None, "message": None, "organization": org}
+        if (
+            getattr(assessment, "credit_consumed_at", None) is None
+            and int(org.credits_balance or 0) <= 0
+        ):
+            return {
+                "can_start": False,
+                "reason": "insufficient_credits",
+                "message": CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
+                "organization": org,
+            }
 
-    if int(org.credits_balance or 0) <= 0:
-        return {
-            "can_start": False,
-            "reason": "insufficient_credits",
-            "message": CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
-            "organization": org,
-        }
+    role_id = getattr(assessment, "role_id", None)
+    if role_id is not None:
+        from ...services.pricing_service import Feature, estimate_reservation
+        from ...services.usage_credit_reservations import (
+            InsufficientRoleBudgetError,
+            ensure_role_capacity,
+        )
+
+        try:
+            ensure_role_capacity(
+                db,
+                organization_id=int(assessment.organization_id),
+                role_id=int(role_id),
+                required=int(estimate_reservation(Feature.ASSESSMENT)),
+            )
+        except InsufficientRoleBudgetError:
+            return {
+                "can_start": False,
+                "reason": "role_monthly_budget_insufficient",
+                "message": CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
+                "organization": org,
+            }
 
     return {"can_start": True, "reason": None, "message": None, "organization": org}
 
@@ -1076,19 +1222,201 @@ def start_or_resume_assessment(
     }
 
 
+def _persist_post_claim_scoring_failure(
+    assessment_id: int,
+    db: Session,
+    *,
+    error: Exception,
+) -> Assessment | None:
+    """Fail closed after the terminal submission claim has committed.
+
+    Sandbox reconnect, test execution, git push, and provider scoring all run
+    after the atomic IN_PROGRESS -> COMPLETED claim. Any failure in that region
+    must leave a durable retry outbox row; otherwise the candidate cannot submit
+    again and the recovery sweep cannot see the stranded result.
+    """
+    try:
+        db.rollback()
+        row = (
+            db.query(Assessment)
+            .filter(Assessment.id == int(assessment_id))
+            .one_or_none()
+        )
+        if row is None or row.status not in {
+            AssessmentStatus.COMPLETED,
+            AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+        }:
+            return None
+
+        breakdown = (
+            dict(row.score_breakdown)
+            if isinstance(getattr(row, "score_breakdown", None), dict)
+            else {}
+        )
+        task = db.query(Task).filter(Task.id == row.task_id).one_or_none()
+        failed_dimension_ids = list(
+            (task.evaluation_rubric or {}).keys()
+            if task is not None and isinstance(task.evaluation_rubric, dict)
+            else []
+        )
+        rubric = (
+            dict(breakdown.get("rubric_grading"))
+            if isinstance(breakdown.get("rubric_grading"), dict)
+            else {}
+        )
+        rubric.update(
+            {
+                "status": "failed",
+                "fully_graded": False,
+                "failed_dimension_ids": failed_dimension_ids,
+                "error": "submission_pipeline_failed",
+            }
+        )
+        retry = (
+            dict(rubric.get("retry"))
+            if isinstance(rubric.get("retry"), dict)
+            else {}
+        )
+        retry.update(
+            {
+                "status": "pending",
+                "attempt_count": max(0, int(retry.get("attempt_count") or 0)),
+                "next_attempt_at": utcnow().isoformat(),
+                "last_error": str(error)[:1000],
+            }
+        )
+        rubric["retry"] = retry
+        breakdown["rubric_grading"] = rubric
+        breakdown["scoring_failure"] = {
+            "status": "retrying",
+            "stage": "post_claim_submission",
+            "error_type": type(error).__name__,
+            "error": str(error)[:1000],
+            "occurred_at": utcnow().isoformat(),
+        }
+        row.score_breakdown = breakdown
+        row.scoring_failed = True
+        row.scoring_partial = False
+        row.score = None
+        row.final_score = None
+        row.assessment_score = None
+        row.taali_score = None
+        row.scored_at = None
+        if not row.completed_at:
+            row.completed_at = utcnow()
+        append_assessment_timeline_event(
+            row,
+            "assessment_scoring_failed",
+            {
+                "stage": "post_claim_submission",
+                "error_type": type(error).__name__,
+                "error": str(error)[:500],
+                "automatic_retry": True,
+            },
+        )
+        if row.application_id:
+            app = (
+                db.query(CandidateApplication)
+                .filter(CandidateApplication.id == row.application_id)
+                .one_or_none()
+            )
+            if app is not None:
+                refresh_application_score_cache(app, db=db)
+        db.commit()
+        db.refresh(row)
+        return row
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to persist post-claim scoring failure assessment_id=%s",
+            assessment_id,
+        )
+        return None
+
+
 def submit_assessment(
     assessment: Assessment,
     final_code: str,
     tab_switch_count: int,
     db: Session,
+    *,
+    wake_agent_on_commit: bool = True,
+    retry_scoring: bool = False,
+    suppress_completion_side_effects: bool = False,
+    enqueue_rubric_retry_on_commit: bool = True,
 ) -> Dict[str, Any]:
-    return submit_assessment_impl(
-        assessment,
-        final_code,
-        tab_switch_count,
-        db,
-        settings_obj=settings,
-        e2b_service_cls=E2BService,
-        workspace_repo_root_fn=_workspace_repo_root,
-        collect_git_evidence_fn=_collect_git_evidence_from_sandbox,
-    )
+    try:
+        result = submit_assessment_impl(
+            assessment,
+            final_code,
+            tab_switch_count,
+            db,
+            settings_obj=settings,
+            e2b_service_cls=E2BService,
+            workspace_repo_root_fn=_workspace_repo_root,
+            collect_git_evidence_fn=_collect_git_evidence_from_sandbox,
+            recover_retry_sandbox_fn=_recover_retry_sandbox_from_pushed_branch,
+            retry_scoring=retry_scoring,
+            suppress_completion_side_effects=suppress_completion_side_effects,
+            enqueue_rubric_retry_on_commit=enqueue_rubric_retry_on_commit,
+        )
+    except Exception as exc:
+        # 400 is a pre-claim lifecycle rejection. 409 means a racing submitter
+        # won the claim and may still be actively scoring; never poison its row.
+        pre_claim_rejection = isinstance(exc, HTTPException) and exc.status_code in {
+            400,
+            409,
+        }
+        recovered = None
+        if not pre_claim_rejection:
+            recovered = _persist_post_claim_scoring_failure(
+                int(assessment.id),
+                db,
+                error=exc,
+            )
+        if (
+            recovered is not None
+            and not retry_scoring
+            and enqueue_rubric_retry_on_commit
+        ):
+            try:
+                from ...tasks.rubric_retry_tasks import retry_incomplete_rubric_scoring
+
+                retry_incomplete_rubric_scoring.delay(int(recovered.id))
+            except Exception:
+                logger.exception(
+                    "Failed to enqueue post-claim scoring retry assessment_id=%s; sweep will recover",
+                    recovered.id,
+                )
+        raise
+    # ``submit_assessment_impl`` returns only after its score/pipeline commit.
+    # Wake the complete role cohort pipeline now so an enabled agent can act on
+    # the fresh result immediately instead of waiting for the periodic sweep.
+    if wake_agent_on_commit and result.get("grading_status") != "pending":
+        _wake_role_agent_after_assessment(assessment)
+    return result
+
+
+def _wake_role_agent_after_assessment(assessment: Assessment) -> bool:
+    """Best-effort, bounded wake-up for the assessment's role agent.
+
+    The cohort task owns the canonical enabled/paused and concurrent-run guards,
+    plus idempotent scoring/decision materialisation.  This hook therefore does
+    exactly one dispatch when a role is present and never changes the already
+    committed submission outcome if the broker is unavailable.
+    """
+    role_id = getattr(assessment, "role_id", None)
+    if role_id is None:
+        return False
+    try:
+        from ...tasks.agent_tasks import agent_cohort_tick_role
+
+        agent_cohort_tick_role.delay(int(role_id), activation=False)
+        return True
+    except Exception:
+        logger.exception(
+            "Failed to enqueue post-assessment agent cycle assessment_id=%s role_id=%s",
+            getattr(assessment, "id", None),
+            role_id,
+        )
+        return False

@@ -19,6 +19,7 @@ import { DistributeRolePanel } from './DistributeRolePanel';
 
 const publishedPayload = {
   published: true,
+  distribution_ready: true,
   apply_url: 'https://app.example.com/job/abc123',
   title: 'Senior Backend Engineer',
   linkedin_post: "We're hiring: Senior Backend Engineer\n\nApply here: https://app.example.com/job/abc123",
@@ -37,8 +38,8 @@ describe('DistributeRolePanel', () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
-  const open = () => {
-    render(<DistributeRolePanel roleId={101} />);
+  const open = (props = {}) => {
+    render(<DistributeRolePanel roleId={101} {...props} />);
     fireEvent.click(screen.getByRole('button', { name: /Distribute this role/i }));
   };
 
@@ -91,6 +92,29 @@ describe('DistributeRolePanel', () => {
     rolesApi.distribution.mockResolvedValue({ data: { published: false } });
     open();
     expect(await screen.findByText(/Publish this role to distribute it/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('LinkedIn post draft')).not.toBeInTheDocument();
+  });
+
+  it('labels a published-but-off native page as preview-only and suppresses distribution artefacts', async () => {
+    // The lifecycle-aware backend hides draft/off pages from feeds and returns
+    // no distribution artefacts even though the recruiter can still preview.
+    rolesApi.distribution.mockResolvedValue({ data: { published: true, distribution_ready: false, reason: 'agent_off' } });
+    open({ jobStatus: 'draft' });
+
+    expect(await screen.findByText(/Preview only.*not accepting applications/i)).toBeInTheDocument();
+    expect(screen.getByText(/Do not distribute it yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Publish this role to distribute it/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('LinkedIn post draft')).not.toBeInTheDocument();
+  });
+
+  it('explains why a published role cannot be distributed while its agent is paused', async () => {
+    rolesApi.distribution.mockResolvedValue({
+      data: { published: true, distribution_ready: false, reason: 'agent_paused' },
+    });
+    open({ jobStatus: 'open' });
+
+    expect(await screen.findByText(/Distribution is paused with the role/i)).toBeInTheDocument();
+    expect(screen.getByText(/Resume the agent/i)).toBeInTheDocument();
     expect(screen.queryByLabelText('LinkedIn post draft')).not.toBeInTheDocument();
   });
 

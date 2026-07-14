@@ -29,7 +29,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
@@ -42,6 +42,7 @@ from ..models.cv_score_job import (
     SCORE_JOB_RUNNING,
 )
 from ..models.role import Role
+from ..models.organization import Organization
 from ..platform.config import settings
 from ..domains.assessments_runtime.pipeline_service import append_application_event
 from .fit_matching_service import (
@@ -51,12 +52,16 @@ from .fit_matching_service import (
     calculate_cv_job_match_v4_sync,
 )
 from .claude_client_resolver import get_client_for_org as _resolve_anthropic_client
-from .pricing_service import Feature
+from .pricing_service import Feature, estimate_reservation
 from .spec_normalizer import normalize_spec
 from .usage_metering_service import (
     InsufficientCreditsError,
     record_event as _meter_record_event,
     reserve as _meter_reserve,
+)
+from .usage_credit_reservations import (
+    InsufficientRoleBudgetError,
+    ensure_role_capacity,
 )
 
 logger = logging.getLogger("taali.cv_score_orchestrator")
@@ -228,6 +233,7 @@ def enqueue_score(
     *,
     force: bool = False,
     bypass_pre_screen: bool = False,
+    requires_active_agent: bool = False,
 ) -> CvScoreJob | None:
     """Queue a CV score for an application.
 
@@ -244,6 +250,12 @@ def enqueue_score(
     ``bypass_pre_screen`` is the explicit opt-out for the pre-screen
     gate: use only when a recruiter has reviewed and wants a full v9
     score regardless of the cheap filter's verdict.
+
+    ``requires_active_agent`` is durable execution authority, not merely an
+    enqueue-time hint. Ingest/cohort/agent callers set it to ``True`` so a
+    queued job cannot begin after Pause or Turn off. Authenticated recruiter
+    and administrator actions leave it ``False`` and may still run while the
+    autonomous agent is held (subject to credits and the role cap).
     """
     if not application or application.id is None:
         return None
@@ -303,14 +315,32 @@ def enqueue_score(
             )
             bypass_pre_screen = False
 
-    # Pre-flight credit gate. In shadow mode (USAGE_METER_LIVE=False) this
-    # is a no-op. In live mode, orgs without enough balance get a silent
-    # skip — the caller (batch loops or single-app routes) sees None and
-    # can render the 402 surface separately if needed.
+    # Provider-job admission.  Lock order is org -> role, matching the hard
+    # reservation path used by assessment/task calls.  The role lock makes
+    # the active CvScoreJob rows a durable, serialized budget commitment:
+    # concurrent public applications cannot all observe the same remaining
+    # cap and enqueue past it.
+    organization_id = int(getattr(application, "organization_id", 0) or 0)
+    score_reservation = int(estimate_reservation(Feature.SCORE))
+    locked_org = None
     try:
-        _meter_reserve(
+        if bool(settings.USAGE_METER_LIVE):
+            locked_org = (
+                db.query(Organization)
+                .filter(Organization.id == organization_id)
+                .with_for_update()
+                .populate_existing()
+                .one_or_none()
+            )
+            if locked_org is None:
+                logger.error(
+                    "enqueue_score skipped for application=%s: organization missing",
+                    application.id,
+                )
+                return None
+        score_reservation = _meter_reserve(
             db,
-            organization_id=int(getattr(application, "organization_id", 0) or 0) or None,
+            organization_id=organization_id,
             feature=Feature.SCORE,
         )
     except InsufficientCreditsError:
@@ -319,43 +349,133 @@ def enqueue_score(
             application.id,
         )
         return None
-    except Exception:  # pragma: no cover — defensive, never block scoring on metering
+    except Exception:
         logger.exception(
-            "enqueue_score reserve check failed for application=%s",
+            "enqueue_score reserve check failed for application=%s — blocked",
             application.id,
         )
+        return None
 
-    # Universal role-level monthly USD cap. When the recruiter has set a
-    # cap (typically because they activated agentic mode and chose a
-    # budget), every Anthropic call on this role — scoring included —
-    # must check it before spending. Skipped scores show up in the
-    # scoring batch's "skipped" tally; the agent's monthly budget guard
-    # surfaces the same paused state on the bar.
     try:
-        from .role_budget_gate import can_spend_on_role
-
-        if not can_spend_on_role(db, role=role):
-            logger.info(
-                "enqueue_score skipped for application=%s: role monthly cap reached (role_id=%s)",
+        locked_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role.id),
+                Role.organization_id == organization_id,
+            )
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if locked_role is None:
+            logger.error(
+                "enqueue_score skipped for application=%s: role missing",
                 application.id,
-                role.id,
             )
             return None
-    except Exception:  # pragma: no cover — defensive
-        logger.exception(
-            "role_budget_gate check failed for application=%s — proceeding",
-            application.id,
+
+        # Duplicate reuse belongs inside the role lock.  Otherwise two public
+        # requests for the same application can both pass `_latest_job` before
+        # either pending row becomes visible.
+        if not force:
+            existing = _latest_job(db, application.id)
+            if existing is not None and existing.status in {
+                SCORE_JOB_PENDING,
+                SCORE_JOB_RUNNING,
+            }:
+                # An explicit recruiter action is fresh authority to finish an
+                # already-queued autonomous score. Persist the promotion before
+                # returning so the separate worker cannot observe the old flag.
+                if (
+                    not bool(requires_active_agent)
+                    and bool(getattr(existing, "requires_active_agent", True))
+                ):
+                    existing.requires_active_agent = False
+                    existing.force_full_score = bool(
+                        getattr(existing, "force_full_score", False)
+                        or bypass_pre_screen
+                    )
+                    db.add(existing)
+                    db.commit()
+                return existing
+
+        if bool(requires_active_agent) and (
+            not bool(locked_role.agentic_mode_enabled)
+            or locked_role.agent_paused_at is not None
+        ):
+            logger.info(
+                "autonomous score enqueue held application_id=%s role_id=%s "
+                "enabled=%s paused=%s",
+                application.id,
+                locked_role.id,
+                bool(locked_role.agentic_mode_enabled),
+                locked_role.agent_paused_at is not None,
+            )
+            return None
+
+        ensure_role_capacity(
+            db,
+            organization_id=organization_id,
+            role_id=int(locked_role.id),
+            required=int(score_reservation),
         )
 
-    if not force:
-        existing = _latest_job(db, application.id)
-        if existing is not None and existing.status in {SCORE_JOB_PENDING, SCORE_JOB_RUNNING}:
-            return existing
+        if locked_org is not None:
+            # Org credits are also committed while score jobs are in flight;
+            # actual debits do not land until workers finish.  Count those
+            # jobs under the org lock so direct enqueues cannot overdraw even
+            # though the legacy reserve() check is intentionally soft.
+            active_org_jobs = int(
+                db.query(func.count(CvScoreJob.id))
+                .join(Role, CvScoreJob.role_id == Role.id)
+                .filter(
+                    Role.organization_id == organization_id,
+                    CvScoreJob.status.in_(
+                        (SCORE_JOB_PENDING, SCORE_JOB_RUNNING)
+                    ),
+                )
+                .scalar()
+                or 0
+            )
+            available = int(locked_org.credits_balance or 0)
+            required_with_commitments = (
+                active_org_jobs + 1
+            ) * int(score_reservation)
+            if available < required_with_commitments:
+                logger.info(
+                    "enqueue_score skipped for application=%s: org credit "
+                    "commitments need=%s available=%s active_jobs=%s",
+                    application.id,
+                    required_with_commitments,
+                    available,
+                    active_org_jobs,
+                )
+                return None
+    except InsufficientRoleBudgetError as exc:
+        logger.info(
+            "enqueue_score skipped for application=%s: role monthly cap "
+            "reached (role_id=%s required=%s available=%s)",
+            application.id,
+            exc.role_id,
+            exc.required,
+            exc.available,
+        )
+        return None
+    except Exception:
+        # A broken cap query is not permission to spend.  This path used to
+        # log "proceeding", which made a transient DB error a budget bypass.
+        logger.exception(
+            "score admission check failed for application=%s — blocked",
+            application.id,
+        )
+        return None
 
     job = CvScoreJob(
         application_id=application.id,
         role_id=application.role_id,
         status=SCORE_JOB_PENDING,
+        requires_active_agent=bool(requires_active_agent),
+        force_full_score=bool(bypass_pre_screen),
     )
     db.add(job)
     db.flush()  # populate job.id
@@ -369,12 +489,33 @@ def enqueue_score(
     # API server hadn't committed yet, and bailed out as "skipped".
     db.commit()
 
-    async_result = score_application_job.delay(
-        application.id,
-        job_id=int(job.id),
-        force_full_score=bypass_pre_screen,
-    )
+    try:
+        async_result = score_application_job.delay(
+            application.id,
+            job_id=int(job.id),
+            force_full_score=bypass_pre_screen,
+        )
+    except Exception as exc:
+        # The row was committed before dispatch so a separate worker can see
+        # it. Compensate if the broker rejects the message; otherwise this
+        # "pending" row wins the duplicate guard forever and no later cohort
+        # tick can retry the candidate.
+        job.status = SCORE_JOB_ERROR
+        job.error_message = f"broker_dispatch_failed: {exc}"[:1000]
+        job.finished_at = datetime.now(timezone.utc)
+        db.add(job)
+        db.commit()
+        logger.exception(
+            "score dispatch failed application_id=%s job_id=%s",
+            application.id,
+            job.id,
+        )
+        raise
     job.celery_task_id = str(async_result.id)
+    db.add(job)
+    # Persist the broker receipt immediately. Callers often return without a
+    # second commit, and the task id is essential for queue/attempt tracing.
+    db.commit()
     return job
 
 
@@ -820,19 +961,49 @@ def _execute_scoring_v3(
     # bill (unchanged behaviour). Cache MISSES are already recorded by the
     # wrapper per-call above — recording them here too would double-count.
     if bool(getattr(output, "cache_hit", False)):
-        _record_usage_safe(
-            db,
-            organization_id=getattr(application, "organization_id", None),
-            role_id=getattr(application, "role_id", None),
-            feature=Feature.SCORE,
-            model=getattr(output, "model_version", None) or V3_MODEL_VERSION,
-            input_tokens=int(getattr(output, "input_tokens", 0) or 0),
-            output_tokens=int(getattr(output, "output_tokens", 0) or 0),
-            cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
-            cache_creation_tokens=int(getattr(output, "cache_creation_tokens", 0) or 0),
-            cache_hit=True,
-            entity_id=f"application:{application.id}",
+        # A cache hit makes no provider call, but it still carries the small
+        # platform cache fee. Give that debit the same org+role hard-admission
+        # contract as provider spend; the old soft enqueue preflight could race
+        # with other jobs and let this direct debit cross a balance/cap.
+        from .provider_usage_admission import (
+            release_provider_usage,
+            reserve_provider_usage,
         )
+
+        cache_reservation = reserve_provider_usage(
+            organization_id=int(application.organization_id),
+            role_id=int(application.role_id),
+            feature=Feature.SCORE,
+            trace_id=(
+                str(getattr(output, "trace_id", None) or f"score-job:{job.id}")
+                + ":cache-hit"
+            ),
+            entity_id=f"application:{application.id}",
+            metadata={"source": "cv_score_cache_fee", "score_job_id": int(job.id)},
+        )
+        try:
+            _meter_record_event(
+                db,
+                organization_id=int(application.organization_id),
+                role_id=int(application.role_id),
+                feature=Feature.SCORE,
+                model=getattr(output, "model_version", None) or V3_MODEL_VERSION,
+                input_tokens=int(getattr(output, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(output, "output_tokens", 0) or 0),
+                cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
+                cache_creation_tokens=int(
+                    getattr(output, "cache_creation_tokens", 0) or 0
+                ),
+                cache_hit=True,
+                entity_id=f"application:{application.id}",
+                metadata={"source": "cv_score_cache_fee", "score_job_id": int(job.id)},
+                credit_reservation=cache_reservation.as_metering_payload(),
+            )
+        except Exception:
+            release_provider_usage(
+                cache_reservation, reason="cv_score_cache_fee_record_failed"
+            )
+            raise
 
     if output.scoring_status == ScoringStatus.FAILED:
         job.status = SCORE_JOB_ERROR
@@ -1059,6 +1230,7 @@ def _enqueue_stale_job(
 def mark_role_scores_stale(
     db: Session, role_id: int, *, reason: str = "role_intent_changed",
     application_ids: list[int] | None = None,
+    dispatch_tech_questions: bool = True,
 ) -> int:
     """Invalidate every scored application for a role.
 
@@ -1131,9 +1303,10 @@ def mark_role_scores_stale(
                 # committed by the caller's outer transaction before a worker
                 # picks the task up — otherwise the signature-gated regen can
                 # read the still-old committed signature and skip itself.
-                regenerate_role_tech_questions.apply_async(
-                    args=[int(role_id)], countdown=10
-                )
+                if dispatch_tech_questions:
+                    regenerate_role_tech_questions.apply_async(
+                        args=[int(role_id)], countdown=10
+                    )
             except Exception:
                 logger.exception("mark_role_scores_stale: failed to dispatch tech_questions regen role_id=%s", role_id)
     except Exception:
@@ -1177,6 +1350,7 @@ def mark_application_scores_stale(
         return False
     _clear_application_scores(app)
     supersede_pending_decisions_for_app(db, app.id, reason=reason)
+    return True
 
 
 def _augment_integrity_signals(

@@ -1,8 +1,8 @@
 """Deterministic bulk decisioning — give EVERY scored candidate a verdict.
 
 The decision-policy engine verdict is fully deterministic, so we don't
-need the LLM agent (capped at ~1 send + ~5 rejects per 30-min cycle) to
-work through a large cohort one candidate at a time. This pass runs the
+need the bounded LLM cycle to work through a large cohort one candidate at a
+time. This pass runs the
 engine over every undecided, scored, open candidate using the scores
 ALREADY stored on the application — no sub-agents, no Anthropic calls —
 and queues the verdict through the normal ``queue_decision`` guard stack

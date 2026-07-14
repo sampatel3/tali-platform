@@ -9,7 +9,7 @@ This brief is self-contained. You do not need any codebase access.
 
 ## 1. What Taali is (context)
 
-Taali is an **agentic hiring platform**. A governed AI agent works a recruiter's whole funnel — it screens every applicant, runs a hands-on assessment, and puts a **decision** in front of the recruiter with the evidence attached. The recruiter approves, overrides, or teaches it back. **The human stays in control of every consequential call.**
+Taali is an **agentic hiring platform**. A governed AI agent works a recruiter's whole funnel — it screens every applicant, runs a hands-on assessment, and moves on-policy reversible steps automatically. Ambiguous, off-policy, and irreversible outcomes go to the recruiter with evidence to approve, override, or teach back.
 
 Its one unique differentiator: it is **the only platform that measures how well a candidate actually works with AI** (an "AI-fluency" assessment), for engineering *and* knowledge work. Everyone hires people who use AI now; nobody else can tell you who's genuinely good at it.
 
@@ -91,8 +91,8 @@ This scene = "turn a job on, watch the agent work it." It is the page's hook.
 
 **§2 Problem.** Big type, minimal visual. *"Everyone works with AI now."* / *"The CV can't prove it. The interview can't catch it."* / *"You need to watch them work."* Confident, short.
 
-**§3 The funnel, once.** Eyebrow `THE FUNNEL`. H2: **"One agent, your whole funnel."** Sub: *"It finds candidates, reads every CV, runs the assessment, and puts a decision in front of you with the evidence attached. You approve. It executes."* Visual: one candidate moving left→right through 5 compact steps, each with a tiny real glimpse:
-- **Source** — "Plugs into your ATS. Every candidate, role and JD flows in." (chips: workable · bullhorn · greenhouse)
+**§3 The funnel, once.** Eyebrow `THE FUNNEL`. H2: **"One agent, your whole funnel."** Sub: *"Applicants arrive through your live job page and connected ATS. The agent reads every CV, runs the assessment, and moves on-policy reversible steps automatically; ambiguous, off-policy, and irreversible outcomes come to you with evidence."* Visual: one candidate moving left→right through 5 compact steps, each with a tiny real glimpse:
+- **Intake** — "Applicants flow in from your live Taali job page and connected ATS. Outbound uses only a lawful audience and campaign you approve." (chips: Taali apply · Workable · Bullhorn)
 - **Screen** — "Reads every CV against the role's real requirements. Weak fits gated with evidence, not guesswork." (a requirement-evidence row)
 - **Assess** — "A task authored from your JD, battle-tested in a sandbox. Candidates pair with Claude on real work — engineering or knowledge work." (a mini score: 88/100)
 - **Decide** — "A deterministic verdict on every candidate, the evidence attached." (an "Advance" verdict pill)

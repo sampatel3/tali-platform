@@ -73,7 +73,7 @@ class RoleCreate(BaseModel):
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
-    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=1, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
 
 
@@ -92,14 +92,29 @@ class RoleUpdate(BaseModel):
     agent_action_allowlist: Optional[list[str]] = None
     agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
-    # HITL toggles. All default False on the model — sending `null`
-    # leaves the existing value unchanged.
+    # Autonomy toggles. New roles inherit their workspace policy; untouched
+    # workspaces default reversible send/resend/advance actions on while
+    # deterministic rejection and assessment skipping remain off.
+    # ``auto_reject`` and ``auto_reject_pre_screen`` can automate only
+    # deterministic pre-screen failures; full-score/assessment rejects always
+    # require confirmation.
+    # Sending `null` leaves the existing value unchanged.
     auto_reject: Optional[bool] = None
     auto_reject_pre_screen: Optional[bool] = None
     auto_promote: Optional[bool] = None
+    auto_send_assessment: Optional[bool] = None
+    auto_resend_assessment: Optional[bool] = None
+    auto_advance: Optional[bool] = None
     auto_skip_assessment: Optional[bool] = None
+    # One-shot Turn-on choice for the only candidate-facing HITL gate in the
+    # requisition bootstrap. The server applies this together with activation,
+    # so recruiters never have to discover and complete a separate Tasks-page
+    # step before the agent can run.
+    activation_assessment_action: Optional[
+        Literal["approve_generated_task", "approve_when_ready", "skip_assessment"]
+    ] = None
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
-    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=1, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
     # Workspace criterion ids the recruiter has explicitly hidden from
     # this role. Editable via PATCH so the chip editor's "Show hidden →
@@ -112,7 +127,9 @@ CRITERION_BUCKET_VALUES = ("must", "preferred", "constraint")
 
 class RoleCriterionResponse(BaseModel):
     id: int
-    source: Literal["recruiter", "derived_from_spec", "recruiter_constraint"]
+    source: Literal[
+        "recruiter", "requisition", "derived_from_spec", "recruiter_constraint"
+    ]
     ordering: int
     weight: float
     must_have: bool
@@ -186,10 +203,10 @@ class RoleResponse(BaseModel):
     # locally only (no sync). True for published jobs and manual roles. The UI
     # uses this to grey out the role + disable Workable-write toggles.
     workable_job_live: bool = True
-    # True when the role has an OPEN public job page (Taali's own /job/{token}
-    # apply page) — i.e. candidates can apply and the careers feed carries it.
-    # Distinct from ``workable_job_state`` (the external ATS). Drives the Jobs
-    # list "Live" badge. List path only; detail responses leave it False.
+    # True only when the role's native /job/{token} page is accepting
+    # applications and eligible for the careers feed. A published-but-inactive
+    # preview deliberately remains False. Distinct from ``workable_job_state``
+    # (the external ATS). Drives the Jobs list "Live" badge.
     is_published: bool = False
     job_spec_filename: Optional[str] = None
     job_spec_text: Optional[str] = None
@@ -210,12 +227,27 @@ class RoleResponse(BaseModel):
     auto_reject: bool = False
     auto_reject_pre_screen: bool = False
     auto_promote: bool = False
+    auto_send_assessment: Optional[bool] = None
+    auto_resend_assessment: Optional[bool] = None
+    auto_advance: Optional[bool] = None
     auto_skip_assessment: bool = False
+    # Flattened runtime truth, including legacy fallbacks and permanent HITL
+    # rails. Clients should use this for status/copy and the nullable fields
+    # above for explicit override editing.
+    agent_effective_policy: dict[str, Any] = Field(default_factory=dict)
     monthly_usd_budget_cents: Optional[int] = None
     score_threshold: Optional[int] = None
     agent_paused_at: Optional[datetime] = None
     agent_paused_reason: Optional[str] = None
     agent_last_run_at: Optional[datetime] = None
+    agent_bootstrap_status: Optional[Literal["starting", "ready", "failed"]] = None
+    agent_bootstrap_error: Optional[str] = None
+    agent_bootstrap_started_at: Optional[datetime] = None
+    agent_bootstrap_completed_at: Optional[datetime] = None
+    # Durable JD -> assessment-authoring + Turn-on command state. The backend
+    # owns generation, validation, activation, and recovery; clients may read
+    # this for progress but never have to remain open to drive the workflow.
+    assessment_task_provisioning: Optional[dict[str, Any]] = None
     tasks_count: int = 0
     applications_count: int = 0
     stage_counts: dict[str, int] = Field(default_factory=dict)

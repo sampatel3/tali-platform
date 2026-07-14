@@ -22,25 +22,32 @@ arrives in a minute. If it doesn't, check spam, then ping us.
 
 **Q: What does agent mode do?**
 For each role you turn it on, Taali continuously: scores incoming CVs, invites
-the strongest matches to your assessment, watches the assessment session, and
-queues "advance" or "reject" recommendations for you to approve. You stay in
-charge of every consequential decision — interviews and final hire stay
-human-only.
+the strongest on-policy matches to your assessment, watches the assessment
+session, and advances reversible positive steps automatically. Ambiguous or
+off-policy results and irreversible rejections come to you; interviews, offers,
+and final hire stay human-only.
 
 **Q: How do I turn it on?**
-Open a role → in the top-right panel of the role hero, set a monthly cap (e.g.
-$50) and click **Turn on agent**. That's it. The agent activates and starts
-working the role within ~30 seconds.
+Create and publish the requisition, open its linked job, set a monthly AI-usage
+cap (e.g. $50), and click **Turn on** once. That's it. The saved command generates,
+battle-tests, repository-checks, and approves the assessment, verifies production
+readiness, opens native applications, and starts the full funnel. You can leave
+the page; retries and the final OFF → ON transition are backend-owned, with no
+second task-approval click.
 
 **Q: Per-role budgets — why?**
-Every role has its own cap. Spend across scoring, pre-screen, assessment grading,
-and agent decisions all draws against that one number. When the cap is reached
-the agent auto-pauses for that role; raise the cap or click Resume in the role
-hero to continue. Other roles keep going.
+Every role has its own AI-usage cap. Model-backed pre-screening, scoring,
+assessment grading, semantic search, and agent reasoning draw against it. Sandbox,
+email, storage, and repository-hosting costs are separate from this AI credit cap;
+Settings → Billing shows the available operational estimates. When the cap or
+workspace credits are exhausted, the role enters a system hold and resumes
+automatically after the month resets, the cap is raised, or credits are restored.
+Other roles keep going.
 
 **Q: How do I pause the agent?**
-Same panel — click **Pause**. Toggles `agent mode = off` for that role. Click
-**Turn on** again to resume.
+Same panel — click **Pause**. This is the deliberate human stop and remains paused
+until you click **Resume**. System-created budget, credit, provider, or startup
+holds recheck and recover automatically; they do not require a routine Resume click.
 
 **Q: Where do I see what the agent did?**
 Reporting tab — narrative-first summary of the last 30 days, with drill-downs
@@ -49,12 +56,16 @@ into individual decisions, anomalies, and budget burn.
 ## Candidates and roles
 
 **Q: How do I create a role?**
-Jobs → **+ New role** → paste the job spec and pick a task. Done.
+Requisitions → **New requisition** → complete or chat through the brief →
+**Publish job page** → open the linked job and click **Turn on**. The assessment
+is generated and validated automatically; choosing a task manually is optional.
 
 **Q: How do I get candidates in?**
-Three options: (a) Workable sync if your account is connected — candidates
-flow in automatically; (b) Manual invite — Role detail → **Invite candidate**;
-(c) Public application link — share the role's public URL.
+Three inbound options: (a) the native public application link, which starts
+accepting applications only after Turn on succeeds; (b) Workable sync when your
+account is connected; (c) a manual candidate invite. Taali does not silently
+discover or contact people. For outbound, you supply a lawful audience and approve
+the campaign before messages are sent.
 
 **Q: Where do I see a candidate's full profile?**
 Click the candidate's name from any list. The standing report shows the score
@@ -89,8 +100,9 @@ credit balance. New workspaces get free credits to start; top up from
 Settings → Billing when you're ready.
 
 **Q: How do I monitor spend?**
-Reporting page shows monthly burn at a glance. Each role shows its own monthly
-cap + spend in the role hero. Settings → Usage shows the per-event ledger.
+Reporting shows monthly burn at a glance. Each role shows its AI-usage cap and
+spend in the role hero. Settings → Usage shows the per-event AI ledger; Settings →
+Billing separately shows available sandbox, email, and storage estimates.
 
 ## Support
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.agent_runtime.policy_evaluator import evaluate_for_application
+from app.models.assessment import Assessment, AssessmentStatus
+from app.models.task import Task
 
 from .conftest import add_event, make_world
 
@@ -71,4 +73,38 @@ def test_missing_application_returns_no_action(db):
         db, role=role, application_id=999_999
     )
     assert verdict.decision_type == "no_action"
+    assert outputs == {}
+
+
+def test_incomplete_assessment_grading_short_circuits_before_subagents(db):
+    org, role, candidate, app = make_world(db)
+    task = Task(
+        organization_id=org.id,
+        name="Policy retry task",
+        evaluation_rubric={"quality": {"weight": 1.0}},
+    )
+    db.add(task)
+    db.flush()
+    db.add(
+        Assessment(
+            organization_id=org.id,
+            candidate_id=candidate.id,
+            role_id=role.id,
+            application_id=app.id,
+            task_id=task.id,
+            token=f"policy-partial-{app.id}",
+            status=AssessmentStatus.COMPLETED,
+            scoring_partial=True,
+            assessment_score=0.0,
+            taali_score=95.0,
+        )
+    )
+    db.flush()
+
+    verdict, outputs = evaluate_for_application(
+        db, role=role, application_id=int(app.id)
+    )
+
+    assert verdict.decision_type == "no_action"
+    assert verdict.rule_path == ["assessment_grading_incomplete"]
     assert outputs == {}

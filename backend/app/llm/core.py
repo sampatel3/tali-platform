@@ -72,6 +72,7 @@ class MeteringContext:
     user_id: Optional[int] = None
     trace_id: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
+    credit_reservation: Optional[dict[str, Any]] = None
     skip: bool = False
     metered_by: Optional[str] = None
 
@@ -108,6 +109,7 @@ class MeteringContext:
             user_id=meter.get("user_id"),
             trace_id=meter.get("trace_id"),
             metadata=meter.get("metadata"),
+            credit_reservation=meter.get("credit_reservation"),
         )
 
     def as_dict(self, *, retry_attempt: int = 0) -> dict[str, Any]:
@@ -127,6 +129,8 @@ class MeteringContext:
                 out["user_id"] = int(self.user_id)
             if self.metadata:
                 out["metadata"] = dict(self.metadata)
+            if self.credit_reservation:
+                out["credit_reservation"] = dict(self.credit_reservation)
         if self.trace_id:
             out["trace_id"] = str(self.trace_id)
         if retry_attempt:

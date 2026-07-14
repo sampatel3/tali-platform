@@ -71,6 +71,7 @@ def run_search(
     *,
     db: Session,
     organization_id: int,
+    role_id: int | None = None,
     nl_query: str,
     base_query,
     rerank_enabled: bool = False,
@@ -99,9 +100,12 @@ def run_search(
             parsed = parse_nl_query(
                 nl_query,
                 client=parser_client,
+                organization_id=organization_id,
+                role_id=role_id,
                 metering={
                     "feature": "search_parse",
                     "organization_id": organization_id,
+                    **({"role_id": int(role_id)} if role_id is not None else {}),
                 },
             )
         except Exception as exc:  # pragma: no cover — parser already swallows
@@ -135,6 +139,7 @@ def run_search(
     # Execute graph predicates: AND-narrow by candidate id set.
     cypher_candidate_ids = _execute_graph_predicates(
         organization_id=organization_id,
+        role_id=role_id,
         parsed=parsed,
         warnings=warnings,
     )
@@ -178,6 +183,7 @@ def run_search(
             kept = rerank_module.rerank_application_ids(
                 db=db,
                 organization_id=organization_id,
+                role_id=role_id,
                 application_ids=checked_ids,
                 soft_criteria=parsed.soft_criteria,
                 client=rerank_client,
@@ -257,6 +263,7 @@ def run_search(
 def _execute_graph_predicates(
     *,
     organization_id: int,
+    role_id: int | None,
     parsed: ParsedFilter,
     warnings: list[SearchWarning],
 ) -> list[int] | None:
@@ -288,6 +295,7 @@ def _execute_graph_predicates(
 
         return graph_search.candidate_ids_matching_all(
             organization_id=organization_id,
+            role_id=role_id,
             predicates=parsed.graph_predicates,
         )
     except Exception as exc:

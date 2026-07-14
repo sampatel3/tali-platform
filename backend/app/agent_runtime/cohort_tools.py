@@ -129,6 +129,8 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
                 except (TypeError, ValueError):
                     pass
 
+    from ..services.agent_policy_settings import effective_agent_policy
+
     return {
         "role_id": int(role.id),
         "role_name": role.name,
@@ -137,7 +139,11 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         "auto_reject": bool(getattr(role, "auto_reject", False)),
         "auto_reject_pre_screen": bool(getattr(role, "auto_reject_pre_screen", False)),
         "auto_promote": bool(getattr(role, "auto_promote", False)),
+        "auto_send_assessment": getattr(role, "auto_send_assessment", None),
+        "auto_resend_assessment": getattr(role, "auto_resend_assessment", None),
+        "auto_advance": getattr(role, "auto_advance", None),
         "auto_skip_assessment": bool(getattr(role, "auto_skip_assessment", False)),
+        "agent_effective_policy": effective_agent_policy(role),
         "monthly_usd_budget_cents": role.monthly_usd_budget_cents,
         "score_threshold": role.score_threshold,
         # Effective values fold in the recruiter's latest answer when the

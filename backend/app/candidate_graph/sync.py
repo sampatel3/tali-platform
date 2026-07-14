@@ -57,21 +57,65 @@ def should_sync_candidate_to_graph(candidate: Candidate, db: Session) -> bool:
     """
     if candidate.id is None:
         return False
+    return billing_role_id_for_candidate(candidate, db) is not None
+
+
+def billing_role_id_for_candidate(
+    candidate: Candidate,
+    db: Session,
+) -> int | None:
+    """Return the newest graph-worthy application role for billing.
+
+    Candidate profile episodes are shared across applications, but the
+    automatic sync is only triggered once a concrete application crosses the
+    cost gate. Charging that newest qualifying role is deterministic and keeps
+    the provider call inside an actual role budget; if no such application
+    exists, the caller skips before touching a provider.
+    """
+    if candidate.id is None:
+        return None
     rows = (
         db.query(CandidateApplication.pipeline_stage,
-                 CandidateApplication.workable_stage)
+                 CandidateApplication.workable_stage,
+                 CandidateApplication.role_id)
         .filter(CandidateApplication.candidate_id == candidate.id)
         .filter(CandidateApplication.deleted_at.is_(None))
+        .order_by(
+            CandidateApplication.updated_at.desc(),
+            CandidateApplication.id.desc(),
+        )
         .all()
     )
-    for pipeline_stage, workable_stage in rows:
+    for pipeline_stage, workable_stage, role_id in rows:
         ps = (pipeline_stage or "").strip().lower()
         if ps in ("in_assessment", "advanced"):
-            return True
+            return int(role_id)
         ws = (workable_stage or "").strip().lower()
         if ws in _POST_HANDOVER_WORKABLE_STAGES:
-            return True
-    return False
+            return int(role_id)
+    return None
+
+
+def latest_application_role_id_for_candidate(
+    candidate: Candidate,
+    db: Session,
+) -> int | None:
+    """Newest live application role, used by explicit whole-org backfills."""
+    if candidate.id is None:
+        return None
+    row = (
+        db.query(CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.candidate_id == int(candidate.id),
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .order_by(
+            CandidateApplication.updated_at.desc(),
+            CandidateApplication.id.desc(),
+        )
+        .first()
+    )
+    return int(row[0]) if row is not None and row[0] is not None else None
 
 
 def sync_candidate(
@@ -83,6 +127,8 @@ def sync_candidate(
     bill_role_id: int | None = None,
     bill_user_id: int | None = None,
     force_resync: bool = False,
+    require_role_admission: bool = False,
+    raise_on_error: bool = False,
 ) -> int:
     """Ingest one candidate's profile (+ optional raw CV text) into Graphiti.
 
@@ -127,13 +173,22 @@ def sync_candidate(
         # Graph content identical to the last full sync — skip the extraction.
         return 0
 
+    bill_org_id = (
+        int(bill_organization_id)
+        if bill_organization_id is not None
+        else int(candidate.organization_id)
+    )
     sent = episode_module.dispatch(
         episodes,
         db=db,
-        bill_organization_id=bill_organization_id,
+        bill_organization_id=bill_org_id,
         bill_role_id=bill_role_id,
         bill_user_id=bill_user_id,
         bill_candidate_id=int(candidate.id),
+        bill_trace_id=f"graph-candidate-sync:{int(candidate.id)}",
+        require_hard_admission=True,
+        require_role_admission=bool(require_role_admission),
+        raise_on_error=bool(raise_on_error),
     )
 
     if db is not None and sent > 0:
@@ -152,6 +207,9 @@ def sync_interview(
     *,
     db: Session | None = None,
     bill_organization_id: int | None = None,
+    bill_role_id: int | None = None,
+    require_role_admission: bool = False,
+    raise_on_error: bool = False,
 ) -> int:
     """Ingest one interview transcript + structured summary.
 
@@ -178,6 +236,11 @@ def sync_interview(
         episodes,
         db=db,
         bill_organization_id=bill_org_id,
+        bill_role_id=bill_role_id,
+        bill_trace_id=f"graph-interview-sync:{int(interview.id)}",
+        require_hard_admission=bill_org_id is not None,
+        require_role_admission=bool(require_role_admission),
+        raise_on_error=bool(raise_on_error),
     )
 
 
@@ -186,6 +249,9 @@ def sync_event(
     *,
     db: Session | None = None,
     bill_organization_id: int | None = None,
+    bill_role_id: int | None = None,
+    require_role_admission: bool = False,
+    raise_on_error: bool = False,
 ) -> int:
     """Ingest a pipeline event (best-effort; some are no-op).
 
@@ -212,7 +278,14 @@ def sync_event(
         except Exception:
             bill_org_id = None
     return episode_module.dispatch(
-        [episode], db=db, bill_organization_id=bill_org_id
+        [episode],
+        db=db,
+        bill_organization_id=bill_org_id,
+        bill_role_id=bill_role_id,
+        bill_trace_id=f"graph-event-sync:{int(event.id)}",
+        require_hard_admission=bill_org_id is not None,
+        require_role_admission=bool(require_role_admission),
+        raise_on_error=bool(raise_on_error),
     )
 
 
@@ -273,11 +346,14 @@ def sync_organization(
         # the metered async wrapper writes a graph_sync usage_event per call
         # (otherwise re-index Anthropic spend lands as org=NULL call_log rows
         # that reconcile against Anthropic but never reach the org's budget).
+        role_id = latest_application_role_id_for_candidate(candidate, db)
         sent = sync_candidate(
             candidate,
             db=db,
             include_cv_text=True,
             bill_organization_id=organization_id,
+            bill_role_id=role_id,
+            require_role_admission=role_id is not None,
         )
         if sent > 0:
             out["candidates"]["succeeded"] += 1
@@ -295,8 +371,13 @@ def sync_organization(
     )
     out["interviews"]["total"] = len(interviews)
     for interview in interviews:
+        role_id = getattr(getattr(interview, "application", None), "role_id", None)
         out["interviews"]["episodes"] += sync_interview(
-            interview, db=db, bill_organization_id=organization_id
+            interview,
+            db=db,
+            bill_organization_id=organization_id,
+            bill_role_id=int(role_id) if role_id is not None else None,
+            require_role_admission=role_id is not None,
         )
 
     events = (
@@ -311,7 +392,14 @@ def sync_organization(
     )
     out["events"]["total"] = len(events)
     for event in events:
-        out["events"]["episodes"] += sync_event(event)
+        role_id = getattr(getattr(event, "application", None), "role_id", None)
+        out["events"]["episodes"] += sync_event(
+            event,
+            db=db,
+            bill_organization_id=organization_id,
+            bill_role_id=int(role_id) if role_id is not None else None,
+            require_role_admission=role_id is not None,
+        )
 
     return out
 

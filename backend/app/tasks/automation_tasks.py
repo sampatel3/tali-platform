@@ -15,11 +15,82 @@ starve a recruiter who clicks "Score selected".
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _automatic_role_work_block_reason(role) -> str | None:
+    """Return why queued autonomous role work must not start now.
+
+    A role can be paused or turned off after a broker accepts a task but before
+    the worker begins provider work.  Re-authorize at execution time so Pause
+    and Turn off stop *new* model spend; an already-started provider request is
+    still allowed to settle normally.
+    """
+
+    from ..services.role_execution_guard import automatic_role_action_block_reason
+
+    return automatic_role_action_block_reason(role)
+
+
+def _set_activation_focus_state(
+    role, *, status: str, error: str | None = None, retry_after: timedelta | None = None
+) -> None:
+    """Update the activation-owned interview-focus recovery marker."""
+    provisioning = (
+        dict(role.assessment_task_provisioning)
+        if isinstance(role.assessment_task_provisioning, dict)
+        else {}
+    )
+    now = datetime.now(timezone.utc)
+    state = (
+        dict(provisioning.get("interview_focus_provisioning"))
+        if isinstance(provisioning.get("interview_focus_provisioning"), dict)
+        else {}
+    )
+    state.update(
+        {
+            "status": str(status),
+            "last_error": str(error)[:2000] if error else None,
+            "next_attempt_at": (
+                (now + retry_after).isoformat() if retry_after else None
+            ),
+            "updated_at": now.isoformat(),
+        }
+    )
+    provisioning["interview_focus_provisioning"] = state
+    role.assessment_task_provisioning = provisioning
+
+
+def _set_activation_tech_state(
+    role, *, status: str, error: str | None = None, retry_after: timedelta | None = None
+) -> None:
+    provisioning = (
+        dict(role.assessment_task_provisioning)
+        if isinstance(role.assessment_task_provisioning, dict)
+        else {}
+    )
+    now = datetime.now(timezone.utc)
+    state = (
+        dict(provisioning.get("tech_questions_provisioning"))
+        if isinstance(provisioning.get("tech_questions_provisioning"), dict)
+        else {}
+    )
+    state.update(
+        {
+            "status": str(status),
+            "last_error": str(error)[:2000] if error else None,
+            "next_attempt_at": (
+                (now + retry_after).isoformat() if retry_after else None
+            ),
+            "updated_at": now.isoformat(),
+        }
+    )
+    provisioning["tech_questions_provisioning"] = state
+    role.assessment_task_provisioning = provisioning
 
 
 @celery_app.task(
@@ -41,14 +112,37 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
     """
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.provider_usage_admission import serialize_provider_work
     from ..services.role_tech_questions_service import get_or_regenerate
 
     db = SessionLocal()
     try:
+        serialize_provider_work(
+            db,
+            scope="role_tech_questions",
+            entity_id=int(role_id),
+        )
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        role_block = _automatic_role_work_block_reason(role)
+        if role_block:
+            return {
+                "status": "skipped",
+                "reason": "role_not_runnable",
+                "detail": role_block,
+                "role_id": role_id,
+            }
         result = get_or_regenerate(db, role)
+        if role.tech_questions_signature:
+            _set_activation_tech_state(role, status="succeeded")
+        else:
+            _set_activation_tech_state(
+                role,
+                status="retry_wait",
+                error="tech-question generation did not produce a current cache",
+                retry_after=timedelta(minutes=5),
+            )
         try:
             db.commit()
         except Exception:
@@ -69,7 +163,9 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
     bind=True,
     max_retries=0,
 )
-def generate_role_interview_focus(self, role_id: int) -> dict:
+def generate_role_interview_focus(
+    self, role_id: int, *, requires_running_agent: bool = False
+) -> dict:
     """Regenerate the interview-focus packet for a role.
 
     Fired when a JD is attached or re-uploaded. Writes the focus blob and
@@ -81,17 +177,46 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
     from ..platform.database import SessionLocal
     from ..services.interview_focus_service import generate_interview_focus_sync
     from ..services.interview_support_service import build_role_interview_pack_templates
+    from ..services.provider_usage_admission import serialize_provider_work
     from ..services.role_criteria_service import render_role_intent_block
 
     db = SessionLocal()
     try:
+        serialize_provider_work(
+            db,
+            scope="role_interview_focus",
+            entity_id=int(role_id),
+        )
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        if requires_running_agent:
+            role_block = _automatic_role_work_block_reason(role)
+            if role_block:
+                return {
+                    "status": "skipped",
+                    "reason": "role_not_runnable",
+                    "detail": role_block,
+                    "role_id": role_id,
+                }
         job_spec_text = (role.job_spec_text or "").strip()
         if not job_spec_text:
             return {"status": "skipped", "reason": "no_job_spec", "role_id": role_id}
+        # Publish/spec-update paths clear this cache before dispatch. A duplicate
+        # delivery after the first worker committed is therefore a true no-op,
+        # not a second paid generation.
+        if isinstance(role.interview_focus, dict) and role.interview_focus:
+            _set_activation_focus_state(role, status="succeeded")
+            db.commit()
+            return {"status": "skipped", "reason": "already_generated", "role_id": role_id}
         if not settings.ANTHROPIC_API_KEY:
+            _set_activation_focus_state(
+                role,
+                status="retry_wait",
+                error="ANTHROPIC_API_KEY is not configured",
+                retry_after=timedelta(hours=1),
+            )
+            db.commit()
             return {"status": "skipped", "reason": "no_api_key", "role_id": role_id}
 
         try:
@@ -105,14 +230,32 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
                     "organization_id": getattr(role, "organization_id", None),
                     "role_id": int(role.id),
                     "entity_id": f"role:{role.id}",
+                    "trace_id": f"interview-focus:role:{role.id}",
                     "db": db,
                 },
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("generate_role_interview_focus failed role_id=%s", role_id)
+            db.rollback()
+            role = db.query(Role).filter(Role.id == role_id).first()
+            if role is not None:
+                _set_activation_focus_state(
+                    role,
+                    status="retry_wait",
+                    error=f"{type(exc).__name__}: {exc}",
+                    retry_after=timedelta(minutes=5),
+                )
+                db.commit()
             return {"status": "error", "role_id": role_id}
 
         if not interview_focus:
+            _set_activation_focus_state(
+                role,
+                status="retry_wait",
+                error="provider returned no interview focus",
+                retry_after=timedelta(minutes=5),
+            )
+            db.commit()
             return {"status": "no_output", "role_id": role_id}
 
         role.interview_focus = interview_focus
@@ -120,6 +263,7 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
         templates = build_role_interview_pack_templates(role)
         role.screening_pack_template = templates.get("screening")
         role.tech_interview_pack_template = templates.get("tech_stage_2")
+        _set_activation_focus_state(role, status="succeeded")
         try:
             db.commit()
         except Exception:
@@ -267,7 +411,11 @@ def run_application_auto_reject(
     default_retry_delay=30,
 )
 def parse_application_cv_sections(
-    self, application_id: int, *, force: bool = False
+    self,
+    application_id: int,
+    *,
+    force: bool = False,
+    origin: str | None = None,
 ) -> dict:
     """Parse an application's stored CV text into structured ``cv_sections``.
 
@@ -279,6 +427,11 @@ def parse_application_cv_sections(
     blocks structured instead of falling back to a naive split-by-heading
     render of the raw (often column-scrambled) PDF text.
 
+    ``origin`` is required execution authority. Autonomous ATS/native work
+    fresh-checks that the linked role agent is enabled and unpaused before any
+    provider call. Explicit recruiter upload is allowed while the agent is
+    held. Missing/unknown legacy messages fail closed.
+
     Idempotent: no-ops when ``cv_sections`` is already populated (unless
     ``force``). Retries a few times when the row or its ``cv_text`` isn't
     visible yet — the enqueue can race the sync transaction's commit.
@@ -286,14 +439,29 @@ def parse_application_cv_sections(
     from sqlalchemy.orm import joinedload
 
     from ..cv_parsing.apply import parse_and_store_cv_sections
+    from ..cv_parsing.origins import (
+        AUTONOMOUS_CV_PARSE_ORIGINS,
+        normalize_cv_parse_origin,
+    )
     from ..models.candidate_application import CandidateApplication
     from ..platform.database import SessionLocal
+
+    normalized_origin = normalize_cv_parse_origin(origin)
+    if normalized_origin is None:
+        return {
+            "status": "skipped",
+            "reason": "unknown_origin",
+            "application_id": application_id,
+        }
 
     db = SessionLocal()
     try:
         app = (
             db.query(CandidateApplication)
-            .options(joinedload(CandidateApplication.candidate))
+            .options(
+                joinedload(CandidateApplication.candidate),
+                joinedload(CandidateApplication.role),
+            )
             .filter(CandidateApplication.id == application_id)
             .first()
         )
@@ -304,6 +472,28 @@ def parse_application_cv_sections(
             if self.request.retries < self.max_retries:
                 raise self.retry(countdown=30)
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
+
+        if app.deleted_at is not None:
+            return {
+                "status": "skipped",
+                "reason": "application_deleted",
+                "application_id": application_id,
+            }
+
+        if normalized_origin in AUTONOMOUS_CV_PARSE_ORIGINS:
+            role = app.role
+            role_block = (
+                "role is unavailable"
+                if role is None or getattr(role, "deleted_at", None) is not None
+                else _automatic_role_work_block_reason(role)
+            )
+            if role_block:
+                return {
+                    "status": "skipped",
+                    "reason": "role_not_runnable",
+                    "detail": role_block,
+                    "application_id": application_id,
+                }
 
         if app.cv_sections is not None and not force:
             return {"status": "skipped", "reason": "already_parsed", "application_id": application_id}

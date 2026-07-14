@@ -549,6 +549,57 @@ def test_evaluate_auto_reject_triggers_on_agent_off_role_as_card_only(db):
     assert verdict["auto_disqualify_eligible"] is False  # card only — no Workable write-back
 
 
+def test_evaluate_auto_reject_paused_role_is_card_only_even_with_legacy_switch(db):
+    """Pause stops irreversible execution without hiding the deterministic read."""
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="Paused", slug=f"paused-{id(db)}")
+    org.workable_config = {"auto_reject_enabled": True}
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="R",
+        source="manual",
+        auto_reject=True,
+        agentic_mode_enabled=True,
+        agent_paused_at=datetime.now(timezone.utc),
+        score_threshold=50,
+    )
+    db.add(role)
+    db.flush()
+    candidate = Candidate(
+        organization_id=org.id,
+        email="paused@x.test",
+        full_name="Paused",
+        workable_candidate_id="wid-paused",
+    )
+    db.add(candidate)
+    db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        pre_screen_score_100=20.0,
+        cv_match_score=None,
+        cv_match_details={"pre_screen_score_100": 20.0},
+        pre_screen_recommendation="Below threshold",
+        pre_screen_run_at=_PRESCREENED_AT,
+    )
+    db.add(app)
+    db.commit()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+
+    assert verdict["should_trigger"] is True
+    assert verdict["auto_disqualify_eligible"] is False
+
+
 def test_bullhorn_post_handover_candidate_is_never_auto_disqualified(db):
     from app.decision_policy.auto_reject import evaluate_auto_reject_decision
 

@@ -243,7 +243,14 @@ def test_auto_enqueue_scoring_skips_sourced(db, monkeypatch):
 
     seen: list[int] = []
 
-    def _recorder(_db, app, force=False):
+    def _recorder(
+        _db,
+        app,
+        force=False,
+        *,
+        requires_active_agent=True,
+    ):
+        assert requires_active_agent is True
         seen.append(int(app.id))
         return None
 

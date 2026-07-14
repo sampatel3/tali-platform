@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..llm.models import SONNET_MODEL as _SONNET_MODEL
+from ..services.pricing_service import Feature
+from .metering import admitted_search_metering
 
 logger = logging.getLogger("taali.candidate_search.grounded")
 
@@ -469,7 +471,14 @@ def _is_transient(exc: Exception) -> bool:
     return isinstance(code, int) and (code == 429 or code >= 500)
 
 
-def _grounding_request(client, *, messages, organization_id, application_id):
+def _grounding_request(
+    client,
+    *,
+    messages,
+    organization_id,
+    role_id: int | None,
+    application_id,
+):
     """One Citations call, retried with exponential backoff on TRANSIENT errors
     (timeout / 429 / 5xx / overloaded). Non-transient errors (e.g. a 400 from a
     malformed document) raise immediately. If every attempt fails the last
@@ -477,6 +486,18 @@ def _grounding_request(client, *, messages, organization_id, application_id):
     last_exc: Exception | None = None
     for attempt in range(GROUNDING_MAX_ATTEMPTS):
         try:
+            call_metering = admitted_search_metering(
+                organization_id=int(organization_id),
+                role_id=int(role_id) if role_id is not None else None,
+                feature=Feature.CANDIDATE_GROUNDING,
+                entity_id=f"application:{application_id}",
+                sub_feature="candidate_search_grounding",
+                trace_id=(
+                    f"candidate-search:grounding:application:{application_id}:"
+                    f"attempt:{attempt}"
+                ),
+                metadata={"retry_attempt": int(attempt)},
+            )
             return client.messages.create(
                 model=GROUNDING_MODEL,
                 max_tokens=GROUNDING_MAX_TOKENS,
@@ -484,11 +505,7 @@ def _grounding_request(client, *, messages, organization_id, application_id):
                 system=_SYSTEM_PROMPT,
                 messages=messages,
                 timeout=GROUNDING_TIMEOUT_S,
-                metering={
-                    "feature": "candidate_grounding",
-                    "organization_id": organization_id,
-                    "entity_id": f"application:{application_id}",
-                },
+                metering=call_metering,
             )
         except Exception as exc:  # noqa: BLE001 — re-raise non-transient below
             if not _is_transient(exc):
@@ -519,6 +536,7 @@ def extract_cv_evidence(
     criteria: list[str],
     client,
     organization_id: int,
+    role_id: int | None = None,
     application_id: int,
     notes_text: str | None = None,
 ) -> list[CriterionVerdict]:
@@ -598,6 +616,7 @@ def extract_cv_evidence(
                     client,
                     messages=messages,
                     organization_id=organization_id,
+                    role_id=role_id,
                     application_id=application_id,
                 )
             except Exception as exc:  # noqa: BLE001 — surface as error, don't crash

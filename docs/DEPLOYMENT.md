@@ -11,12 +11,12 @@ You will need accounts on the following services:
 | [Railway](https://railway.app) | Backend hosting + Postgres + Redis | railway.app |
 | [Vercel](https://vercel.com) | Frontend hosting | vercel.com |
 | [Stripe](https://stripe.com) | Payment processing | dashboard.stripe.com |
-| [Workable](https://www.workable.com) | ATS integration | workable.com/partner |
 | [E2B](https://e2b.dev) | Code sandbox execution | e2b.dev |
 | [Anthropic](https://console.anthropic.com) | Claude AI API | console.anthropic.com |
 | [Resend](https://resend.com) | Transactional email | resend.com |
 
 Optional:
+- **Workable** — ATS integration; Taali-native requisitions do not require it
 - **AWS S3** — for assessment artifact storage
 - **Sentry** — for error monitoring
 
@@ -30,19 +30,24 @@ Always deploy backend services through repository wrapper scripts from repo root
 
 ```bash
 ./scripts/railway/check_status.sh
-./scripts/railway/deploy_backend.sh
+./scripts/railway/deploy_production.sh
 ./scripts/railway/fetch_logs.sh resourceful-adaptation
 ```
 
-Worker (if present):
+Workers-only recovery (always deploys and validates both workers):
 
 ```bash
-RAILWAY_WORKER_SERVICE=<worker-service-name> ./scripts/railway/deploy_worker.sh
+RAILWAY_WORKER_SERVICE=<general-worker-service> \
+RAILWAY_SCORING_WORKER_SERVICE=<scoring-worker-service> \
+  ./scripts/railway/deploy_worker.sh
 ```
 
 Why this matters:
 - Deploys are forced from `backend/` so Railway does not attempt a repo-root build.
-- Service/environment are validated before deploy.
+- Web, general-worker, and scoring-worker services are validated by exact name.
+- The coordinated wrapper pins live metering and native apply, migrates
+  production, deploys both workers, deploys web, waits for public `/ready`, and
+  validates the default assessment-provider path.
 - This avoids `Railpack could not determine how to build app` failures caused by wrong root directory detection.
 - Manual Workable sync runs are queued to Celery when enabled, so keep the worker service deployed for durable background execution.
 
@@ -80,7 +85,14 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 E2B_API_KEY=<from e2b.dev dashboard>
 ANTHROPIC_API_KEY=<from console.anthropic.com>
+CLAUDE_MODEL=claude-haiku-4-5-20251001
+CLAUDE_SCORING_BATCH_MODEL=claude-haiku-4-5-20251001
 
+DEPLOYMENT_ENV=production
+USAGE_METER_LIVE=true
+ATS_PUBLIC_APPLY_ENABLED=true
+
+# Only when Workable ATS sync is enabled:
 WORKABLE_CLIENT_ID=<from Workable partner portal>
 WORKABLE_CLIENT_SECRET=<from Workable partner portal>
 WORKABLE_WEBHOOK_SECRET=<from Workable webhook settings>
@@ -90,51 +102,124 @@ STRIPE_WEBHOOK_SECRET=<from Stripe webhook endpoint>
 
 RESEND_API_KEY=<from resend.com dashboard>
 
+GITHUB_TOKEN=<real token with access to the assessment org>
+GITHUB_MOCK_MODE=false
+
 FRONTEND_URL=https://your-app.vercel.app
 BACKEND_URL=https://your-backend.up.railway.app
 ```
 
 See [ENV_SETUP.md](./ENV_SETUP.md) for the full variable reference.
 
-### 4. Deploy
+### 4. Create the two Celery worker services before web rollout
+
+Production uses three application services from the same `backend/` root:
+
+| Service | Mode | Queues | Beat |
+|---|---|---|---|
+| Web | `web` (default) | — | — |
+| General worker | `worker` | `celery` | `true` |
+| Scoring worker | `worker` | `scoring` | `false` |
+
+Create both worker services from the same repository and set each **Root
+Directory** to `backend`. Use Railway shared variables so all three services
+receive the same production runtime set: `DATABASE_URL`, `REDIS_URL`,
+`SECRET_KEY`, `DEPLOYMENT_ENV`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`,
+`ANTHROPIC_API_KEY`, pinned model variables, `FRONTEND_URL`, `BACKEND_URL`, and
+`ATS_PUBLIC_APPLY_ENABLED`; assessment-enabled deployments also need `E2B_API_KEY`,
+`RESEND_API_KEY`, `GITHUB_TOKEN`, `GITHUB_ORG`, and `GITHUB_MOCK_MODE=false`.
+Optional provider credentials used by tasks must also be shared.
+
+The wrapper pins the exact queue and Beat variables before every rollout. Only
+the general worker owns Beat. The scoring service is scoring-only and never
+runs a second scheduler.
+
+`backend/railway.json` is shared by all three services and therefore does not
+declare Railway's HTTP `healthcheckPath`: Celery processes do not serve HTTP.
+Public web readiness is polled explicitly after deployment instead.
+
+### 5. Run the coordinated production rollout
+
+Use the single orchestrator from repo root. Substitute names only if the
+Railway services were renamed:
 
 ```bash
-# Default (from repo root)
-./scripts/railway/deploy_backend.sh
+RAILWAY_ENVIRONMENT=production \
+RAILWAY_BACKEND_SERVICE=resourceful-adaptation \
+RAILWAY_WORKER_SERVICE=taali-worker \
+RAILWAY_SCORING_WORKER_SERVICE=taali-worker-scoring \
+RAILWAY_BACKEND_URL=https://resourceful-adaptation-production.up.railway.app \
+  ./scripts/railway/deploy_production.sh
 ```
 
-Railway will detect the `railway.json` configuration and:
-1. Build with Nixpacks (auto-detects Python + `requirements.txt`)
-2. Run the Railway bootstrap script to validate production env, wait for Postgres, apply Alembic migrations, and then start uvicorn on the assigned `$PORT`
+The order is enforced:
 
-### 5. Verify
+1. Set `USAGE_METER_LIVE=true` and `ATS_PUBLIC_APPLY_ENABLED=true` with
+   `--skip-deploys` on web and both workers, then read back and validate all six
+   values.
+2. Resolve the web service's production `DATABASE_PUBLIC_URL`, run
+   `python -m alembic upgrade head` separately from service startup, then run
+   `python -m alembic current` against the same public database.
+3. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
+   wait for a new `SUCCESS` deployment ID.
+4. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
+   deploy it and wait for its own new `SUCCESS` deployment ID.
+5. Deploy web, wait for its new Railway deployment to succeed, poll public
+   `/ready`, then require the default worker's live Anthropic, E2B, Resend
+   delivery, and GitHub capability checks to pass.
+
+Any missing service, duplicate service name, wrong topology variable, failed
+deployment, migration failure, or readiness timeout makes the wrapper exit
+non-zero. A single healthy worker cannot produce a successful rollout.
+
+### 6. Verify autonomous Turn on readiness
+
+The coordinated wrapper performs these checks. They can also be repeated
+read-only:
 
 ```bash
-curl https://your-backend.up.railway.app/health
-# Expected: {"status":"healthy","service":"taali-api"}
+RAILWAY_ENVIRONMENT=production \
+RAILWAY_BACKEND_SERVICE=resourceful-adaptation \
+RAILWAY_WORKER_SERVICE=taali-worker \
+RAILWAY_SCORING_WORKER_SERVICE=taali-worker-scoring \
+  ./scripts/railway/check_status.sh
+
+curl --fail-with-body \
+  https://resourceful-adaptation-production.up.railway.app/health
+curl --fail-with-body \
+  https://resourceful-adaptation-production.up.railway.app/ready
 ```
 
-### 6. Celery worker (second Railway service)
+`/health` provides diagnostics; production `/ready` returns success only when
+live usage metering, both `celery` and `scoring` workers, and their live model
+access are healthy. The coordinated deployment adds a stricter default-agent
+gate: E2B must be configured, GitHub access must be real and verified, and the
+worker must complete its cached Resend test send. An assessment-free role can
+still use the narrower per-role readiness contract.
+The agent sweep runs hourly, but Turn on and Resume enqueue a complete role pass
+immediately.
 
-When `MVP_DISABLE_CELERY=False`, async tasks (assessment invitation emails, Workable posting) require a Celery worker. Add a **second service** to the same Railway project:
+This is one-time platform setup. The healthy per-role workflow is:
 
-1. In the Railway project dashboard, click **New** → **GitHub Repo** (or reuse the same repo).
-2. Set **Root Directory** to `backend` (same as the web service).
-3. Railway will use `railway.json` by default; for the worker, either:
-   - Set **Override** in the service settings to use `railway.worker.json` (if your CLI/project supports multiple configs), or  
-   - In the worker service → **Settings** → **Deploy**, set **Custom start command** to:
-     ```bash
-     celery -A app.tasks worker --loglevel=info --concurrency=2
-     ```
-4. Add the **same environment variables** as the web service (or use Railway [shared variables](https://docs.railway.app/develop/variables#shared-variables)): at minimum `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `RESEND_API_KEY`, `ANTHROPIC_API_KEY`, and any keys used by your tasks.
+1. Create/publish the requisition.
+2. Accept or edit the monthly cap and click **Turn on**. The click authorizes
+   a durable server-side workflow. The browser may close immediately: task
+   generation/repair, sandbox battle testing, repository verification, exact
+   draft approval, production readiness, activation, and the first cohort pass
+   continue from persisted state. Skipping the stage is an optional override,
+   not a required second decision.
 
-The worker uses the same Redis as the web app as the broker; no extra Redis service is needed.
-
-Deploy worker after the service is created:
-
-```bash
-RAILWAY_WORKER_SERVICE=<worker-service-name> ./scripts/railway/deploy_worker.sh
-```
+Activation applies the Agent settings already visible on the role. On an
+untouched workspace, reversible assessment send/resend and interview advance
+start on, while deterministic rejection and assessment skipping stay off. It
+opens a native requisition for applications, starts the full funnel pass, and
+fails closed if a dependency or the minimum funded credit balance is missing.
+No routine Process Candidates or Workable sync click is required. Human action
+remains intentional for
+irreversible reject confirmation, ambiguous/off-policy exceptions, and
+restoring external funding/credentials after a hold. Once a system hold's cause
+is healthy, the recovery sweeps resume the workflow and dispatch a full pass
+automatically; only recruiter-authored pauses require an explicit Resume.
 
 ### Common crash causes
 
@@ -264,7 +349,7 @@ Run Workable metadata sync smoke:
 Run model policy smoke (Haiku check):
 
 ```bash
-EXPECTED_CLAUDE_MODEL=claude-3-5-haiku-latest ./scripts/qa/prod_model_smoke.sh
+EXPECTED_CLAUDE_MODEL=claude-haiku-4-5-20251001 ./scripts/qa/prod_model_smoke.sh
 ```
 
 ---

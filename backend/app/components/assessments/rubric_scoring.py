@@ -42,13 +42,24 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
 from ...platform.config import settings
+from ...platform.database import SessionLocal
 from ...services.metered_anthropic_client import MeteredAnthropicClient
+from ...services.pricing_service import Feature
+from ...services.usage_credit_reservations import (
+    CreditReservation,
+    InsufficientRoleBudgetError,
+    reserve_credits,
+)
+from ...services.usage_metering_service import (
+    InsufficientCreditsError,
+)
 from .interrogation import (
     RESOLVED_STATUSES,
     derive_interrogation_state,
@@ -257,7 +268,9 @@ class DimensionGrade:
     reasoning: str  # 1-3 sentences from the grader
     evidence_citations: List[str] = field(default_factory=list)  # specific file:line or transcript-turn refs
     weight: float = 0.0  # carried through from rubric for aggregation
-    error: Optional[str] = None  # set when the grader call failed; score=0 in that case
+    # ``score``/``rating`` are placeholders when ``error`` is set and MUST NOT
+    # be used in an aggregate.  The explicit error is the authority signal.
+    error: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -265,7 +278,9 @@ class RubricResult:
     """Aggregated rubric grading across all dimensions."""
 
     dimensions: List[DimensionGrade]
-    weighted_score_100: float  # 0-100, weight-aggregated across dimensions
+    # Complete-rubric score, or successful-dimensions-only evidence when
+    # ``fully_graded`` is false. Callers must gate authority on fully_graded.
+    weighted_score_100: float
     model_used: str
     total_input_tokens: int = 0
     total_output_tokens: int = 0
@@ -724,10 +739,10 @@ class RubricScorer:
     and aggregates with weights.
 
     Resilience: a single dimension grader failing (network blip, malformed
-    JSON, etc.) does NOT fail the whole scoring run. The failed dimension
-    is recorded in ``RubricResult.failed_dimension_ids`` with score=0 and
-    the others still grade — the recruiter UI can then surface the gap
-    for human re-grading rather than blocking the submit flow.
+    JSON, etc.) does NOT discard successful evidence. The failed dimension
+    is recorded in ``RubricResult.failed_dimension_ids``; its numeric
+    placeholder is excluded from aggregates and the submission remains
+    non-authoritative until the automatic retry completes it.
     """
 
     def __init__(
@@ -736,6 +751,8 @@ class RubricScorer:
         organization_id: int,
         *,
         assessment_id: Optional[int] = None,
+        role_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
         model: Optional[str] = None,
     ) -> None:
         if not api_key:
@@ -746,6 +763,17 @@ class RubricScorer:
         )
         self._organization_id = int(organization_id)
         self._assessment_id = assessment_id
+        self._role_id = int(role_id) if role_id is not None else None
+        self._trace_id = (
+            str(trace_id).strip()
+            if trace_id is not None and str(trace_id).strip()
+            else (
+                f"assessment:{int(assessment_id)}:rubric"
+                if assessment_id is not None
+                else f"organization:{self._organization_id}:rubric"
+            )
+        )
+        self._credit_error: Optional[Exception] = None
         self._model = (model or "").strip() or _DEFAULT_RUBRIC_SCORING_MODEL
         logger.info(
             "RubricScorer init org=%s assessment=%s model=%s",
@@ -754,7 +782,12 @@ class RubricScorer:
 
     # ---- internal --------------------------------------------------------
 
-    def _metering(self, dimension_id: str) -> Dict[str, Any]:
+    def _metering(
+        self,
+        dimension_id: str,
+        *,
+        credit_reservation: Optional[CreditReservation] = None,
+    ) -> Dict[str, Any]:
         # MeteredAnthropicClient only persists keys from ``metering[metadata]``
         # onto the UsageEvent row's metadata column. ``sub_feature`` and
         # ``dimension`` have to ride inside metadata or they disappear,
@@ -762,6 +795,7 @@ class RubricScorer:
         grader_meta: Dict[str, Any] = {
             "sub_feature": "rubric_scoring",
             "dimension": dimension_id,
+            "trace_id": f"{self._trace_id}:{dimension_id}",
         }
         if self._assessment_id is not None:
             grader_meta["assessment_id"] = str(self._assessment_id)
@@ -772,7 +806,44 @@ class RubricScorer:
         }
         if self._assessment_id is not None:
             meta["entity_id"] = f"assessment:{self._assessment_id}"
+        if self._role_id is not None:
+            meta["role_id"] = self._role_id
+        meta["trace_id"] = f"{self._trace_id}:{dimension_id}"
+        if credit_reservation is not None:
+            meta["credit_reservation"] = credit_reservation.as_metering_payload()
         return meta
+
+    def _reserve_paid_call(self, dimension_id: str) -> CreditReservation:
+        """Hard-hold one model-graded dimension against org + role budgets."""
+        if self._credit_error is not None:
+            raise self._credit_error
+        try:
+            # The metered client records and commits the previous dimension in
+            # its own session.  A fresh reservation session therefore sees the
+            # latest debit and cannot reuse a stale Organization identity.
+            with SessionLocal() as meter_db:
+                reservation = reserve_credits(
+                    meter_db,
+                    organization_id=self._organization_id,
+                    feature=Feature.ASSESSMENT,
+                    external_ref=(
+                        f"usage-hold:{self._trace_id}:{dimension_id}:"
+                        f"{uuid.uuid4().hex}"
+                    ),
+                    metadata={
+                        "sub_feature": "rubric_scoring",
+                        "dimension": dimension_id,
+                        "assessment_id": self._assessment_id,
+                        "trace_id": f"{self._trace_id}:{dimension_id}",
+                    },
+                    role_id=self._role_id,
+                    enforce_role_budget=self._role_id is not None,
+                )
+                meter_db.commit()
+                return reservation
+        except (InsufficientCreditsError, InsufficientRoleBudgetError) as exc:
+            self._credit_error = exc
+            raise
 
     def _parse_grader_response(self, raw: str, dimension_id: str) -> Dict[str, Any]:
         """Parse the grader's JSON response. Tolerant of stray markdown
@@ -1007,12 +1078,13 @@ class RubricScorer:
         the shipped artifact regardless of who typed it. Defaults to the
         decision frame for back-compat with un-lensed dimensions.
 
-        Never raises. On failure returns a ``DimensionGrade`` with
-        ``score=0`` and ``error`` set so the aggregator can flag the gap
-        for human review.
+        Never raises. On failure returns a ``DimensionGrade`` with an explicit
+        ``error``.  The numeric placeholder is excluded from every aggregate;
+        it exists only for backwards-compatible serialization.
         """
         user_prompt = _build_user_prompt(dimension_id, criteria, artifacts)
         try:
+            reservation = self._reserve_paid_call(dimension_id)
             response = self._client.messages.create(
                 model=self._model,
                 max_tokens=_MAX_TOKENS_PER_DIMENSION,
@@ -1023,7 +1095,10 @@ class RubricScorer:
                 temperature=0,
                 system=_system_prompt_for_lens(lens),
                 messages=[{"role": "user", "content": user_prompt}],
-                metering=self._metering(dimension_id),
+                metering=self._metering(
+                    dimension_id,
+                    credit_reservation=reservation,
+                ),
             )
             raw_text = response.content[0].text if response.content else ""
             payload = self._parse_grader_response(raw_text, dimension_id)
@@ -1032,8 +1107,8 @@ class RubricScorer:
                 "RubricScorer dimension=%s grading failed", dimension_id,
             )
             return DimensionGrade(
-                dimension_id=dimension_id, score=0.0, rating="poor",
-                reasoning="Grader call failed; flagged for human review.",
+                dimension_id=dimension_id, score=0.0, rating="error",
+                reasoning="Grading is incomplete and will be retried automatically.",
                 evidence_citations=[], weight=weight, error=str(exc),
             )
 
@@ -1094,18 +1169,20 @@ class RubricScorer:
                     lens=dim_spec.get("lens"),
                 )
             graded.append(grade)
-            total_weight += weight
             if grade.error is not None:
                 failed_ids.append(dim_id)
+            else:
+                total_weight += weight
 
         # Weighted aggregate to 0-100. If total_weight is 0 (no dimensions
         # had weight) treat each as equal-weight so the score isn't NaN.
-        if not graded:
+        successful = [grade for grade in graded if grade.error is None]
+        if not successful:
             weighted = 0.0
         elif total_weight <= 0:
-            weighted = (sum(g.score for g in graded) / len(graded)) * 10.0
+            weighted = (sum(g.score for g in successful) / len(successful)) * 10.0
         else:
-            weighted_sum = sum(g.score * g.weight for g in graded)
+            weighted_sum = sum(g.score * g.weight for g in successful)
             weighted = (weighted_sum / total_weight) * 10.0
 
         return RubricResult(

@@ -415,8 +415,8 @@ def _apply_recruiter_answer(
         # and can pause on it. Answering this card with a high-enough number
         # is the same "raise the cap" intent as the settings PATCH, so clear
         # a budget-pause that the new budget now covers. Pure mutation on the
-        # same role; the existing flush persists it and the next cohort beat
-        # (≤30 min) picks the role back up. Mirrors the PATCH-route resume.
+        # same role; the existing flush persists it and the next hourly cohort
+        # beat picks the role back up. Mirrors the PATCH-route resume.
         from ..agent_runtime import budget_guard
 
         budget_guard.resume_if_under_budget(db, role=role)

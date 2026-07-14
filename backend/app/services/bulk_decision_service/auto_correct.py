@@ -138,6 +138,25 @@ def auto_correct_stale_verdict(
             "auto-corrected stale verdict app=%s %s -> %s",
             getattr(app, "id", "?"), prior_type, new_type,
         )
+        # A corrected positive verdict belongs to the same autonomy contract as
+        # a freshly-created one. Without this, a role switched to auto-promote
+        # could retain an old HITL card forever because the cohort query quite
+        # correctly excludes applications that already have a pending row.
+        from ...agent_runtime.tool_registry import maybe_auto_execute_decision
+        from ...domains.assessments_runtime.pipeline_service import (
+            is_post_handover_workable_stage,
+        )
+
+        maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type=new_type,
+            on_policy=True,
+            force_human_review=is_post_handover_workable_stage(
+                getattr(app, "workable_stage", None)
+            ),
+        )
         return new_type
     except Exception:  # noqa: BLE001 — never break scoring
         logger.exception(

@@ -12,7 +12,7 @@ const GUIDES = [
   {
     href: '/agentic-hiring',
     title: 'What is agentic hiring?',
-    description: 'How an AI agent runs sourcing, screening, assessment, and decisions end to end — with you on every call that matters.',
+    description: 'How an AI agent ingests applicants, screens, assesses, and advances the routine funnel — while humans retain irreversible and ambiguous calls.',
   },
   {
     href: '/ai-native-hiring',

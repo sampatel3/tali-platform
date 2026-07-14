@@ -100,6 +100,39 @@ describe('AgentChatDock', () => {
     );
   });
 
+  it('shows Turn-on-owned assessment drafts as automatic progress, not another approval step', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message',
+          id: 'auto-task',
+          author: 'agent',
+          text: 'Turn on is saved.',
+          actions: [{
+            type: 'draft_task_review',
+            automatic_activation: true,
+            activation_status: 'pending',
+            reject_questions: [],
+            drafts: [{
+              task_id: 17,
+              name: 'Platform reliability exercise',
+              decisions: [],
+              rubric: [],
+              repo_file_count: 3,
+            }],
+          }],
+        }],
+      },
+    });
+
+    renderDock();
+
+    expect(await screen.findByText(/being validated for Turn on/i)).toBeInTheDocument();
+    expect(screen.getByText(/no second click is needed/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Reject & revise/i })).not.toBeInTheDocument();
+  });
+
   it('bulk mode: composer fans out to onSendBulk, not the single-role send', async () => {
     mocks.getTimeline.mockResolvedValue({ data: { timeline: [] } });
     const onSendBulk = vi.fn();

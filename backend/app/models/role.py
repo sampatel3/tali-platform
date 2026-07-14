@@ -100,6 +100,10 @@ class Role(Base):
     job_spec_filename = Column(String, nullable=True)
     job_spec_text = Column(Text, nullable=True)
     job_spec_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    # Durable state for JD -> generated assessment provisioning. The request is
+    # committed with the Role/requisition transaction, then claimed by a
+    # retryable worker; Beat recovers lost broker kicks and stale claims.
+    assessment_task_provisioning = Column(JSON, nullable=True)
     # Once a recruiter edits/uploads the job spec in Taali, that text is the
     # deliberate source of truth. ATS syncs may still refresh title and source
     # metadata, but must not silently replace the recruiter's edited spec.
@@ -179,17 +183,20 @@ class Role(Base):
     agent_paused_at = Column(DateTime(timezone=True), nullable=True)
     agent_paused_reason = Column(Text, nullable=True)
     agent_last_run_at = Column(DateTime(timezone=True), nullable=True)
+    # Durable acknowledgement for the asynchronous activation/resume handoff.
+    # ``agentic_mode_enabled`` means the recruiter granted autonomy; this state
+    # records whether a worker has actually accepted and completed the first
+    # cohort tick.  A bootstrap that exhausts retries is marked failed and the
+    # role is auto-paused rather than remaining deceptively green.
+    agent_bootstrap_status = Column(String(length=16), nullable=True)
+    agent_bootstrap_error = Column(Text, nullable=True)
+    agent_bootstrap_started_at = Column(DateTime(timezone=True), nullable=True)
+    agent_bootstrap_completed_at = Column(DateTime(timezone=True), nullable=True)
     agent_calibration = Column(JSON, nullable=True)
-    # Per-role Anthropic model override. Null = use settings.resolved_claude_model
-    # DEPRECATED (May 2026 single-version cleanup): per §8.1 of
-    # recruitment_system_architecture.md the canonical model-selection
-    # surface is ``config/agent_models.yaml`` (loaded by
-    # ``app.agent_runtime.model_config``). This per-role override
-    # remains as a runtime escape hatch for the orchestrator agent's
-    # own model only; the five sub-agents resolve their model via
-    # ``get_model_for_agent("<name>")``. Sunset target: when all
-    # remaining callers route through model_config and the
-    # orchestrator's model is also moved into agent_models.yaml.
+    # Per-role autonomous-orchestrator model override. Null/empty uses
+    # ``settings.resolved_agent_autonomous_model``, which falls back to the
+    # pinned ``CLAUDE_MODEL``. This does not change the candidate chat or batch
+    # scoring models, which have their own explicit settings.
     agent_model = Column(String, nullable=True)
     # Cached "do high scorers cluster" signals (skills/companies/titles/schools
     # over-represented in the top decile vs the full applicant pool). Computed
@@ -197,36 +204,40 @@ class Role(Base):
     # when stale (>1 hour). See the agent's get_cohort_signals tool.
     agent_cohort_signals = Column(JSON, nullable=True)
     agent_cohort_signals_at = Column(DateTime(timezone=True), nullable=True)
-    # Per-role HITL toggles. Both default False so every candidate-
-    # affecting action lands in the Decision Hub for human approval
-    # unless the recruiter explicitly opts into automation.
+    # Per-role autonomy toggles. Columns default False, but first activation
+    # defaults ``auto_promote`` to True unless the caller explicitly opts out.
+    # Positive/reversible actions may then execute automatically while the role
+    # is enabled, unpaused, on-policy and within its guards.
     #
-    # ``auto_reject``: when True, reject decisions execute immediately —
-    # the pre-screen Celery auto-reject path disqualifies in Workable
-    # without queueing, and the agent's queue_reject_decision /
-    # queue_skip_assessment_reject_decision tools call the same path
-    # ``approve_decision.run`` uses on recruiter approval, instead of
-    # creating a pending AgentDecision card.
+    # ``auto_reject``: opt-in to automatic deterministic pre-screen rejection
+    # when provider/policy safeguards also allow it. LLM-authored, full-score
+    # and assessment-stage reject recommendations remain pending for explicit
+    # human confirmation even when this is True.
     #
-    # ``auto_promote``: when True, the agent sends assessments and
-    # advances candidates to interview without approval. When False the
-    # agent's queue_advance_decision tool produces an AgentDecision card
-    # and ``send_assessment`` opens an ``agent_needs_input`` approval row.
+    # ``auto_promote``: when True, the running agent sends assessments and
+    # advances on-policy candidates without routine approval. When False (or a
+    # guard holds), those actions remain pending AgentDecision cards.
     auto_reject = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
     # ``auto_reject_pre_screen``: narrower opt-in than ``auto_reject`` —
     # ONLY candidates failing the cheap pre-screen gate are rejected
     # immediately (the ``run_auto_reject_if_needed`` path). Rejects of
-    # fully-scored candidates still queue as Decision Hub cards. The full
+    # fully-scored candidates still require human confirmation. The full
     # ``auto_reject`` toggle supersedes this one (OR semantics at the
-    # pre-screen gate).
+    # deterministic pre-screen gate only).
     auto_reject_pre_screen = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
     auto_promote = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Granular reversible-action policy.  NULL deliberately means "inherit the
+    # legacy auto_promote value" so existing rows and older API clients retain
+    # their behavior while new Settings clients can control each action.
+    auto_send_assessment = Column(Boolean, nullable=True)
+    auto_resend_assessment = Column(Boolean, nullable=True)
+    auto_advance = Column(Boolean, nullable=True)
     # ``auto_skip_assessment``: when True the assessment stage is bypassed
     # entirely — a ``send_assessment`` verdict is translated to
     # ``advance_to_interview`` (the same switch a role with no assessment

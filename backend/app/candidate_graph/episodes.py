@@ -351,6 +351,10 @@ def dispatch(
     bill_role_id: int | None = None,
     bill_user_id: int | None = None,
     bill_candidate_id: int | None = None,
+    bill_trace_id: str | None = None,
+    require_hard_admission: bool = False,
+    require_role_admission: bool = False,
+    raise_on_error: bool = False,
 ) -> int:
     """Send episodes to Graphiti. Returns the number successfully sent.
 
@@ -358,10 +362,12 @@ def dispatch(
     Errors on individual episodes are logged but don't abort the batch —
     a partial graph is better than nothing.
 
-    When ``db`` and ``bill_organization_id`` are supplied, each successful
-    episode also writes a ``UsageEvent`` (feature=graph_sync) so the
-    indexing cost flows into the role's monthly budget. The caller owns
-    the commit; this function only adds rows.
+    When ``bill_organization_id`` is supplied, the wrapped Graphiti provider
+    clients write one ``UsageEvent`` per actual Anthropic/Voyage call.
+    Durable outbox callers also set ``require_hard_admission``: every provider
+    call then reserves organization credits + role capacity before touching
+    the SDK, settles to actual usage, and propagates any provider/metering
+    error so the row remains retryable.
     """
     sent = 0
     if not graph_client.is_configured():
@@ -380,6 +386,15 @@ def dispatch(
         graph_metering_ctx,
     )
 
+    if require_hard_admission and bill_organization_id is None:
+        raise ValueError("hard-admitted Graphiti dispatch requires organization")
+    if require_role_admission and (
+        bill_organization_id is None or bill_role_id is None
+    ):
+        raise ValueError(
+            "hard-admitted Graphiti dispatch requires organization and role"
+        )
+
     for episode in episodes:
         # Populate the contextvar BEFORE invoking add_episode so the
         # metered async wrapper around Graphiti's LLM client picks up
@@ -397,6 +412,9 @@ def dispatch(
                     candidate_id=bill_candidate_id,
                     user_id=bill_user_id,
                     episode_name=episode.name,
+                    trace_id=bill_trace_id or f"graphiti:{episode.name}",
+                    require_hard_admission=bool(require_hard_admission),
+                    require_role_admission=bool(require_role_admission),
                 )
             )
         try:
@@ -424,6 +442,8 @@ def dispatch(
             logger.warning(
                 "Graphiti add_episode failed name=%s reason=%s", episode.name, exc
             )
+            if raise_on_error:
+                raise
         finally:
             if meter_ctx_token is not None:
                 graph_metering_ctx.reset(meter_ctx_token)

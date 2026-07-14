@@ -3,6 +3,7 @@
 // as the rest of the product; the wrapper owns all network lifecycle state.
 
 import React, { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ArrowUpRight,
   Circle,
@@ -211,42 +212,48 @@ const AgentCard = ({ agent }) => {
     : `${fmtUsdFine(spent)} used · No limit set`;
 
   return (
-    <article className="an-agent-card">
-      <header className="an-agent-card-head">
-        <StatusGlyph kind={status.kind} />
-        <div className="an-agent-identity">
-          <h3 className="an-agent-name" title={name}>{name}</h3>
-          <p className={`an-agent-status ${status.kind}`}>{status.text}</p>
-        </div>
-      </header>
+    <Link
+      to={`/jobs/${agent.role_id}?view=role-fit`}
+      aria-label={`Open agent settings for ${name}`}
+      style={{ color: 'inherit', display: 'block', height: '100%', textDecoration: 'none' }}
+    >
+      <article className="an-agent-card">
+        <header className="an-agent-card-head">
+          <StatusGlyph kind={status.kind} />
+          <div className="an-agent-identity">
+            <h3 className="an-agent-name" title={name}>{name}</h3>
+            <p className={`an-agent-status ${status.kind}`}>{status.text}</p>
+          </div>
+        </header>
 
-      <div className="an-agent-budget">
-        <div className="an-agent-budget-head">
-          <span>Monthly budget</span>
-          <strong>{budgetText}</strong>
+        <div className="an-agent-budget">
+          <div className="an-agent-budget-head">
+            <span>Monthly budget</span>
+            <strong>{budgetText}</strong>
+          </div>
+          <div
+            className="an-agent-budget-track"
+            role="progressbar"
+            aria-label={`${name} monthly budget used`}
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={barPct}
+            aria-valuetext={cap > 0 ? `${rawPct}% used` : 'No monthly cap set'}
+          >
+            <span
+              className={`an-agent-budget-fill${barHi ? ' hi' : ''}`}
+              style={{ width: `${barPct}%` }}
+            />
+          </div>
         </div>
-        <div
-          className="an-agent-budget-track"
-          role="progressbar"
-          aria-label={`${name} monthly budget used`}
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow={barPct}
-          aria-valuetext={cap > 0 ? `${rawPct}% used` : 'No monthly cap set'}
-        >
-          <span
-            className={`an-agent-budget-fill${barHi ? ' hi' : ''}`}
-            style={{ width: `${barPct}%` }}
-          />
-        </div>
-      </div>
 
-      <div className="an-agent-meta">
-        <div className="an-agent-meta-item"><span>Decisions waiting</span><strong>{safeNum(agent.pending)}</strong></div>
-        <div className="an-agent-meta-item"><span>Last run</span><strong>{relativeTimeInWords(agent.last_run_at)}</strong></div>
-        <div className="an-agent-meta-item"><span>Runs in 24 hours</span><strong>{safeNum(agent.cycles_24h)}</strong></div>
-      </div>
-    </article>
+        <div className="an-agent-meta">
+          <div className="an-agent-meta-item"><span>Decisions waiting</span><strong>{safeNum(agent.pending)}</strong></div>
+          <div className="an-agent-meta-item"><span>Last run</span><strong>{relativeTimeInWords(agent.last_run_at)}</strong></div>
+          <div className="an-agent-meta-item"><span>Runs in 24 hours</span><strong>{safeNum(agent.cycles_24h)}</strong></div>
+        </div>
+      </article>
+    </Link>
   );
 };
 

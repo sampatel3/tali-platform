@@ -13,6 +13,11 @@ from .org_criterion import (
 
 CRITERION_SOURCE_RECRUITER = "recruiter"
 CRITERION_SOURCE_DERIVED = "derived_from_spec"
+# Criteria authored in a RoleBrief and copied into its materialized Role.
+# Keeping this distinct from recruiter/workspace chips lets a re-publish
+# reconcile only the brief-owned rows without deleting later role-specific
+# recruiter edits.
+CRITERION_SOURCE_REQUISITION = "requisition"
 # Retained for back-compat with the old schema literal (schemas/role.py).
 # New code should set ``bucket = "constraint"`` and use
 # ``CRITERION_SOURCE_RECRUITER`` instead.

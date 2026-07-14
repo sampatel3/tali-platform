@@ -11,8 +11,9 @@ dropped it. These tests cover the durable outbox that replaced that path:
 - The drain sends pending rows, marks them ``sent``, and is idempotent.
 - A send that doesn't land (returns 0 OR raises) leaves the row ``pending``
   — the irreplaceable signal is never lost.
-- The retry budget is capped: a row that keeps failing is eventually
-  marked ``failed`` rather than retried forever.
+- Transient provider/budget/graph failures stay retryable beyond the old cap
+  and recover automatically after the cooldown.
+- Only structurally invalid payloads become terminal ``failed``.
 - The drain is a no-op while Graphiti is unconfigured (rows untouched).
 - The Celery drain task ships pending rows and is idempotent across runs.
 
@@ -22,7 +23,7 @@ rather than standing up Neo4j.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from app.agent_runtime import outcome_learning
@@ -54,7 +55,12 @@ def _seed_advance(db):
     org = Organization(name="Outbox Org", slug=f"outbox-{id(db)}")
     db.add(org)
     db.flush()
-    role = Role(organization_id=org.id, name="Backend", source="manual")
+    role = Role(
+        organization_id=org.id,
+        name="Backend",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
     db.add(role)
     db.flush()
     cand = Candidate(
@@ -131,6 +137,7 @@ def test_outcome_lands_in_outbox_when_graph_unconfigured_and_raising(db):
     assert row.attempts == 0
     assert row.organization_id == int(org.id)
     assert row.payload["decision_id"] == int(decision.id)
+    assert row.payload["role_id"] == int(role.id)
     # v1 "interviewed" maps to the v2 outcome_type vocabulary.
     assert row.payload["outcome_type"] == "reached_interview"
 
@@ -196,6 +203,11 @@ def test_drain_sends_pending_and_is_idempotent(db):
     # instead of an unattributed (org=NULL) call_log row. Was dropped pre-fix.
     kw = dispatch_kwargs[0]
     assert kw.get("bill_organization_id") == int(org.id)
+    assert kw.get("bill_role_id") == int(role.id)
+    assert kw.get("require_hard_admission") is True
+    assert kw.get("require_role_admission") is True
+    assert kw.get("raise_on_error") is True
+    assert str(kw.get("bill_trace_id")).startswith("graph-outbox:")
     assert kw.get("db") is db
 
     row = db.query(GraphEpisodeOutbox).one()
@@ -212,6 +224,52 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert summary2["scanned"] == 0
     assert summary2["sent"] == 0
     assert dispatched == []
+
+
+def test_drain_defers_paused_role_without_attempt_or_provider_call(db):
+    _, role, _, _ = _enqueue_pending(db)
+    role.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    row = db.query(GraphEpisodeOutbox).one()
+    assert summary["sent"] == 0
+    assert summary["deferred"] == 1
+    assert summary["role_deferred"] == 1
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 0
+    dispatch.assert_not_called()
+
+    role.agent_paused_at = None
+    db.commit()
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as resumed_dispatch:
+        resumed = episode_outbox.drain(db)
+
+    assert resumed["sent"] == 1
+    resumed_dispatch.assert_called_once()
+
+
+def test_drain_defers_turned_off_role_without_attempt_or_provider_call(db):
+    _, role, _, _ = _enqueue_pending(db)
+    role.agentic_mode_enabled = False
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    row = db.query(GraphEpisodeOutbox).one()
+    assert summary["role_deferred"] == 1
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 0
+    dispatch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -255,11 +313,12 @@ def test_failing_send_raises_leaves_row_pending_with_error(db):
     assert "neo4j unreachable" in (row.last_error or "")
 
 
-def test_retry_budget_capped_marks_failed(db):
+def test_transient_failure_remains_pending_beyond_old_cap_and_recovers(db):
     _enqueue_pending(db)
-    # Push attempts to one below the cap so the next failure trips it.
+    # Push attempts to one below the former terminal cap and make the row due.
     row = db.query(GraphEpisodeOutbox).one()
     row.attempts = episode_outbox._MAX_ATTEMPTS - 1
+    row.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
     db.commit()
 
     with patch.object(graph_client, "is_configured", return_value=True), patch.object(
@@ -267,10 +326,88 @@ def test_retry_budget_capped_marks_failed(db):
     ):
         summary = episode_outbox.drain(db)
 
+    assert summary["failed"] == 0
+    assert summary["pending"] == 1
+    row = db.query(GraphEpisodeOutbox).one()
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == episode_outbox._MAX_ATTEMPTS
+
+    # While the cooldown is active, repeated beat/manual drains do not hammer
+    # the provider or burn another attempt.
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as mock_dispatch:
+        deferred = episode_outbox.drain(db)
+    assert deferred["scanned"] == 0
+    assert deferred["deferred"] == 1
+    mock_dispatch.assert_not_called()
+
+    # Once the bounded cooldown elapses, the same durable row is retried and
+    # sent — no human requeue or status repair required.
+    row.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    db.commit()
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ):
+        recovered = episode_outbox.drain(db)
+    assert recovered["sent"] == 1
+    assert db.query(GraphEpisodeOutbox).one().status == OUTBOX_STATUS_SENT
+
+
+def test_admission_or_metering_error_stays_retryable_with_reason(db):
+    _enqueue_pending(db)
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module,
+        "dispatch",
+        side_effect=RuntimeError("usage settlement unavailable"),
+    ):
+        summary = episode_outbox.drain(db)
+
+    assert summary["pending"] == 1
+    assert summary["failed"] == 0
+    row = db.query(GraphEpisodeOutbox).one()
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 1
+    assert "usage settlement unavailable" in (row.last_error or "")
+
+
+def test_invalid_payload_is_the_only_terminal_failure(db):
+    _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    payload = dict(row.payload or {})
+    payload.pop("candidate_taali_id")
+    row.payload = payload
+    db.commit()
+
+    mock_dispatch = MagicMock()
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", mock_dispatch
+    ):
+        summary = episode_outbox.drain(db)
+
     assert summary["failed"] == 1
     row = db.query(GraphEpisodeOutbox).one()
     assert row.status == OUTBOX_STATUS_FAILED
-    assert row.attempts == episode_outbox._MAX_ATTEMPTS
+    assert "invalid episode payload" in (row.last_error or "")
+    mock_dispatch.assert_not_called()
+
+
+def test_legacy_outcome_payload_resolves_role_from_decision(db):
+    org, role, app, decision = _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    payload = dict(row.payload or {})
+    payload.pop("role_id")
+    row.payload = payload
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as mock_dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["sent"] == 1
+    assert mock_dispatch.call_args.kwargs["bill_role_id"] == int(role.id)
 
 
 def test_drain_is_noop_when_graph_unconfigured(db):

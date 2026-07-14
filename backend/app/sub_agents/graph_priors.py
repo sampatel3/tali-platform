@@ -364,6 +364,7 @@ class GraphPriorsSubAgent:
             neigh = graph_search.colleague_neighbourhood(
                 organization_id=int(req.organization_id),
                 candidate_id=int(candidate.id),
+                role_id=int(req.role_id),
                 max_companies=int(config.neighbourhood_size),
             )
         except Exception as exc:
@@ -379,6 +380,7 @@ class GraphPriorsSubAgent:
             neighbour_ids = graph_search.candidate_ids_matching_all(
                 organization_id=int(req.organization_id),
                 predicates=predicates,
+                role_id=int(req.role_id),
             )
         except Exception as exc:
             logger.warning("candidate_ids_matching_all crashed: %s", exc)

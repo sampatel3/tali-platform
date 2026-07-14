@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AnalyticsMotionPreview, ANALYTICS_SHOWCASE } from './AnalyticsMotionPreview';
@@ -24,6 +25,12 @@ const setReducedMotion = (reduced) => {
   }));
 };
 
+const renderPreview = () => render(
+  <MemoryRouter>
+    <AnalyticsMotionPreview />
+  </MemoryRouter>,
+);
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -31,7 +38,7 @@ afterEach(() => {
 describe('AnalyticsMotionPreview (/analytics-preview)', () => {
   it('renders logged-out with the pulse band and the real Outcomes view', () => {
     setReducedMotion(false);
-    render(<AnalyticsMotionPreview />);
+    renderPreview();
 
     // Real AgentHeader (the title; "Analytics" also appears in the breadcrumb).
     expect(screen.getAllByText(/Analytics/).length).toBeGreaterThan(0);
@@ -46,7 +53,7 @@ describe('AnalyticsMotionPreview (/analytics-preview)', () => {
 
   it('renders the final KPI values under prefers-reduced-motion', () => {
     setReducedMotion(true);
-    render(<AnalyticsMotionPreview />);
+    renderPreview();
 
     // The "Decisions" ticker lands on its final fixture value immediately.
     expect(screen.getByText(String(ANALYTICS_SHOWCASE.summary.kpis.decisions_made.current))).toBeInTheDocument();
@@ -54,7 +61,7 @@ describe('AnalyticsMotionPreview (/analytics-preview)', () => {
 
   it('switches to the redesigned real Fleet view without the Outcomes pulse', () => {
     setReducedMotion(true);
-    render(<AnalyticsMotionPreview />);
+    renderPreview();
 
     fireEvent.click(screen.getByRole('tab', { name: /Agent fleet/i }));
 

@@ -1,61 +1,41 @@
-"""Tests for dispatch_assessment_invite — the Taali-email + Workable-hybrid
-dispatcher used by both the recruiter create-assessment route and the
-agent's send_assessment action.
-
-Behaviour matrix (from the 2026-05-07 restructure):
-- Always send Taali email (Taali is the only source of the unique link).
-- ALSO move candidate in Workable + post activity note WHEN:
-  * MVP_DISABLE_WORKABLE is False
-  * org.workable_connected + access_token + subdomain are set
-  * assessment.workable_candidate_id is set
-  * config.invite_stage_name is non-empty
-  * config.workable_writeback is true  (read-only opt-out honored)
-- invite_channel records what happened: manual | workable_hybrid | workable_partial
-"""
+"""Truthful, durable assessment invite delivery and ATS handoff tests."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 
-from app.domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from app.models.assessment import Assessment
 from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 def _make_org(
     db,
     *,
-    name: str = "Acme",
     workable_connected: bool = False,
     invite_stage_name: str = "",
     workable_writeback: bool = False,
-    workflow_mode: str = "manual",
 ) -> Organization:
-    config = {
-        "workable_writeback": workable_writeback,
-        "workflow_mode": workflow_mode,
-        "invite_stage_name": invite_stage_name,
-        "granted_scopes": ["r_candidates", "r_jobs", "w_candidates"],
-        "workable_actor_member_id": "member-x",
-    }
     org = Organization(
-        name=name,
+        name="Acme",
         slug=f"org-{id(db)}",
         workable_connected=workable_connected,
         workable_access_token=("tk-1" if workable_connected else None),
         workable_subdomain=("acme" if workable_connected else None),
-        workable_config=config,
+        workable_config={
+            "workable_writeback": workable_writeback,
+            "workflow_mode": "workable_hybrid",
+            "invite_stage_name": invite_stage_name,
+            "granted_scopes": ["r_candidates", "r_jobs", "w_candidates"],
+            "workable_actor_member_id": "member-x",
+        },
     )
     db.add(org)
     db.flush()
@@ -63,391 +43,478 @@ def _make_org(
 
 
 def _make_assessment(
-    db,
-    *,
-    org: Organization,
-    workable_candidate_id: str | None = None,
+    db, *, org: Organization, workable_candidate_id: str | None = None
 ) -> Assessment:
     role = Role(organization_id=org.id, name="Backend", source="manual")
-    db.add(role)
-    db.flush()
     task = Task(
         name="Test Task",
         task_key=f"task-{id(db)}",
         organization_id=org.id,
         is_active=True,
     )
-    db.add(task)
+    db.add_all([role, task])
     db.flush()
     candidate = Candidate(
         organization_id=org.id, email="alice@x.test", full_name="Alice"
     )
     db.add(candidate)
     db.flush()
-    a = Assessment(
+    application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="review",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        workable_candidate_id=workable_candidate_id,
+    )
+    db.add(application)
+    db.flush()
+    assessment = Assessment(
         organization_id=org.id,
         candidate_id=candidate.id,
         task_id=task.id,
         role_id=role.id,
+        application_id=application.id,
         token="tok-abc",
         duration_minutes=60,
         expires_at=datetime.now(timezone.utc),
         workable_candidate_id=workable_candidate_id,
     )
-    db.add(a)
+    db.add(assessment)
     db.flush()
-    return a
+    return assessment
 
 
-@pytest.fixture
-def patched_email():
-    """Patch the inner email sender so the function never hits Resend."""
+def _commit_invite_intent(db, assessment, org, *, actor_type="agent"):
+    from app.components.notifications import tasks as notification_tasks
+    from app.domains.integrations_notifications.invite_flow import (
+        dispatch_assessment_invite,
+    )
+
+    with patch.object(notification_tasks.dispatch_pending_assessment_invite, "delay"):
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
+            candidate_email=assessment.candidate.email,
+            candidate_name=assessment.candidate.full_name,
+            position=assessment.task.name,
+            pipeline_source="recruiter" if actor_type == "recruiter" else "agent",
+            pipeline_actor_type=actor_type,
+            pipeline_reason="Assessment invite sent",
+        )
+        db.commit()
+
+
+def test_invite_intent_dispatches_only_after_outer_commit(db):
+    from app.components.notifications import tasks as notification_tasks
+    from app.domains.integrations_notifications.invite_flow import (
+        INVITE_PENDING_DISPATCH,
+        dispatch_assessment_invite,
+    )
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    with patch.object(
+        notification_tasks.dispatch_pending_assessment_invite, "delay"
+    ) as kick, patch(
+        "app.domains.integrations_notifications.invite_flow._send_taali_invite_email"
+    ) as immediate_email:
+        result = dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
+            candidate_email="alice@x.test",
+            candidate_name="Alice",
+            position="Backend",
+        )
+        assert result == INVITE_PENDING_DISPATCH
+        assert assessment.invite_email_status == INVITE_PENDING_DISPATCH
+        assert assessment.invite_sent_at is None
+        assert assessment.application.pipeline_stage == "review"
+        immediate_email.assert_not_called()
+        kick.assert_not_called()
+        db.commit()
+
+    kick.assert_called_once_with(int(assessment.id), reply_to=None)
+
+
+def test_nested_rollback_discards_invite_intent_and_never_kicks_worker(db):
+    from app.components.notifications import tasks as notification_tasks
+    from app.domains.integrations_notifications.invite_flow import (
+        dispatch_assessment_invite,
+    )
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    db.commit()
+    with patch.object(
+        notification_tasks.dispatch_pending_assessment_invite, "delay"
+    ) as kick:
+        with pytest.raises(RuntimeError):
+            with db.begin_nested():
+                dispatch_assessment_invite(
+                    assessment=assessment,
+                    org=org,
+                    candidate_email="alice@x.test",
+                    candidate_name="Alice",
+                    position="Backend",
+                )
+                raise RuntimeError("rollback")
+        db.commit()
+
+    kick.assert_not_called()
+    db.refresh(assessment)
+    assert assessment.invite_email_status is None
+
+
+def test_broker_queue_is_idempotent_and_does_not_claim_candidate_contact(db):
+    from app.domains.integrations_notifications.invite_flow import (
+        INVITE_PENDING_DISPATCH,
+        INVITE_QUEUED,
+        deliver_pending_assessment_invite,
+    )
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.invite_email_status = INVITE_PENDING_DISPATCH
+    assessment.invite_email_reply_to = "recruiter@acme.test"
+    db.commit()
     with patch(
         "app.domains.integrations_notifications.invite_flow._send_taali_invite_email"
-    ) as mock_email:
-        yield mock_email
-
-
-@pytest.fixture
-def patched_workable():
-    """Patch both Workable side calls. Defaults to success for both."""
-    with patch(
-        "app.domains.integrations_notifications.invite_flow.move_candidate_in_workable"
-    ) as mock_move, patch(
-        "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
-    ) as mock_adapter_factory:
-        mock_move.return_value = {
-            "success": True,
-            "action": "move",
-            "code": "ok",
-            "config": {"actor_member_id": "member-x"},
-        }
-        adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_comment.return_value = {"success": True}
-        yield {"move": mock_move, "adapter_factory": mock_adapter_factory}
-
-
-# ---------------------------------------------------------------------------
-# Always-send-Taali-email (the new invariant)
-# ---------------------------------------------------------------------------
-
-
-def test_taali_email_fires_when_workable_not_connected(db, patched_email):
-    org = _make_org(db, workable_connected=False)
-    a = _make_assessment(db, org=org)
-
-    channel = dispatch_assessment_invite(
-        assessment=a,
-        org=org,
-        candidate_email="alice@x.test",
-        candidate_name="Alice",
-        position="Senior Backend",
-    )
-
-    assert patched_email.called
-    assert channel == "manual"
-    assert a.invite_channel == "manual"
-    assert a.invite_sent_at is not None
-
-
-def test_taali_email_fires_even_when_workable_connected(db, patched_email, patched_workable, monkeypatch):
-    """The big behavior change: previously workable_preferred_fallback_manual
-    suppressed the Taali email; now it ALWAYS fires."""
-    from app.platform.config import settings as cfg
-
-    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-
-    org = _make_org(
-        db,
-        workable_connected=True,
-        invite_stage_name="Phone Screen",
-        workable_writeback=True,
-        workflow_mode="workable_hybrid",
-    )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_001")
-
-    channel = dispatch_assessment_invite(
-        assessment=a,
-        org=org,
-        candidate_email="alice@x.test",
-        candidate_name="Alice",
-        position="Senior Backend",
-    )
-
-    # Email was sent (the new invariant).
-    assert patched_email.called
-    # Workable was also updated.
-    assert patched_workable["move"].called
-    assert channel == "workable_hybrid"
-    assert a.invite_channel == "workable_hybrid"
-
-
-# ---------------------------------------------------------------------------
-# Workable handoff eligibility — each gate
-# ---------------------------------------------------------------------------
-
-
-def test_workable_handoff_skipped_when_invite_stage_blank(db, patched_email, patched_workable, monkeypatch):
-    """Hybrid mode + connected + linked, but no invite_stage_name → email-only."""
-    from app.platform.config import settings as cfg
-
-    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-
-    org = _make_org(
-        db,
-        workable_connected=True,
-        invite_stage_name="",
-        workable_writeback=True,
-    )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_002")
-
-    channel = dispatch_assessment_invite(
-        assessment=a,
-        org=org,
-        candidate_email="alice@x.test",
-        candidate_name="Alice",
-        position="Backend",
-    )
-
-    assert patched_email.called
-    assert patched_workable["move"].called is False
-    assert channel == "manual"
-
-
-def test_workable_handoff_skipped_when_candidate_not_linked(db, patched_email, patched_workable, monkeypatch):
-    """Hybrid mode + connected + stage set, but assessment isn't linked
-    (manual recruiter-created) → email only."""
-    from app.platform.config import settings as cfg
-
-    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-
-    org = _make_org(
-        db,
-        workable_connected=True,
-        invite_stage_name="Invited",
-        workable_writeback=True,
-    )
-    a = _make_assessment(db, org=org, workable_candidate_id=None)
-
-    channel = dispatch_assessment_invite(
-        assessment=a,
-        org=org,
-        candidate_email="alice@x.test",
-        candidate_name="Alice",
-        position="Backend",
-    )
-
-    assert patched_email.called
-    assert patched_workable["move"].called is False
-    assert channel == "manual"
-
-
-def test_workable_handoff_skipped_when_writeback_disabled(db, patched_email, patched_workable, monkeypatch):
-    """Read-only mode (``workable_writeback`` False) = explicit recruiter
-    opt-out from Workable side effects on assessment send. Honor it even
-    when everything else is wired (incl. the w_candidates scope)."""
-    from app.platform.config import settings as cfg
-
-    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-
-    org = _make_org(
-        db,
-        workable_connected=True,
-        invite_stage_name="Invited",
-        workable_writeback=False,
-    )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_003")
-
-    channel = dispatch_assessment_invite(
-        assessment=a,
-        org=org,
-        candidate_email="alice@x.test",
-        candidate_name="Alice",
-        position="Backend",
-    )
-
-    assert patched_email.called
-    assert patched_workable["move"].called is False
-    assert channel == "manual"
-
-
-def test_workable_handoff_skipped_when_globally_disabled(db, patched_email, patched_workable, monkeypatch):
-    """MVP_DISABLE_WORKABLE flag short-circuits regardless of org config."""
-    from app.platform.config import settings as cfg
-
-    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", True)
-
-    org = _make_org(
-        db,
-        workable_connected=True,
-        invite_stage_name="Invited",
-        workable_writeback=True,
-    )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_004")
-
-    channel = dispatch_assessment_invite(
-        assessment=a,
-        org=org,
-        candidate_email="alice@x.test",
-        candidate_name="Alice",
-        position="Backend",
-    )
-
-    assert patched_email.called
-    assert patched_workable["move"].called is False
-    assert channel == "manual"
-
-
-# ---------------------------------------------------------------------------
-# Workable handoff failure modes
-# ---------------------------------------------------------------------------
-
-
-def test_workable_partial_when_stage_move_fails(db, patched_email, monkeypatch):
-    """If the Workable stage move fails, email is already out — record
-    workable_partial channel so observability sees the divergence."""
-    from app.platform.config import settings as cfg
-
-    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-
-    org = _make_org(
-        db,
-        workable_connected=True,
-        invite_stage_name="Invited",
-        workable_writeback=True,
-    )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_005")
-
-    with patch(
-        "app.domains.integrations_notifications.invite_flow.move_candidate_in_workable",
-        return_value={"success": False, "code": "api_error", "message": "500"},
-    ), patch(
-        "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
-    ) as mock_adapter_factory:
-        adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_comment.return_value = {"success": True}
-        channel = dispatch_assessment_invite(
-            assessment=a,
-            org=org,
-            candidate_email="alice@x.test",
-            candidate_name="Alice",
-            position="Backend",
+    ) as email:
+        first = deliver_pending_assessment_invite(
+            db, assessment_id=int(assessment.id)
+        )
+        second = deliver_pending_assessment_invite(
+            db, assessment_id=int(assessment.id)
         )
 
-    assert patched_email.called
-    assert channel == "workable_partial"
-    assert a.invite_channel == "workable_partial"
+    assert first["status"] == "queued"
+    assert second["status"] == "already_claimed"
+    assert email.call_count == 1
+    assert email.call_args.kwargs["idempotency_key"] == (
+        f"assessment-invite/{int(assessment.id)}"
+    )
+    db.refresh(assessment)
+    assert assessment.invite_email_status == INVITE_QUEUED
+    assert assessment.invite_sent_at is None
+    assert assessment.application.pipeline_stage == "review"
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == assessment.application_id,
+            CandidateApplicationEvent.event_type == "assessment_invite_sent",
+        )
+        .count()
+        == 0
+    )
 
 
-def test_workable_partial_when_activity_post_fails(db, patched_email, monkeypatch):
-    """Stage move OK but activity post fails → still partial. Recruiter
-    won't see the activity in Workable but candidate did get the email."""
+def test_pending_dispatch_sweep_recovers_lost_postcommit_kick(db):
+    from app.components.notifications import tasks as notification_tasks
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.invite_email_status = "pending_dispatch"
+    db.commit()
+    with patch.object(
+        notification_tasks.dispatch_pending_assessment_invite, "delay"
+    ) as kick:
+        result = notification_tasks.sweep_pending_assessment_invites.run(limit=10)
+
+    assert result == {
+        "scanned": 1,
+        "dispatched": 1,
+        "failed": 0,
+        "recovered_claims": 0,
+    }
+    kick.assert_called_once_with(int(assessment.id))
+
+
+def test_provider_success_atomically_confirms_pipeline_and_handoff_outbox(
+    db, monkeypatch
+):
     from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-
     org = _make_org(
         db,
         workable_connected=True,
-        invite_stage_name="Invited",
+        invite_stage_name="Assessment",
         workable_writeback=True,
     )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_006")
+    assessment = _make_assessment(db, org=org, workable_candidate_id="wkbl-confirm")
+    _commit_invite_intent(db, assessment, org)
 
-    with patch(
-        "app.domains.integrations_notifications.invite_flow.move_candidate_in_workable",
-        return_value={"success": True, "config": {"actor_member_id": "member-x"}},
-    ), patch(
-        "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
-    ) as mock_adapter_factory:
-        adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_comment.return_value = {"success": False}
-        channel = dispatch_assessment_invite(
-            assessment=a,
-            org=org,
-            candidate_email="alice@x.test",
-            candidate_name="Alice",
-            position="Backend",
-        )
-
-    assert channel == "workable_partial"
-
-
-def test_workable_exception_does_not_break_email_dispatch(db, patched_email, monkeypatch):
-    """If the Workable client raises, the email is still already sent and
-    the function returns a workable_partial channel, not an exception."""
-    from app.platform.config import settings as cfg
-
-    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-
-    org = _make_org(
+    result = confirm_assessment_invite_provider_success(
         db,
-        workable_connected=True,
-        invite_stage_name="Invited",
-        workable_writeback=True,
+        assessment_id=int(assessment.id),
+        email_id="em-confirmed",
+        expected_generation=0,
     )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_007")
 
-    with patch(
-        "app.domains.integrations_notifications.invite_flow.move_candidate_in_workable",
-        side_effect=RuntimeError("network down"),
-    ):
-        # Must not raise.
-        channel = dispatch_assessment_invite(
-            assessment=a,
-            org=org,
-            candidate_email="alice@x.test",
-            candidate_name="Alice",
-            position="Backend",
+    assert result["confirmed"] is True
+    assert result["handoff_pending"] is True
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    assert row.invite_email_id == "em-confirmed"
+    assert row.invite_email_status == "sent"
+    assert row.invite_sent_at is not None
+    assert row.application.pipeline_stage == "invited"
+    assert row.invite_workable_handoff_status == "pending"
+    assert row.invite_workable_handoff_generation == 0
+    assert row.invite_workable_handoff_stage == "Assessment"
+    event_types = {
+        item.event_type
+        for item in db.query(CandidateApplicationEvent).filter(
+            CandidateApplicationEvent.application_id == row.application_id
         )
-
-    assert patched_email.called
-    assert channel == "workable_partial"
-
-
-# ---------------------------------------------------------------------------
-# Activity note content
-# ---------------------------------------------------------------------------
+    }
+    assert {
+        "pipeline_initialized",
+        "pipeline_stage_changed",
+        "assessment_invite_sent",
+    }.issubset(event_types)
 
 
-def test_workable_activity_note_contains_assessment_link(db, patched_email, monkeypatch):
-    """The activity note posted to Workable should include the unique
-    assessment link so recruiters can preview what the candidate received."""
+def test_provider_success_confirmation_is_idempotent(db):
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    _commit_invite_intent(db, assessment, org)
+    first = confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-once",
+        expected_generation=0,
+    )
+    version = assessment.application.version
+    second = confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-once",
+        expected_generation=0,
+    )
+
+    assert first["deduplicated"] is False
+    assert second["deduplicated"] is True
+    db.refresh(assessment.application)
+    assert assessment.application.version == version
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == assessment.application_id,
+            CandidateApplicationEvent.event_type == "assessment_invite_sent",
+        )
+        .count()
+        == 1
+    )
+
+
+def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
+    db, monkeypatch
+):
+    from app.components.notifications import tasks as notification_tasks
     from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
     monkeypatch.setattr(cfg, "FRONTEND_URL", "https://app.taali.test")
-
     org = _make_org(
         db,
         workable_connected=True,
-        invite_stage_name="Invited",
+        invite_stage_name="Assessment",
         workable_writeback=True,
     )
-    a = _make_assessment(db, org=org, workable_candidate_id="wkbl_008")
+    assessment = _make_assessment(db, org=org, workable_candidate_id="wkbl-retry")
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-retry",
+        expected_generation=0,
+    )
 
     with patch(
-        "app.domains.integrations_notifications.invite_flow.move_candidate_in_workable",
-        return_value={"success": True, "config": {"actor_member_id": "member-x"}},
-    ), patch(
-        "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
-    ) as mock_adapter_factory:
-        adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_comment.return_value = {"success": True}
-
-        dispatch_assessment_invite(
-            assessment=a,
-            org=org,
-            candidate_email="alice@x.test",
-            candidate_name="Alice",
-            position="Backend",
+        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
+        return_value={"success": True},
+    ) as move, patch(
+        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
+    ) as adapter_factory, patch.object(
+        notification_tasks.send_assessment_email, "delay"
+    ) as email:
+        adapter = adapter_factory.return_value
+        adapter.post_candidate_comment.side_effect = [
+            {"success": False, "error": "Workable 503"},
+            {"success": True},
+        ]
+        first = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+        db.expire_all()
+        row = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+        assert first["status"] == "retry_wait"
+        assert row.invite_workable_stage_moved_at is not None
+        assert row.invite_workable_note_posted_at is None
+        row.invite_workable_handoff_next_attempt_at = datetime.now(
+            timezone.utc
+        ) - timedelta(seconds=1)
+        db.commit()
+        second = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
         )
 
-        post_args = adapter.post_candidate_comment.call_args
-        candidate_id_arg, member_id_arg, body = post_args.args
-        assert candidate_id_arg == "wkbl_008"
-        assert member_id_arg == "member-x"
-        assert "Alice" in body
-        assert "alice@x.test" in body
-        assert f"https://app.taali.test/assessment/{a.id}" in body
-        assert "tok-abc" in body  # token is present
+    assert second["status"] == "succeeded"
+    assert move.call_count == 1
+    assert adapter.post_candidate_comment.call_count == 2
+    email.assert_not_called()
+    _, _, note = adapter.post_candidate_comment.call_args.args
+    assert f"https://app.taali.test/assessment/{assessment.id}" in note
+    assert "assessment-invite/" in note
+
+
+def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        invite_stage_name="Assessment",
+        workable_writeback=True,
+    )
+    assessment = _make_assessment(db, org=org, workable_candidate_id="wkbl-once")
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-once",
+        expected_generation=0,
+    )
+    with patch(
+        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
+        return_value={"success": True},
+    ) as move, patch(
+        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
+    ) as adapter_factory:
+        adapter_factory.return_value.post_candidate_comment.return_value = {
+            "success": True
+        }
+        first = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+        second = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+
+    assert first["status"] == "succeeded"
+    assert second == {"status": "succeeded", "deduplicated": True}
+    assert move.call_count == 1
+    assert adapter_factory.return_value.post_candidate_comment.call_count == 1
+
+
+def test_stale_workable_generation_cannot_touch_new_handoff(db, monkeypatch):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.invite_workable_handoff_generation = 1
+    assessment.invite_workable_handoff_status = "pending"
+    assessment.invite_workable_handoff_stage = "Assessment"
+    db.commit()
+    with patch(
+        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable"
+    ) as move:
+        result = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+
+    assert result["status"] == "missing_or_superseded"
+    move.assert_not_called()
+    db.refresh(assessment)
+    assert assessment.invite_workable_handoff_generation == 1
+    assert assessment.invite_workable_handoff_status == "pending"
+
+
+def test_workable_handoff_sweep_recovers_pending_rows(db):
+    from app.components.notifications import tasks as notification_tasks
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.invite_email_confirmed_generation = 0
+    assessment.invite_workable_handoff_generation = 0
+    assessment.invite_workable_handoff_status = "pending"
+    db.commit()
+    with patch.object(
+        notification_tasks.dispatch_assessment_invite_workable_handoff, "delay"
+    ) as kick:
+        result = notification_tasks.sweep_assessment_invite_workable_handoffs.run(
+            limit=10
+        )
+
+    assert result == {"scanned": 1, "dispatched": 1, "failed": 0}
+    kick.assert_called_once_with(int(assessment.id), 0)
+
+
+def test_idempotency_key_changes_only_for_explicit_resend(db):
+    from app.domains.integrations_notifications.invite_flow import (
+        assessment_invite_idempotency_key,
+    )
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    root = f"assessment-invite/{int(assessment.id)}"
+    assert assessment_invite_idempotency_key(assessment) == root
+    assessment.invite_email_retry_count = 5
+    assessment.invite_email_status = "retry_wait"
+    assert assessment_invite_idempotency_key(assessment) == root
+    assessment.invite_email_send_generation = 1
+    assert assessment_invite_idempotency_key(assessment) == f"{root}/resend/1"
+
+
+def test_explicit_resend_queues_a_new_provider_generation(db):
+    from app.actions.resend_assessment_invite import run
+    from app.actions.types import Actor
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.role.agentic_mode_enabled = True
+    assessment.role.tasks.append(assessment.task)
+    assessment.invite_email_id = "em-original"
+    assessment.invite_delivered_at = datetime.now(timezone.utc)
+
+    result = run(
+        db,
+        Actor.system(),
+        organization_id=int(org.id),
+        assessment_id=int(assessment.id),
+    )
+
+    assert result.status == "queued"
+    assert assessment.invite_email_send_generation == 1
+    assert assessment.invite_email_id is None
+    assert assessment.invite_delivered_at is None
+    assert assessment.application.pipeline_stage == "review"

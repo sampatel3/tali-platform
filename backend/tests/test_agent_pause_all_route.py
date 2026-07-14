@@ -12,7 +12,9 @@ discarding it is an explicit opt-in via POST /agent-decisions/discard.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from sqlalchemy import event
 
@@ -43,7 +45,7 @@ def _seed_org_with_agent_roles(org_name: str, *, role_names: list[str]) -> dict:
 
     sess = TestingSessionLocal()
     try:
-        org = Organization(name=org_name, slug=f"pa-{id(sess)}")
+        org = Organization(name=org_name, slug=f"pa-{uuid.uuid4().hex[:12]}")
         sess.add(org)
         sess.flush()
         role_ids = []
@@ -182,8 +184,14 @@ def test_pause_all_is_idempotent_for_already_paused_roles(client):
     assert second.json()["enabled_count"] == 1
 
 
-def test_resume_all_clears_pause_for_under_budget_roles(client):
+def test_resume_all_clears_pause_and_wakes_under_budget_roles(client, monkeypatch):
     from tests.conftest import auth_headers
+
+    wakeups: list[tuple[int, bool]] = []
+    monkeypatch.setattr(
+        "app.tasks.agent_tasks.agent_cohort_tick_role.delay",
+        lambda role_id, *, activation: wakeups.append((role_id, activation)),
+    )
 
     headers, email = auth_headers(client)
     seeded = _seed_org_with_agent_roles("Resume Org", role_names=["A", "B"])
@@ -195,11 +203,70 @@ def test_resume_all_clears_pause_for_under_budget_roles(client):
     body = resp.json()
     assert body["affected"] == 2
     assert body["skipped"] == 0
+    assert sorted(wakeups) == sorted(
+        (role_id, False) for role_id in seeded["role_ids"]
+    )
 
     for role_id in seeded["role_ids"]:
         paused_at, reason, _enabled = _role_pause_state(role_id)
         assert paused_at is None
         assert reason is None
+
+
+def test_resume_all_repauses_role_when_worker_rejects_wakeup(client, monkeypatch):
+    from tests.conftest import auth_headers
+
+    monkeypatch.setattr(
+        "app.tasks.agent_tasks.agent_cohort_tick_role.delay",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("broker down")),
+    )
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles(
+        "Resume Dispatch Failure Org", role_names=["A"]
+    )
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    client.post("/api/v1/agent/pause-all", headers=headers)
+
+    resp = client.post("/api/v1/agent/resume-all", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["affected"] == 0
+    assert resp.json()["skipped"] == 1
+    paused_at, reason, enabled = _role_pause_state(role_id)
+    assert paused_at is not None
+    assert reason == "agent bootstrap dispatch failed"
+    assert enabled is True
+
+    status = client.get(f"/api/v1/roles/{role_id}/agent/status", headers=headers)
+    assert status.status_code == 200, status.text
+    assert status.json()["bootstrap_status"] == "failed"
+    assert status.json()["bootstrap_error"] == "agent bootstrap dispatch failed"
+
+
+def test_resume_all_leaves_roles_paused_when_production_runtime_is_unready(client):
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Resume Unready Org", role_names=["A", "B"])
+    _attach_user_to_org(email, seeded["org_id"])
+    client.post("/api/v1/agent/pause-all", headers=headers)
+
+    with (
+        patch("app.platform.startup_validation.is_production_like", return_value=True),
+        patch(
+            "app.services.agent_worker_health.worker_beat_status",
+            return_value={"ready": False, "reason": "heartbeat_stale"},
+        ),
+    ):
+        resp = client.post("/api/v1/agent/resume-all", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["affected"] == 0
+    assert resp.json()["skipped"] == 2
+    for role_id in seeded["role_ids"]:
+        assert _role_pause_state(role_id)[0] is not None
 
 
 def test_pause_all_is_org_scoped(client):
@@ -290,7 +357,7 @@ def test_resume_one_role_clears_pause(client, monkeypatch):
     # Resume kicks an immediate cycle; stub it so this stays a fast HTTP-layer
     # check (celery runs eagerly in the suite).
     monkeypatch.setattr(
-        "app.tasks.agent_tasks.agent_daily_review_role.delay",
+        "app.tasks.agent_tasks.agent_cohort_tick_role.delay",
         lambda *a, **k: None,
     )
 
@@ -311,6 +378,36 @@ def test_resume_one_role_clears_pause(client, monkeypatch):
     paused_at, reason, _enabled = _role_pause_state(role_id)
     assert paused_at is None
     assert reason is None
+
+    status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=headers
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["bootstrap_status"] == "starting"
+    assert status.json()["bootstrap_started_at"] is not None
+
+
+def test_resume_one_role_returns_503_and_stays_paused_when_runtime_unready(client):
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Per-role Unready Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+
+    with (
+        patch("app.platform.startup_validation.is_production_like", return_value=True),
+        patch(
+            "app.services.agent_worker_health.worker_beat_status",
+            return_value={"ready": False, "reason": "heartbeat_stale"},
+        ),
+    ):
+        resp = client.post(f"/api/v1/roles/{role_id}/agent/resume", headers=headers)
+
+    assert resp.status_code == 503, resp.text
+    assert "heartbeat_stale" in resp.text
+    assert _role_pause_state(role_id)[0] is not None
 
 
 def test_turn_off_keeps_pending_decisions_by_default(client):

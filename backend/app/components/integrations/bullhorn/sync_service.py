@@ -21,7 +21,7 @@ raises :class:`BullhornSyncCancelled` at the next checkpoint.
 
 Cost safety: this module never triggers paid re-scoring. New candidates are
 scored once via the shared enqueue path inside :mod:`sync_candidates`, gated on
-``role.starred_for_auto_sync`` exactly like the Workable import.
+the shared enabled + unpaused + lifecycle-ready agent policy.
 """
 
 from __future__ import annotations

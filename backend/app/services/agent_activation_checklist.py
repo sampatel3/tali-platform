@@ -89,9 +89,10 @@ def _gaps_for(role: Role) -> Iterable[str]:
     if not must_chips:
         yield "intent_slot_missing"
 
-    # 3. Linked assessment task — needed before send_assessment can fire.
-    linked_tasks = [t for t in (role.tasks or []) if getattr(t, "deleted_at", None) is None]
-    if not linked_tasks:
+    # 3. Only an active assessment task can be assigned. A generated draft is
+    # intentionally not executable until its content has been approved.
+    active_tasks = [t for t in (role.tasks or []) if bool(getattr(t, "is_active", False))]
+    if not active_tasks and not bool(getattr(role, "auto_skip_assessment", False)):
         yield "task_assignment_missing"
 
     # 4. Monthly USD budget cap. Activation already checks this is set in

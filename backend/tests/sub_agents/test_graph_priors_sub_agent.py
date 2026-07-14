@@ -89,16 +89,18 @@ def test_priors_compute_p_advance_from_neighbours(db):
             "schools": [],
             "skills": [],
         },
-    ), patch(
+    ) as neighbourhood, patch(
         "app.sub_agents.graph_priors.graph_search.candidate_ids_matching_all",
         return_value=neighbour_ids,
-    ):
+    ) as matching_all:
         result = GRAPH_PRIORS_SUB_AGENT.run(req, db=db)
     assert result.ok is True
     assert result.output["neighbour_count"] == 8
     # 6 advanced of 8 → ~0.75
     assert 0.7 < result.output["p_advance"] < 0.8
     assert result.confidence > 0.0
+    assert neighbourhood.call_args.kwargs["role_id"] == role.id
+    assert matching_all.call_args.kwargs["role_id"] == role.id
 
 
 def test_priors_filter_to_same_role_family(db):

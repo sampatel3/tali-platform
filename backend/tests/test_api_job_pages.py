@@ -9,10 +9,19 @@ editable (status unchanged) so it can be re-published.
 
 No Anthropic is needed for any of this (publish + serialize only touch DB state).
 """
+import pytest
+
 from app.models.job_page import JobPage
 from app.models.organization import Organization
+from app.models.role import JOB_STATUS_OPEN, Role
 from app.models.role_brief import RoleBrief
+from app.platform.config import settings
 from tests.conftest import auth_headers
+
+
+@pytest.fixture(autouse=True)
+def _enable_public_apply(monkeypatch):
+    monkeypatch.setattr(settings, "ATS_PUBLIC_APPLY_ENABLED", True)
 
 
 # Publish now enforces the same required-fields gate the UI does, so fill every
@@ -300,15 +309,20 @@ def test_public_get_closed_page_404(client, db):
 # --------------------------------------------------------------------------- #
 # Public careers board: GET /api/v1/public/careers/{slug} (no auth)
 # --------------------------------------------------------------------------- #
-def _publish(client, headers, **fields):
-    """Create a requisition with the given fields and publish it. Returns token."""
+def _publish(client, headers, db, **fields):
+    """Create/publish and mark the already-readied agent live for board tests."""
     jd = fields.pop("jd_markdown", "JD")
     brief_id = _make_requisition(client, headers, **fields)
-    return client.post(
+    published = client.post(
         f"/api/v1/requisitions/{brief_id}/publish",
         json={"jd_markdown": jd},
         headers=headers,
-    ).json()["token"]
+    ).json()
+    role = db.query(Role).filter(Role.id == published["role_id"]).one()
+    role.agentic_mode_enabled = True
+    role.job_status = JOB_STATUS_OPEN
+    db.commit()
+    return published["token"]
 
 
 def _org_slug(db, organization_name):
@@ -322,6 +336,7 @@ def test_careers_board_lists_published_pages_with_public_fields(client, db):
     _publish(
         client,
         headers,
+        db,
         title="Platform Engineer",
         location_city="Dubai",
         location_country="UAE",
@@ -357,9 +372,9 @@ def test_careers_board_newest_first(client, db):
     headers, _ = auth_headers(client, organization_name="Hooli Search")
     # Publish three; reorder published_at directly so the test is deterministic
     # regardless of clock resolution.
-    t1 = _publish(client, headers, title="First")
-    t2 = _publish(client, headers, title="Second")
-    t3 = _publish(client, headers, title="Third")
+    t1 = _publish(client, headers, db, title="First")
+    t2 = _publish(client, headers, db, title="Second")
+    t3 = _publish(client, headers, db, title="Third")
     from datetime import datetime, timedelta, timezone
 
     base = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -376,8 +391,8 @@ def test_careers_board_newest_first(client, db):
 
 def test_careers_board_excludes_closed_and_drafts(client, db):
     headers, _ = auth_headers(client, organization_name="Pied Piper Hiring")
-    open_token = _publish(client, headers, title="Open Role")
-    closed_token = _publish(client, headers, title="Closed Role")
+    open_token = _publish(client, headers, db, title="Open Role")
+    closed_token = _publish(client, headers, db, title="Closed Role")
     # A draft requisition that was never published mints NO page → never listed.
     _make_requisition(client, headers, title="Draft Role")
 
@@ -396,13 +411,29 @@ def test_careers_board_excludes_closed_and_drafts(client, db):
     assert closed_token not in tokens
 
 
+def test_careers_board_does_not_advertise_published_requisition_preview(client, db):
+    headers, _ = auth_headers(client, organization_name="Preview Only Co")
+    brief_id = _make_requisition(client, headers, title="Not Live Yet")
+    published = client.post(
+        f"/api/v1/requisitions/{brief_id}/publish",
+        json={"jd_markdown": "# Not Live Yet\n\nPreview."},
+        headers=headers,
+    )
+    assert published.status_code == 200, published.text
+
+    slug = _org_slug(db, "Preview Only Co")
+    body = client.get(f"/api/v1/public/careers/{slug}").json()
+
+    assert body["jobs"] == []
+
+
 def test_careers_board_excludes_other_orgs_pages(client, db):
     # Org A publishes a page.
     headers_a, _ = auth_headers(client, organization_name="Org Alpha")
-    _publish(client, headers_a, title="Alpha Role")
+    _publish(client, headers_a, db, title="Alpha Role")
     # Org B publishes a page.
     headers_b, _ = auth_headers(client, organization_name="Org Beta")
-    _publish(client, headers_b, title="Beta Role")
+    _publish(client, headers_b, db, title="Beta Role")
 
     slug_a = _org_slug(db, "Org Alpha")
     body = client.get(f"/api/v1/public/careers/{slug_a}").json()
@@ -432,6 +463,7 @@ def test_careers_board_never_exposes_client_rate_or_margin(client, db):
     _publish(
         client,
         headers,
+        db,
         title="Eng",
         client_id=client_id,
         client_rate=400000,
@@ -453,13 +485,13 @@ def test_careers_board_never_exposes_client_rate_or_margin(client, db):
 def test_careers_board_salary_formatting_variants(client, db):
     headers, _ = auth_headers(client, organization_name="Comp Variants Co")
     # Full band (currency omitted → defaults to AED).
-    _publish(client, headers, title="Both", salary_min=20000, salary_max=28000)
+    _publish(client, headers, db, title="Both", salary_min=20000, salary_max=28000)
     # Floor only.
-    _publish(client, headers, title="MinOnly", salary_min=20000, salary_currency="AED")
+    _publish(client, headers, db, title="MinOnly", salary_min=20000, salary_currency="AED")
     # Ceiling only.
-    _publish(client, headers, title="MaxOnly", salary_max=28000, salary_currency="AED")
+    _publish(client, headers, db, title="MaxOnly", salary_max=28000, salary_currency="AED")
     # No band at all → "".
-    _publish(client, headers, title="NoBand")
+    _publish(client, headers, db, title="NoBand")
 
     slug = _org_slug(db, "Comp Variants Co")
     body = client.get(f"/api/v1/public/careers/{slug}").json()

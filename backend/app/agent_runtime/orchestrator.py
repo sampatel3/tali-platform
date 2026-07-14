@@ -25,7 +25,12 @@ from ..platform.config import settings
 from ..llm import CallUsage, MeteringContext, one_call
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature, raw_cost_usd_micro
-from ..services.usage_metering_service import InsufficientCreditsError, reserve
+from ..services.provider_usage_admission import (
+    release_provider_usage,
+    reserve_provider_usage,
+)
+from ..services.usage_credit_reservations import InsufficientRoleBudgetError
+from ..services.usage_metering_service import InsufficientCreditsError
 from . import budget_guard, calibration, data_readiness
 from .system_prompt import PROMPT_VERSION, build_system_prompt
 from .tool_registry import (
@@ -485,15 +490,53 @@ def run_cycle(
             run.error = f"per-cycle token budget reached ({int(token_budget)})"
             break
 
+        reservation = None
         try:
-            reserve(
-                db,
+            reservation = reserve_provider_usage(
                 organization_id=int(role.organization_id),
+                role_id=int(role.id),
                 feature=Feature.AGENT_AUTONOMOUS,
+                trace_id=f"agent-run:{int(run.id)}:round:{int(round_idx)}",
+                entity_id=str(role.id),
+                sub_feature="agent_autonomous_round",
+                metadata={
+                    "agent_run_id": int(run.id),
+                    "round": int(round_idx),
+                },
             )
         except InsufficientCreditsError as exc:
+            credit_reason = (
+                "usage credits exhausted: "
+                f"need {exc.required}, have {exc.available}; top up to resume"
+            )
+            # This is an organization-level spend stop, not a transient LLM
+            # failure. Persist the same durable hold used by scoring so future
+            # cohort/event tasks cannot repeatedly enter the paid phase while
+            # the ledger is empty.
+            budget_guard.pause_role(db, role=role, reason=credit_reason)
             run.status = "budget_paused"
-            run.error = f"insufficient organization credits: {exc.available} < {exc.required}"
+            run.error = credit_reason
+            break
+        except InsufficientRoleBudgetError as exc:
+            role_reason = (
+                "monthly USD cap admission blocked agent round: "
+                f"need {exc.required}, have {exc.available} remaining"
+            )
+            budget_guard.pause_role(db, role=role, reason=role_reason)
+            run.status = "budget_paused"
+            run.error = role_reason
+            break
+        except Exception as exc:
+            # A ledger/hold failure is not permission to bypass billing. Leave
+            # the role enabled for the scheduled recovery path, but fail this
+            # cycle before the provider call.
+            logger.exception(
+                "agent_runtime: usage reservation failed role=%s round=%s",
+                role.id,
+                round_idx,
+            )
+            run.status = "failed"
+            run.error = f"usage reservation failed: {exc}"
             break
 
         # Fresh sink per round for the AgentRun rollup. The metered wrapper
@@ -504,7 +547,12 @@ def run_cycle(
             organization_id=int(role.organization_id),
             role_id=int(role.id),
             entity_id=str(role.id),
+            # Keep one stable trace across every paid round. In particular,
+            # the metered wrapper can now correlate SDK-error call logs (which
+            # have no UsageEvent) directly back to this AgentRun.
+            trace_id=f"agent-run:{int(run.id)}",
             metadata={"agent_run_id": int(run.id), "round": int(round_idx)},
+            credit_reservation=reservation.as_metering_payload(),
         )
         try:
             response = one_call(
@@ -518,6 +566,13 @@ def run_cycle(
                 usage_sink=round_usage,
             )
         except Exception as exc:  # pragma: no cover — defensive
+            # MeteredAnthropicClient releases SDK-error holds centrally; this
+            # idempotent fallback covers injected clients and pre-wrapper
+            # failures.
+            release_provider_usage(
+                reservation,
+                reason=f"agent_round_call_failed:{type(exc).__name__}",
+            )
             logger.exception("agent_runtime: anthropic call failed role=%s", role.id)
             run.status = "failed"
             run.error = f"anthropic call failed: {exc}"
@@ -653,8 +708,8 @@ def run_cycle(
                 f"See agent_runs.error for details."
             ),
             "budget_paused": (
-                f"Agent paused mid-cycle — monthly budget cap was reached. "
-                f"Will resume next month or after recruiter raises the cap."
+                f"Agent paused mid-cycle — {run.error or 'a spend guard was reached'}. "
+                "Resolve the stated hold, then resume the agent."
             ),
         }
         _emit_cycle_abort_event(

@@ -33,13 +33,27 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
+from ..platform.database import SessionLocal
 from ..services.metered_anthropic_client import MeteredAnthropicClient
+from ..services.pricing_service import (
+    Feature,
+    credits_charged,
+    raw_cost_usd_micro,
+)
 from ..services.task_spec_loader import validate_task_spec
+from ..services.usage_credit_reservations import (
+    CreditReservation,
+    InsufficientRoleBudgetError,
+    release_credit_reservation,
+    reserve_credits,
+)
+from ..services.usage_metering_service import InsufficientCreditsError
 
 logger = logging.getLogger("taali.task_spec_generator")
 
@@ -50,6 +64,10 @@ _DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 # large output — give it room.
 _MAX_TOKENS = 20000
 _DEFAULT_MAX_ATTEMPTS = 3
+# Hard-hold enough for the configured 20K output ceiling plus a conservative
+# 60K-token input context (system contract + JD + prior invalid spec/repairs).
+# The hold is model-priced and reconciled to actual usage after every attempt.
+_RESERVATION_INPUT_TOKENS = 60_000
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +226,15 @@ def _revision_prompt(prior_spec: Dict[str, Any], feedback: str) -> str:
     )
 
 
-def _make_client(api_key: str, organization_id: int, role_slug: str):
+def _make_client(
+    api_key: str,
+    organization_id: int,
+    role_slug: str,
+    role_id: Optional[int] = None,
+    trace_id: Optional[str] = None,
+):
     """Build the metered client + metering payload shared by generate/revise."""
+    resolved_trace = str(trace_id or f"task-spec-{uuid.uuid4().hex}")
     client = MeteredAnthropicClient(
         inner=Anthropic(api_key=api_key),
         organization_id=int(organization_id),
@@ -217,9 +242,90 @@ def _make_client(api_key: str, organization_id: int, role_slug: str):
     metering = {
         "feature": "assessment",
         "organization_id": int(organization_id),
-        "metadata": {"sub_feature": "task_spec_generation", "role_slug": role_slug},
+        "trace_id": resolved_trace,
+        "metadata": {
+            "sub_feature": "task_spec_generation",
+            "role_slug": role_slug,
+            "trace_id": resolved_trace,
+        },
     }
+    if role_id is not None:
+        metering["role_id"] = int(role_id)
+        metering["entity_id"] = f"role:{int(role_id)}"
+    else:
+        metering["entity_id"] = f"role-slug:{role_slug}"
     return client, metering
+
+
+def _task_spec_reservation_amount(model: str) -> int:
+    """Conservative maximum charge for one configured generation attempt."""
+    raw = raw_cost_usd_micro(
+        input_tokens=_RESERVATION_INPUT_TOKENS,
+        output_tokens=_MAX_TOKENS,
+        model=model,
+    )
+    return credits_charged(
+        feature=Feature.ASSESSMENT,
+        cost_usd_micro=raw,
+        cache_hit=False,
+    )
+
+
+def _reserve_generation_attempt(
+    *,
+    metering: Dict[str, Any],
+    model: str,
+    attempt: int,
+) -> CreditReservation:
+    trace_id = str(metering["trace_id"])
+    external_ref = (
+        f"usage-reservation:task-spec:{trace_id}:attempt:{attempt}:"
+        f"{uuid.uuid4().hex[:12]}"
+    )
+    with SessionLocal() as meter_db:
+        reservation = reserve_credits(
+            meter_db,
+            organization_id=int(metering["organization_id"]),
+            feature=Feature.ASSESSMENT,
+            external_ref=external_ref,
+            amount=_task_spec_reservation_amount(model),
+            metadata={
+                "sub_feature": "task_spec_generation",
+                "role_id": metering.get("role_id"),
+                "entity_id": metering.get("entity_id"),
+                "trace_id": trace_id,
+                "attempt": int(attempt),
+            },
+            role_id=(
+                int(metering["role_id"])
+                if metering.get("role_id") is not None
+                else None
+            ),
+            enforce_role_budget=metering.get("role_id") is not None,
+        )
+        meter_db.commit()
+        return reservation
+
+
+def _release_generation_attempt(
+    reservation: CreditReservation, *, reason: str
+) -> None:
+    """Best-effort/idempotent compensation when no model usage was returned."""
+    try:
+        with SessionLocal() as meter_db:
+            release_credit_reservation(
+                meter_db,
+                reservation=reservation,
+                reason=reason,
+            )
+            meter_db.commit()
+    except Exception:
+        # Conservatively leave the durable hold in place. Its trace metadata is
+        # recoverable, while an optimistic refund could double-credit the org.
+        logger.exception(
+            "task_spec failed to release credit reservation ref=%s",
+            reservation.external_ref,
+        )
 
 
 def _run_generation_loop(
@@ -242,16 +348,79 @@ def _run_generation_loop(
 
     for attempt in range(1, max_attempts + 1):
         try:
+            reservation = _reserve_generation_attempt(
+                metering=metering,
+                model=chosen_model,
+                attempt=attempt,
+            )
+        except InsufficientCreditsError as exc:
+            logger.info(
+                "task_spec generation blocked before provider call role=%s: %s",
+                role_slug,
+                exc,
+            )
+            return GeneratedSpecResult(
+                spec=best,
+                valid=False,
+                errors=[f"insufficient usage credits: {exc}"],
+                attempts=attempt - 1,
+                model_used=chosen_model,
+            )
+        except InsufficientRoleBudgetError as exc:
+            logger.info(
+                "task_spec generation blocked by role cap before provider "
+                "call role=%s: %s",
+                role_slug,
+                exc,
+            )
+            return GeneratedSpecResult(
+                spec=best,
+                valid=False,
+                errors=[f"insufficient role monthly budget: {exc}"],
+                attempts=attempt - 1,
+                model_used=chosen_model,
+            )
+        except Exception as exc:  # fail closed when the hard hold cannot land
+            logger.exception(
+                "task_spec reservation failed before provider call role=%s",
+                role_slug,
+            )
+            return GeneratedSpecResult(
+                spec=best,
+                valid=False,
+                errors=[f"usage reservation failed: {exc}"],
+                attempts=attempt - 1,
+                model_used=chosen_model,
+            )
+
+        attempt_metering = {
+            **metering,
+            "retry_attempt": attempt - 1,
+            "credit_reservation": reservation.as_metering_payload(),
+            "metadata": {
+                **dict(metering.get("metadata") or {}),
+                "attempt": attempt,
+                "reservation_ref": reservation.external_ref,
+            },
+        }
+        try:
             resp = client.messages.create(
                 model=chosen_model,
                 max_tokens=_MAX_TOKENS,
                 temperature=0.3,
                 system=_SYSTEM_PROMPT,
                 messages=messages,
-                metering=metering,
+                metering=attempt_metering,
             )
             raw = resp.content[0].text if resp.content else ""
         except Exception as exc:  # noqa: BLE001 — resilience boundary
+            # The real wrapper also compensates SDK errors centrally. Keeping
+            # this idempotent fallback covers injected/mocked clients and any
+            # failure before the wrapper takes ownership of the request.
+            _release_generation_attempt(
+                reservation,
+                reason=f"generation_call_failed:{type(exc).__name__}",
+            )
             logger.warning("task_spec generation call failed (attempt %d): %s", attempt, exc)
             return GeneratedSpecResult(
                 spec=best, valid=False,
@@ -301,9 +470,11 @@ def generate_task_spec(
     jd_text: str,
     api_key: str,
     organization_id: int,
+    role_id: Optional[int] = None,
     deliverable_kind_hint: Optional[str] = None,
     model: Optional[str] = None,
     max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    trace_id: Optional[str] = None,
 ) -> GeneratedSpecResult:
     """Generate a validated task spec from a role + JD.
 
@@ -316,7 +487,13 @@ def generate_task_spec(
     if not api_key:
         raise ValueError("api_key is required")
     chosen_model = (model or "").strip() or _DEFAULT_MODEL
-    client, metering = _make_client(api_key, organization_id, role_slug)
+    client, metering = _make_client(
+        api_key,
+        organization_id,
+        role_slug,
+        role_id=role_id,
+        trace_id=trace_id,
+    )
     messages: List[Dict[str, Any]] = [
         {"role": "user", "content": _user_prompt(role_name, role_slug, jd_text, deliverable_kind_hint)}
     ]
@@ -335,8 +512,10 @@ def revise_task_spec(
     jd_text: str,
     api_key: str,
     organization_id: int,
+    role_id: Optional[int] = None,
     model: Optional[str] = None,
     max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    trace_id: Optional[str] = None,
 ) -> GeneratedSpecResult:
     """Re-author a draft spec from recruiter feedback.
 
@@ -351,7 +530,13 @@ def revise_task_spec(
     if not api_key:
         raise ValueError("api_key is required")
     chosen_model = (model or "").strip() or _DEFAULT_MODEL
-    client, metering = _make_client(api_key, organization_id, role_slug)
+    client, metering = _make_client(
+        api_key,
+        organization_id,
+        role_slug,
+        role_id=role_id,
+        trace_id=trace_id,
+    )
     messages: List[Dict[str, Any]] = [
         {"role": "user", "content": _user_prompt(role_name, role_slug, jd_text, None)},
         {"role": "assistant", "content": json.dumps(prior_spec)[:8000]},

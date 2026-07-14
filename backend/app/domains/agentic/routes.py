@@ -243,6 +243,10 @@ class AgentStatusPayload(BaseModel):
     paused_at: Optional[datetime] = None
     paused_reason: Optional[str] = None
     last_run_at: Optional[datetime] = None
+    bootstrap_status: Optional[str] = None
+    bootstrap_error: Optional[str] = None
+    bootstrap_started_at: Optional[datetime] = None
+    bootstrap_completed_at: Optional[datetime] = None
     pending_decisions: int
     monthly_budget_cents: Optional[int] = None
     monthly_spent_cents: int
@@ -960,7 +964,13 @@ def re_evaluate(
 
     if application is not None and score_is_outdated(application):
         try:
-            job = enqueue_score(db, application, force=True, bypass_pre_screen=True)
+            job = enqueue_score(
+                db,
+                application,
+                force=True,
+                bypass_pre_screen=True,
+                requires_active_agent=False,
+            )
             db.commit()
         except Exception as exc:
             db.rollback()
@@ -1393,6 +1403,10 @@ def agent_status(
         paused_at=role.agent_paused_at,
         paused_reason=role.agent_paused_reason,
         last_run_at=role.agent_last_run_at,
+        bootstrap_status=getattr(role, "agent_bootstrap_status", None),
+        bootstrap_error=getattr(role, "agent_bootstrap_error", None),
+        bootstrap_started_at=getattr(role, "agent_bootstrap_started_at", None),
+        bootstrap_completed_at=getattr(role, "agent_bootstrap_completed_at", None),
         pending_decisions=pending,
         monthly_budget_cents=role.monthly_usd_budget_cents,
         monthly_spent_cents=monthly_spent,
@@ -1532,8 +1546,11 @@ def resume_all_agents(
     so a role that's genuinely over its monthly cap stays paused rather than
     resuming only to re-pause on the next cycle — the same guard the
     cap-raise auto-resume uses. Roles held back for that reason are reported
-    in ``skipped``. Resumed roles pick up on the next scheduled sweep (no
-    immediate thundering-herd of manual cycles).
+    in ``skipped``. Every successful resume immediately queues the complete
+    cohort pipeline, matching the one-role and settings resume paths. If the
+    broker rejects a wake-up, that role is compensated back to a durable
+    failed/paused state and reported as skipped; the endpoint never claims a
+    role is running when no worker accepted it.
     """
     roles = (
         db.query(Role)
@@ -1545,12 +1562,34 @@ def resume_all_agents(
         )
         .all()
     )
-    affected = 0
+    resumed_roles: list[Role] = []
     for role in roles:
-        if budget_guard.resume_if_under_budget(db, role=role):
-            affected += 1
-    if affected:
+        if budget_guard.resume_if_under_budget(db, role=role, explicit=True):
+            resumed_roles.append(role)
+    if resumed_roles:
         db.commit()
+
+    dispatch_failed = 0
+    for role in resumed_roles:
+        try:
+            from ...tasks.agent_tasks import agent_cohort_tick_role
+
+            agent_cohort_tick_role.delay(int(role.id), activation=False)
+        except Exception:
+            logger.exception(
+                "Failed to enqueue bulk-resume cycle for role_id=%s", role.id
+            )
+            budget_guard.pause_role(
+                db, role=role, reason="agent bootstrap dispatch failed"
+            )
+            role.agent_bootstrap_status = "failed"
+            role.agent_bootstrap_error = "agent bootstrap dispatch failed"
+            role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
+            db.add(role)
+            db.commit()
+            dispatch_failed += 1
+
+    affected = len(resumed_roles) - dispatch_failed
     return BulkAgentPauseResult(
         affected=affected,
         enabled_count=len(roles),
@@ -1620,7 +1659,7 @@ def resume_role_agent(
     resume-all and the cap-raise auto-resume) so a genuinely over-budget role
     stays paused rather than resuming only to re-pause next cycle. On a real
     resume we kick an immediate review cycle so the recruiter doesn't wait up
-    to 30 minutes for the next beat — mirroring the PATCH resume path.
+    to 60 minutes for the next beat — mirroring the PATCH resume path.
     """
     role = (
         db.query(Role)
@@ -1633,16 +1672,54 @@ def resume_role_agent(
     )
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
-    resumed = budget_guard.resume_if_under_budget(db, role=role)
+    # Surface a concrete production-runtime failure on the explicit endpoint.
+    # The shared budget_guard repeats this check at the mutation boundary so
+    # non-HTTP resume paths fail closed too; this preflight exists to return an
+    # actionable 503 instead of a misleading ``resumed=false`` when the budget
+    # itself is already clear.
+    if (
+        bool(role.agentic_mode_enabled)
+        and role.agent_paused_at is not None
+        and budget_guard.check_monthly_usd(db, role=role).ok
+    ):
+        from ...services.agent_activation_readiness import (
+            activation_readiness,
+            readiness_message,
+        )
+
+        readiness = activation_readiness(role)
+        if not readiness.get("ready"):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Agent runtime is not ready: "
+                    f"{readiness_message(readiness)}. The role remains paused."
+                ),
+            )
+    resumed = budget_guard.resume_if_under_budget(db, role=role, explicit=True)
     if resumed:
         db.commit()
         try:
-            from ...tasks.agent_tasks import agent_daily_review_role
+            from ...tasks.agent_tasks import agent_cohort_tick_role
 
-            agent_daily_review_role.delay(int(role.id))
+            agent_cohort_tick_role.delay(int(role.id), activation=False)
         except Exception:
             logger.exception(
                 "Failed to enqueue resume cycle for role_id=%s", role.id
+            )
+            budget_guard.pause_role(
+                db, role=role, reason="agent bootstrap dispatch failed"
+            )
+            role.agent_bootstrap_status = "failed"
+            role.agent_bootstrap_error = "agent bootstrap dispatch failed"
+            role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The agent worker queue is unavailable. The role was left "
+                    "paused; retry Resume."
+                ),
             )
     return RoleAgentPauseResult(
         role_id=role_id,

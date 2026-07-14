@@ -25,7 +25,9 @@ avoid an extra plugin dependency for the suite.
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import dataclass, field
+from types import ModuleType
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -127,7 +129,25 @@ def patched_sdk():
     # The service does ``from claude_agent_sdk import ...`` inside ``run()``,
     # so we patch the real module's attributes. The real claude_agent_sdk
     # is installed in this venv (see ``pip show``).
-    import claude_agent_sdk
+    try:
+        import claude_agent_sdk
+    except ModuleNotFoundError:
+        # The SDK is a production/runtime dependency, but unit-only CI images
+        # may intentionally omit it.  `run()` imports these names lazily, so a
+        # minimal module shell is enough for the fully-faked stream below.
+        claude_agent_sdk = ModuleType("claude_agent_sdk")
+        for symbol in (
+            "query",
+            "AssistantMessage",
+            "ResultMessage",
+            "TextBlock",
+            "ToolUseBlock",
+            "ToolResultBlock",
+            "UserMessage",
+            "ClaudeAgentOptions",
+        ):
+            setattr(claude_agent_sdk, symbol, object())
+        sys.modules["claude_agent_sdk"] = claude_agent_sdk
 
     with patch.object(claude_agent_sdk, "query", fake_query), \
          patch.object(claude_agent_sdk, "AssistantMessage", _FakeAssistantMessage), \
@@ -149,12 +169,15 @@ def patched_meter(monkeypatch):
     """Replace ``write_aggregated_usage_event`` with a MagicMock that
     records every call. Returned so tests can assert on call args."""
     mock = MagicMock()
+    evidence = MagicMock()
     from app.components.integrations.claude_agent import service as svc_mod
     monkeypatch.setattr(svc_mod, "write_aggregated_usage_event", mock)
+    monkeypatch.setattr(svc_mod, "write_incomplete_call_evidence", evidence)
+    mock.incomplete_evidence = evidence
     return mock
 
 
-def _build_service(_executor=None):
+def _build_service(_executor=None, *, role_id=None):
     """Construct an ``AgentSDKChatService`` with a no-op MCP factory."""
     from app.components.integrations.claude_agent.service import AgentSDKChatService
 
@@ -164,6 +187,7 @@ def _build_service(_executor=None):
         api_key="sk-test",
         organization_id=42,
         assessment_id=7,
+        role_id=role_id,
         executor=executor,
         max_turns=8,
         _mcp_server_factory=factory,
@@ -437,9 +461,14 @@ def test_max_turns_hit_returns_partial_text_as_success(patched_sdk, patched_mete
     assert "tool budget" in turn.content.lower(), "should include the soft-recovery trailer"
     assert turn.stop_reason == "max_turns_soft"
     assert len(turn.tool_calls_made) == 1
-    # No ResultMessage was emitted, so no meter write (Admin-API
-    # reconciliation catches the spend).
+    # No ResultMessage was emitted, so no billable UsageEvent is invented;
+    # the reconciliation ledger still receives an incomplete-call marker.
     patched_meter.assert_not_called()
+    patched_meter.incomplete_evidence.assert_called_once()
+    assert (
+        patched_meter.incomplete_evidence.call_args.kwargs["status"]
+        == "sdk_incomplete_recovered"
+    )
 
 
 def test_hard_sdk_crash_with_partial_content_returns_partial_failure(patched_sdk, patched_meter):
@@ -553,6 +582,11 @@ def test_no_result_message_returns_failure_and_no_meter(patched_sdk, patched_met
     assert turn.success is False
     assert turn.stop_reason == "no_result_message"
     patched_meter.assert_not_called()
+    patched_meter.incomplete_evidence.assert_called_once()
+    assert (
+        patched_meter.incomplete_evidence.call_args.kwargs["status"]
+        == "no_result_message"
+    )
 
 
 # ---- 5. Budget pre-empt ------------------------------------------------------
@@ -575,6 +609,145 @@ def test_budget_pre_empt_skips_sdk_and_meter(patched_sdk, patched_meter):
     assert turn.success is False
     assert "budget" in turn.content.lower()
     assert patched_sdk["query_calls"] == 0
+    patched_meter.assert_not_called()
+
+
+def test_role_budget_admission_skips_sdk_and_meter(
+    patched_sdk, patched_meter, monkeypatch,
+):
+    """A provider-boundary role-cap refusal must never spawn the SDK."""
+    from app.services.usage_credit_reservations import InsufficientRoleBudgetError
+
+    svc, _factory = _build_service(role_id=17)
+    monkeypatch.setattr(
+        svc,
+        "_reserve_paid_sdk_call",
+        MagicMock(
+            side_effect=InsufficientRoleBudgetError(
+                role_id=17,
+                required=1_500_000,
+                available=20_000,
+            )
+        ),
+    )
+
+    turn = asyncio.run(svc.run(
+        messages=[{"role": "user", "content": "hi"}],
+        system="task",
+        budget_remaining_usd=0.5,
+    ))
+
+    assert turn.success is False
+    assert turn.stop_reason == "role_budget_exhausted"
+    assert patched_sdk["query_calls"] == 0
+    patched_meter.assert_not_called()
+
+
+def test_sdk_usage_settles_provider_boundary_reservation(
+    patched_sdk, patched_meter, monkeypatch,
+):
+    from app.services.usage_credit_reservations import CreditReservation
+
+    patched_sdk["messages_to_yield"] = [
+        _FakeResultMessage(
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+            total_cost_usd=0.01,
+        ),
+    ]
+    svc, _factory = _build_service(role_id=17)
+    reservation = CreditReservation(
+        organization_id=42,
+        feature="assessment",
+        amount=1_500_000,
+        external_ref="usage-hold:sdk-test",
+        live=True,
+    )
+    monkeypatch.setattr(
+        svc,
+        "_reserve_paid_sdk_call",
+        MagicMock(return_value=reservation),
+    )
+    monkeypatch.setattr(
+        "app.components.integrations.claude_agent.service.mark_provider_attempt_started",
+        lambda *args, **kwargs: True,
+    )
+
+    turn = asyncio.run(svc.run(
+        messages=[{"role": "user", "content": "hi"}],
+        system="task",
+        budget_remaining_usd=0.5,
+    ))
+
+    assert turn.success is True
+    assert patched_meter.call_args.kwargs["credit_reservation"] == (
+        reservation.as_metering_payload()
+    )
+
+
+def test_no_result_sdk_call_retains_usage_unknown_provider_hold(
+    db, patched_sdk, patched_meter, monkeypatch,
+):
+    import uuid
+
+    from app.components.integrations.claude_agent.service import (
+        AgentSDKChatService,
+    )
+    from app.models.billing_credit_ledger import BillingCreditLedger
+    from app.models.organization import Organization
+    from app.models.role import Role
+    from app.platform.config import settings
+    from app.services.provider_usage_admission import (
+        PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
+    )
+
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    org = Organization(
+        name="SDK unknown usage",
+        slug=f"sdk-unknown-{uuid.uuid4().hex}",
+        credits_balance=1_000_000,
+    )
+    db.add(org)
+    db.flush()
+    role = Role(organization_id=int(org.id), name="SDK unknown role")
+    db.add(role)
+    db.commit()
+    patched_sdk["messages_to_yield"] = []
+    svc = AgentSDKChatService(
+        api_key="sk-test",
+        organization_id=int(org.id),
+        assessment_id=7001,
+        role_id=int(role.id),
+        executor=MagicMock(),
+        trace_id="assessment:7001:agent",
+        _mcp_server_factory=lambda _executor: {"type": "fake_mcp"},
+    )
+
+    turn = asyncio.run(
+        svc.run(
+            messages=[{"role": "user", "content": "hello"}],
+            system="task",
+            budget_remaining_usd=0.2,
+            max_budget_usd=0.1,
+        )
+    )
+
+    assert turn.stop_reason == "no_result_message"
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.reason == "reservation:assessment")
+        .one()
+    )
+    assert (
+        hold.entry_metadata["state"]
+        == PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE
+    )
+    assert db.get(Organization, int(org.id)).credits_balance == 700_000
     patched_meter.assert_not_called()
 
 
@@ -708,6 +881,11 @@ def test_write_aggregated_usage_event_creates_row_with_source_tag(monkeypatch):
         def commit(self):
             self.committed = True
 
+        def flush(self):
+            # ``record_event`` flushes so the linked call-log FK can be set.
+            if added_rows and getattr(added_rows[0], "id", None) is None:
+                added_rows[0].id = 123
+
         def refresh(self, row):
             row.id = 123
 
@@ -732,8 +910,12 @@ def test_write_aggregated_usage_event_creates_row_with_source_tag(monkeypatch):
         num_turns=3,
     )
 
-    assert len(added_rows) == 1
-    row = added_rows[0]
+    from app.models.claude_call_log import ClaudeCallLog
+    from app.models.usage_event import UsageEvent
+
+    assert len(added_rows) == 2
+    row = next(item for item in added_rows if isinstance(item, UsageEvent))
+    call_log = next(item for item in added_rows if isinstance(item, ClaudeCallLog))
     assert row.organization_id == 11
     # entity_id uses the namespaced ``assessment:{id}`` format (2026-06-01).
     assert row.entity_id == "assessment:22"
@@ -750,6 +932,8 @@ def test_write_aggregated_usage_event_creates_row_with_source_tag(monkeypatch):
     assert row.event_metadata["sub_feature"] == "agent_sdk_chat"
     assert row.event_metadata["assessment_id"] == 22
     assert row.event_metadata["num_turns"] == 3
+    assert call_log.usage_event_id == row.id
+    assert call_log.cost_usd_micro == row.cost_usd_micro
 
 
 def test_write_aggregated_usage_event_falls_back_to_estimate_when_sdk_cost_zero(monkeypatch):
@@ -772,6 +956,10 @@ def test_write_aggregated_usage_event_falls_back_to_estimate_when_sdk_cost_zero(
         def commit(self):
             pass
 
+        def flush(self):
+            if added_rows and getattr(added_rows[0], "id", None) is None:
+                added_rows[0].id = 456
+
         def refresh(self, row):
             pass
 
@@ -793,12 +981,206 @@ def test_write_aggregated_usage_event_falls_back_to_estimate_when_sdk_cost_zero(
         num_turns=1,
     )
 
-    assert len(added_rows) == 1
-    row = added_rows[0]
+    from app.models.usage_event import UsageEvent
+
+    assert len(added_rows) == 2
+    row = next(item for item in added_rows if isinstance(item, UsageEvent))
     # cost_usd_micro must be > 0 (we fell back to the local estimate).
     assert row.cost_usd_micro > 0
     # The fallback estimate is recorded in metadata for audit.
     assert row.event_metadata["estimated_cost_usd_micro"] > 0
+
+
+def test_aggregated_writer_live_debits_atomically_and_carries_role(db, monkeypatch):
+    """SDK totals use the canonical live UsageEvent + ledger debit path."""
+    import uuid
+
+    from app.components.integrations.claude_agent.usage_reconciler import (
+        write_aggregated_usage_event,
+    )
+    from app.models.billing_credit_ledger import BillingCreditLedger
+    from app.models.organization import Organization
+    from app.models.role import Role
+    from app.models.usage_event import UsageEvent
+    from app.platform.config import settings
+
+    org = Organization(
+        name="SDK live meter",
+        slug=f"sdk-live-{uuid.uuid4().hex}",
+        credits_balance=1_000_000,
+    )
+    db.add(org)
+    db.flush()
+    role = Role(organization_id=org.id, name="Metered role")
+    db.add(role)
+    db.commit()
+    org_id, role_id = int(org.id), int(role.id)
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+
+    event_id = write_aggregated_usage_event(
+        organization_id=org_id,
+        assessment_id=991,
+        role_id=role_id,
+        trace_id="assessment:991:chat:req-1:agent",
+        feature="assessment",
+        sub_feature="agent_sdk_chat",
+        model="claude-haiku-4-5-20251001",
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        total_cost_usd=0.01,
+        num_turns=1,
+    )
+
+    db.expire_all()
+    event = db.query(UsageEvent).filter(UsageEvent.id == event_id).one()
+    ledger = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == f"usage:{event.id}")
+        .one()
+    )
+    db.refresh(org)
+    assert event.role_id == role_id
+    assert event.cost_usd_micro == 10_000
+    assert event.credits_charged == 30_000
+    assert event.event_metadata["trace_id"] == "assessment:991:chat:req-1:agent"
+    assert ledger.delta == -30_000
+    assert org.credits_balance == 970_000
+
+
+def test_aggregated_writer_meter_failure_keeps_exact_sdk_cost_receipt(
+    db, monkeypatch,
+):
+    import uuid
+
+    from app.components.integrations.claude_agent.usage_reconciler import (
+        write_aggregated_usage_event,
+    )
+    from app.models.billing_credit_ledger import BillingCreditLedger
+    from app.models.organization import Organization
+    from app.models.role import Role
+    from app.platform.config import settings
+    from app.services.pricing_service import Feature
+    from app.services.provider_usage_admission import (
+        PROVIDER_SUCCEEDED_PENDING_STATE,
+        mark_provider_attempt_started,
+    )
+    from app.services.usage_credit_reservations import reserve_credits
+
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    org = Organization(
+        name="SDK deferred meter",
+        slug=f"sdk-deferred-{uuid.uuid4().hex}",
+        credits_balance=1_000_000,
+    )
+    db.add(org)
+    db.flush()
+    role = Role(organization_id=int(org.id), name="SDK deferred role")
+    db.add(role)
+    db.commit()
+    reservation = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.ASSESSMENT,
+        external_ref=f"usage-hold:sdk-deferred:{uuid.uuid4().hex}",
+        amount=300_000,
+        role_id=int(role.id),
+        enforce_role_budget=True,
+    )
+    db.commit()
+    assert mark_provider_attempt_started(
+        reservation,
+        provider="claude_agent_sdk",
+    )
+
+    def _metering_down(*args, **kwargs):
+        raise RuntimeError("canonical usage store unavailable")
+
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.record_event",
+        _metering_down,
+    )
+    event_id = write_aggregated_usage_event(
+        organization_id=int(org.id),
+        assessment_id=7002,
+        role_id=int(role.id),
+        trace_id="assessment:7002:agent",
+        feature="assessment",
+        sub_feature="agent_sdk_chat",
+        model="claude-haiku-4-5-20251001",
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        total_cost_usd=0.01,
+        num_turns=1,
+        credit_reservation=reservation.as_metering_payload(),
+    )
+
+    assert event_id is None
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+        .one()
+    )
+    receipt = hold.entry_metadata["deferred_usage_event"]
+    assert hold.entry_metadata["state"] == PROVIDER_SUCCEEDED_PENDING_STATE
+    assert receipt["provider_cost_usd_micro"] == 10_000
+    assert receipt["metadata"]["source"] == "claude_agent_sdk_aggregated"
+    assert receipt["metadata"]["trace_id"] == "assessment:7002:agent"
+    assert db.get(Organization, int(org.id)).credits_balance == 700_000
+
+
+def test_incomplete_sdk_call_writes_zero_cost_evidence_only(db):
+    """Unknown partial usage is visible without a fabricated usage debit."""
+    import uuid
+
+    from app.components.integrations.claude_agent.usage_reconciler import (
+        write_incomplete_call_evidence,
+    )
+    from app.models.claude_call_log import ClaudeCallLog
+    from app.models.organization import Organization
+    from app.models.usage_event import UsageEvent
+
+    org = Organization(
+        name="SDK incomplete meter",
+        slug=f"sdk-incomplete-{uuid.uuid4().hex}",
+        credits_balance=1_000_000,
+    )
+    db.add(org)
+    db.commit()
+    trace_id = "assessment:992:chat:req-2:agent"
+
+    assert write_incomplete_call_evidence(
+        organization_id=int(org.id),
+        assessment_id=992,
+        feature="assessment",
+        sub_feature="agent_sdk_chat",
+        model="claude-haiku-4-5-20251001",
+        status="no_result_message",
+        error_reason="stream closed before totals",
+        trace_id=trace_id,
+        error_class="validation",
+    )
+
+    db.expire_all()
+    row = db.query(ClaudeCallLog).filter(ClaudeCallLog.trace_id == trace_id).one()
+    assert row.status == "no_result_message"
+    assert row.input_tokens == 0
+    assert row.output_tokens == 0
+    assert row.cost_usd_micro == 0
+    assert row.usage_event_id is None
+    assert (
+        db.query(UsageEvent)
+        .filter(
+            UsageEvent.organization_id == org.id,
+            UsageEvent.entity_id == "assessment:992",
+        )
+        .count()
+        == 0
+    )
 
 
 # ---- 9. Default model resolution --------------------------------------------

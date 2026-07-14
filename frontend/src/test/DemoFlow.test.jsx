@@ -125,7 +125,7 @@ describe('Demo flow redesign', () => {
 
     // Variant G's 5-step funnel replaces the old 3-step + decision-feed band.
     expect(screen.getByText(/your whole funnel\./i)).toBeInTheDocument();
-    ['Source', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
+    ['Intake', 'Screen', 'Assess', 'Decide', 'Hand back'].forEach((step) => {
       expect(screen.getByText(step)).toBeInTheDocument();
     });
     // No leftover decision-feed / 3-step copy.

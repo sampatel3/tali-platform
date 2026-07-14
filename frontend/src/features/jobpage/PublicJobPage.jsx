@@ -127,6 +127,7 @@ export function PublicJobPage() {
             token={token}
             questions={job.screening_questions || []}
             organizationName={job.organization_name}
+            resumeRequired={Boolean(job.resume_required)}
           />
         ) : applyHref ? (
           <a className="pjp-apply-btn" href={applyHref} target="_blank" rel="noreferrer noopener">
@@ -134,7 +135,7 @@ export function PublicJobPage() {
           </a>
         ) : (
           <p className="pjp-muted">
-            Applications for this role are handled directly by {job.organization_name || 'the employer'}.
+            Applications are not open for this role right now.
           </p>
         )}
       </footer>

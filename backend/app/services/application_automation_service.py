@@ -15,6 +15,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from .document_service import sanitize_text_for_storage
+from .native_pre_screen_automation import try_native_careers_reject
 from .pre_screen_decision_emitter import queue_pre_screen_reject
 from .pre_screening_service import (
     evaluate_auto_reject_decision,
@@ -26,18 +27,6 @@ from .workable_actions_service import (
     workable_job_state,
     workable_job_syncable,
 )
-
-
-def _candidate_label(app: CandidateApplication) -> str:
-    candidate = getattr(app, "candidate", None)
-    name = sanitize_text_for_storage(str(getattr(candidate, "full_name", None) or "").strip())
-    if name:
-        return name
-    email = sanitize_text_for_storage(str(getattr(candidate, "email", None) or "").strip())
-    if email:
-        return email
-    return "Candidate"
-
 
 def reject_for_cv_gap(
     *,
@@ -291,6 +280,15 @@ def run_auto_reject_if_needed(
     # don't attempt the Workable round-trip — surface a Decision Hub card
     # instead (or skip cleanly if no card can be created). (Codex #229)
     if role is not None and not getattr(app, "workable_candidate_id", None):
+        native_outcome = try_native_careers_reject(
+            db,
+            app=app,
+            decision=decision,
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
+        if native_outcome is not None:
+            return native_outcome
         # Unlinked candidate: the disqualify-by-id below would be a guaranteed
         # miss. Surface a card instead (or skip cleanly if none can be made).
         return _divert_pre_screen_reject_to_card(

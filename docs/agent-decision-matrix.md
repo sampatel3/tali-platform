@@ -1,81 +1,139 @@
-# Agent decision matrix — what runs, what it costs, who approves
+# Agent decision matrix — autonomy, approvals, and spend
 
-A reference for the three role-level toggles and how they interact with the
-pipeline stages. Source of truth is the code; key files are cited inline.
+This is the operator-facing contract for a role after a requisition is
+published. The normal flow is: create/publish the requisition, accept or edit
+the monthly role cap, and click **Turn on** once. That persisted command owns
+assessment generation, automated repair and validation, exact-task approval,
+production readiness, activation, and the first cohort pass. Celery Beat owns
+recovery after the browser closes and the ongoing proactive sweeps.
 
-## The three toggles
+## Controls and activation defaults
 
-| Toggle | Field | Default | What it controls |
+| Control | Stored field | Column default | Effective behavior |
 | --- | --- | --- | --- |
-| **Agent** | `role.agentic_mode_enabled` (+ `agent_paused_at`) | off | Whether the role is under autonomous management — the 30-min cohort tick that auto-enqueues scoring, runs the reasoning cycle, and keeps the pre-screen reject queue aligned. |
-| **Auto-reject** | `role.auto_reject` | off | Whether a below-threshold reject **executes immediately** or waits for you in the Decision Hub. |
-| **Auto-promote** | `role.auto_promote` | off | Whether *send assessment* / *advance to interview* **execute immediately** or wait for you in the Decision Hub. |
+| **Agent** | `role.agentic_mode_enabled` | off | Turns autonomous role management on and materializes the visible effective policy. It never changes a saved role-specific choice. |
+| **Send assessment** | `role.auto_send_assessment` | workspace default (platform: on) | Sends an on-policy assessment invite while enabled, unpaused, funded, and within contact safeguards. |
+| **Resend assessment** | `role.auto_resend_assessment` | workspace default (platform: on) | Resends an eligible invite while enabled, unpaused, funded, and within resend safeguards. |
+| **Advance to interview** | `role.auto_advance` | workspace default (platform: on) | Advances an on-policy candidate locally and, when configured, into the organization's Workable interview stage. |
+| **Legacy Auto-promote aggregate** | `role.auto_promote` | derived | Compatibility value only; the three action-level controls above are authoritative. |
+| **Auto-reject** | `role.auto_reject` | off | Allows the separate **deterministic pre-screen** path to reject automatically when its provider/policy safeguards pass. It does not bypass human confirmation for LLM, full-score, or assessment reject recommendations. |
+| **Auto-reject pre-screen only** | `role.auto_reject_pre_screen` | off | Narrow explicit opt-in to the same deterministic pre-screen auto-reject path. Full-score and assessment rejection still require confirmation. |
+| **Auto-skip assessment** | `role.auto_skip_assessment` | off | Bypasses assessment and translates a positive send verdict into advance-to-interview. With auto-promote on, an on-policy advance may execute automatically. |
 
-`agent_paused_at` is a third agent state: **auto-paused** (agent is *on* but the monthly $ cap was hit). For everything automated it behaves like **off** — the cohort tick skips paused roles (`agent_tasks.py:241`, `:292`).
+The database defaults describe an inactive role. A new role copies workspace
+defaults once; later workspace edits do not silently alter it. An untouched
+workspace grants only reversible positive automation and keeps deterministic
+rejection and assessment skipping off. Turning the role on persists that exact
+effective policy.
 
-## Pipeline stages — cost & determinism
+## Lifecycle states
 
-| Stage | What it does | LLM? (model) | Costs money? | Deterministic? | Blocked by budget cap? |
-| --- | --- | --- | --- | --- | --- |
-| **Fraud / JD-copy gate** | plagiarism + verbatim-JD detection inside pre-screen | No | **Free** | **Yes** | No |
-| **Pre-screen score** | cheap fit filter, stage 1 of scoring (`Feature.PRESCREEN`, Haiku) | Yes (Haiku) | **Yes — low** | No | **Yes** (via `enqueue_score` → `can_spend_on_role`, `cv_score_orchestrator.py:302`) |
-| **Pre-screen reject verdict** | "below threshold → reject" decision (`evaluate_auto_reject_decision`) | No | **Free** | **Yes** | No |
-| **CV-match (v3)** | full role-fit score (`Feature.SCORE`) | Yes | **Yes — high** | No | **Yes** |
-| **Assessment generate + grade** | task build + grading (`Feature.ASSESSMENT`) | Yes | **Yes** | No | Yes |
-| **Agent reasoning cycle** | survey cohort, plan, call tools (`Feature.AGENT_AUTONOMOUS`, Sonnet) | Yes | **Yes** | No | **Yes** — pauses the role at the cap |
-| **Decision Hub card / Workable disqualify / advance** | queue or execute a verdict | No | **Free** | **Yes** | No |
-
-**Takeaway:** every *scoring/reasoning* stage costs money and is budget-gated. Every *decision/execution* stage (reject card, disqualify, advance) is deterministic and free — it should never be blocked by the budget cap. (Today the reject sweep *is* wrongly coupled to the cap — that's the bug fixed alongside this doc.)
-
-## What runs automatically, by agent state
-
-| Behavior | Agent **ON** | Agent **PAUSED** (budget) | Agent **OFF** |
-| --- | --- | --- | --- |
-| Auto-enqueue scoring (pre-screen + CV-match) | Yes — 30-min tick, budget-gated | No | No |
-| Agent reasoning cycle (LLM) | Yes | No | No |
-| Pre-screen reject queue maintained | Yes (cohort tick) | No¹ | No (queue is agent-gated) |
-| Manual **"Process candidates"** | Yes | Yes | Yes |
-| Reject at pre-screen short-circuit (score-time) | Yes¹ | only if scoring runs² | No |
-
-¹ Fixed by this PR — the pre-screen reject now fires at score-time and the deterministic reject sweep runs even on budget-paused roles.
-² When paused/over-budget, `enqueue_score` is blocked, so no new candidate reaches the pre-screen stage at all. The *backlog* already pre-screened is cleared by the sweep.
-
-When the agent is **off**, nothing is automated: candidates sit unscored until you click **Process candidates**, and no pre-screen reject cards are created (`queue_pre_screen_reject` and `reconcile_*` both no-op for non-agentic roles).
-
-## Below-threshold candidate — what happens to the reject
-
-The reject only applies to candidates **without** a full CV-match score yet — once `cv_match_score` is set, the verdict defers to the agent's CV-match flow (`auto_reject.py:87`).
-
-| Agent | Auto-reject | Outcome for a below-threshold (pre-screen) candidate |
+| State | Meaning | What happens next |
 | --- | --- | --- |
-| ON / paused | **ON** | Reject **executes**: Workable disqualify when linked + connected, else a Decision Hub card (`run_auto_reject_if_needed`). Free. No human approval. |
-| ON / paused | **OFF** | A **Decision Hub `skip_assessment_reject` card** is queued for your one-click approval (`queue_pre_screen_reject`). Free. |
-| OFF | either | **Nothing** — the role isn't agent-managed, so no card and no disqualify (unless org-level legacy Workable auto-disqualify is configured). |
+| **Off** | `agentic_mode_enabled=false` | No agent cohort cycle runs. Deterministic pre-screen review cards may still be recovered by the free catch-up sweep. |
+| **Turn-on queued** | disabled with `activation_intent.status=pending/retry_wait` | The durable command continues generation, validation, readiness, and activation automatically. The browser is not part of the workflow. |
+| **Turn-on needs input** | disabled with `activation_intent.status=blocked` | Automated task repair was exhausted or the persisted job input is structurally unusable. Correct the reported input (or explicitly skip assessment) and click Turn on again. |
+| **Starting** | enabled, `agent_bootstrap_status=starting` | The activation/resume handoff has been accepted and the first complete cohort pass is queued. |
+| **On / ready** | enabled, unpaused, bootstrap ready | New application events can wake work immediately; the hourly cohort sweep is the recovery/proactive backstop. |
+| **Paused** | enabled, `agent_paused_at` set | Paid scoring/reasoning and automatic positive actions stop. Existing Decision Hub cards remain actionable. |
+| **Failed startup** | bootstrap failed and role auto-paused | The broker/worker or first pass exhausted its immediate retry budget. The system recovery sweep resumes it automatically after the reported dependency is healthy. |
 
-## Passing candidate — send assessment / advance
+A pause reason is material:
 
-These are driven by the agent reasoning cycle, so they only happen when the **agent is ON** (and scored candidates exist).
+- **Monthly cap reached:** raise the cap or wait for a new month; system recovery
+  resumes automatically after the full readiness check passes.
+- **Usage credits exhausted:** top up credits; system recovery resumes
+  automatically after the full readiness check passes.
+- **Bootstrap/runtime failure:** restore worker/runtime health; system recovery
+  retries without a recruiter click.
+- **Paused by recruiter:** never clears automatically; the recruiter must
+  explicitly resume it.
 
-| Auto-promote | `send_assessment` / `advance_to_interview` |
-| --- | --- |
-| **ON** | Executes immediately as a system action (`tool_registry.py:999`, `:1118`). |
-| **OFF** | Queues a Decision Hub card (`send_assessment` / `advance` / `resend_assessment_invite`) for your approval. |
+## Decision and approval boundary
 
-Auto-reject and auto-promote are independent: auto-reject governs the *bottom* of the funnel (culling), auto-promote the *top* (advancing). With both **off**, every candidate-affecting action lands in the Decision Hub; with both **on**, the agent runs the funnel end-to-end and only escalates genuine ambiguity.
+| Candidate state / recommendation | Auto-promote on | Auto-reject on | Human confirmation? |
+| --- | --- | --- | --- |
+| Deterministic pre-screen failure, no full score | n/a | May disqualify automatically when the explicit role toggle and provider/policy safeguards pass; otherwise queues a card | Only when automatic pre-screen execution is not eligible or not enabled |
+| Send assessment / resend invite | Executes when its action-level toggle is on and the role is enabled, unpaused, on-policy and within budget/credit/contact guards | n/a | When its toggle is off or a guard holds |
+| Advance to interview | Executes when `auto_advance` is on and the role is enabled, unpaused and on-policy | n/a | When the toggle is off, role is paused/off, policy is ambiguous/off-policy, or the candidate is already post-handover |
+| LLM-authored reject recommendation | n/a | Toggle records reject intent but cannot bypass the reject rail | **Always** |
+| Deterministic full-score reject recommendation | n/a | Cannot bypass the reject rail | **Always** |
+| Assessment-stage reject recommendation | n/a | Cannot bypass the reject rail | **Always** |
+| Low-confidence / ambiguous / policy escalation | Never auto-executes | Never auto-executes | **Always** |
 
-## The eight permutations at a glance
+“Advance to interview” above is always the Taali pipeline transition. For a
+Workable-linked candidate, configure the organization-level
+`interview_stage_name` once; autonomous advances then write to that external
+stage. Without a configured target, the local transition succeeds and the
+external move remains a safe human handoff. Invite delivery and its configured
+assessment-stage/note handoff remain automatic.
 
-`Agent → Auto-reject → Auto-promote`
+Reject and `skip_assessment_reject` are irreversible candidate-facing outcomes:
+they can disqualify in the ATS and trigger rejection communications. The agent
+may create the recommendation and evidence, but the side effect remains pending
+until a recruiter confirms it. The only auto-reject exception is the separate,
+deterministic pre-screen gate under its explicit role toggle.
 
-| # | Agent | A-reject | A-promote | Net behavior |
-| --- | --- | --- | --- | --- |
-| 1 | off | – | – | Manual only. Score via "Process candidates"; every decision is yours. No automation. |
-| 2 | on | off | off | Agent scores + recommends; **every** reject/send/advance is a Decision Hub card. (Max oversight.) |
-| 3 | on | **on** | off | Below-threshold auto-culled; sends/advances still need your approval. |
-| 4 | on | off | **on** | Sends/advances auto-fire; rejects wait for you. |
-| 5 | on | **on** | **on** | Fully autonomous funnel; only ambiguous cases escalate. |
-| 6 | paused | (as set) | (as set) | Same intent as its ON row, but **no scoring/LLM** runs until resumed; the free reject sweep still culls the already-screened backlog. |
-| 7 | off | on | on | Toggles are stored but **inert** — nothing runs without the agent. |
-| 8 | on | on/off | on/off | (covered by 2–5) |
+## What runs and what is metered
 
-> Money is only ever spent in rows where the **agent is ON and not paused** (scoring + reasoning). Rejecting, carding, disqualifying, and advancing are always free and deterministic.
+| Work | Cadence / trigger | Metered? | Spend/credit behavior |
+| --- | --- | --- | --- |
+| Complete agent cohort pass | Immediately on activation/resume; hourly Beat sweep as backstop | Yes when it calls Anthropic | Role monthly cap and organization credit ledger both apply |
+| CV parse, pre-screen, full scoring | Application/event driven plus cohort recovery | Yes, except deterministic fraud checks/cache hits | Reservations fail closed when funded credits are unavailable; an enabled role is paused on depletion |
+| Assessment authoring, repair, and grading | Turn on / funnel driven | Yes | A fresh hard hold is admitted before each Anthropic call; actual usage settles the hold and failures release it |
+| Candidate graph projection | Durable event outboxes | Yes when Anthropic/Voyage is called | Role-attributed provider calls use hard holds and retry without dropping the episode |
+| Deterministic decision policy | When a score lands and during cohort reconciliation | No LLM | Free; produces/dispatches the policy verdict under the autonomy rules above |
+| Pre-screen reject catch-up | Every 30 minutes | No LLM | Free; recovers already-screened below-threshold candidates, including on off/paused roles |
+| Decision execution | Event driven | No LLM itself | Free, but candidate-facing guards and the human-confirm reject rail still apply |
+
+Every automatic Anthropic or Voyage call with role context is admitted against
+both organization credits and the role cap before the provider is called, then
+recorded in `usage_events` and settled to actual usage. `claude_call_logs`,
+trace metadata, and stale-hold recovery provide the reconciliation/backstop
+rails. The role's monthly cap covers parsing, pre-screening, scoring,
+assessments, graph projection, and autonomous reasoning—not only the top-level
+agent cycle. E2B and Resend delivery costs are exposed as operational estimates
+and durable execution/delivery state; they are not debited as AI usage credits.
+GitHub repository work is readiness-verified and state-tracked, but has no
+per-request price ledger in this codebase.
+
+## Production Turn-on readiness
+
+Production activation fails closed unless all dependencies needed by that
+role's actual funnel are ready:
+
+- fresh Beat-to-worker canaries for both `celery` and `scoring` queues;
+- `USAGE_METER_LIVE=true` on the API and workers;
+- a valid shared `ANTHROPIC_API_KEY` and enough credits for one conservative
+  funnel pass;
+- native public apply enabled for a requisition without an ATS job;
+- one unambiguous active task, or one generated draft whose battle test has
+  passed and can be activated atomically by Turn on—or an explicit
+  `auto_skip_assessment=true` choice;
+- when assessment is used: E2B, Resend, and a real GitHub token with mock mode
+  disabled on the relevant worker.
+
+If any check fails, the durable Turn-on command records the actionable reason
+and leaves the role off. Transient readiness and broker failures retry from the
+server-side command; structurally unusable input or exhausted automated repair
+becomes an explicit needs-input state instead of waiting forever.
+
+## Manual controls
+
+`Process candidates` and `Sync from Workable` are recovery controls. They are
+not required in the healthy requisition → Turn on path. Necessary human steps
+are intentionally limited to the Turn-on budget authority; irreversible reject
+confirmation; ambiguous/off-policy exceptions; interview, offer, and hire
+judgement; selecting the external Workable interview stage when applicable;
+correcting genuinely unusable requisition input or exhausted task repair; and
+restoring external funding/credentials. After a funding or runtime repair, the
+system resumes itself. The Turn-on click itself authorizes the single
+battle-tested generated assessment; it is not a separate manual step.
+
+Applicant arrival is an external event, not an operator workflow step: Turn on
+lists the native requisition on the organization's careers board and the agent
+continuously processes native or Workable applications as they arrive. It does
+not scrape third-party talent networks or send unsolicited outreach without a
+lawful, supplied audience and the campaign-level human approval already
+required by the outreach subsystem. Interviews, offers, and hiring decisions
+likewise remain human judgement rather than simulated automation.

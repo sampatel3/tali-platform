@@ -13,11 +13,12 @@ The core platform is implemented and deployable end-to-end, and active execution
 - **Stack:** FastAPI, PostgreSQL (SQLAlchemy 2 + Alembic), Redis, Celery.
 - **Auth:** Register, login, JWT (`/api/v1/auth/*`), forgot/reset password.
 - **Assessments:** Create (candidate inline), list (filters, pagination, `candidate_name` / `candidate_email` / `task_name`), get by id, start by token, execute code, Claude chat, submit. E2B sandbox create/reuse, timeline and results persisted.
-- **Repository context model:** when a task is created/updated, TAALI recreates a canonical local `main` Git repo snapshot from `task.repo_structure`; assessment sessions still do **not** create candidate-specific branches.
+- **Repository context model:** generated tasks are provisioned and verified in GitHub before activation. Each assessment uses a candidate-specific branch; submission checkpoints the exact branch/HEAD before grading, and retry workers recover that verified artifact in a fresh sandbox if the original E2B session has ended.
 - **Tasks:** List, get, create, PATCH, DELETE; template vs org tasks.
 - **Organizations:** Get, update; Workable OAuth: `GET authorize-url`, `POST workable/connect`.
 - **Billing:** `GET usage`, `GET costs` (per-assessment + per-tenant infrastructure cost estimates), `POST checkout-session` (Stripe Checkout, £25).
 - **Other:** Analytics endpoint, rate limiting (auth + assessment), invite + results emails via Celery. Health: `GET /health`.
+- **Autonomous roles:** create/publish a requisition, accept or edit its monthly cap, and click **Turn on**. That click persists a durable server-side command; the browser may close immediately. The platform then generates and repairs the assessment, runs its sandbox battle test, provisions/verifies its repository, approves that exact passing draft, checks production readiness, opens the native job, starts the first complete cohort pass, and continuously processes incoming native/Workable applications. Publish itself is spend-free, and there is no separate Tasks-page setup or second approval click. Transient failures retry automatically; genuinely unusable job input or exhausted automated repair is surfaced as a human-input state. Irreversible reject recommendations remain human-confirmed.
 
 ### Frontend (Vercel)
 
@@ -32,7 +33,10 @@ The core platform is implemented and deployable end-to-end, and active execution
 
 ### Deployment
 
-- **Backend:** Railway. Start runs `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`. PostgreSQL and Redis as Railway add-ons. If the project has multiple services, run `railway up --service <your-backend-service-name>` from `backend/` (service name is in the Railway dashboard).
+- **Backend:** Railway. The supported web bootstrap validates production config,
+  waits for PostgreSQL, applies `alembic upgrade head`, then starts uvicorn.
+  PostgreSQL and Redis are Railway add-ons; repository deployment wrappers select
+  and validate web plus the general and scoring workers.
 - **Frontend:** Vercel; build from `frontend/` with `npm run build`; `VITE_API_URL` points to backend.
 - **Docs:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Vercel + Railway only), [docs/ENV_SETUP.md](docs/ENV_SETUP.md).
 
@@ -78,11 +82,11 @@ taali-platform/
 
 ## Quick start (deployed setup)
 
-1. **Backend (Railway)**  
-   - New project; add PostgreSQL and Redis.  
-   - Set env vars (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `SECRET_KEY`, `E2B_API_KEY`, `ANTHROPIC_API_KEY`, `STRIPE_*`, `WORKABLE_*`, `RESEND_API_KEY`, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, `BACKEND_URL`.  
-   - Deploy from `backend/` (e.g. `railway up`).  
-   - Confirm: `curl https://<your-backend>.up.railway.app/health` → `{"status":"healthy","service":"taali-api"}`.
+1. **Backend + two workers (Railway)**
+   - New project; add PostgreSQL and Redis, plus web, general-worker, and scoring-worker services from `backend/`.
+   - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `RESEND_API_KEY`, real GitHub credentials, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
+   - Run `./scripts/railway/deploy_production.sh`. It pins and validates live metering and native apply on all three services, migrates via production `DATABASE_PUBLIC_URL`, deploys general `celery` + Beat, deploys scoring-only without Beat, deploys web, then polls `/ready`.
+   - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final gate validates web, both queue canaries, and live Anthropic/E2B/Resend/GitHub capability for the default assessment path.
 
 2. **Frontend (Vercel)**  
    - Import or deploy from `frontend/`.  
@@ -95,8 +99,8 @@ taali-platform/
    - Workable: endpoint `https://<backend>/api/v1/webhooks/workable`, set `WORKABLE_WEBHOOK_SECRET`.  
    See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for event lists.
 
-4. **Celery**  
-   - Email and “post to Workable” tasks require a Celery worker (e.g. separate Railway service) with the same `REDIS_URL` and app env: `celery -A app.tasks worker --loglevel=info`. If no worker is run, invite/results emails and Workable post won’t run.
+4. **Fund usage once**
+   - Fund the organization credit ledger. Turn on remains durably queued and the role stays off when it cannot afford one conservative funnel pass; after a top-up or restored dependency, recovery continues automatically. Process Candidates and manual sync remain recovery controls, not requisition steps.
 
 ---
 
@@ -111,12 +115,11 @@ taali-platform/
 
 ## Not yet implemented (optional / polish)
 
-- **Candidate detail actions:** “Download PDF”, “Post to Workable” (button in UI), “Delete” assessment. (Backend has `posted_to_workable` and Celery task; no recruiter-triggered API/UI yet.)
-- **Candidate workflow depth:** candidate CRUD exists, but multi-step creation (assign task + review/send in one guided flow) is not complete.
+- **Candidate detail actions:** Additional one-off recruiter exports/actions can still be added, but they are not part of the autonomous requisition funnel.
+- **Workable stage mapping:** Candidate import, scoring, invite delivery, and the configured assessment-stage/note handoff are automatic for linked agent roles. Configure the organization's interview-stage target once to allow autonomous Workable advancement; without it, the local pipeline advances and the external move remains a safe human handoff.
 - **Stripe webhooks:** Checkout session is used; extra handlers (e.g. `payment_intent.succeeded`) can be added.
-- **Workable webhooks:** Endpoint exists; auto-create assessment / post on completion can be extended.
 - **Frontend test quality:** test script exists and suite passes, but there are remaining `act(...)` warnings to clean up for quieter CI logs.
-- **Monitoring:** Sentry, structured JSON logs, uptime checks, DB backups not required for current deployment but recommended for production.
+- **Monitoring:** Structured JSON logs and readiness checks are built in. External error tracking, independent uptime checks, and managed database backups remain recommended production operations.
 
 ---
 
@@ -127,7 +130,7 @@ taali-platform/
 | Backend   | FastAPI, Python 3.11+, PostgreSQL 15, SQLAlchemy 2, Alembic, Redis, Celery, JWT |
 | Frontend  | Vite 5, React 18, Tailwind CSS, Monaco Editor, react-router-dom routing |
 | Execution | E2B Code Interpreter SDK |
-| AI        | Anthropic Claude (environment-tiered: Haiku non-prod, configurable production) |
+| AI        | Anthropic Claude (pinned Haiku 4.5 snapshot by default; explicit snapshot overrides only) |
 | ATS       | Workable (OAuth + webhooks) |
 | Payments  | Stripe (Checkout, usage) |
 | Email     | Resend |

@@ -293,7 +293,7 @@ def run(
         # and closing the queue row would lose the pending state without
         # actually doing the override (Codex #192).
         send_status = getattr(send_result, "status", None)
-        if send_status not in ("sent", "already_exists"):
+        if send_status not in ("queued", "sent", "already_exists"):
             raise HTTPException(
                 status_code=409,
                 detail=(

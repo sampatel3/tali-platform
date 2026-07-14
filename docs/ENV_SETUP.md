@@ -6,6 +6,12 @@ Complete reference for all environment variables used by the TAALI platform.
 
 ## Backend Variables
 
+### Deployment
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DEPLOYMENT_ENV` | **Yes in production** | `development` | Set to `production` on every production web and worker service. This explicitly activates production startup safeguards, including live usage-meter enforcement; public URL and Sentry configuration remain defensive production-like signals. |
+
 ### Database
 
 | Variable | Required | Default | Description |
@@ -53,8 +59,10 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `CLAUDE_MODEL` | No | `claude-3-5-haiku-latest` | Model for assessment terminal, chat, and general use. |
-| `CLAUDE_SCORING_BATCH_MODEL` | No | `claude-3-5-haiku-latest` | Cost-optimised model used by batch scoring jobs. Falls back to `CLAUDE_MODEL` when unset. |
+| `CLAUDE_MODEL` | No | `claude-haiku-4-5-20251001` | Valid pinned default for general/assessment and recruitment-agent calls. Use a snapshot id, not a retired `-latest` alias. |
+| `CLAUDE_SCORING_BATCH_MODEL` | No | `claude-haiku-4-5-20251001` | Cost-optimised model used by batch scoring jobs. Falls back to `CLAUDE_MODEL` when unset. |
+| `CLAUDE_CHAT_MODEL` | No | `claude-haiku-4-5-20251001` | Pinned candidate-facing agentic-chat model; independent of `CLAUDE_MODEL`. |
+| `CLAUDE_AGENT_AUTONOMOUS_MODEL` | No | `""` | Optional autonomous cohort-loop override. Empty means the pinned `CLAUDE_MODEL` is used; a per-role `agent_model` remains the final override. |
 | `CLAUDE_SCORING_MODEL` | No | `""` | **Deprecated.** Old single-model selector. If set it must equal `CLAUDE_MODEL`, otherwise startup fails. Leave unset on new deployments. |
 | `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
 | `ANTHROPIC_ADMIN_API_KEY` | No | `""` | Anthropic Admin API key for provisioning per-org workspace keys. Empty = workspace provisioning disabled, all calls fall back to `ANTHROPIC_API_KEY`. |
@@ -65,7 +73,8 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 |----------|----------|---------|-------------|
 | `CLAUDE_INPUT_COST_PER_MILLION_USD` | No | `1.0` | Input token cost model. Default tracks Claude Haiku 4.5 — the model the platform routes to today. The pre-2026 defaults (`0.25` / `1.25`) were Haiku 3.5 rates and produced ~4x under-counts in the Anthropic reconciliation panel. |
 | `CLAUDE_OUTPUT_COST_PER_MILLION_USD` | No | `5.0` | Output token cost model. See note above. |
-| `USAGE_METER_LIVE` | No | `false` | When `false`, every Claude call writes a `usage_events` row but the credit ledger is **not** debited and gates do **not** block — shadow mode for validating attribution before flipping live. Set to `true` once shadow data confirms the meter matches Anthropic's dashboard. |
+| `USAGE_METER_LIVE` | **Yes in production** | `false` | When `false`, Claude calls still write `usage_events`, but the credit ledger is **not** debited and spend gates do **not** block. Production web and worker startup fail closed unless this is `true` or the emergency override below is explicitly enabled. `/health` exposes the active mode and readiness. |
+| `USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY` | No | `false` | Emergency-only, time-bounded bypass that permits production to boot while `USAGE_METER_LIVE=false`. Credit gates remain disabled and `/health` reports `shadow_emergency_override` as degraded/unready. Return this to `false` when the incident is resolved. |
 | `E2B_COST_PER_HOUR_USD` | No | `0.30` | Hourly E2B runtime cost estimate per active assessment sandbox. |
 | `EMAIL_COST_PER_SEND_USD` | No | `0.01` | Per-email send cost estimate (invite/results notifications). |
 | `STORAGE_COST_PER_GB_MONTH_USD` | No | `0.023` | Storage cost estimate for persisted assessment artifacts. |
@@ -77,11 +86,51 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `WORKABLE_CLIENT_ID` | **Yes** | `""` | OAuth2 client ID for Workable integration. |
-| `WORKABLE_CLIENT_SECRET` | **Yes** | `""` | OAuth2 client secret for Workable integration. |
-| `WORKABLE_WEBHOOK_SECRET` | **Yes** | `""` | Secret used to verify incoming Workable webhook signatures. |
+| `WORKABLE_CLIENT_ID` | Only with Workable | `""` | OAuth2 client ID for the optional Workable integration. |
+| `WORKABLE_CLIENT_SECRET` | Only with Workable | `""` | OAuth2 client secret for the optional Workable integration. |
+| `WORKABLE_WEBHOOK_SECRET` | Only with Workable | `""` | Secret used to verify incoming Workable webhooks. |
 
 **Where to get it:** Apply for a Workable partner integration at [workable.com](https://www.workable.com) → Partner Portal. You'll receive client credentials after approval.
+
+For a Taali-native requisition with no Workable job, set
+`ATS_PUBLIC_APPLY_ENABLED=true`. Production agent activation refuses to open a
+native job while its application endpoint is disabled.
+
+### Autonomous Agent Runtime
+
+The supported production worker command is:
+
+```bash
+python -m app.scripts.railway_worker_start
+```
+
+With its default settings it consumes both `celery` and `scoring` and owns the
+single Beat scheduler. Queue-specific canaries are emitted every minute;
+`/health` and production Turn on require both canaries to be fresh. The role
+cohort sweep runs hourly, while activation and resume enqueue an immediate
+complete pass.
+
+One-time environment configuration replaces per-job operator steps. In
+production set `DEPLOYMENT_ENV=production`, `USAGE_METER_LIVE=true`, a real
+`ANTHROPIC_API_KEY`, and fund the organization credit ledger. Native
+requisitions also need `ATS_PUBLIC_APPLY_ENABLED=true`. If assessments are used,
+the worker needs `E2B_API_KEY`, `RESEND_API_KEY`, a real `GITHUB_TOKEN`, and
+`GITHUB_MOCK_MODE=false`. Turn on fails closed and reports the missing item.
+
+Per role, create/publish the requisition and click **Turn on**. That one action
+persists the authorization and budget before any provider work starts. The
+backend owns pending generation/repair, sandbox validation, repository approval,
+readiness, activation, and the first complete pass; the page or browser may be
+closed without interrupting it. Explicitly skipping the assessment remains
+available as an override, not a prerequisite. There is no separate Tasks-page
+setup. First activation materializes the role's visible Agent settings; an
+untouched workspace defaults reversible assessment send/resend and interview
+advance on while deterministic rejection and assessment skipping remain off.
+It starts the complete funnel pass and opens a native requisition for
+applications. Manual pauses require explicit Resume. Budget,
+credit, failed-bootstrap, and runtime/provider holds are rechecked every five
+minutes and resume automatically once both their cause and the full readiness
+probe are healthy.
 
 ### Stripe (Payments)
 

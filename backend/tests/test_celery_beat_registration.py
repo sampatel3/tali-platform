@@ -52,10 +52,47 @@ def test_every_routed_task_is_registered():
     )
 
 
+def test_pool_rescore_endpoint_task_is_registered():
+    # This task is API-dispatched rather than routed/scheduled, so the generic
+    # Beat and route-table gates above cannot catch a missing eager import.
+    assert "rescore_pool_against_requirement" in celery_app.tasks
+
+
 def test_flush_brain_feed_is_scheduled_and_registered():
     # Explicit guard for the outbound brain feed: if its flush task isn't both
     # on the beat schedule and registered, the feed never ships.
     task_name = "app.tasks.brain_feed_tasks.flush_brain_feed"
+    assert task_name in celery_app.tasks
+    assert task_name in _scheduled_task_names().values()
+
+
+def test_assessment_task_provisioning_recovery_is_scheduled_and_registered():
+    task_name = "app.tasks.assessment_tasks.sweep_assessment_task_provisioning"
+    assert task_name in celery_app.tasks
+    assert task_name in _scheduled_task_names().values()
+
+
+def test_assessment_invite_provider_recovery_is_scheduled_and_registered():
+    task_name = (
+        "app.components.notifications.tasks.sweep_retryable_assessment_invites"
+    )
+    assert task_name in celery_app.tasks
+    assert task_name in _scheduled_task_names().values()
+
+
+def test_incomplete_rubric_recovery_is_scheduled_registered_and_routed():
+    retry_task = "app.tasks.rubric_retry_tasks.retry_incomplete_rubric_scoring"
+    sweep_task = "app.tasks.rubric_retry_tasks.sweep_incomplete_rubric_scoring"
+    scheduled = _scheduled_task_names().values()
+    assert retry_task in celery_app.tasks
+    assert sweep_task in celery_app.tasks
+    assert sweep_task in scheduled
+    assert celery_app.conf.task_routes[retry_task]["queue"] == "scoring"
+    assert celery_app.conf.task_routes[sweep_task]["queue"] == "scoring"
+
+
+def test_stale_usage_credit_hold_recovery_is_scheduled_and_registered():
+    task_name = "app.tasks.health_tasks.release_stale_usage_credit_reservations"
     assert task_name in celery_app.tasks
     assert task_name in _scheduled_task_names().values()
 

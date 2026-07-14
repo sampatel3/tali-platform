@@ -28,6 +28,7 @@ from ..actions import (
     score_cv,
     send_assessment,
 )
+from ..actions._decision_side_effects import apply_decision_side_effects
 from ..actions.types import Actor
 from ..mcp import handlers as mcp_handlers
 from ..models.agent_decision import AgentDecision
@@ -35,9 +36,11 @@ from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
+from ..models.organization import Organization
 from ..models.role import Role
 from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
+from ..services.agent_policy_settings import automation_enabled_for_decision
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
 
 
@@ -361,7 +364,6 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Natural-language description of the candidates you want."},
-                "role_id": {"type": "integer", "description": "Optional: restrict matches to one role."},
                 "rerank": {"type": "boolean", "default": True},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
             },
@@ -460,14 +462,18 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "name": "send_assessment",
         "description": (
             "Create an assessment for the application and dispatch the invite "
-            "email to the candidate. Auto-execute (no recruiter approval). "
+            "email to the candidate. With auto_send_assessment on, an enabled and "
+            "unpaused role sends automatically while policy, budget, credit, "
+            "and daily-volume guards pass; otherwise this returns an "
+            "awaiting-recruiter-approval decision. "
             "Use when the candidate has cleared CV/pre-screen review and is "
             "ready to take the technical assessment. Idempotent: returns "
             "status='already_exists' if a valid assessment is already open. "
             "Refuses with status='misconfigured' if the role has 0 or >1 "
             "tasks linked unless task_id is passed explicitly. Returns "
-            "{assessment_id, status, detail} where status is 'sent', "
-            "'already_exists', 'insufficient_credits', 'misconfigured', or 'blocked'."
+            "{assessment_id, status, detail} where status includes 'queued', "
+            "'already_exists', 'awaiting_recruiter_approval', "
+            "'insufficient_credits', 'misconfigured', or 'blocked'."
         ),
         "input_schema": {
             "type": "object",
@@ -493,10 +499,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "Re-dispatch the invite email for an existing assessment without "
             "creating a new Assessment row. Use when the candidate didn't "
             "receive the original invite, asked to be re-invited, or the link "
-            "expired. Honors the role's auto_promote toggle just like "
-            "send_assessment — when auto_promote is False, opens an "
-            "ask_recruiter card instead of resending. Returns "
-            "{assessment_id, status, detail} where status is 'resent', "
+            "expired. Honors the role's auto_resend_assessment toggle — when "
+            "it is False, queues an "
+            "AgentDecision for human approval instead of resending. Returns "
+            "{assessment_id, status, detail} where status is 'queued', "
             "'voided', 'no_candidate', or 'awaiting_recruiter_approval'."
         ),
         "input_schema": {
@@ -551,15 +557,16 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         },
     },
     # ------------------------------------------------------------------
-    # QUEUE — recruiter must approve before side effect
+    # DECISIONS — positive actions may auto-execute under auto_promote;
+    # irreversible reject recommendations always require human confirmation.
     # ------------------------------------------------------------------
     {
         "name": "queue_advance_decision",
         "description": (
-            "Queue a recommendation that the recruiter advance this candidate to "
-            "the technical interview stage. The recruiter sees the recommendation "
-            "in their pending-decisions panel and approves with one click. Reasoning "
-            "must cite concrete evidence from the CV / scores."
+            "Recommend advancing this candidate to the technical interview stage. "
+            "With auto_advance on, an enabled/unpaused role executes an on-policy "
+            "advance automatically. Otherwise it remains in the Decision Hub for "
+            "human approval. Reasoning must cite concrete CV/score evidence."
         ),
         "input_schema": {
             "type": "object",
@@ -577,6 +584,8 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Queue a recommendation to reject this candidate. The recruiter "
             "sees the recommendation and approves or overrides with one click. "
+            "This irreversible rejection ALWAYS requires explicit human "
+            "confirmation, including when auto_reject is on. "
             "Use when the candidate has completed assessment / review and the "
             "evidence clearly indicates they are not a fit. Always cite "
             "concrete weaknesses (low TAALI, missing requirements, "
@@ -599,7 +608,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Queue a recommendation to reject WITHOUT sending the assessment, "
             "i.e. cut the candidate at the pre-screen / CV stage. Recruiter "
-            "approves or overrides. Use only when CV-match and pre-screen "
+            "always approves or overrides this LLM/full-score recommendation; "
+            "auto_reject only applies to the separate deterministic pre-screen "
+            "path. Use only when CV-match and pre-screen "
             "scores are clearly below threshold AND requirements are not met. "
             "This decision is more impactful than queue_reject_decision because "
             "the candidate never gets the chance to demonstrate skill in the "
@@ -801,12 +812,14 @@ def _tool_compare_applications(db: Session, *, agent_run: AgentRun, role: Role, 
 
 
 def _tool_nl_search_candidates(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
-    role_id = args.get("role_id")
     return mcp_handlers.nl_search_candidates(
         db,
         _read_ctx(role),
         query=str(args.get("query") or ""),
-        role_id=int(role_id) if role_id is not None else int(role.id),
+        # Autonomous search is always scoped and billed to the running role.
+        # Never accept a model-supplied billing identity: otherwise an agent
+        # could consume another role's allowance and bypass its own cap.
+        role_id=int(role.id),
         rerank=bool(args.get("rerank", True)),
         limit=int(args.get("limit") or 25),
     )
@@ -864,6 +877,7 @@ def _tool_refresh_candidate_graph(
         include_cv_text=True,
         bill_organization_id=int(role.organization_id),
         bill_role_id=int(role.id),
+        require_role_admission=True,
     )
     return {
         "status": "ok" if sent > 0 else "no_episodes",
@@ -1062,7 +1076,7 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     #                      approve the batch ("send anyway") or hold. Autonomous
     #                      within the guard; human-in-the-loop only at the cap.
     #                      See services.assessment_autosend_guard.
-    auto_promote = bool(getattr(role, "auto_promote", False))
+    auto_promote = automation_enabled_for_decision(role, "send_assessment")
     guard_hold_reason: Optional[str] = None
     if auto_promote:
         guard = check_auto_send(db, role=role)
@@ -1201,7 +1215,7 @@ def _tool_resend_assessment_invite(
     #                      anchored to the assessment's application_id (decisions
     #                      are per-application). evidence.assessment_id tells the
     #                      approve path which assessment to resend.
-    if not bool(getattr(role, "auto_promote", False)):
+    if not automation_enabled_for_decision(role, "resend_assessment_invite"):
         if assessment.application_id is None:
             return {
                 "status": "misconfigured",
@@ -1380,20 +1394,20 @@ def _stamp_policy_revision_in_evidence(
     return base
 
 
-# Maps each queueable decision_type to the role attribute that controls
-# auto-execution. When the toggle is True, the agent's queue tool calls
-# the same action ``approve_decision.run`` triggers on recruiter approval
-# rather than creating a pending Decision Hub card.
+# Maps each queueable decision_type to the role attribute that expresses its
+# autonomy preference. A matching toggle is necessary but not sufficient for
+# auto-execution: the role must also be enabled/unpaused and on-policy, and the
+# human-confirm rail below always withholds irreversible reject types.
 _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
-    "advance_to_interview": "auto_promote",
+    "advance_to_interview": "auto_advance",
     "reject": "auto_reject",
     "skip_assessment_reject": "auto_reject",
     # send_assessment / resend_assessment_invite share the same
     # auto_promote toggle: it gates every candidate-facing send the
     # agent originates. Off → queue an AgentDecision for recruiter
     # approval. On → dispatch immediately as a system action.
-    "send_assessment": "auto_promote",
-    "resend_assessment_invite": "auto_promote",
+    "send_assessment": "auto_send_assessment",
+    "resend_assessment_invite": "auto_resend_assessment",
 }
 
 
@@ -1488,7 +1502,7 @@ def _auto_execute_decision(
     role: Role,
     decision: Any,
     decision_type: str,
-) -> None:
+) -> bool:
     """Resolve and execute an AgentDecision immediately as a system action.
 
     Mirrors the side effects of ``approve_decision.run`` — same
@@ -1509,6 +1523,67 @@ def _auto_execute_decision(
             f"(TAA-11 / P1-TALI-03). Leave the decision pending for the "
             f"recruiter to approve."
         )
+    from ..services.role_execution_guard import (
+        assessment_task_is_current,
+        automatic_role_action_block_reason,
+        lock_live_role,
+    )
+
+    live_role = lock_live_role(
+        db,
+        role_id=int(role.id),
+        organization_id=int(role.organization_id),
+    )
+    role_block = automatic_role_action_block_reason(live_role)
+    auto_toggle = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
+    if (
+        role_block is None
+        and auto_toggle
+        and not automation_enabled_for_decision(live_role, decision_type)
+    ):
+        role_block = f"role.{auto_toggle} is disabled"
+    if role_block:
+        held = dict(decision.evidence or {})
+        held["auto_execute_hold"] = {
+            "status": "role_not_runnable",
+            "detail": role_block,
+        }
+        decision.evidence = held
+        db.add(decision)
+        return False
+    # ``live_role`` is non-null when no block reason was returned. Use this
+    # populate-existing row for every subsequent side effect; the Role lock
+    # serializes a stale queued action against Turn off / requisition republish.
+    role = live_role
+
+    if decision_type == "advance_to_interview":
+        prior_assessment = (
+            db.query(Assessment)
+            .filter(
+                Assessment.application_id == int(decision.application_id),
+                Assessment.organization_id == int(role.organization_id),
+                Assessment.role_id == int(role.id),
+                Assessment.is_voided.is_(False),
+            )
+            .order_by(Assessment.id.desc())
+            .first()
+        )
+        if prior_assessment is not None and not assessment_task_is_current(
+            db, assessment=prior_assessment, role=role
+        ):
+            held = dict(decision.evidence or {})
+            held["auto_execute_hold"] = {
+                "status": "superseded_assessment_task",
+                "detail": (
+                    "Assessment result belongs to a task that is no longer "
+                    "active/assignable for the current role. Human review is required."
+                ),
+                "assessment_id": int(prior_assessment.id),
+                "task_id": int(prior_assessment.task_id),
+            }
+            decision.evidence = held
+            db.add(decision)
+            return False
     actor = Actor.system()
     metadata = {
         "agent_decision_id": int(decision.id),
@@ -1543,7 +1618,7 @@ def _auto_execute_decision(
         )
     elif decision_type == "send_assessment":
         ev = decision.evidence or {}
-        send_assessment.run(
+        send_result = send_assessment.run(
             db,
             actor,
             organization_id=int(role.organization_id),
@@ -1551,21 +1626,214 @@ def _auto_execute_decision(
             task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
             duration_minutes=int(ev.get("duration_minutes") or 90),
         )
+        # A billing/configuration guard can legitimately no-op the send. Do not
+        # close the decision as approved when no invite exists; keep the card
+        # pending with an actionable hold reason so the recovery sweep or a
+        # recruiter can resolve it later.
+        send_status = getattr(send_result, "status", None)
+        if send_status not in ("queued", "sent", "already_exists"):
+            held = dict(decision.evidence or {})
+            held["auto_execute_hold"] = {
+                "status": send_status or "unknown",
+                "detail": getattr(send_result, "detail", None),
+            }
+            decision.evidence = held
+            db.add(decision)
+            return False
     elif decision_type == "resend_assessment_invite":
         ev = decision.evidence or {}
         assessment_id = ev.get("assessment_id")
-        if assessment_id is not None:
-            resend_assessment_invite.run(
-                db,
-                actor,
-                organization_id=int(role.organization_id),
-                assessment_id=int(assessment_id),
-            )
+        if assessment_id is None:
+            held = dict(decision.evidence or {})
+            held["auto_execute_hold"] = {
+                "status": "misconfigured",
+                "detail": "evidence.assessment_id is required",
+            }
+            decision.evidence = held
+            db.add(decision)
+            return False
+        resend_result = resend_assessment_invite.run(
+            db,
+            actor,
+            organization_id=int(role.organization_id),
+            assessment_id=int(assessment_id),
+        )
+        if getattr(resend_result, "status", None) not in {"queued", "resent"}:
+            held = dict(decision.evidence or {})
+            held["auto_execute_hold"] = {
+                "status": getattr(resend_result, "status", None) or "unknown",
+                "detail": getattr(resend_result, "detail", None),
+            }
+            decision.evidence = held
+            db.add(decision)
+            return False
     decision.status = "approved"
     decision.resolved_at = datetime.now(timezone.utc)
     decision.resolved_by_user_id = None
     decision.resolution_note = reason
     decision.human_disposition = "auto_approved"
+
+    # Auto resolution must have the same external/audit consequences as a
+    # human approval. Previously the local stage changed but Workable stage
+    # writeback, the activity note and graph/outcome trail were skipped.
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(decision.application_id),
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == int(role.organization_id))
+        .first()
+        if app is not None
+        else None
+    )
+    apply_decision_side_effects(
+        db,
+        actor,
+        decision=decision,
+        app=app,
+        org=org,
+        role=role,
+        disposition="approved",
+        note=reason,
+        reject_notify=False,
+    )
+    if app is not None:
+        try:
+            from . import outcome_learning
+
+            outcome_learning.record_outcome_for_approved_decision(
+                db, decision=decision, application=app
+            )
+        except Exception:  # pragma: no cover - learning never blocks execution
+            logging.getLogger("taali.agent.autonomy").exception(
+                "auto-approved outcome recording failed decision_id=%s", decision.id
+            )
+    return True
+
+
+def maybe_auto_execute_decision(
+    db: Session,
+    *,
+    role: Role,
+    decision: Any,
+    decision_type: str,
+    on_policy: bool = True,
+    force_human_review: bool = False,
+) -> dict[str, bool | str | None]:
+    """Apply the role's autonomy contract to a freshly queued decision.
+
+    Shared by LLM-authored and deterministic decision producers. Positive,
+    reversible actions execute only while the role agent is enabled, unpaused,
+    on-policy and opted into the matching toggle. Rejects and caller-marked
+    conflicts stay pending. Assessment sends additionally honor the spend /
+    volume guard. A failed/no-op action also stays pending instead of being
+    falsely marked approved.
+    """
+    just_created = bool(getattr(decision, "_just_created", True))
+    pending = str(getattr(decision, "status", "")) == "pending"
+    auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
+    toggle_on = bool(
+        auto_attr and automation_enabled_for_decision(role, decision_type)
+    )
+    role_running = bool(
+        getattr(role, "agentic_mode_enabled", False)
+        and getattr(role, "agent_paused_at", None) is None
+    )
+    human_confirm_required = bool(
+        force_human_review
+        or decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+    )
+
+    guard_ok = True
+    guard_hold_reason: Optional[str] = None
+    if (
+        decision_type in _AUTO_SEND_GUARDED_TYPES
+        and toggle_on
+        and role_running
+        and just_created
+        and pending
+    ):
+        guard = check_auto_send(db, role=role)
+        guard_ok = bool(guard.ok)
+        guard_hold_reason = guard.reason
+        if not guard_ok:
+            evidence = dict(decision.evidence or {})
+            evidence.setdefault("auto_send_hold", guard_hold_reason)
+            decision.evidence = evidence
+            db.add(decision)
+
+    eligible = bool(
+        auto_attr
+        and toggle_on
+        and role_running
+        and just_created
+        and pending
+        and on_policy
+        and not human_confirm_required
+        and guard_ok
+    )
+    executed = False
+    action_held = False
+    if eligible:
+        # Keep the queued decision itself durable, but isolate all action-side
+        # mutations (assessment row, stage transition, audit rows, etc.) in a
+        # savepoint.  Several callers intentionally continue their cohort after
+        # one candidate fails.  Without this boundary, an invite broker failure
+        # raised after ``send_assessment`` flushed its rows could be swallowed by
+        # the caller and those partial changes would be committed with the rest
+        # of the cohort.
+        db.flush()
+        try:
+            with db.begin_nested():
+                executed = bool(
+                    _auto_execute_decision(
+                        db,
+                        role=role,
+                        decision=decision,
+                        decision_type=decision_type,
+                    )
+                )
+        except Exception as exc:
+            logging.getLogger("taali.agent.autonomy").exception(
+                "auto-action rolled back decision_id=%s decision_type=%s",
+                getattr(decision, "id", None),
+                decision_type,
+            )
+            evidence = dict(decision.evidence or {})
+            evidence["auto_execute_hold"] = {
+                "status": "action_error",
+                "detail": str(exc)[:500],
+            }
+            decision.evidence = evidence
+            db.add(decision)
+            action_held = True
+        else:
+            action_held = not executed
+
+    return {
+        "executed": executed,
+        "human_confirm_required": bool(human_confirm_required and toggle_on),
+        "off_policy_withheld": bool(
+            toggle_on and role_running and just_created and pending and not on_policy
+        ),
+        "auto_send_held": bool(
+            decision_type in _AUTO_SEND_GUARDED_TYPES
+            and toggle_on
+            and role_running
+            and just_created
+            and pending
+            and on_policy
+            and not human_confirm_required
+            and not guard_ok
+        ),
+        "action_held": action_held,
+        "hold_reason": guard_hold_reason,
+    }
 
 
 def _queue(
@@ -1603,12 +1871,6 @@ def _queue(
     just_created = bool(getattr(decision, "_just_created", True))
     if just_created:
         agent_run.decisions_emitted = int(agent_run.decisions_emitted or 0) + 1
-    auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
-    # Human-confirm rail (TAA-11 / P1-TALI-03): an irreversible reject is
-    # never auto-executed, even with ``role.auto_reject`` on. The
-    # recommendation is queued; the recruiter confirms the Workable
-    # disqualify with one click. See ``_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES``.
-    human_confirm_required = decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
     # TAA-22 (P2-TALI-01): bind the irreversible auto-execution to the
     # deterministic engine. A hire-relevant decision_type is only
     # auto-executed if it matches the engine verdict captured this cycle by
@@ -1617,59 +1879,24 @@ def _queue(
     on_policy, engine_verdict = _is_on_policy(
         agent_run, int(args["application_id"]), decision_type
     )
-    toggle_on = bool(auto_attr and bool(getattr(role, auto_attr, False)))
-    off_policy_withheld = bool(
-        toggle_on and not human_confirm_required and just_created
-        and str(decision.status) == "pending" and not on_policy
+    autonomy = maybe_auto_execute_decision(
+        db,
+        role=role,
+        decision=decision,
+        decision_type=decision_type,
+        on_policy=on_policy,
     )
-    if off_policy_withheld:
+    if autonomy["off_policy_withheld"]:
         logging.getLogger("taali.agent.policy").warning(
             "off_policy_auto_execute_withheld role_id=%s app_id=%s "
             "queued=%s engine=%s run_id=%s",
             role.id, args["application_id"], decision_type,
             engine_verdict, agent_run.id,
         )
-    # Auto-send guard (defense-in-depth for the gate in _tool_send_assessment).
-    # A send_assessment queued while auto_promote=True would auto-execute below;
-    # hold it instead when the role's budget cap or per-day volume cap is hit, so
-    # the pending card stays for the recruiter to approve ("send anyway"). This
-    # mirrors, and re-checks, the same guard _tool_send_assessment consulted.
-    guard_ok = True
-    guard_hold_reason: Optional[str] = None
-    if decision_type in _AUTO_SEND_GUARDED_TYPES and toggle_on and just_created:
-        _guard = check_auto_send(db, role=role)
-        guard_ok = _guard.ok
-        guard_hold_reason = _guard.reason
-    auto_send_held = bool(
-        decision_type in _AUTO_SEND_GUARDED_TYPES
-        and toggle_on and on_policy and not human_confirm_required
-        and just_created and str(decision.status) == "pending" and not guard_ok
-    )
-    if auto_send_held and guard_hold_reason is not None:
-        ev = dict(decision.evidence or {})
-        ev.setdefault("auto_send_hold", guard_hold_reason)
-        decision.evidence = ev
-        db.add(decision)
+    if autonomy["auto_send_held"]:
         logging.getLogger("taali.agent.autosend").info(
             "auto_send_held role_id=%s app_id=%s reason=%s run_id=%s",
-            role.id, args["application_id"], guard_hold_reason, agent_run.id,
-        )
-    # Only auto-execute a freshly-created, still-pending decision. A dedup
-    # return (existing pending, recently-discarded, or a prior_approved C4
-    # match) carries _just_created=False and may already be resolved —
-    # re-dispatching it would re-fire the side effect (resend invite, stage
-    # change, reject) for an already-handled decision. (Codex #241)
-    if (
-        auto_attr
-        and not human_confirm_required
-        and on_policy
-        and guard_ok
-        and bool(getattr(role, auto_attr, False))
-        and just_created
-        and str(decision.status) == "pending"
-    ):
-        _auto_execute_decision(
-            db, role=role, decision=decision, decision_type=decision_type
+            role.id, args["application_id"], autonomy["hold_reason"], agent_run.id,
         )
     return {
         "decision_id": int(decision.id),
@@ -1679,18 +1906,15 @@ def _queue(
         # human confirmation rather than silently executed. ``True`` only when
         # the role would otherwise have auto-executed (toggle on) but the
         # human-confirm rail held it pending.
-        "human_confirm_required": bool(
-            human_confirm_required
-            and auto_attr
-            and bool(getattr(role, auto_attr, False))
-        ),
+        "human_confirm_required": bool(autonomy["human_confirm_required"]),
         # Surface the off-policy guard (TAA-22): True when the toggle would
         # have auto-executed but the queued decision_type did not match the
         # deterministic engine verdict, so it was held pending for review.
-        "off_policy_withheld": off_policy_withheld,
+        "off_policy_withheld": bool(autonomy["off_policy_withheld"]),
         # Surface the auto-send guard: True when auto_promote would have sent
         # immediately but the budget/volume cap held it pending for review.
-        "auto_send_held": auto_send_held,
+        "auto_send_held": bool(autonomy["auto_send_held"]),
+        "action_held": bool(autonomy["action_held"]),
     }
 
 
@@ -1884,7 +2108,15 @@ def _tool_record_observation(
         "agent_run_id": int(agent_run.id),
     }
     calibration.save(db, role=role, updates={"notes": [entry]})
-    db.flush()
+    # This tool is deliberately a mid-cycle durability boundary: the note
+    # must survive a later abort, and the next round's hard-admission session
+    # must be able to lock/read the role without competing with an uncommitted
+    # role update held by this cycle.  A flush alone satisfied neither
+    # contract (and deadlocked the independent admission session on Postgres;
+    # SQLite reports the same issue as ``database table is locked: roles``).
+    db.commit()
+    db.refresh(role)
+    db.refresh(agent_run)
     current_count = len((role.agent_calibration or {}).get("notes") or [])
     return {
         "status": "saved",
@@ -2180,8 +2412,11 @@ def dispatch(
     new_decision = int(agent_run.decisions_emitted or 0) > before
     result_status = str(result.get("status") or "") if isinstance(result, dict) else ""
     direct_candidate_contact = (
-        (name == "send_assessment" and result_status == "sent")
-        or (name == "resend_assessment_invite" and result_status == "resent")
+        (name == "send_assessment" and result_status in {"queued", "sent"})
+        or (
+            name == "resend_assessment_invite"
+            and result_status in {"queued", "resent"}
+        )
     )
     if name in QUEUE_DECISION_TOOL_NAMES and (new_decision or direct_candidate_contact):
         counts = _governed_action_counts(agent_run)

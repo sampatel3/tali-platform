@@ -2,6 +2,7 @@
 
 import io
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from PyPDF2 import PdfReader
 
@@ -13,11 +14,20 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.task import Task
 from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
 
 
-def test_role_application_assessment_lifecycle(client):
+def test_role_application_assessment_lifecycle(client, db, monkeypatch):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+
+    kicked: list[int] = []
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda assessment_id, reply_to=None: kicked.append(int(assessment_id)),
+    )
     headers, _ = auth_headers(client)
     task_resp = create_task_via_api(client, headers, name="Role linked task")
     assert task_resp.status_code == 201
@@ -76,6 +86,10 @@ def test_role_application_assessment_lifecycle(client):
     assert assessment["task_id"] == task["id"]
     assert assessment["role_id"] == role["id"]
     assert assessment["application_id"] == app_payload["id"]
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == assessment["id"]).one()
+    assert row.invite_email_status == "pending_dispatch"
+    assert kicked == [int(assessment["id"])]
 
 
 def test_role_star_unstar_toggles_auto_sync_flag(client):
@@ -101,6 +115,67 @@ def test_role_star_unstar_toggles_auto_sync_flag(client):
     unstar_resp = client.delete(f"/api/v1/roles/{role['id']}/star", headers=headers)
     assert unstar_resp.status_code == 200, unstar_resp.text
     assert unstar_resp.json()["starred_for_auto_sync"] is False
+
+
+def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Incoming activation policy"},
+        headers=headers,
+    ).json()
+    role = db.query(Role).filter(Role.id == created["id"]).one()
+    task = Task(
+        organization_id=role.organization_id,
+        name="Approved activation task",
+        task_key=f"incoming_policy_{role.id}",
+        is_active=True,
+    )
+    role.tasks.append(task)
+    role.monthly_usd_budget_cents = 100
+    role.auto_send_assessment = True
+    role.auto_resend_assessment = True
+    role.auto_advance = True
+    db.add(task)
+    db.commit()
+
+    with patch(
+        "app.services.agent_activation_readiness.activation_readiness",
+        return_value={
+            "ready": False,
+            "production": True,
+            "reasons": [{"code": "test_unready", "detail": "fail closed"}],
+        },
+    ) as readiness:
+        response = client.patch(
+            f"/api/v1/roles/{role.id}",
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 9_000,
+                "auto_send_assessment": False,
+                "auto_resend_assessment": True,
+                "auto_advance": False,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 503, response.text
+    assert readiness.call_args.kwargs == {
+        "auto_skip_assessment": None,
+        "monthly_usd_budget_cents": 9_000,
+        "auto_send_assessment": False,
+        "auto_resend_assessment": True,
+        "auto_advance": False,
+    }
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    assert persisted.agentic_mode_enabled is False
+    assert persisted.monthly_usd_budget_cents == 100
+    assert persisted.auto_send_assessment is True
+    assert persisted.auto_resend_assessment is True
+    assert persisted.auto_advance is True
 
 
 def test_role_star_is_org_scoped(client):
@@ -455,6 +530,31 @@ def test_role_application_summary_uses_role_fit_before_completion_and_hierarchic
     assert post_item["score_summary"]["role_fit_score"] == 78.0
     assert post_item["score_summary"]["taali_score"] == 74.0
 
+    # A failed rubric dimension invalidates every headline score even if an
+    # older cache still held a strong result. The UI receives an honest pending
+    # state until the automatic grader retry completes.
+    assessment_row.scoring_partial = True
+    assessment_row.score_breakdown = {
+        "rubric_grading": {
+            "status": "partial",
+            "fully_graded": False,
+            "failed_dimension_ids": ["quality"],
+            "dimensions": [{"id": "quality", "error": "provider unavailable"}],
+        }
+    }
+    refresh_application_score_cache(app_row, db=db)
+    db.commit()
+    pending = client.get(
+        f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score",
+        headers=headers,
+    )
+    assert pending.status_code == 200, pending.text
+    pending_item = pending.json()[0]
+    assert pending_item["taali_score"] is None
+    assert pending_item["score_mode"] == "rubric_grading_pending"
+    assert pending_item["score_summary"]["assessment_score"] is None
+    assert pending_item["score_summary"]["assessment_grading_pending"] is True
+
 
 def test_application_interview_debrief_and_client_report_work_before_completion(client, db):
     headers, email = auth_headers(client)
@@ -639,6 +739,85 @@ def test_reject_unlink_role_task_when_assessment_exists(client):
     assert "already has assessments" in unlink_resp.json()["detail"].lower()
 
 
+def test_live_role_cannot_enable_assessment_stage_without_active_task(client, db):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Assessment stage invariant"},
+        headers=headers,
+    ).json()
+    role = db.query(Role).filter(Role.id == created["id"]).one()
+    role.agentic_mode_enabled = True
+    role.auto_skip_assessment = True
+    db.commit()
+
+    response = client.patch(
+        f"/api/v1/roles/{role.id}",
+        json={"auto_skip_assessment": False},
+        headers=headers,
+    )
+
+    assert response.status_code == 409, response.text
+    assert "assign an active assessment task" in response.json()["detail"].lower()
+    db.expire_all()
+    assert db.query(Role).filter(Role.id == role.id).one().auto_skip_assessment is True
+
+
+def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(
+        client, headers, name="Last live assessment task"
+    ).json()
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Last task invariant"},
+        headers=headers,
+    ).json()
+    assert client.post(
+        f"/api/v1/roles/{created['id']}/tasks",
+        json={"task_id": task["id"]},
+        headers=headers,
+    ).status_code == 200
+    role = db.query(Role).filter(Role.id == created["id"]).one()
+    role.agentic_mode_enabled = True
+    role.auto_skip_assessment = False
+    db.commit()
+
+    response = client.delete(
+        f"/api/v1/roles/{role.id}/tasks/{task['id']}",
+        headers=headers,
+    )
+
+    assert response.status_code == 204, response.text
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    assert persisted.tasks == []
+    assert persisted.auto_skip_assessment is True
+
+
+def test_role_budget_rejects_zero_on_create_and_update(client):
+    headers, _ = auth_headers(client)
+
+    create_response = client.post(
+        "/api/v1/roles",
+        json={"name": "Invalid zero budget", "monthly_usd_budget_cents": 0},
+        headers=headers,
+    )
+    assert create_response.status_code == 422, create_response.text
+
+    role = client.post(
+        "/api/v1/roles",
+        json={"name": "Budget validation role"},
+        headers=headers,
+    ).json()
+    update_response = client.patch(
+        f"/api/v1/roles/{role['id']}",
+        json={"monthly_usd_budget_cents": 0},
+        headers=headers,
+    )
+    assert update_response.status_code == 422, update_response.text
+
+
 def test_application_cv_match_score_is_returned(client, monkeypatch):
     headers, _ = auth_headers(client)
     role = client.post("/api/v1/roles", json={"name": "CV match role"}, headers=headers).json()
@@ -783,6 +962,76 @@ def test_application_detail_exposes_cv_sections_and_document_file(client, db, tm
     assert download_resp.status_code == 200, download_resp.text
     assert download_resp.content == b"%PDF-1.4 stored cv bytes"
     assert download_resp.headers["content-disposition"].startswith("attachment;")
+
+
+def test_recruiter_replacement_cv_clears_sections_and_carries_explicit_origin(
+    client, db, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    role = client.post(
+        "/api/v1/roles", json={"name": "Replacement CV role"}, headers=headers
+    ).json()
+    spec_response = client.post(
+        f"/api/v1/roles/{role['id']}/upload-job-spec",
+        files={
+            "file": (
+                "job-spec.txt",
+                io.BytesIO(b"Python platform engineer role requirements"),
+                "text/plain",
+            )
+        },
+        headers=headers,
+    )
+    assert spec_response.status_code == 200, spec_response.text
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "replacement@example.com"},
+        headers=headers,
+    ).json()
+    row = db.query(CandidateApplication).filter_by(id=app["id"]).one()
+    row.cv_sections = {"skills": ["Old skill"]}
+    row.candidate.cv_sections = {"skills": ["Old skill"]}
+    db.commit()
+
+    monkeypatch.setattr(
+        applications_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/replacement.pdf",
+            "filename": "replacement.pdf",
+            "extracted_text": "New CV with Python and distributed systems.",
+            "text_preview": "New CV",
+        },
+    )
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        applications_routes,
+        "on_application_created",
+        lambda application, **kwargs: calls.append(
+            {"application_id": application.id, **kwargs}
+        ),
+    )
+
+    response = client.post(
+        f"/api/v1/applications/{app['id']}/upload-cv",
+        files={"file": ("replacement.pdf", io.BytesIO(b"%PDF replacement"), "application/pdf")},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    replaced = db.query(CandidateApplication).filter_by(id=app["id"]).one()
+    assert replaced.cv_sections is None
+    assert replaced.candidate.cv_sections is None
+    assert calls == [
+        {
+            "application_id": app["id"],
+            "score": True,
+            "score_force": True,
+            "requires_active_agent": False,
+            "parse_origin": "recruiter_upload",
+        }
+    ]
 
 
 def test_job_spec_upload_generates_interview_focus(client, db, monkeypatch):
@@ -1772,7 +2021,22 @@ def test_pipeline_endpoints_validate_min_taali_threshold_range(client):
     assert pipeline_invalid.status_code == 422, pipeline_invalid.text
 
 
-def test_assessment_invite_event_is_logged_when_stage_is_unchanged(client):
+def test_assessment_invite_event_is_logged_when_stage_is_unchanged(
+    client, db, monkeypatch
+):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+
+    # Queue acceptance is intentionally not treated as candidate contact. Keep
+    # the worker out of this API-level test, then cross the truthful delivery
+    # boundary explicitly with a provider message id below.
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda assessment_id, reply_to=None: None,
+    )
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Timeline invite task").json()
     role = _create_role_with_spec(client, headers, name="Timeline invite role")
@@ -1805,6 +2069,28 @@ def test_assessment_invite_event_is_logged_when_stage_is_unchanged(client):
         headers=headers,
     )
     assert invite_resp.status_code == 201, invite_resp.text
+
+    pending_events_resp = client.get(
+        f"/api/v1/applications/{app['id']}/events", headers=headers
+    )
+    assert pending_events_resp.status_code == 200, pending_events_resp.text
+    pending_event_types = [
+        event["event_type"] for event in pending_events_resp.json()
+    ]
+    assert "assessment_invite_sent" not in pending_event_types
+
+    assessment = (
+        db.query(Assessment)
+        .filter(Assessment.id == int(invite_resp.json()["id"]))
+        .one()
+    )
+    confirmed = confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-stage-unchanged",
+        expected_generation=int(assessment.invite_email_send_generation or 0),
+    )
+    assert confirmed["confirmed"] is True
 
     events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
     assert events_resp.status_code == 200, events_resp.text

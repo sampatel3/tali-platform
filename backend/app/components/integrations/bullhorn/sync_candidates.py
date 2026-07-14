@@ -18,10 +18,11 @@ mapping is a reject, the ``rejected`` outcome) via the shared pipeline
 transitions.
 
 Cost safety (hard rule): a freshly-created application enqueues scoring via the
-SAME shared path Workable import uses (``on_application_created``), gated exactly
-like Workable on ``role.starred_for_auto_sync`` — fresh candidates only, on the
-create branch only. Re-syncs of an existing application NEVER re-enqueue
-scoring, and nothing here dispatches paid re-evaluation of a stale score.
+SAME shared path Workable import uses (``on_application_created``), only while
+the role agent is enabled, unpaused, and lifecycle-ready. The sticky star is
+adoption/cadence metadata, not an execution grant. Re-syncs of an existing
+application NEVER re-enqueue scoring, and nothing here dispatches paid
+re-evaluation of a stale score.
 """
 
 from __future__ import annotations
@@ -48,12 +49,14 @@ from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....models.role import Role
 from ....services.application_events import on_application_created
+from ....cv_parsing.origins import CV_PARSE_ORIGIN_ATS_INGEST
 from ....services.document_service import (
     extract_text,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
 )
 from ....services.pre_screening_service import refresh_pre_screening_fields
+from ....services.job_page_lifecycle import role_allows_new_paid_ats_work
 from ....services.s3_service import generate_s3_key, upload_bytes_to_s3
 from . import stage_map as stage_map_mod
 from .service import BullhornService
@@ -481,14 +484,19 @@ def sync_submission(
     else:
         refresh_pre_screening_fields(app)
 
-    # COST SAFETY: mirror Workable import exactly. A freshly-created application
-    # enqueues scoring through the shared path ONLY when the role is opted into
-    # real-time auto-sync scoring (``starred_for_auto_sync``); the scoring job
-    # emits the deterministic decision downstream. Re-syncs never re-enqueue, and
-    # no bullhorn-specific rescore trigger exists. Context on an existing
-    # application is stored for the NEXT recruiter-approved evaluation only.
-    auto_score = bool(created_application and getattr(role, "starred_for_auto_sync", False))
-    on_application_created(app, score=auto_score)
+    # COST SAFETY: the sticky star records adoption/sync cadence; it is not a
+    # runtime spend grant. Metadata continues to sync while paused/off, but only
+    # a lifecycle-ready, enabled, unpaused agent may launch NEW paid CV parsing
+    # or first-score work. Re-syncs never re-score, and existing queued work is
+    # deliberately not cancelled by this ingest-time gate.
+    paid_work_allowed = role_allows_new_paid_ats_work(role)
+    auto_score = bool(created_application and paid_work_allowed)
+    on_application_created(
+        app,
+        score=auto_score,
+        allow_paid_work=paid_work_allowed,
+        parse_origin=CV_PARSE_ORIGIN_ATS_INGEST,
+    )
 
     db.flush()
     counters["application_upserted"] += 1

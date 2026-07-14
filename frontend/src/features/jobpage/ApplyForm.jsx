@@ -171,7 +171,7 @@ function EEOStep({ token, onDone }) {
   );
 }
 
-export function ApplyForm({ token, questions = [], organizationName }) {
+export function ApplyForm({ token, questions = [], organizationName, resumeRequired = false }) {
   const [form, setForm] = useState({ full_name: '', email: '', phone: '' });
   const [answers, setAnswers] = useState({});
   const [resume, setResume] = useState(null);
@@ -211,6 +211,10 @@ export function ApplyForm({ token, questions = [], organizationName }) {
     if (!form.full_name.trim()) { setError('Please tell us your name.'); return; }
     if (!form.email.trim() && !form.phone.trim()) {
       setError('Please give us an email address or phone number so we can reach you.');
+      return;
+    }
+    if (resumeRequired && !resume) {
+      setError('Please upload your resume so your application can be evaluated.');
       return;
     }
     const missing = questions.filter(
@@ -295,8 +299,17 @@ export function ApplyForm({ token, questions = [], organizationName }) {
       ))}
 
       <label className="pjp-field">
-        <span className="pjp-field-label">Resume (PDF or Word .docx, up to 5 MB)</span>
-        <input type="file" accept=".pdf,.docx" onChange={onResume} data-testid="resume-input" />
+        <span className="pjp-field-label">
+          Resume (PDF or Word .docx, up to 5 MB)
+          {resumeRequired ? <span className="pjp-req" aria-hidden> *</span> : null}
+        </span>
+        <input
+          type="file"
+          accept=".pdf,.docx"
+          onChange={onResume}
+          data-testid="resume-input"
+          aria-required={resumeRequired}
+        />
       </label>
 
       <button type="submit" className="pjp-apply-btn" disabled={phase === 'submitting'}>

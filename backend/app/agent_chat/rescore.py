@@ -165,7 +165,13 @@ def rescore_candidates(
     queued = 0
     for s in selected:
         try:
-            if enqueue_score(db, s["_app"], force=True, bypass_pre_screen=True):
+            if enqueue_score(
+                db,
+                s["_app"],
+                force=True,
+                bypass_pre_screen=True,
+                requires_active_agent=False,
+            ):
                 queued += 1
         except Exception:  # pragma: no cover — one bad app must not abort the batch
             logger.exception("rescore enqueue failed app=%s", s["application_id"])

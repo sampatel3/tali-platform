@@ -34,8 +34,18 @@ const stageFile = (file) => ({
   url: isImage(file) ? URL.createObjectURL(file) : null,
 });
 
-const statusLabel = (status) => String(status || 'draft').replace(/_/g, ' ');
-const isPublished = (status) => String(status || '').toLowerCase() === 'published';
+const REQUISITION_STATUS_LABELS = Object.freeze({
+  draft: 'Draft',
+  submitted: 'Ready to publish',
+  applied: 'Published',
+  published: 'Published', // compatibility with pre-lifecycle payloads
+});
+export const requisitionStatusLabel = (status) => {
+  const normalized = String(status || 'draft').toLowerCase();
+  return REQUISITION_STATUS_LABELS[normalized]
+    || normalized.replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
+};
+export const isPublishedRequisition = (status) => ['applied', 'published'].includes(String(status || '').toLowerCase());
 
 // Prefer the backend's human-readable `detail` (e.g. the 409 "Brief already
 // applied to a role") over a generic fallback, so the error banner tells the
@@ -551,10 +561,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // the serialized brief, which drives the published-state UI below.
   const publish = useCallback(async () => {
     if (!selectedId) return;
-    // Frontend gate: don't publish a brief with required fields still open — the
-    // rendered JD would carry "(to be captured)" markers onto the public,
-    // candidate-facing page. (The backend has NO such validation today; a real
-    // fix would gate this server-side too — see note.)
+    // Frontend gate mirrors the backend required-field validation and gives the
+    // recruiter an immediate, field-oriented message before the request.
     const remaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
     if (remaining > 0) {
       setError(`${remaining} required field${remaining === 1 ? '' : 's'} still needed before you can publish — fill them in on the Brief tab or answer the agent.`);
@@ -619,14 +627,14 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [jobPageUrl]);
 
-  // ---- Workable bridge (Stage 1) ----
-  // The requisition's ref code + the inactive job it stood up on publish, plus
-  // the spec the recruiter pastes into Workable: the rendered JD with a ref line
-  // appended. Mirrors the backend's _workable_spec EXACTLY so the import-side
-  // scan recovers the code; built FE-side so "Copy" works on load without a
-  // re-publish. ``brief.job`` = { role_id, name, job_status, workable_job_id }.
+  // ---- Optional Workable bridge ----
+  // A native requisition is runnable without Workable. For teams that also use
+  // it, retain the ref code + rendered JD bridge so the import-side scan can
+  // link the external job. Built FE-side so optional Copy works on load without
+  // a re-publish. ``brief.job`` = { role_id, name, job_status, workable_job_id }.
   const refCode = brief?.ref_code || '';
   const linkedJob = brief?.job || null;
+  const linkedJobOpen = String(linkedJob?.job_status || '').toLowerCase() === 'open';
   const workableSpec = useMemo(() => {
     if (!refCode) return '';
     const jd = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
@@ -761,7 +769,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldPoll, selectedId, turnInFlight]);
 
-  const published = Boolean(jobPage) || isPublished(brief?.status);
+  const published = Boolean(jobPage) || isPublishedRequisition(brief?.status);
   // Block sends while a switch is in flight (brief null / loadingBrief) so a
   // reply can't post to the wrong requisition, and while a turn is in flight.
   const canSend = Boolean(brief) && !loadingBrief && (composer.trim() || attachments.length > 0) && !turnInFlight;
@@ -853,8 +861,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   >
                     <span className="rq-side-title">{b.title || 'Untitled requisition'}</span>
                     <span className="rq-side-meta">
-                      <span className={`rq-dot ${isPublished(b.status) ? 'is-published' : 'is-open'}`} />
-                      {statusLabel(b.status)}
+                      <span className={`rq-dot ${isPublishedRequisition(b.status) ? 'is-published' : 'is-open'}`} />
+                      {requisitionStatusLabel(b.status)}
                       {b.completeness != null ? ` · ${b.completeness}%` : ''}
                     </span>
                   </button>
@@ -904,7 +912,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                 <div className="rq-main-head-titles">
                   <h1 className="rq-main-title">{brief.title || 'Untitled requisition'}</h1>
                   <div className="rq-main-sub">
-                    <span className="rq-status-chip">{statusLabel(brief.status)}</span>
+                    <span className="rq-status-chip">{requisitionStatusLabel(brief.status)}</span>
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
                   {/* Hiring department folded into the header (no separate
@@ -965,7 +973,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   {jobPage ? (
                     <div className="rq-published">
                       <div className="rq-published-top">
-                        <span className="rq-published-flag"><Check size={15} /> Published</span>
+                        <span className="rq-published-flag">
+                          <Check size={15} /> {linkedJobOpen ? 'Live · accepting applications' : 'Preview ready · applications open after Turn on'}
+                        </span>
                         <a
                           className="rq-published-url"
                           href={jobPageUrl}
@@ -977,8 +987,17 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         </a>
                       </div>
                       <div className="rq-published-actions">
+                        {linkedJob?.role_id ? (
+                          <button
+                            type="button"
+                            className="rq-btn-sm is-primary"
+                            onClick={() => onNavigate?.('job-pipeline', { roleId: linkedJob.role_id })}
+                          >
+                            <Rocket size={13} /> {linkedJobOpen ? 'Open job' : 'Open job to turn on'}
+                          </button>
+                        ) : null}
                         <button type="button" className="rq-btn-sm is-ghost" onClick={copyJobUrl}>
-                          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Copy'}
+                          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : (linkedJobOpen ? 'Copy' : 'Copy preview')}
                         </button>
                         <a
                           className="rq-btn-sm is-ghost"
@@ -986,7 +1005,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          <ExternalLink size={13} /> View job page
+                          <ExternalLink size={13} /> {linkedJobOpen ? 'View job page' : 'View preview'}
                         </a>
                         <button
                           type="button"
@@ -1007,7 +1026,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                             rel="noopener noreferrer"
                             title={careersUrl}
                           >
-                            On your careers page <ExternalLink size={12} />
+                            {linkedJobOpen ? 'Live on your careers page' : 'Appears on your careers page after Turn on'} <ExternalLink size={12} />
                           </a>
                           <button type="button" className="rq-btn-sm is-ghost" onClick={copyCareersUrl}>
                             {careersCopied ? <Check size={13} /> : <Copy size={13} />} {careersCopied ? 'Copied' : 'Copy'}
@@ -1015,16 +1034,17 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         </div>
                       ) : null}
 
-                      {/* Workable bridge: the inactive Taali job + the spec to post in Workable. */}
+                      {/* Optional Workable distribution bridge. The native Taali
+                          job + agent workflow is already ready after publish. */}
                       <div className="rq-workable-row">
                         <div className="rq-workable-head">
                           <span className={`rq-job-status ${linkedJob?.workable_job_id ? 'is-open' : 'is-draft'}`}>
-                            {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Not linked to Workable yet · Draft'}
+                            {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Taali job ready · Workable optional'}
                           </span>
                           {refCode ? <code className="rq-ref-code" title="Requisition ref code">{refCode}</code> : null}
                         </div>
                         <p className="rq-workable-hint">
-                          Create the job in Workable using this spec — keep the ref line so it links back to this requisition automatically when it syncs in.
+                          Taali applications and the agent do not depend on Workable. If you also want Workable distribution, create it there with this spec and keep the ref line for automatic linking.
                         </p>
                         <button
                           type="button"
@@ -1032,7 +1052,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           onClick={copyWorkableSpec}
                           disabled={!workableSpec}
                         >
-                          {workableCopied ? <Check size={13} /> : <FileText size={13} />} {workableCopied ? 'Copied' : 'Copy spec for Workable'}
+                          {workableCopied ? <Check size={13} /> : <FileText size={13} />} {workableCopied ? 'Copied' : 'Optional: copy for Workable'}
                         </button>
                       </div>
                     </div>

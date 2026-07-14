@@ -15,15 +15,17 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
-from ..models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFERRED
+from ..models.organization import Organization
 from ..models.role import JOB_STATUS_DRAFT, Role
-from ..models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 from ..models.role_brief import (
     BRIEF_SOURCES,
     BRIEF_STATUS_APPLIED,
     BRIEF_STATUS_SUBMITTED,
     RoleBrief,
 )
+from .agent_policy_settings import apply_workspace_agent_defaults
+from .role_brief_criteria import materialize_brief_criteria as _materialize_criteria
+from .role_criteria_service import snapshot_workspace_criteria
 
 # Fields the agent / recruiter may set on a brief.
 _EDITABLE_FIELDS = frozenset(
@@ -157,60 +159,20 @@ def submit_brief(db: Session, brief: RoleBrief) -> RoleBrief:
     return brief
 
 
-def _criterion_text(item) -> str:
-    if isinstance(item, str):
-        return item.strip()
-    if isinstance(item, dict):
-        return str(item.get("text") or item.get("label") or "").strip()
-    return str(item).strip()
-
-
-def _materialize_criteria(db: Session, brief: RoleBrief, role: Role) -> None:
-    """Create role_criterion rows from the brief's must_haves / preferred /
-    dealbreakers (-> must / preferred / constraint buckets) so the published role
-    is immediately scoreable. Idempotent: skips if the role already has criteria,
-    so re-publishing never duplicates. (Dealbreakers also become knockout
-    questions once screening_questions reaches prod.)"""
-    has_any = (
-        db.query(RoleCriterion.id)
-        .filter(RoleCriterion.role_id == role.id, RoleCriterion.deleted_at.is_(None))
-        .first()
-    )
-    if has_any:
-        return
-    ordering = 0
-    for items, bucket, must in (
-        (brief.must_haves, BUCKET_MUST, True),
-        (brief.preferred, BUCKET_PREFERRED, False),
-        (brief.dealbreakers, BUCKET_CONSTRAINT, False),
-    ):
-        for item in items or []:
-            text = _criterion_text(item)
-            if not text:
-                continue
-            db.add(
-                RoleCriterion(
-                    role_id=role.id,
-                    text=text,
-                    bucket=bucket,
-                    must_have=must,
-                    source=CRITERION_SOURCE_RECRUITER,
-                    ordering=ordering,
-                )
-            )
-            ordering += 1
-    db.flush()
-
-
 def materialize_brief_to_role(
     db: Session,
     brief: RoleBrief,
     *,
     mark_applied: bool = True,
     job_status: str | None = None,
+    job_spec_text: str | None = None,
 ) -> Role:
-    """Create (or update) the role this brief describes. Name + description +
-    criteria.
+    """Create (or update) the role this brief describes.
+
+    In addition to name, summary, and criteria, all structured fields shared by
+    ``RoleBrief`` and ``Role`` are copied on every materialization.  Publish may
+    also pass the rendered ``job_spec_text`` so downstream scoring and agent
+    flows consume the full JD rather than the brief's short summary.
 
     ``mark_applied`` (default True) flips the brief to APPLIED, locking it from
     further edits — the "commit fully to a role" path. Publish passes
@@ -237,19 +199,52 @@ def materialize_brief_to_role(
         ):
             role.job_status = job_status
     else:
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == int(brief.organization_id))
+            .one_or_none()
+        )
         role = Role(
             organization_id=brief.organization_id,
             name=(brief.title or "Untitled role"),
             source="requisition",
             job_status=job_status,
         )
+        apply_workspace_agent_defaults(role, org)
         db.add(role)
         db.flush()
         brief.role_id = role.id
+        # Requisition criteria and workspace criteria are independent sources.
+        # Seed the workspace snapshot once, at creation, exactly like POST
+        # /roles; later workspace edits remain opt-in via Sync workspace.
+        snapshot_workspace_criteria(db, role)
     if brief.title:
         role.name = brief.title
     if brief.summary:
         role.description = brief.summary
+    for field in (
+        "employment_type",
+        "workplace_type",
+        "location_city",
+        "location_country",
+        "department",
+        "salary_min",
+        "salary_max",
+        "salary_currency",
+        "salary_period",
+    ):
+        setattr(role, field, getattr(brief, field, None))
+    if job_spec_text is not None:
+        spec_changed = (role.job_spec_text or "") != job_spec_text
+        role.job_spec_text = job_spec_text
+        if spec_changed:
+            role.job_spec_uploaded_at = (
+                datetime.now(timezone.utc) if job_spec_text.strip() else None
+            )
+            # The post-commit JD event will regenerate these from the new spec.
+            # Clear them now so reads cannot mistake stale guidance for current.
+            role.interview_focus = None
+            role.interview_focus_generated_at = None
     _materialize_criteria(db, brief, role)
     if mark_applied:
         brief.status = BRIEF_STATUS_APPLIED

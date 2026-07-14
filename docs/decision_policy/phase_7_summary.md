@@ -1,8 +1,15 @@
 # Phase 7 Summary — Cohort planner (agent surveys, reasons, acts)
 
+> Historical implementation note. This file records the original Phase 7
+> rollout and its then-current approval defaults; it is not the operating
+> contract. The current one-click autonomy, metering, recovery, and HITL
+> boundaries are defined in [the agent decision matrix](../agent-decision-matrix.md).
+> The manual checks at the end are release-validation notes, not routine steps
+> required after turning on a role.
+
 ## Mental-model shift
 
-Phases 1-6 wired the agent as a **reactive** system: per-application Celery events fired the orchestrator, which thought about one candidate at a time. Phase 7 inverts the trigger model: the agent owns the cycle. A 30-minute beat tick wakes one tick per active role; the orchestrator surveys the cohort, decides where the leverage is, and acts. There are no per-application triggers any more.
+Phases 1-6 wired the agent as a **reactive** system: per-application Celery events fired the orchestrator, which thought about one candidate at a time. Phase 7 inverted the trigger model so the agent owns the cycle. The original rollout used a 30-minute Beat tick; the current production cadence is hourly, with immediate activation/resume and event wakeups. The orchestrator surveys the cohort, decides where the leverage is, and acts.
 
 This aligns with the design principles in:
 - **Anthropic — "Building effective agents":** workflows have predefined paths; agents direct their own. The previous trigger model was workflow-shaped (event → cycle); cohort planner is agent-shaped (the agent decides where to spend its cycle).
@@ -44,7 +51,7 @@ Net delta from the design I sketched: ~700 lines instead of ~1500.
     2. Decide where to spend the cycle from the survey output.
     3. Auto-execute deterministic work (`batch_score_cv`); ask the recruiter for genuine gaps; queue verdicts via `evaluate_policy` for human-in-loop decisions.
 - `backend/app/services/application_events.py` — per-application agent trigger removed (kept the audit-write path; just no longer enqueues a Celery task per applicant).
-- `backend/app/tasks/agent_tasks.py` — new `agent_cohort_tick_sweep` + `agent_cohort_tick_role` tasks. Beat schedule entry `agent-cohort-tick-every-30-minutes` (1800s) added to `celery_app.py`.
+- `backend/app/tasks/agent_tasks.py` — added `agent_cohort_tick_sweep` + `agent_cohort_tick_role`; the current Beat entry is `agent-cohort-tick-every-60-minutes` (3600s).
 - `backend/app/agent_runtime/needs_input_routes.py` — `/api/v1/agent-needs-input` HTTP surface (list + answer + dismiss).
 - `backend/app/main.py` — wires the new router.
 
@@ -93,4 +100,4 @@ Net delta from the design I sketched: ~700 lines instead of ~1500.
 
 1. Walk through the role page on a real agent-on role and confirm the AgentNeedsInputCard renders only when there's an actual question.
 2. Manually trigger `agent_cohort_tick_role.delay(role_id)` from a Python REPL on a role with mixed state and inspect the AgentRun reasoning summary.
-3. Tune the `agent-cohort-tick-every-30-minutes` cadence per real-world load — 30 min is a guess. Per-org config is a one-line addition if needed.
+3. Cadence was tuned to `agent-cohort-tick-every-60-minutes`; activation, resume, and application events provide the immediate path.

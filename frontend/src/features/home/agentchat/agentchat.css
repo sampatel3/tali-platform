@@ -254,6 +254,7 @@
 .ac-draft-tag { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--purple-2); background: var(--purple-soft); padding: 2px 7px; border-radius: 5px; }
 .ac-draft-decisions { margin: 1px 0 2px; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
 .ac-draft-decisions li { font-size: 0.71875rem; color: var(--ink-2); line-height: 1.4; }
+.ac-draft-auto { padding: 8px 9px; border-radius: 8px; background: var(--purple-soft); color: var(--ink-2); font-size: 0.71875rem; line-height: 1.45; }
 
 /* ---- Structured reject questionnaire ----------------------------------- */
 .ac-reject { display: flex; flex-direction: column; gap: 10px; padding: 11px; background: var(--bg-3); border: 1px solid var(--purple-soft); border-radius: 10px; }

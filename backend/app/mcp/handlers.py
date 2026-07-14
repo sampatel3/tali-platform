@@ -388,6 +388,7 @@ def nl_search_candidates(
     result = run_search(
         db=db,
         organization_id=int(user.organization_id),
+        role_id=int(role_id) if role_id is not None else None,
         nl_query=text,
         base_query=base,
         rerank_enabled=verify,
@@ -480,6 +481,7 @@ def find_top_candidates(
     result = _engine(
         db=db,
         organization_id=int(user.organization_id),
+        role_id=int(role_id) if role_id is not None else None,
         query=text,
         base_query=base,
         limit=int(limit),
@@ -578,6 +580,7 @@ def screen_pool_against_requirement(
     engine_kwargs = dict(
         db=db,
         organization_id=int(user.organization_id),
+        role_id=int(role_id) if role_id is not None else None,
         requirement=text,
         base_query=base,
         limit=int(limit),

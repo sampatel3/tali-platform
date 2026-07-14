@@ -54,7 +54,13 @@ def _enqueue_capture(db, app, monkeypatch, *, guard, genuine, run_at, cv_uploade
     fake.delay.side_effect = _delay
     monkeypatch.setattr("app.tasks.scoring_tasks.score_application_job", fake)
     monkeypatch.setattr("app.services.role_budget_gate.can_spend_on_role", lambda *a, **k: True)
-    monkeypatch.setattr("app.services.cv_score_orchestrator._meter_reserve", lambda *a, **k: None)
+    # Admission now threads the numeric reservation into the role-cap check.
+    # Keep this guard-focused test out of the metering implementation while
+    # preserving that contract.
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator._meter_reserve",
+        lambda *a, **k: 30_000,
+    )
 
     from app.services.cv_score_orchestrator import enqueue_score
     enqueue_score(db, app, force=True, bypass_pre_screen=True)

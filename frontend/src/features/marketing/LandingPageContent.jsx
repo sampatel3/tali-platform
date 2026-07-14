@@ -21,7 +21,7 @@ import './landingVariantGSections.css';
 //   2. The animated agent-ON <AgentScene> (job flips OFF→ON on first scroll,
 //      candidates flow into the decision lane, verdicts stamp) as the hero's
 //      product graphic (styles in heroAgentScene.css).
-//   3. Variant G's 5-step FUNNEL ("One agent, your whole funnel." — Source /
+//   3. Variant G's 5-step FUNNEL ("One agent, your whole funnel." — Intake /
 //      Screen / Assess / Decide / Hand back) in the #how-it-works band.
 //   4. Variant G's 5-Ds AI-fluency scorecard ("Measure how people actually work
 //      with AI." — Delegation / Description / Discernment / Diligence /
@@ -133,8 +133,8 @@ export const LandingPage = ({ onNavigate }) => {
                 Taali is the agentic hiring platform — one governed agent runs screening,
                 AI-fluency assessment, and defensible decisions end to end, across
                 <em className="not-italic font-medium text-[var(--ink)]"> engineering and knowledge work</em>.
-                It paces itself within your budget and asks you on every call that matters.
-                Every consequential decision still goes through you.
+                It paces itself within your budget, executes on-policy reversible steps,
+                and brings ambiguity, irreversible rejections, interviews, offers, and hires to you.
               </p>
               <div className="flex flex-wrap gap-3 text-[0.8125rem] text-[var(--ink-2)]" style={{ marginBottom: 30 }}>
                 {[
@@ -192,8 +192,10 @@ export const LandingPage = ({ onNavigate }) => {
             <span className="eyebrow">AGENTIC HIRING</span>
             <h2 className="display mt-3">One agent, <span className="grad-text">your whole funnel.</span></h2>
             <p className="lede">
-              It sources, reads every CV, runs the assessment, and puts a decision in front of you with
-              the evidence attached. You approve. It executes.
+              It takes applicants from your live Taali job page and connected ATS, reads every CV,
+              runs the assessment, and executes on-policy reversible steps. Ambiguous and irreversible
+              calls come to you with evidence. Outbound starts only from an audience you lawfully supply
+              and a campaign you approve.
             </p>
           </Reveal>
 
@@ -316,7 +318,7 @@ export const LandingPage = ({ onNavigate }) => {
             <div>
               <TaaliLogo onClick={() => onNavigate('landing')} wordmarkClassName="!text-[var(--bg)]" />
               <p className="mt-5 max-w-[17.5rem] text-[0.9375rem] leading-7 text-[var(--taali-inverse-text)] opacity-70">
-                The agentic hiring platform. One governed agent runs your funnel — you decide every call that matters.
+                The agentic hiring platform. One governed agent runs the routine funnel — you decide the calls that require human judgment.
               </p>
             </div>
 

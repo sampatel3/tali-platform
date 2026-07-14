@@ -42,6 +42,9 @@ from ....services.s3_service import (
     upload_bytes_to_s3,
 )
 from ....services.application_events import on_application_created
+from ....cv_parsing.origins import CV_PARSE_ORIGIN_ATS_INGEST
+from ....services.agent_policy_settings import apply_workspace_agent_defaults
+from ....services.job_page_lifecycle import role_allows_new_paid_ats_work
 from ....services.fit_matching_service import (
     CvMatchValidationError,
     calculate_cv_job_match_sync,
@@ -1752,26 +1755,13 @@ class WorkableSyncService:
                 db, org, job_id=job_id, title=title, description=description
             )
         if not role:
-            # Seed budget + threshold from workspace settings. Workable itself
-            # doesn't supply criteria so the new role's chip set is snapshotted
-            # from ``org_criteria`` further down via ``sync_all_criteria``.
-            # Existing roles (re-sync) keep their own chips.
-            org_budget = getattr(org, "default_role_budget_cents", None)
-            org_threshold = getattr(org, "default_score_threshold", None)
             role = Role(
                 organization_id=org.id,
                 source="workable",
                 workable_job_id=job_id or None,
                 name=title,
-                monthly_usd_budget_cents=(
-                    int(org_budget) if org_budget is not None else None
-                ),
-                score_threshold=(
-                    max(0, min(100, int(org_threshold)))
-                    if org_threshold is not None
-                    else None
-                ),
             )
+            apply_workspace_agent_defaults(role, org)
             db.add(role)
             created = True
         previous_job_data = (
@@ -1920,19 +1910,35 @@ class WorkableSyncService:
                 role.star_auto_managed = False
 
         # New Workable role → auto-provision a draft assessment task from its
-        # JD (gated by AUTO_GENERATE_ASSESSMENT_TASKS; default off). countdown
-        # gives the surrounding sync transaction time to commit before the
-        # worker reads the role. Best-effort; never breaks the sync.
-        if created and (role.job_spec_text or "").strip():
-            try:
-                from ....platform.config import settings
-                if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
-                    from ....tasks.assessment_tasks import generate_assessment_task_for_role
-                    generate_assessment_task_for_role.apply_async(
-                        args=[int(role.id), int(org.id)], countdown=45,
-                    )
-            except Exception:  # pragma: no cover
-                logger.warning("auto-generate enqueue failed for synced role %s", getattr(role, "id", "?"), exc_info=True)
+        # JD (gated by AUTO_GENERATE_ASSESSMENT_TASKS; default on). Persist the
+        # request in this sync transaction before the low-latency broker kick;
+        # Beat recovers a lost kick after commit. countdown gives the
+        # surrounding transaction time to commit before the worker reads it.
+        if (created or spec_changed) and (role.job_spec_text or "").strip():
+            from ....platform.config import settings
+
+            if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+                from ....services.task_provisioning_service import (
+                    request_assessment_task_provisioning,
+                )
+
+                provisioning_requested = request_assessment_task_provisioning(
+                    role,
+                    reason=("workable_role_create" if created else "workable_spec_update"),
+                    supersede_generated_drafts=bool(spec_changed),
+                )
+                if provisioning_requested:
+                    try:
+                        from ....tasks.assessment_tasks import generate_assessment_task_for_role
+                        generate_assessment_task_for_role.apply_async(
+                            args=[int(role.id), int(org.id)], countdown=45,
+                        )
+                    except Exception:  # pragma: no cover
+                        logger.warning(
+                            "auto-generate enqueue failed for synced role %s; durable sweep will retry",
+                            getattr(role, "id", "?"),
+                            exc_info=True,
+                        )
 
         return role, created
 
@@ -2445,28 +2451,27 @@ class WorkableSyncService:
                         filename=filename,
                         content=content,
                     )
-            # Refresh the read-only score cache from existing fields. We
-            # do NOT auto-enqueue scoring here — scoring is human-only,
-            # triggered via Score / Rescore / Score selected. The
-            # interview-pack regen and auto-reject pre-screen are fanned
-            # out as Celery tasks below so the sync loop doesn't make
-            # synchronous Claude calls per candidate.
+            # Refresh the read-only score cache from existing fields. Paid
+            # scoring is never run synchronously inside the sync loop. Newly
+            # created applications on a running role agent are admitted to the
+            # bounded async scoring path below; manual Score / Rescore
+            # remains an optional recovery/override for other roles.
             if app.score_cached_at is None:
                 refresh_application_score_cache(app, db=db)
             else:
                 refresh_pre_screening_fields(app)
-            # Defer the per-application auto work (interview pack +
-            # auto-reject pre-screen) to Celery. Default scoring stays
-            # human-triggered, EXCEPT for roles flagged
-            # starred_for_auto_sync — recruiters opt those into real-time
-            # scoring per-candidate. Only score on the create branch
-            # (created_application) so re-syncs of an existing app don't
-            # re-enqueue scoring jobs every Beat tick.
-            auto_score = bool(
-                created_application
-                and getattr(role, "starred_for_auto_sync", False)
+            # The star is sticky adoption/sync-cadence metadata, not permission
+            # to spend.  Only a lifecycle-ready, enabled, unpaused role may
+            # launch NEW paid parse/score work. Metadata continues to sync while
+            # paused/off, and work queued before the hold is left untouched.
+            paid_work_allowed = role_allows_new_paid_ats_work(role)
+            auto_score = bool(created_application and paid_work_allowed)
+            on_application_created(
+                app,
+                score=auto_score,
+                allow_paid_work=paid_work_allowed,
+                parse_origin=CV_PARSE_ORIGIN_ATS_INGEST,
             )
-            on_application_created(app, score=auto_score)
             # NOTE: syncs never dispatch paid re-scoring. A changed
             # Workable context (new answers/comments/activities) is
             # stored for display and for the NEXT recruiter-approved
@@ -2494,7 +2499,7 @@ class WorkableSyncService:
                     sister for sister in (role.sister_roles or [])
                     if sister.deleted_at is None
                 ]
-                if live_sisters:
+                if live_sisters and role_allows_new_paid_ats_work(role):
                     from ....services.sister_role_service import (
                         ensure_application_sister_evaluations,
                     )

@@ -16,6 +16,7 @@ import pytest
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.organization import Organization
+from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
 
@@ -257,3 +258,71 @@ def test_chat_embeds_editor_context_when_provided(client, db, assessment_in_prog
     assert "<editor_context" in last_user
     assert "src/main.py" in last_user
     assert "1/0" in last_user
+
+
+def test_chat_reserves_call_and_threads_stable_role_trace(
+    client, db, assessment_in_progress,
+):
+    role = Role(
+        organization_id=assessment_in_progress.organization_id,
+        name="Trace role",
+    )
+    db.add(role)
+    db.flush()
+    assessment_in_progress.role_id = role.id
+    db.commit()
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as mock_svc_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.reserve"
+        ) as reserve_mock,
+    ):
+        svc = MagicMock()
+        svc.run = AsyncMock(return_value=_stub_chat_turn())
+        mock_svc_cls.return_value = svc
+        with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
+            resp = client.post(
+                f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+                json={"message": "trace this", "request_id": "stable-req-7"},
+                headers={"X-Assessment-Token": "chat-test-tok"},
+            )
+
+    assert resp.status_code == 200, resp.text
+    reserve_mock.assert_called_once()
+    init = mock_svc_cls.call_args.kwargs
+    assert init["role_id"] == role.id
+    assert init["trace_id"] == (
+        f"assessment:{assessment_in_progress.id}:chat:stable-req-7:agent"
+    )
+
+
+def test_chat_credit_gate_blocks_before_paid_sdk_call(
+    client, db, assessment_in_progress,
+):
+    from app.services.usage_metering_service import InsufficientCreditsError
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as mock_svc_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.reserve",
+            side_effect=InsufficientCreditsError(
+                organization_id=int(assessment_in_progress.organization_id),
+                required=60_000,
+                available=0,
+            ),
+        ),
+    ):
+        with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
+            resp = client.post(
+                f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+                json={"message": "should not spend"},
+                headers={"X-Assessment-Token": "chat-test-tok"},
+            )
+
+    assert resp.status_code == 402
+    mock_svc_cls.assert_not_called()

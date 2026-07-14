@@ -43,6 +43,7 @@ from .org_criterion import (
 )
 from .role_criterion import (
     CRITERION_SOURCE_DERIVED,
+    CRITERION_SOURCE_REQUISITION,
     CRITERION_SOURCE_RECRUITER,
     CRITERION_SOURCE_RECRUITER_CONSTRAINT,
     RoleCriterion,
@@ -245,6 +246,7 @@ __all__ = [
     "RoleCriterion",
     "CRITERION_SOURCE_RECRUITER",
     "CRITERION_SOURCE_DERIVED",
+    "CRITERION_SOURCE_REQUISITION",
     "CRITERION_SOURCE_RECRUITER_CONSTRAINT",
     "OrganizationCriterion",
     "BUCKET_MUST",

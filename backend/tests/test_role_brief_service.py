@@ -9,6 +9,7 @@ from app.models import (
     BUCKET_MUST,
     BUCKET_PREFERRED,
     Organization,
+    CRITERION_SOURCE_REQUISITION,
     RoleCriterion,
 )
 from app.models.role import (
@@ -77,6 +78,53 @@ def test_materialize_creates_role(db):
     assert b.role_id == role.id and b.status == "applied"
 
 
+def test_materialized_requisition_inherits_workspace_agent_defaults(db):
+    org = _org(db)
+    org.default_role_budget_cents = 12_500
+    org.default_score_threshold = 73
+    b = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, b, title="Backend Engineer")
+
+    role = materialize_brief_to_role(db, b, mark_applied=False)
+
+    assert role.monthly_usd_budget_cents == 12_500
+    assert role.score_threshold == 73
+
+
+def test_materialize_copies_full_jd_and_structured_role_fields(db):
+    b = create_brief(db, organization_id=_org(db).id)
+    update_brief_fields(
+        db,
+        b,
+        title="Platform Engineer",
+        summary="Short summary",
+        department="Engineering",
+        location_city="Dubai",
+        location_country="UAE",
+        workplace_type="hybrid",
+        employment_type="full_time",
+        salary_min=240000,
+        salary_max=300000,
+        salary_currency="AED",
+        salary_period="year",
+    )
+    jd = "# Platform Engineer\n\nFull responsibilities and requirements."
+    role = materialize_brief_to_role(db, b, job_spec_text=jd)
+
+    assert role.job_spec_text == jd
+    assert role.job_spec_uploaded_at is not None
+    assert role.description == "Short summary"
+    assert role.department == "Engineering"
+    assert role.location_city == "Dubai"
+    assert role.location_country == "UAE"
+    assert role.workplace_type == "hybrid"
+    assert role.employment_type == "full_time"
+    assert role.salary_min == 240000
+    assert role.salary_max == 300000
+    assert role.salary_currency == "AED"
+    assert role.salary_period == "year"
+
+
 def test_applied_brief_is_locked_then_rematerializes_same_role(db):
     b = create_brief(db, organization_id=_org(db).id)
     update_brief_fields(db, b, title="Eng")
@@ -110,6 +158,77 @@ def test_materialize_creates_criteria_by_bucket(db):
     assert (
         db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id).count() == 4
     )
+
+
+def test_republish_reconciles_only_requisition_owned_criteria(db):
+    b = create_brief(db, organization_id=_org(db).id)
+    update_brief_fields(
+        db,
+        b,
+        title="Eng",
+        must_haves=["Python", "Postgres"],
+        preferred=["AWS"],
+    )
+    role = materialize_brief_to_role(db, b, mark_applied=False)
+    recruiter_row = RoleCriterion(
+        role_id=role.id,
+        text="Recruiter-specific signal",
+        bucket=BUCKET_PREFERRED,
+        must_have=False,
+        source="recruiter",
+        ordering=99,
+    )
+    db.add(recruiter_row)
+    db.flush()
+
+    update_brief_fields(
+        db,
+        b,
+        must_haves=["Go"],
+        preferred=[],
+        dealbreakers=["No production ownership"],
+    )
+    materialize_brief_to_role(db, b, mark_applied=False)
+
+    active = (
+        db.query(RoleCriterion)
+        .filter(RoleCriterion.role_id == role.id, RoleCriterion.deleted_at.is_(None))
+        .all()
+    )
+    requisition = {
+        (row.text, row.bucket)
+        for row in active
+        if row.source == CRITERION_SOURCE_REQUISITION
+    }
+    assert requisition == {
+        ("Go", BUCKET_MUST),
+        ("No production ownership", BUCKET_CONSTRAINT),
+    }
+    assert recruiter_row in active
+    assert not {"Python", "Postgres", "AWS"} & {row.text for row in active}
+
+
+def test_republish_adopts_exact_legacy_brief_rows_before_reconciling(db):
+    """Pre-provenance requisitions stored their brief rows as recruiter rows.
+    An exact uncustomized match can be adopted safely, avoiding duplicates on
+    the first publish after upgrade."""
+    b = create_brief(db, organization_id=_org(db).id)
+    update_brief_fields(db, b, title="Eng", must_haves=["Python"])
+    role = materialize_brief_to_role(db, b, mark_applied=False)
+    original = (
+        db.query(RoleCriterion)
+        .filter(RoleCriterion.role_id == role.id)
+        .one()
+    )
+    original.source = "recruiter"
+    db.flush()
+
+    materialize_brief_to_role(db, b, mark_applied=False)
+    rows = db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id).all()
+
+    assert len(rows) == 1
+    assert rows[0].id == original.id
+    assert rows[0].source == CRITERION_SOURCE_REQUISITION
 
 
 # --------------------------------------------------------------------------- #
@@ -179,4 +298,3 @@ def test_republish_promotes_open_only_from_draft(db):
     db.flush()
     materialize_brief_to_role(db, b, mark_applied=False, job_status=JOB_STATUS_DRAFT)
     assert role.job_status == JOB_STATUS_OPEN  # not demoted
-

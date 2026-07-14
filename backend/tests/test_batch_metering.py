@@ -11,18 +11,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.models.anthropic_batch_job import AnthropicBatchJob
+from app.models.billing_credit_ledger import BillingCreditLedger
 from app.models.claude_call_log import ClaudeCallLog
 from app.models.organization import Organization
+from app.models.role import Role
 from app.models.usage_event import UsageEvent
 from app.services.metered_anthropic_client import (
     MeteredAnthropicClient,
     MeteringRequiredError,
 )
 from app.services.pricing_service import Feature, raw_cost_usd_micro
+from app.services.provider_usage_admission import (
+    PROVIDER_SUCCEEDED_PENDING_STATE,
+)
+from app.services.usage_credit_reservations import reserve_credits
 
 MODEL = "claude-haiku-4-5"
 
@@ -218,6 +225,317 @@ def test_batch_results_idempotent(db):
 
     assert db.query(ClaudeCallLog).count() == 2
     assert db.query(UsageEvent).count() == 2
+
+
+def test_batch_result_settles_each_request_hold_to_actual(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.settings.USAGE_METER_LIVE", True
+    )
+    entries = _entries(1)
+    client, _, org_id = _client(db, entries=entries)
+    org = db.get(Organization, org_id)
+    org.credits_balance = 100_000
+    role = Role(
+        organization_id=org_id,
+        name="Batch role",
+        monthly_usd_budget_cents=100,
+    )
+    db.add(role)
+    db.commit()
+    reservation = reserve_credits(
+        db,
+        organization_id=org_id,
+        feature=Feature.CV_PARSE,
+        external_ref="usage-hold:batch-result:settle",
+        role_id=int(role.id),
+        enforce_role_budget=True,
+    )
+    db.commit()
+
+    client.messages.batches.create(
+        requests=_requests(1),
+        metering={
+            "feature": Feature.CV_PARSE,
+            "organization_id": org_id,
+            "by_custom_id": {
+                "cvparse-1": {
+                    "entity_id": "application:1",
+                    "role_id": int(role.id),
+                    "credit_reservation": reservation.as_metering_payload(),
+                }
+            },
+        },
+    )
+    list(client.messages.batches.results("msgbatch_test_1"))
+
+    event = db.query(UsageEvent).filter_by(organization_id=org_id).one()
+    db.refresh(org)
+    assert org.credits_balance == 100_000 - int(event.credits_charged)
+    assert event.event_metadata["credit_reservation"]["state"] == "settled"
+    assert (
+        db.query(BillingCreditLedger)
+        .filter_by(external_ref="usage-hold:batch-result:settle:settled")
+        .count()
+        == 1
+    )
+
+
+def test_batch_result_meter_failure_keeps_durable_success_receipt(
+    db, monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.settings.USAGE_METER_LIVE", True
+    )
+    client, _, org_id = _client(db, entries=_entries(1))
+    org = db.get(Organization, org_id)
+    org.credits_balance = 100_000
+    role = Role(
+        organization_id=org_id,
+        name="Batch receipt role",
+        monthly_usd_budget_cents=100,
+    )
+    db.add(role)
+    db.commit()
+    reservation = reserve_credits(
+        db,
+        organization_id=org_id,
+        feature=Feature.CV_PARSE,
+        external_ref="usage-hold:batch-result:meter-down",
+        role_id=int(role.id),
+        enforce_role_budget=True,
+    )
+    db.commit()
+    client.messages.batches.create(
+        requests=_requests(1),
+        metering={
+            "feature": Feature.CV_PARSE,
+            "organization_id": org_id,
+            "by_custom_id": {
+                "cvparse-1": {
+                    "entity_id": "application:1",
+                    "role_id": int(role.id),
+                    "credit_reservation": reservation.as_metering_payload(),
+                }
+            },
+        },
+    )
+
+    with patch.object(client._messages, "_write_event", return_value=None):
+        list(client.messages.batches.results("msgbatch_test_1"))
+
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter_by(external_ref=reservation.external_ref)
+        .one()
+    )
+    receipt = hold.entry_metadata["deferred_usage_event"]
+    assert hold.entry_metadata["state"] == PROVIDER_SUCCEEDED_PENDING_STATE
+    assert receipt["input_tokens"] == 1_000
+    assert receipt["output_tokens"] == 500
+    assert receipt["service_tier"] == "batch"
+    assert receipt["role_id"] == int(role.id)
+    assert db.query(UsageEvent).count() == 0
+    assert (
+        db.query(AnthropicBatchJob)
+        .filter_by(batch_id="msgbatch_test_1")
+        .one()
+        .metered_at
+        is None
+    )
+
+
+def test_ambiguous_batch_submit_failure_retains_request_hold(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    client, fake, org_id = _client(db)
+    org = db.get(Organization, org_id)
+    org.credits_balance = 100_000
+    role = Role(organization_id=org_id, name="Ambiguous batch role")
+    db.add(role)
+    db.commit()
+    reservation = reserve_credits(
+        db,
+        organization_id=org_id,
+        feature=Feature.CV_PARSE,
+        external_ref="usage-hold:batch-submit:ambiguous",
+        role_id=int(role.id),
+        enforce_role_budget=True,
+    )
+    db.commit()
+    fake.create = MagicMock(side_effect=TimeoutError("batch submit timed out"))
+
+    with pytest.raises(TimeoutError):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                "by_custom_id": {
+                    "cvparse-1": {
+                        "organization_id": org_id,
+                        "role_id": int(role.id),
+                        "credit_reservation": reservation.as_metering_payload(),
+                    }
+                },
+            },
+        )
+
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+        .one()
+    )
+    assert hold.entry_metadata["state"] == "provider_attempt_started"
+    assert db.get(Organization, org_id).credits_balance < 100_000
+    assert (
+        db.query(ClaudeCallLog)
+        .filter(ClaudeCallLog.status == "sdk_ambiguous_error")
+        .count()
+        == 1
+    )
+
+
+def test_non_succeeded_batch_result_releases_request_hold(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    entries = [_FakeEntry(custom_id="cvparse-1", result=_FakeResult(type="errored"))]
+    client, _, org_id = _client(db, entries=entries)
+    org = db.get(Organization, org_id)
+    org.credits_balance = 100_000
+    role = Role(
+        organization_id=org_id,
+        name="Failed batch role",
+        monthly_usd_budget_cents=100,
+    )
+    db.add(role)
+    db.commit()
+    reservation = reserve_credits(
+        db,
+        organization_id=org_id,
+        feature=Feature.CV_PARSE,
+        external_ref="usage-hold:batch-result:release",
+        role_id=int(role.id),
+        enforce_role_budget=True,
+    )
+    db.commit()
+
+    client.messages.batches.create(
+        requests=_requests(1),
+        metering={
+            "feature": Feature.CV_PARSE,
+            "organization_id": org_id,
+            "by_custom_id": {
+                "cvparse-1": {
+                    "role_id": int(role.id),
+                    "credit_reservation": reservation.as_metering_payload(),
+                }
+            },
+        },
+    )
+    list(client.messages.batches.results("msgbatch_test_1"))
+
+    db.refresh(org)
+    assert org.credits_balance == 100_000
+    assert db.query(UsageEvent).filter_by(organization_id=org_id).count() == 0
+    assert (
+        db.query(BillingCreditLedger)
+        .filter_by(external_ref="usage-hold:batch-result:release:settled")
+        .count()
+        == 1
+    )
+
+
+def test_partial_batch_meter_retry_reuses_settled_request_events(db, monkeypatch):
+    """A failed later call-log write must not double-count earlier results."""
+
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.settings.USAGE_METER_LIVE", True
+    )
+    client, _, org_id = _client(db, entries=_entries(2))
+    org = db.get(Organization, org_id)
+    org.credits_balance = 100_000
+    role = Role(
+        organization_id=org_id,
+        name="Retry-safe batch role",
+        monthly_usd_budget_cents=100,
+    )
+    db.add(role)
+    db.commit()
+    reservations = {}
+    for i in (1, 2):
+        reservations[f"cvparse-{i}"] = reserve_credits(
+            db,
+            organization_id=org_id,
+            feature=Feature.CV_PARSE,
+            external_ref=f"usage-hold:batch-result:retry-{i}",
+            role_id=int(role.id),
+            enforce_role_budget=True,
+        )
+    db.commit()
+    client.messages.batches.create(
+        requests=_requests(2),
+        metering={
+            "feature": Feature.CV_PARSE,
+            "organization_id": org_id,
+            "by_custom_id": {
+                custom_id: {
+                    "entity_id": f"application:{i}",
+                    "role_id": int(role.id),
+                    "credit_reservation": reservation.as_metering_payload(),
+                }
+                for i, (custom_id, reservation) in enumerate(
+                    reservations.items(), start=1
+                )
+            },
+        },
+    )
+
+    real_log_write = client._messages._record_call_log_safe
+    attempts = 0
+
+    def _fail_second_log(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            return False
+        return real_log_write(**kwargs)
+
+    with patch.object(
+        client._messages,
+        "_record_call_log_safe",
+        side_effect=_fail_second_log,
+    ):
+        list(client.messages.batches.results("msgbatch_test_1"))
+
+    first_balance = int(db.get(Organization, org_id).credits_balance)
+    assert db.query(UsageEvent).filter_by(organization_id=org_id).count() == 2
+    assert db.query(ClaudeCallLog).count() == 1
+    batch_row = (
+        db.query(AnthropicBatchJob)
+        .filter_by(batch_id="msgbatch_test_1")
+        .one()
+    )
+    assert batch_row.metered_at is None
+
+    list(client.messages.batches.results("msgbatch_test_1"))
+
+    db.expire_all()
+    assert db.query(UsageEvent).filter_by(organization_id=org_id).count() == 2
+    assert db.query(ClaudeCallLog).count() == 2
+    assert int(db.get(Organization, org_id).credits_balance) == first_balance
 
 
 def test_unknown_batch_results_still_capture_call_log(db):

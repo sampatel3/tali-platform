@@ -177,6 +177,7 @@ def _enqueue_outcome_episode(
         candidate_full_name=full_name,
         candidate_taali_id=candidate_id,
         decision_id=int(decision.id),
+        role_id=int(decision.role_id),
         outcome_type=outcome_type,
         quality_signal=None,
         observed_at=observed_at,

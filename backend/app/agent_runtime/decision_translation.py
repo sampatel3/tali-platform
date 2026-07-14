@@ -43,7 +43,7 @@ def resolve_persisted_decision_type(
 
 def role_has_assessment_stage(role) -> bool:
     """Whether this role's pipeline actually runs an assessment: it has at
-    least one assessment task AND the recruiter hasn't flipped the
+    least one *active* assessment task AND the recruiter hasn't flipped the
     ``auto_skip_assessment`` toggle. Every caller that feeds
     ``has_assessment_task`` into the engine or into
     ``resolve_persisted_decision_type`` goes through this, so a skip-toggled
@@ -52,7 +52,10 @@ def role_has_assessment_stage(role) -> bool:
     ``auto_promote``)."""
     if bool(getattr(role, "auto_skip_assessment", False)):
         return False
-    return bool(getattr(role, "tasks", None))
+    return any(
+        bool(getattr(task, "is_active", False))
+        for task in (getattr(role, "tasks", None) or [])
+    )
 
 
 __all__ = [

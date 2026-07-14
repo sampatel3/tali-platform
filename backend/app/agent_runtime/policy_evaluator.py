@@ -31,6 +31,7 @@ from ..decision_policy.engine import (
 )
 from ..decision_policy.schema import PolicyJson
 from ..models.candidate_application import CandidateApplication
+from ..models.assessment import Assessment, AssessmentStatus
 from ..models.role import Role
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import must_have_blocked
@@ -230,6 +231,35 @@ def evaluate_for_application(
                 decision_type="no_action",
                 reasoning=f"application {application_id} not found",
                 rule_path=["application_missing"],
+            ),
+            {},
+        )
+
+    incomplete_assessment = (
+        db.query(Assessment.id)
+        .filter(
+            Assessment.application_id == int(app.id),
+            Assessment.is_voided.is_(False),
+            Assessment.status.in_(
+                [
+                    AssessmentStatus.COMPLETED,
+                    AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+                ]
+            ),
+            (
+                Assessment.scoring_partial.is_(True)
+                | Assessment.scoring_failed.is_(True)
+            ),
+        )
+        .order_by(Assessment.id.desc())
+        .first()
+    )
+    if incomplete_assessment is not None:
+        return (
+            PolicyDecision(
+                decision_type="no_action",
+                reasoning="Assessment rubric grading is incomplete and retrying automatically",
+                rule_path=["assessment_grading_incomplete"],
             ),
             {},
         )

@@ -284,11 +284,13 @@ class _CountingClient:
 
     def __init__(self, behaviour):
         self.calls = 0
+        self.requests = []
         outer = self
 
         class _M:
             def create(self, **kwargs):
                 outer.calls += 1
+                outer.requests.append(kwargs)
                 return behaviour(outer.calls)
 
         self.messages = _M()
@@ -368,6 +370,46 @@ def test_retries_transient_then_succeeds(monkeypatch):
     )
     assert client.calls == 3
     assert out[0].status == "met" and out[0].grounded is True
+    reservation_refs = {
+        call["metering"]["credit_reservation"]["external_ref"]
+        for call in client.requests
+    }
+    assert len(reservation_refs) == 3
+
+
+def test_grounding_threads_role_into_each_admitted_call(monkeypatch):
+    captured = []
+
+    def _admit(**kwargs):
+        captured.append(kwargs)
+        return {
+            "feature": "candidate_grounding",
+            "organization_id": kwargs["organization_id"],
+            "role_id": kwargs["role_id"],
+            "credit_reservation": {
+                "organization_id": kwargs["organization_id"],
+                "feature": "candidate_grounding",
+                "amount": 5_000,
+                "external_ref": "test-grounding-hold",
+                "live": False,
+            },
+        }
+
+    monkeypatch.setattr(ge, "admitted_search_metering", _admit)
+    client = _CountingClient(lambda _n: _met_response())
+
+    out = ge.extract_cv_evidence(
+        cv_text="core banking platform",
+        criteria=["banking domain experience"],
+        client=client,
+        organization_id=1,
+        role_id=88,
+        application_id=9,
+    )
+
+    assert out[0].status == "met"
+    assert captured[0]["role_id"] == 88
+    assert client.requests[0]["metering"]["role_id"] == 88
 
 
 def test_non_transient_error_is_not_retried(monkeypatch):
@@ -624,7 +666,12 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: list(apps))
 
     out = tc.find_top_candidates(
-        db=db, organization_id=1, query="top data engineers", base_query=MagicMock(), limit=2
+        db=db,
+        organization_id=1,
+        role_id=44,
+        query="top data engineers",
+        base_query=MagicMock(),
+        limit=2,
     )
 
     assert out["total_matched"] == 3
@@ -636,6 +683,7 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     # not ILIKE-matched into the pool (the "0 matched" bug).
     assert seen_kwargs.get("defer_qualitative") is True
     assert seen_kwargs.get("rerank_enabled") is False
+    assert seen_kwargs.get("role_id") == 44
     # no qualitative criteria → no grounding spend, no evidence model, no filter
     assert out["evidence_model"] is None
     assert out["excluded"]["not_met_total"] == 0

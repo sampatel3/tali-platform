@@ -322,6 +322,7 @@ def _ground(
     criteria: list[str],
     client,
     organization_id: int,
+    role_id: int | None,
     application_id: int,
 ) -> list[CriterionVerdict]:
     """Pure (no DB / no ORM access) — safe to run in a worker thread. Grounds
@@ -337,6 +338,7 @@ def _ground(
         criteria=criteria,
         client=client,
         organization_id=organization_id,
+        role_id=role_id,
         application_id=int(application_id),
     )
     for v in verdicts:
@@ -351,6 +353,7 @@ def _ground_window(
     criteria: list[str],
     client,
     organization_id: int,
+    role_id: int | None = None,
 ) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
     """Ground each app in ``apps`` concurrently (I/O-bound Haiku calls).
 
@@ -371,6 +374,7 @@ def _ground_window(
                 criteria=criteria,
                 client=client,
                 organization_id=organization_id,
+                role_id=role_id,
                 application_id=int(app.id),
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
@@ -705,6 +709,7 @@ def find_top_candidates(
     *,
     db: Session,
     organization_id: int,
+    role_id: int | None = None,
     query: str,
     base_query,
     limit: int = DEFAULT_LIMIT,
@@ -725,6 +730,7 @@ def find_top_candidates(
     result = run_search(
         db=db,
         organization_id=organization_id,
+        role_id=role_id,
         nl_query=query,
         base_query=base_query,
         rerank_enabled=False,
@@ -876,7 +882,11 @@ def find_top_candidates(
     )
     apps.sort(key=_rank_key, reverse=True)
     grounded = _ground_window(
-        apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
+        apps[:window_size],
+        criteria=criteria,
+        client=client,
+        organization_id=organization_id,
+        role_id=role_id,
     )
 
     survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
@@ -961,6 +971,7 @@ def screen_pool_against_requirement(
     *,
     db: Session,
     organization_id: int,
+    role_id: int | None = None,
     requirement: str,
     base_query,
     limit: int = DEFAULT_SCREEN_LIMIT,
@@ -995,6 +1006,7 @@ def screen_pool_against_requirement(
     result = run_search(
         db=db,
         organization_id=organization_id,
+        role_id=role_id,
         nl_query=requirement,
         base_query=base_query,
         rerank_enabled=False,
@@ -1120,7 +1132,11 @@ def screen_pool_against_requirement(
         matched_pool, result_ids[: max(window_size, limit)]
     )
     grounded = _ground_window(
-        apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
+        apps[:window_size],
+        criteria=criteria,
+        client=client,
+        organization_id=organization_id,
+        role_id=role_id,
     )
 
     # 4. Hide hard-constraint failures (salary over cap, …); rank the rest by fit

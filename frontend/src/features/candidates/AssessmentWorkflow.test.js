@@ -11,6 +11,14 @@ describe('deriveAssessmentWorkflow', () => {
     expect(wf.label).toMatch(/delivery pending/i);
   });
 
+  it('transient provider failure stays visibly agent-driven', () => {
+    const wf = deriveAssessmentWorkflow('pending', { email_status: 'retry_wait' });
+    expect(wf.codes).toBe('CTTTT');
+    expect(wf.label).toMatch(/retrying automatically/i);
+    expect(wf.action).toBeNull();
+    expect(wf.live).toBe(true);
+  });
+
   it('delivered to inbox', () => {
     expect(codes('pending', { delivered_at: 'x', email_status: 'delivered' })).toBe('DDCTT');
   });

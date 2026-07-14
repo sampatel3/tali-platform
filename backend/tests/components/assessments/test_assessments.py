@@ -1,18 +1,23 @@
 from tests.conftest import verify_user
 
+TEST_PASSWORD = "Secur3-Horse-Battery!"
+
+
 def _register_and_login(client):
     """Helper: register a user and return auth headers."""
-    client.post("/api/v1/auth/register", json={
+    register_resp = client.post("/api/v1/auth/register", json={
         "email": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
         "full_name": "Test User",
         "organization_name": "Test Org",
     })
+    assert register_resp.status_code == 201, register_resp.text
     verify_user("test@example.com")
     login_resp = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
-        "password": "testpass123",
+        "password": TEST_PASSWORD,
     })
+    assert login_resp.status_code == 200, login_resp.text
     token = login_resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 

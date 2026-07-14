@@ -74,9 +74,17 @@ async def _lifespan(_app: FastAPI):
     from .mcp import mcp_app as _mcp_server
 
     # Lazy-create the session manager (no-op when the streamable_http_app
-    # mount has already done so on first import).
+    # mount has already done so on first import).  ``streamable_http_app``
+    # captures the manager instance in its ASGI endpoint, so after a previous
+    # lifespan reset we must also replace the mounted sub-app.  Otherwise a
+    # second TestClient/lifespan starts the new manager while /mcp requests are
+    # still routed to the retired manager whose task group has shut down.
     if _mcp_server._session_manager is None:
-        _mcp_server.streamable_http_app()
+        restarted_mcp_app = _mcp_server.streamable_http_app()
+        for route in _app.routes:
+            if getattr(route, "path", None) == "/mcp":
+                route.app = restarted_mcp_app
+                break
     try:
         async with _mcp_server.session_manager.run():
             yield
@@ -492,8 +500,14 @@ from .mcp import mcp_app as _mcp_server  # noqa: E402
 app.mount("/mcp", _mcp_server.streamable_http_app())
 
 
-@app.get("/health")
-def health_check():
+def _health_payload() -> dict:
+    """Build the shared liveness/readiness payload.
+
+    ``/health`` remains an always-readable diagnostic endpoint. ``/ready``
+    applies deployment semantics to the same evidence and returns 503 when the
+    database, Redis, live usage meter, or required Beat→worker queues are not
+    ready in production.
+    """
     db_ok = False
     redis_ok = False
     try:
@@ -511,6 +525,22 @@ def health_check():
         redis_ok = bool(r.ping())
     except Exception:
         redis_ok = False
+        r = None
+
+    try:
+        from .services.agent_worker_health import worker_beat_status
+
+        agent_worker = worker_beat_status(client=r) if r is not None else {
+            "ready": False,
+            "reason": "redis_unavailable",
+            "age_seconds": None,
+        }
+    except Exception:
+        agent_worker = {
+            "ready": False,
+            "reason": "health_probe_error",
+            "age_seconds": None,
+        }
 
     # Resend powers verification, password-reset, and team-invite emails.
     # When the key is missing or set to "skip", on_after_register silently
@@ -531,18 +561,67 @@ def health_check():
     except Exception:
         s3_health = {"available": False, "reason": "probe_error"}
 
+    production_like = is_production_like(settings)
+    usage_meter_live = bool(settings.USAGE_METER_LIVE)
+    usage_meter_emergency_override = bool(
+        settings.USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY
+    )
+    usage_meter_override_active = bool(
+        production_like
+        and not usage_meter_live
+        and usage_meter_emergency_override
+    )
+    usage_meter_ready = not production_like or usage_meter_live
+    if usage_meter_live:
+        usage_meter_mode = "live"
+    elif usage_meter_override_active:
+        usage_meter_mode = "shadow_emergency_override"
+    else:
+        usage_meter_mode = "shadow"
+
     # S3 down doesn't degrade the API: cv_text persists in Postgres
-    # regardless. Surface the state for ops visibility but don't change
-    # the top-level status_str unless DB or Redis is actually broken.
-    status_str = "healthy" if db_ok and redis_ok else "degraded"
+    # regardless. Production shadow metering does degrade readiness because
+    # credit debits and spend gates are disabled; the emergency override only
+    # permits boot, it must remain operationally visible.
+    status_str = (
+        "healthy"
+        if (
+            db_ok
+            and redis_ok
+            and usage_meter_ready
+            and (not production_like or bool(agent_worker.get("ready")))
+        )
+        else "degraded"
+    )
     return {
         "status": status_str,
         "service": "taali-api",
         "database": db_ok,
         "redis": redis_ok,
+        "agent_worker": agent_worker,
         "s3": s3_health,
+        "usage_meter": {
+            "mode": usage_meter_mode,
+            "live": usage_meter_live,
+            "ready": usage_meter_ready,
+            "production_emergency_override": usage_meter_override_active,
+        },
         "integrations": integrations,
     }
+
+
+@app.get("/health")
+def health_check():
+    return _health_payload()
+
+
+@app.get("/ready")
+def readiness_check():
+    payload = _health_payload()
+    return JSONResponse(
+        status_code=200 if payload.get("status") == "healthy" else 503,
+        content=payload,
+    )
 
 
 @app.get("/healthz/graphiti")

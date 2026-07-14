@@ -52,11 +52,20 @@ def run(
         actor_id=actor.event_actor_id,
         reason="Pipeline initialized before stage change",
     )
+    # Agent auto-approvals arrive as ``Actor.system`` (the LLM itself cannot
+    # call this mutation directly) with an agent_decision_id in metadata. Keep
+    # that provenance on the stage row/event instead of mislabelling the move
+    # as recruiter-authored.
+    stage_source = (
+        "agent"
+        if actor.type != "recruiter" and (metadata or {}).get("agent_decision_id")
+        else "recruiter"
+    )
     transition_stage(
         db,
         app=app,
         to_stage=to_stage,
-        source="recruiter",
+        source=stage_source,
         actor_type=actor.type,
         actor_id=actor.event_actor_id,
         reason=reason or "Stage advanced",

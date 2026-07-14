@@ -3,11 +3,10 @@
 Two responsibilities, both invoked from ``approve_decision`` /
 ``override_decision`` after the underlying action has already succeeded:
 
-1. ``try_workable_advance`` — move the candidate in Workable to the
-   recruiter-picked ``target_stage`` whenever they advanced (or
-   skip-advanced) them. When no stage is supplied the Workable move is
-   skipped, so "Advance" / "Skip & advance" only change Tali's internal
-   pipeline_stage and the recruiter's Workable view is silently out of sync.
+1. ``try_workable_advance`` — move the candidate in Workable to the explicit
+   recruiter-picked ``target_stage``. Autonomous/system advances fall back to
+   the org's configured ``interview_stage_name``; without either, write-back is
+   skipped and the local pipeline remains authoritative.
 
 2. ``post_decision_summary_to_workable`` — post a short activity-feed note
    ("TAALI ▸ Advanced by recruiter · score 85 · …  Report (30d): https://…")
@@ -19,8 +18,8 @@ Both are best-effort: failures are recorded as application events and
 returned as booleans / no-ops, never raised. The caller has already
 committed the actual stage / outcome change before this fires.
 
-Recruiter-only. ``actor.user_id`` is required so we can attribute the
-minted ``ShareLink`` row to the same recruiter who clicked the button.
+Decision summaries with share links remain recruiter-attributed. Stage
+write-back also supports agent/system actors for autonomous advances.
 """
 
 from __future__ import annotations
@@ -163,12 +162,9 @@ def try_workable_advance(
 ) -> bool:
     """Move the candidate in Workable to ``target_stage``.
 
-    ``target_stage`` is the recruiter's pick (sent in the approve / override
-    request body from the Workable stage `<select>` rendered in the home-
-    page modal). When unset / empty, the Workable move is skipped; only
-    Tali's internal pipeline_stage changes. Returns True iff the move
-    succeeded. Failures record a ``workable_writeback_failed`` event and
-    return False — the underlying stage change has already committed.
+    ``target_stage`` is normally the recruiter's pick. For an agent/system
+    actor, an empty value falls back to ``workable_config.interview_stage_name``.
+    An explicit target always wins. Returns True iff the move succeeded.
     """
     # Bullhorn-connected org → advance via the Bullhorn provider (writes the
     # org's advanced-mapped JobSubmission status). Same gating contract as the
@@ -179,6 +175,13 @@ def try_workable_advance(
         return bullhorn
 
     target = (target_stage or "").strip()
+    if not target and actor.type in {"agent", "system"} and org is not None:
+        config = (
+            org.workable_config
+            if isinstance(getattr(org, "workable_config", None), dict)
+            else {}
+        )
+        target = str(config.get("interview_stage_name") or "").strip()
     if not target:
         return False
     if not _workable_writeback_ready(app=app, org=org):

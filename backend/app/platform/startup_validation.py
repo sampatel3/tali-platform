@@ -11,11 +11,27 @@ INSECURE_DEFAULTS = frozenset({
     "secret",
 })
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+PRODUCTION_ENV_NAMES = frozenset({"prod", "production"})
+RETIRED_CLAUDE_MODELS = frozenset(
+    "claude-" + suffix
+    for suffix in (
+        "3-5-haiku-latest",
+        "3-5-haiku-20241022",
+        "3-haiku-20240307",
+    )
+)
 
 
 def is_production_like(settings) -> bool:
+    deployment_env = (
+        getattr(settings, "DEPLOYMENT_ENV", "") or ""
+    ).strip().lower()
     frontend_url = (getattr(settings, "FRONTEND_URL", "") or "").strip()
-    return bool(getattr(settings, "SENTRY_DSN", None)) or "localhost" not in frontend_url
+    return (
+        deployment_env in PRODUCTION_ENV_NAMES
+        or bool(getattr(settings, "SENTRY_DSN", None))
+        or "localhost" not in frontend_url
+    )
 
 
 def url_points_to_localhost(url: str | None) -> bool:
@@ -39,12 +55,65 @@ def is_railway_environment(environ: Mapping[str, str] | None = None) -> bool:
 
 def collect_startup_failures(settings) -> list[str]:
     failures: list[str] = []
+    production_like = is_production_like(settings)
     secret = (getattr(settings, "SECRET_KEY", "") or "").strip().lower()
-    if is_production_like(settings) and secret in INSECURE_DEFAULTS:
+    if production_like and secret in INSECURE_DEFAULTS:
         failures.append(
             "CRITICAL: SECRET_KEY is set to an insecure default. "
             "Set a strong SECRET_KEY in your .env before running in production."
         )
+
+    usage_meter_live = bool(getattr(settings, "USAGE_METER_LIVE", False))
+    usage_meter_emergency_override = bool(
+        getattr(
+            settings,
+            "USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY",
+            False,
+        )
+    )
+    if (
+        production_like
+        and not usage_meter_live
+        and not usage_meter_emergency_override
+    ):
+        failures.append(
+            "CRITICAL: USAGE_METER_LIVE must be true in production so credit "
+            "debits and spend gates are enforced. Set USAGE_METER_LIVE=true. "
+            "For a time-bounded metering incident only, set "
+            "USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY=true; this leaves "
+            "the usage meter unready and /health degraded."
+        )
+
+    if production_like:
+        if not bool(
+            getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", True)
+        ):
+            failures.append(
+                "CRITICAL: AUTO_GENERATE_ASSESSMENT_TASKS must be true in "
+                "production so a published requisition can reach its "
+                "battle-tested Turn on review without a manual Tasks workflow."
+            )
+        configured_models = {
+            field: (getattr(settings, field, "") or "").strip()
+            for field in (
+                "CLAUDE_MODEL",
+                "CLAUDE_SCORING_MODEL",
+                "CLAUDE_SCORING_BATCH_MODEL",
+                "CLAUDE_CHAT_MODEL",
+                "CLAUDE_AGENT_AUTONOMOUS_MODEL",
+            )
+        }
+        retired = [
+            f"{field}={model}"
+            for field, model in configured_models.items()
+            if model.lower() in RETIRED_CLAUDE_MODELS
+        ]
+        if retired:
+            failures.append(
+                "CRITICAL: retired Anthropic model configured ("
+                + ", ".join(retired)
+                + "). Configure a currently supported, pinned Anthropic model ID."
+            )
 
     if not getattr(settings, "ASSESSMENT_TERMINAL_ENABLED", False):
         failures.append(

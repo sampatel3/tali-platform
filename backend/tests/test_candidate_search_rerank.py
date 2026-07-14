@@ -22,12 +22,14 @@ class _FakeClient:
     def __init__(self, decisions: list[bool]):
         self._decisions = list(decisions)
         self.calls = 0
+        self.requests: list[dict] = []
 
         class _Messages:
             def __init__(inner_self):
                 inner_self._parent = self
 
             def create(inner_self, **kwargs):
+                inner_self._parent.requests.append(kwargs)
                 idx = inner_self._parent.calls
                 inner_self._parent.calls += 1
                 if idx < len(inner_self._parent._decisions):
@@ -112,6 +114,53 @@ def test_malformed_response_drops_candidate(monkeypatch):
         client=fake,
     )
     assert out == []  # malformed → conservative drop
+
+
+def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
+    apps = [_make_app_row(10, 100)]
+    db = _make_db(apps)
+    fake = _FakeClient([True])
+    captured = {}
+
+    def _admit(**kwargs):
+        captured.update(kwargs)
+        return {
+            "feature": "cv_rerank",
+            "organization_id": kwargs["organization_id"],
+            "role_id": kwargs["role_id"],
+            "credit_reservation": {
+                "organization_id": kwargs["organization_id"],
+                "feature": "cv_rerank",
+                "amount": 5_000,
+                "external_ref": "test-rerank-hold",
+                "live": False,
+            },
+        }
+
+    monkeypatch.setattr(rerank_module, "admitted_search_metering", _admit)
+    graph_context_args = {}
+
+    def _graph_context(**kwargs):
+        graph_context_args.update(kwargs)
+        return None
+
+    monkeypatch.setattr(rerank_module, "_build_graph_context", _graph_context)
+
+    out = rerank_module.rerank_application_ids(
+        db=db,
+        organization_id=1,
+        role_id=77,
+        application_ids=[10],
+        soft_criteria=["large enterprise"],
+        client=fake,
+    )
+
+    assert out == [10]
+    assert captured["organization_id"] == 1
+    assert captured["role_id"] == 77
+    assert graph_context_args["role_id"] == 77
+    assert fake.requests[0]["metering"]["role_id"] == 77
+    assert fake.requests[0]["metering"]["credit_reservation"]["amount"] == 5_000
 
 
 def test_no_api_key_falls_back_to_pass_through(monkeypatch):

@@ -19,12 +19,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 from app.components.integrations.workable.service import WorkableService
 from app.components.integrations.workable.sync_service import WorkableSyncService
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import JOB_STATUS_OPEN, Role
 
 
 _CANDIDATE_ID = "wk_cand_42"
@@ -143,6 +145,76 @@ def _run_one_candidate_sync(
         run=None,
         mode="full",
     )
+
+
+@pytest.mark.parametrize(
+    ("agentic", "paused", "job_state", "expected_paid"),
+    [
+        pytest.param(True, False, "published", True, id="enabled"),
+        pytest.param(True, True, "published", False, id="paused"),
+        pytest.param(False, False, "published", False, id="off"),
+        pytest.param(True, False, "closed", False, id="provider-closed"),
+    ],
+)
+def test_new_workable_application_paid_dispatch_requires_running_agent(
+    db,
+    *,
+    agentic,
+    paused,
+    job_state,
+    expected_paid,
+):
+    """A sticky adoption star must never outlive the agent's spend grant."""
+
+    slug = f"workable-paid-guard-{agentic}-{paused}-{job_state}"
+    org = Organization(
+        name=f"Org {slug}",
+        slug=slug,
+        workable_connected=True,
+        workable_access_token="x",
+        workable_subdomain="test",
+    )
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="Backend",
+        source="workable",
+        job_spec_text="Hiring a senior backend engineer.",
+        workable_job_id="J1",
+        workable_job_data={"state": job_state},
+        job_status=JOB_STATUS_OPEN,
+        starred_for_auto_sync=True,
+        agentic_mode_enabled=agentic,
+        agent_paused_at=(datetime.now(timezone.utc) if paused else None),
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.flush()
+
+    with patch(
+        "app.components.integrations.workable.sync_service.on_application_created"
+    ) as on_created:
+        _run_one_candidate_sync(
+            db,
+            org=org,
+            role=role,
+            new_comment_body="Metadata still synchronizes.",
+        )
+
+    on_created.assert_called_once()
+    assert on_created.call_args.kwargs == {
+        "score": expected_paid,
+        "allow_paid_work": expected_paid,
+        "parse_origin": "ats_ingest",
+    }
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == role.id)
+        .one()
+    )
+    assert app.source == "workable"
+    assert role.starred_for_auto_sync is True
 
 
 def _sync_and_collect_rescore_calls(db, *, org, role):

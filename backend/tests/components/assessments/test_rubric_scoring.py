@@ -408,7 +408,7 @@ def test_grade_dimension_error_returns_zero_with_error_set(
     scorer = RubricScorer(api_key="sk-fake", organization_id=1)
     grade = scorer.grade_dimension("d", {}, sample_artifacts)
     assert grade.score == 0.0
-    assert grade.rating == "poor"
+    assert grade.rating == "error"
     assert grade.error is not None
     assert "No more canned responses" in grade.error
 
@@ -423,8 +423,27 @@ def test_grade_dimension_threads_metering_kwargs(
     patched_metered_client["responses_to_yield"] = [
         _grader_response(8, "good"),
     ]
-    scorer = RubricScorer(api_key="sk-fake", organization_id=42, assessment_id=99)
-    scorer.grade_dimension("framework_assessment", {}, sample_artifacts)
+    scorer = RubricScorer(
+        api_key="sk-fake",
+        organization_id=42,
+        assessment_id=99,
+        role_id=17,
+        trace_id="assessment:99:submission:req-1",
+    )
+    from app.services.usage_credit_reservations import CreditReservation
+
+    reservation = CreditReservation(
+        organization_id=42,
+        feature="assessment",
+        amount=60_000,
+        external_ref="usage-hold:rubric-test",
+        live=False,
+    )
+    with patch(
+        "app.components.assessments.rubric_scoring.reserve_credits",
+        return_value=reservation,
+    ):
+        scorer.grade_dimension("framework_assessment", {}, sample_artifacts)
 
     # Metering shape: MeteredAnthropicClient only persists keys from
     # metering["metadata"] onto the UsageEvent row. ``sub_feature`` /
@@ -435,9 +454,60 @@ def test_grade_dimension_threads_metering_kwargs(
     meta = call["metering"]
     assert meta["feature"] == "assessment"
     assert meta["organization_id"] == 42
+    assert meta["role_id"] == 17
+    assert meta["trace_id"] == "assessment:99:submission:req-1:framework_assessment"
     assert meta["entity_id"] == "assessment:99"
     assert meta["metadata"]["sub_feature"] == "rubric_scoring"
     assert meta["metadata"]["dimension"] == "framework_assessment"
+    assert meta["metadata"]["trace_id"] == "assessment:99:submission:req-1:framework_assessment"
+    assert meta["credit_reservation"]["external_ref"] == "usage-hold:rubric-test"
+
+
+def test_grade_dimension_credit_gate_skips_paid_call(
+    patched_metered_client, sample_artifacts,
+):
+    from app.services.usage_metering_service import InsufficientCreditsError
+
+    scorer = RubricScorer(api_key="sk-fake", organization_id=42, assessment_id=99)
+    with patch(
+        "app.components.assessments.rubric_scoring.reserve_credits",
+        side_effect=InsufficientCreditsError(
+            organization_id=42,
+            required=60_000,
+            available=0,
+        ),
+    ):
+        grade = scorer.grade_dimension("framework_assessment", {}, sample_artifacts)
+
+    assert grade.error is not None
+    assert "needs 60000 credits" in grade.error
+    assert patched_metered_client["calls"] == []
+
+
+def test_grade_dimension_role_cap_skips_paid_call(
+    patched_metered_client, sample_artifacts,
+):
+    from app.services.usage_credit_reservations import InsufficientRoleBudgetError
+
+    scorer = RubricScorer(
+        api_key="sk-fake",
+        organization_id=42,
+        assessment_id=99,
+        role_id=17,
+    )
+    with patch(
+        "app.components.assessments.rubric_scoring.reserve_credits",
+        side_effect=InsufficientRoleBudgetError(
+            role_id=17,
+            required=60_000,
+            available=10_000,
+        ),
+    ):
+        grade = scorer.grade_dimension("framework_assessment", {}, sample_artifacts)
+
+    assert grade.error is not None
+    assert "role_id=17 needs 60000" in grade.error
+    assert patched_metered_client["calls"] == []
 
 
 # ---- RubricScorer.grade_rubric (aggregation) -------------------------------
@@ -509,6 +579,16 @@ def test_grade_rubric_continues_after_single_dimension_failure(
     # 4 dimensions should be graded normally
     successful = [d for d in result.dimensions if d.error is None]
     assert len(successful) == 4
+    # The failed dimension's backwards-compatible numeric placeholder is not
+    # authoritative and must not depress the partial evidence aggregate.
+    expected = (
+        sum(d.score * d.weight for d in successful)
+        / sum(d.weight for d in successful)
+        * 10.0
+    )
+    assert result.weighted_score_100 == pytest.approx(expected, abs=0.05)
+    failed = next(d for d in result.dimensions if d.error is not None)
+    assert failed.rating == "error"
 
 
 def test_grade_rubric_handles_empty_rubric(

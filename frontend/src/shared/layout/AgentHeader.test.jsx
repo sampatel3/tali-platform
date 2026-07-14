@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-import { AgentHeader } from './AgentHeader';
+import { AgentHeader, buildAgentPropFromStatus } from './AgentHeader';
 
 const runningAgent = {
   on: true,
@@ -66,6 +66,35 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByText(/monthly budget reached/i)).toBeInTheDocument();
   });
 
+  it('shows an honest starting state until the worker acknowledges activation', () => {
+    const agent = buildAgentPropFromStatus({
+      enabled: true,
+      bootstrap_status: 'starting',
+      pending_decisions: 0,
+      monthly_spent_cents: 0,
+      monthly_budget_cents: 5000,
+    });
+    render(<AgentHeader title="Jobs" agent={agent} onPauseAgent={() => {}} />);
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+    expect(screen.getByText(/starting first autonomous cycle/i)).toBeInTheDocument();
+  });
+
+  it('surfaces an exhausted bootstrap as a retryable auto-pause', () => {
+    const agent = buildAgentPropFromStatus({
+      enabled: true,
+      paused_at: new Date().toISOString(),
+      paused_reason: 'agent bootstrap failed after retries: model unavailable',
+      bootstrap_status: 'failed',
+      bootstrap_error: 'model unavailable',
+      pending_decisions: 0,
+      monthly_spent_cents: 0,
+      monthly_budget_cents: 5000,
+    });
+    render(<AgentHeader title="Jobs" agent={agent} onResumeAgent={() => {}} />);
+    expect(screen.getByText('Auto-paused')).toBeInTheDocument();
+    expect(screen.getByText(/startup held.*auto-checking/i)).toBeInTheDocument();
+  });
+
   it('uses the canonical primary small action when the agent is off', () => {
     render(
       <AgentHeader
@@ -79,6 +108,22 @@ describe('AgentHeader — Pause/Resume panel', () => {
       'taali-btn-primary',
       'taali-btn-sm',
     );
+  });
+
+  it('keeps Agent settings discoverable before the agent is turned on', () => {
+    const onSettings = vi.fn();
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={{ ...runningAgent, on: false, paused: false }}
+        onActivateAgent={() => {}}
+        onAgentSettings={onSettings}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Configure agent' }));
+    expect(onSettings).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /turn on/i })).toBeInTheDocument();
   });
 
   it('renders a Turn off control only when onTurnOffAgent is wired, and fires it', () => {

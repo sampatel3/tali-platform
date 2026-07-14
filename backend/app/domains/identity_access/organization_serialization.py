@@ -10,6 +10,7 @@ from __future__ import annotations
 from ...models.organization import Organization
 from ...platform.config import settings
 from ...schemas.organization import (
+    AgentDefaults,
     AiToolingConfig,
     FirefliesConfig,
     NotificationPreferences,
@@ -78,7 +79,23 @@ def resolved_scoring_policy(org: Organization) -> dict:
 
 def resolved_ai_tooling_config(org: Organization) -> dict:
     raw = org.ai_tooling_config if isinstance(org.ai_tooling_config, dict) else {}
-    return AiToolingConfig(**{**AiToolingConfig().model_dump(), **raw}).model_dump()
+    normalized = dict(raw)
+    raw_defaults = normalized.get("agent_defaults")
+    if isinstance(raw_defaults, dict):
+        defaults = dict(raw_defaults)
+        # Historical Settings clients stored 0 to mean "not configured".
+        # A role now always needs a positive hard cap, so resolve that legacy
+        # sentinel to the same $50 platform default used by Turn on.
+        try:
+            invalid_budget = int(defaults.get("budget_cents") or 0) <= 0
+        except (TypeError, ValueError):
+            invalid_budget = True
+        if invalid_budget:
+            defaults["budget_cents"] = 5_000
+        normalized["agent_defaults"] = defaults
+    return AiToolingConfig(
+        **{**AiToolingConfig().model_dump(), **normalized}
+    ).model_dump()
 
 
 def resolved_notification_preferences(org: Organization) -> dict:
@@ -118,6 +135,14 @@ def merge_ai_tooling_config(org: Organization, incoming: OrgUpdate) -> dict:
     if incoming.ai_tooling_config is None:
         return base
     updates = incoming.ai_tooling_config.model_dump(exclude_none=True)
+    incoming_defaults = updates.pop("agent_defaults", None)
+    if incoming_defaults is not None:
+        existing_defaults = base.get("agent_defaults")
+        if not isinstance(existing_defaults, dict):
+            existing_defaults = AgentDefaults().model_dump()
+        updates["agent_defaults"] = AgentDefaults(
+            **{**existing_defaults, **incoming_defaults}
+        ).model_dump()
     return AiToolingConfig(**{**base, **updates}).model_dump()
 
 

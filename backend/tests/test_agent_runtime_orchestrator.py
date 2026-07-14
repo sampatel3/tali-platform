@@ -28,6 +28,8 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.services.usage_credit_reservations import InsufficientRoleBudgetError
+from app.services.usage_metering_service import InsufficientCreditsError
 
 
 # SQLite BigInteger PK workaround (same as other agent_runtime tests).
@@ -74,7 +76,8 @@ def _make_role(db, org: Organization) -> Role:
         name="Backend",
         source="manual",
         agentic_mode_enabled=True,
-        monthly_usd_budget_cents=0,  # 0 disables the monthly check
+        # Legacy zero values resolve to the documented $50 default cap.
+        monthly_usd_budget_cents=0,
         # Data-readiness gate requires a job spec before the agent runs.
         job_spec_text="Requirements\n- 5+ years backend engineering\n",
     )
@@ -176,6 +179,8 @@ def test_run_cycle_calls_agent_run_complete_immediately(db):
     }
     # decisions_emitted unchanged (no queue tools called).
     assert run.decisions_emitted == 0
+    metering = client.messages.create.call_args.kwargs["metering"]
+    assert metering["credit_reservation"]["feature"] == "agent_autonomous"
 
 
 def test_run_cycle_records_tool_call_then_finishes(db):
@@ -218,6 +223,55 @@ def test_run_cycle_records_tool_call_then_finishes(db):
     assert run.status == "succeeded"
     counts = {entry["name"]: entry["count"] for entry in (run.tools_called or [])}
     assert counts == {"get_application": 1, "agent_run_complete": 1}
+
+
+def test_run_cycle_threads_agent_run_trace_id_to_every_anthropic_round(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_1",
+                    name="get_application",
+                    input_={"application_id": int(app.id)},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_2",
+                    name="agent_run_complete",
+                    input_={"summary": "Reviewed."},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+    ])
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    expected_trace_id = f"agent-run:{int(run.id)}"
+    meterings = [
+        call.kwargs["metering"]
+        for call in client.messages.create.call_args_list
+    ]
+    assert len(meterings) == 2
+    assert [metering["metadata"]["round"] for metering in meterings] == [0, 1]
+    assert all(metering["trace_id"] == expected_trace_id for metering in meterings)
+    assert all(
+        metering["metadata"]["agent_run_id"] == int(run.id)
+        for metering in meterings
+    )
 
 
 def test_run_cycle_increments_decisions_when_queue_tool_called(db):
@@ -373,6 +427,59 @@ def test_run_cycle_pauses_role_on_monthly_budget_exhausted(db):
     assert role.agent_paused_reason
 
 
+def test_run_cycle_durably_pauses_when_org_credits_are_exhausted(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    depleted = InsufficientCreditsError(
+        organization_id=int(org.id), required=20_000, available=0
+    )
+    client = MagicMock()
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.reserve_provider_usage", side_effect=depleted
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "budget_paused"
+    assert "top up to resume" in (run.error or "")
+    db.refresh(role)
+    assert role.agent_paused_at is not None
+    assert "top up to resume" in (role.agent_paused_reason or "")
+    assert not client.messages.create.called
+
+
+def test_run_cycle_durably_pauses_when_hard_role_admission_is_exhausted(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    capped = InsufficientRoleBudgetError(
+        role_id=int(role.id), required=20_000, available=5_000
+    )
+    client = MagicMock()
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.reserve_provider_usage", side_effect=capped
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "budget_paused"
+    assert "monthly USD cap admission blocked" in (run.error or "")
+    db.refresh(role)
+    assert role.agent_paused_at is not None
+    assert not client.messages.create.called
+
+
 def test_run_cycle_token_budget_blocks_actions_from_over_budget_response(db):
     org = _make_org(db)
     role = _make_role(db, org)
@@ -421,6 +528,9 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
 
     assert run.status == "failed"
     assert "anthropic call failed" in (run.error or "").lower()
+    failed_call_metering = boom_client.messages.create.call_args.kwargs["metering"]
+    assert failed_call_metering["trace_id"] == f"agent-run:{int(run.id)}"
+    assert failed_call_metering["metadata"]["agent_run_id"] == int(run.id)
 
 
 def test_run_cycle_uses_role_agent_model_when_set(db):

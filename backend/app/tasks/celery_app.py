@@ -32,6 +32,7 @@ def _install_anthropic_wire_tap(**_kwargs):
             "Failed to install Anthropic wire-tap in worker"
         )
 
+
 # Task → queue routing. Scoring lives on its own queue so a long-running
 # integration task (e.g. Workable sync at 60+ min) can't starve scoring.
 # Today we run a single worker that consumes both queues; when we
@@ -40,6 +41,7 @@ def _install_anthropic_wire_tap(**_kwargs):
 _TASK_ROUTES = {
     "app.tasks.scoring_tasks.score_application_job": {"queue": "scoring"},
     "app.tasks.scoring_tasks.batch_score_role": {"queue": "scoring"},
+    "app.tasks.scoring_tasks.recover_stuck_score_jobs": {"queue": "scoring"},
     # Nightly calibration scoring is Anthropic-heavy — keep it off the default
     # queue so it can't starve agent ticks / sync.
     "app.tasks.calibration_tasks.score_terminal_for_calibration": {"queue": "scoring"},
@@ -53,6 +55,13 @@ _TASK_ROUTES = {
     # (Anthropic + E2B) — keep it off the default queue so it can't starve agent
     # ticks / Workable sync.
     "app.tasks.assessment_tasks.finalize_timed_out_assessments": {"queue": "scoring"},
+    # JD authoring/repair is multi-call Sonnet work; battle testing holds an E2B
+    # sandbox. Keep all provisioning work off the default agent/sync queue.
+    "app.tasks.assessment_tasks.generate_assessment_task_for_role": {"queue": "scoring"},
+    "app.tasks.assessment_tasks.repair_generated_task_after_battle_failure": {"queue": "scoring"},
+    "app.tasks.assessment_tasks.battle_test_generated_task": {"queue": "scoring"},
+    "app.tasks.rubric_retry_tasks.retry_incomplete_rubric_scoring": {"queue": "scoring"},
+    "app.tasks.rubric_retry_tasks.sweep_incomplete_rubric_scoring": {"queue": "scoring"},
 }
 
 celery_app.conf.update(
@@ -67,6 +76,31 @@ celery_app.conf.update(
     task_default_queue="celery",
     task_routes=_TASK_ROUTES,
     beat_schedule={
+        # End-to-end scheduler canary. A fresh key proves Beat dispatched and a
+        # worker consumed a task; API production activation fails closed when
+        # it goes stale instead of pretending an idle agent is running.
+        "default-queue-worker-heartbeat-every-minute": {
+            "task": "app.tasks.health_tasks.queue_worker_heartbeat",
+            "schedule": 60.0,
+            "args": ["celery"],
+            "options": {"queue": "celery", "priority": 9},
+        },
+        "scoring-queue-worker-heartbeat-every-minute": {
+            "task": "app.tasks.health_tasks.queue_worker_heartbeat",
+            "schedule": 60.0,
+            "args": ["scoring"],
+            "options": {"queue": "scoring", "priority": 9},
+        },
+        # A worker can die after committing a provider-call credit hold but
+        # before the metering wrapper settles/releases it. Reap only holds
+        # older than two hours (far beyond any bounded provider call); the
+        # settlement ref makes this idempotent and late results are still
+        # charged by the canonical reservation reconciler.
+        "release-stale-usage-credit-reservations-every-15-minutes": {
+            "task": "app.tasks.health_tasks.release_stale_usage_credit_reservations",
+            "schedule": 900.0,
+            "kwargs": {"stale_after_minutes": 120, "limit": 500},
+        },
         # Sync redesign (2026-05-20): the old ``sync_workable_orgs`` did a
         # full-fat sync every 30 min and was rate-limiting Workable while
         # re-downloading CVs we already had. Now split across four tasks:
@@ -113,6 +147,13 @@ celery_app.conf.update(
             "task": "app.tasks.workable_tasks.expire_stuck_decision_batches",
             "schedule": 300.0,
         },
+        # A broker outage or worker SIGKILL must not leave a CvScoreJob in
+        # pending/running forever (which blocks enqueue_score's duplicate
+        # guard). Archive the stale attempt and dispatch a fresh idempotent one.
+        "recover-stuck-score-jobs-every-5-minutes": {
+            "task": "app.tasks.scoring_tasks.recover_stuck_score_jobs",
+            "schedule": 300.0,
+        },
         # Message Batches API pipelines (cv_parse today). Submit sweeps
         # parse-pending applications into per-org batches every 15 min
         # (no-op unless CV_PARSE_BATCH_ENABLED); poll drains ended batches
@@ -136,6 +177,43 @@ celery_app.conf.update(
         "assessment-nudges-daily": {
             "task": "app.tasks.assessment_tasks.send_assessment_nudges",
             "schedule": 86400.0,
+        },
+        # Assessment rows are the durable invite outbox. The normal producer
+        # kick runs only after the outer DB commit; this sweep recovers a lost
+        # kick, broker outage, or worker crash without recruiter intervention.
+        "sweep-pending-assessment-invites-every-minute": {
+            "task": "app.components.notifications.tasks.sweep_pending_assessment_invites",
+            "schedule": 60.0,
+        },
+        # Provider-send recovery is deliberately separate from outbox dispatch:
+        # it leases cooled-down/stale sends only when the default worker's live
+        # Resend canary is healthy, then retries with the original idempotency
+        # key so no recruiter intervention or duplicate candidate email occurs.
+        "sweep-retryable-assessment-invites-every-minute": {
+            "task": "app.components.notifications.tasks.sweep_retryable_assessment_invites",
+            "schedule": 60.0,
+        },
+        # Workable stage/note is a distinct outbox that begins only after
+        # Resend returns a provider id. ATS outages therefore recover without
+        # re-submitting the candidate email.
+        "sweep-assessment-invite-workable-handoffs-every-minute": {
+            "task": "app.components.notifications.tasks.sweep_assessment_invite_workable_handoffs",
+            "schedule": 60.0,
+        },
+        # Role JSON is the durable JD->assessment provisioning outbox. Recover
+        # broker outages, stale worker claims, and cooled-down failed retry
+        # chains without a recruiter re-publishing or manually retrying.
+        "sweep-assessment-task-provisioning-every-minute": {
+            "task": "app.tasks.assessment_tasks.sweep_assessment_task_provisioning",
+            "schedule": 60.0,
+        },
+        # Completed candidate work with a partial/failed rubric remains
+        # non-authoritative. This durable sweep recovers provider/credit errors,
+        # lost broker kicks, and stale worker leases without a recruiter click.
+        "sweep-incomplete-rubric-grading-every-minute": {
+            "task": "app.tasks.rubric_retry_tasks.sweep_incomplete_rubric_scoring",
+            "schedule": 60.0,
+            "options": {"queue": "scoring"},
         },
         # Per-(task, role_family) predictive-quality calibration. The engine
         # (sub_agents.task_calibration.recompute_all) predates this entry but
@@ -208,11 +286,19 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_cohort_tick_sweep",
             "schedule": 3600.0,
         },
+        # System holds self-heal: month rollover, credit top-up, and restored
+        # runtime/provider health are rechecked against the same fail-closed
+        # readiness contract used by explicit Resume. Manual pauses are never
+        # cleared. A successful recovery immediately dispatches a role tick.
+        "agent-system-hold-recovery-every-5-minutes": {
+            "task": "app.tasks.agent_tasks.agent_recovery_sweep",
+            "schedule": 300.0,
+        },
         # Deterministic, free pre-screen reject catch-up. Unlike the cohort
         # tick above (which skips budget-paused roles), this culls already
-        # pre-screened, below-threshold candidates on EVERY agent-managed
-        # role — paused included — so the obvious-no backlog never strands
-        # 'open' when a role auto-pauses at its monthly cap. No LLM spend;
+        # pre-screened, below-threshold candidates on every role — agent off
+        # and paused included — so the obvious-no backlog never strands open.
+        # No LLM spend;
         # just re-dispatches the idempotent auto-reject task. Bounded per run.
         "pre-screen-reject-sweep-every-30-minutes": {
             "task": "app.tasks.agent_tasks.pre_screen_reject_sweep",

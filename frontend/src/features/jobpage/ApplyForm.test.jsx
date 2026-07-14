@@ -73,6 +73,23 @@ describe('ApplyForm', () => {
     expect(publicJobApi.apply).not.toHaveBeenCalled();
   });
 
+  it('requires a resume when the agent-run job says it is required', async () => {
+    render(
+      <ApplyForm
+        token="tok-1"
+        questions={[]}
+        organizationName="Acme"
+        resumeRequired
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/Full name/i), { target: { value: 'Sam' } });
+    fireEvent.change(screen.getByLabelText(/^Email/i), { target: { value: 'sam@x.test' } });
+    fireEvent.click(screen.getByRole('button', { name: /Submit application/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/upload your resume/i);
+    expect(publicJobApi.apply).not.toHaveBeenCalled();
+  });
+
   it('offers the optional EEO step only when an eeo_token comes back, and it is dismissible', async () => {
     publicJobApi.apply.mockResolvedValue({ status: 'received', application_id: 3, eeo_token: 'eeo_tok' });
     publicJobApi.submitEeo.mockResolvedValue(undefined);
@@ -117,15 +134,15 @@ describe('PublicJobPage apply gating (zero regression)', () => {
     expect(await screen.findByTestId('apply-form')).toBeInTheDocument();
   });
 
-  it('renders exactly as before when accepts_applications is absent/false', async () => {
+  it('renders a clear inactive state when accepts_applications is false', async () => {
     renderPage({
       title: 'Staff Engineer',
       jd_markdown: 'Build things.',
       organization_name: 'Acme',
       accepts_applications: false,
     });
-    // The original "handled directly by" footer — no apply form.
-    expect(await screen.findByText(/handled directly by Acme/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Applications are not open for this role right now/i)).toBeInTheDocument();
     expect(screen.queryByTestId('apply-form')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit application/i })).not.toBeInTheDocument();
   });
 });

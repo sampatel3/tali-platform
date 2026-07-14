@@ -17,6 +17,11 @@ from __future__ import annotations
 import logging
 
 from ..llm import MeteringContext, generate_structured
+from ..services.pricing_service import Feature
+from ..services.provider_usage_admission import (
+    release_provider_usage,
+    reserve_provider_usage,
+)
 from . import MODEL_VERSION, PROMPT_VERSION
 from .prompts import build_cv_parse_prompt
 from .schemas import ParsedCV, ParsedCVSections
@@ -124,20 +129,63 @@ def parse_cv(
     # ``.input`` dict — no JSON parsing, no fence stripping, no syntactic
     # retry path. ParsedCVSections's Pydantic JSON schema is the single
     # wire contract; semantic ``model_validate`` still runs server-side.
+    metering_context = MeteringContext.from_dict(
+        metering, default_feature="cv_parse"
+    )
+    reservation = None
+    if (
+        metering_context.organization_id is not None
+        and metering_context.role_id is not None
+    ):
+        try:
+            reservation = reserve_provider_usage(
+                organization_id=int(metering_context.organization_id),
+                role_id=int(metering_context.role_id),
+                feature=Feature.CV_PARSE,
+                trace_id=(
+                    str(metering_context.trace_id)
+                    if metering_context.trace_id
+                    else f"cv-parse:{metering_context.entity_id or cache_key}"
+                ),
+                entity_id=(
+                    str(metering_context.entity_id)
+                    if metering_context.entity_id is not None
+                    else None
+                ),
+                sub_feature="application_cv_parse",
+            )
+        except Exception as exc:
+            # Structured sections are an optional display enhancement; the
+            # candidate page already has a raw-text fallback. Never bypass the
+            # org balance or role ceiling to create them.
+            return _fail(f"usage_admission_failed: {exc}")
+        metering_context.credit_reservation = reservation.as_metering_payload()
+
     result = generate_structured(
         client,
         model=MODEL_VERSION,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
         output_model=ParsedCVSections,
-        metering=MeteringContext.from_dict(metering, default_feature="cv_parse"),
+        metering=metering_context,
         max_tokens=OUTPUT_TOKEN_CEILING,
         temperature=TEMPERATURE,
-        max_retries=MAX_RETRIES,
+        # One hard reservation belongs to exactly one provider call. CV section
+        # parsing is optional, so a validation failure falls back to raw text
+        # rather than making an unreserved retry that could overshoot the cap.
+        max_retries=0 if reservation is not None else MAX_RETRIES,
         use_tool_use=True,
     )
 
     if not result.ok or result.value is None:
+        if (result.error_reason or "").startswith("claude_call_failed"):
+            # The real wrapper already releases on SDK failure. This
+            # idempotent fallback covers injected clients and failures before
+            # the wrapper sees the request.
+            release_provider_usage(
+                reservation,
+                reason="cv_parse_provider_call_failed",
+            )
         return _fail(result.error_reason or "parse_failed")
 
     parsed = ParsedCV.from_sections(
