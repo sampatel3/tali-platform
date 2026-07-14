@@ -400,12 +400,17 @@ describe('JobsPage Workable sync states', () => {
 
     const nativeOpenCard = (await screen.findByText('Native Open')).closest('.job-card');
     const nativeDraftCard = screen.getByText('Native Draft').closest('.job-card');
+    expect(screen.queryByRole('button', { name: 'Filter' })).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Filter jobs' })).toBeInTheDocument();
     expect(nativeOpenCard).not.toHaveClass('not-live');
     expect(nativeDraftCard).toHaveClass('not-live');
     expect(screen.getByRole('button', { name: /^Live2$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Draft1$/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Live2$/i }));
+    const liveFilter = screen.getByRole('button', { name: /^Live2$/i });
+    expect(liveFilter).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(liveFilter);
+    expect(liveFilter).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Native Open')).toBeInTheDocument();
     expect(screen.getByText('Provider Live')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Native Draft')).not.toBeInTheDocument());
