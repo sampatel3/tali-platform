@@ -212,7 +212,7 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelector('.job-agent-pill.is-on')).toBeNull();
   });
 
-  it('greys agent-off, paused, and non-live roles after Motion settles while keeping them actionable', async () => {
+  it('greys only explicitly non-live ATS roles, independently of agent state', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
         {
@@ -244,6 +244,21 @@ describe('JobsPage Workable sync states', () => {
           agentic_mode_enabled: true,
           agent_paused_at: '2026-05-30T18:53:00Z',
         },
+        {
+          ...baseRoles[0],
+          id: 105,
+          name: 'Unknown Workable State',
+          workable_job_state: null,
+        },
+        {
+          ...baseRoles[0],
+          id: 106,
+          name: 'Inactive Sister Role',
+          source: 'manual',
+          role_kind: 'sister',
+          workable_job_state: null,
+          workable_job_live: false,
+        },
       ],
     });
     apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
@@ -257,22 +272,24 @@ describe('JobsPage Workable sync states', () => {
     const closedCard = screen.getByText('Closed Role').closest('.job-card');
     const manualCard = screen.getByText('Manual Role').closest('.job-card');
     const pausedPublishedCard = screen.getByText('Paused Published Role').closest('.job-card');
+    const unknownStateCard = screen.getByText('Unknown Workable State').closest('.job-card');
+    const inactiveSisterCard = screen.getByText('Inactive Sister Role').closest('.job-card');
 
     expect(closedCard).toHaveClass('not-live');
-    expect(closedCard).toHaveClass('agent-inactive');
-    expect(closedCard).not.toHaveClass('agent-on');
+    expect(closedCard).toHaveClass('agent-on');
     expect(publishedCard).not.toHaveClass('not-live');
     expect(manualCard).not.toHaveClass('not-live');
     expect(pausedPublishedCard).not.toHaveClass('not-live');
+    expect(unknownStateCard).not.toHaveClass('not-live');
+    expect(inactiveSisterCard).toHaveClass('not-live');
     expect(publishedCard).toHaveClass('agent-on');
-    expect(publishedCard).not.toHaveClass('agent-inactive');
-    expect(manualCard).toHaveClass('agent-inactive');
-    expect(pausedPublishedCard).toHaveClass('agent-inactive');
     expect(pausedPublishedCard).not.toHaveClass('agent-on');
     await waitFor(() => expect(closedCard).toHaveStyle({ opacity: '0.55' }));
     expect(publishedCard).toHaveStyle({ opacity: '1' });
-    expect(manualCard).toHaveStyle({ opacity: '0.55' });
-    expect(pausedPublishedCard).toHaveStyle({ opacity: '0.55' });
+    expect(manualCard).toHaveStyle({ opacity: '1' });
+    expect(pausedPublishedCard).toHaveStyle({ opacity: '1' });
+    expect(unknownStateCard).toHaveStyle({ opacity: '1' });
+    expect(inactiveSisterCard).toHaveStyle({ opacity: '0.55' });
 
     expect(closedCard).toHaveAttribute('role', 'button');
     expect(closedCard).toHaveAttribute('tabindex', '0');

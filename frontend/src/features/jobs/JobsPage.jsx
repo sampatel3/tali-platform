@@ -63,11 +63,12 @@ const STAGES = PIPELINE_FUNNEL_STAGES;
 // and reduced motion are already settled, avoiding repeated zero-to-value runs.
 const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
 
-// Inactive roles keep the same settled opacity as the longstanding non-live
-// treatment. A role is visually active only while its agent is running; agent
-// OFF / PAUSED and non-live Workable lifecycle states settle dimmed. Motion
-// owns the reveal opacity, so the inactive target must be explicit here.
+// Non-live ATS roles keep the longstanding settled opacity. Agent state is an
+// independent signal carried by the ON / PAUSED / OFF pill and must never dim
+// an otherwise active posting. Motion owns the reveal opacity, so the inactive
+// lifecycle target must be explicit here.
 const ROLE_CARD_DIMMED_OPACITY = 0.55;
+const NON_LIVE_WORKABLE_STATES = new Set(['draft', 'archived', 'closed']);
 const roleCardFadeVariants = Object.freeze({
   hidden: fadeVariants.hidden,
   visible: ({ index = 0, stagger = false } = {}) => ({
@@ -140,10 +141,16 @@ const isRoleDraft = (role) => (
 // boards). Manual/Taali roles have no Workable state and are never "live".
 const isRoleLive = (role) => String(role?.workable_job_state || '').toLowerCase() === 'published';
 
-// A Workable role that isn't live is a filled/closed/draft posting — greyed
-// out on the grid. Manual roles are never greyed (they aren't Workable-managed).
+// Grey only when the external lifecycle explicitly says the posting is no
+// longer active. The backend boolean is authoritative and also carries an ATS
+// owner's state onto sister roles. The state fallback supports older payloads;
+// missing/unknown state is not proof that a posting is inactive.
 const isRoleDimmed = (role) => (
-  String(role?.source || '').toLowerCase() === 'workable' && !isRoleLive(role)
+  role?.workable_job_live != null
+    ? role.workable_job_live === false
+    : NON_LIVE_WORKABLE_STATES.has(
+      String(role?.workable_job_state || '').trim().toLowerCase(),
+    )
 );
 
 const filterRoleBySource = (role, sourceFilter) => {
@@ -895,8 +902,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   // "AGENT PAUSED", not "AGENT ON".
                   const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
                   const agentActive = agentEnabled && !agentPaused;
-                  const roleActive = agentActive && !lifecycleDimmed;
-                  const roleDimmed = !roleActive;
                   // Live agent status from the /roles/{id}/agent/status fan-out.
                   // When loaded, the indicator shows the canvas-spec
                   // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
@@ -919,13 +924,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       custom={{ index: roleIndex, stagger: !gridStaggerDone }}
                       variants={reduced ? reducedRoleCardFadeVariants : roleCardFadeVariants}
                       initial={reduced ? false : 'hidden'}
-                      animate={roleDimmed ? 'dimmed' : 'visible'}
+                      animate={lifecycleDimmed ? 'dimmed' : 'visible'}
                       exit="exit"
                       transition={{
                         layout: reduced ? motionTransition.instant : motionTransition.layout,
                       }}
                       data-motion-index={roleIndex}
-                      className={`job-card ${workableRole ? 'from-wk' : ''} ${roleActive ? 'agent-on' : 'agent-inactive'} ${lifecycleDimmed ? 'not-live' : ''}`}
+                      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
                       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                       role="button"
                       tabIndex={0}
