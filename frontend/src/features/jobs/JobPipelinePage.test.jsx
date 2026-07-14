@@ -200,7 +200,7 @@ describe('JobPipelinePage', () => {
   };
 
   // Per HANDOFF v2 §4.3 / canvas jobs-detail-settings — CV scoring criteria
-  // and Reject threshold live on the Agent settings tab now (the legacy
+  // and Screening threshold live on the Agent settings tab now (the legacy
   // above-tabs score-panel was retired). Tests that assert on those
   // controls open the tab first.
   const openAgentSettingsTab = async () => {
@@ -217,9 +217,9 @@ describe('JobPipelinePage', () => {
     renderPipeline();
     await openAgentSettingsTab();
 
-    await screen.findByRole('heading', { name: /Reject threshold/i, level: 2 });
+    await screen.findByRole('heading', { name: /Screening threshold/i, level: 2 });
 
-    expect(screen.getByRole('slider', { name: /Reject threshold percent/i })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: /Screening threshold percent/i })).toBeInTheDocument();
     // The threshold is a slider only — no spinbutton anywhere on the tab.
     // (The agent bar's budget input is its own spinbutton, outside scope.)
     const settingsRegion = document.querySelector('.mc-agent-settings');
@@ -235,7 +235,7 @@ describe('JobPipelinePage', () => {
     await openAgentSettingsTab();
 
     fireEvent.click(await screen.findByRole('button', {
-      name: 'Reject deterministic screening failures automatically',
+      name: 'Auto-reject pre-screen failures',
     }));
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
       auto_reject: false,
@@ -261,7 +261,7 @@ describe('JobPipelinePage', () => {
     renderPipeline();
     await openAgentSettingsTab();
 
-    const send = await screen.findByRole('button', { name: 'Send assessments automatically' });
+    const send = await screen.findByRole('button', { name: 'Auto-send assessments' });
     expect(send).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(send);
 
@@ -405,9 +405,9 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByText(/one human authorization step/i)).toBeInTheDocument();
+    expect(await screen.findByText(/saved policy keeps running after you close this page/i)).toBeInTheDocument();
     expect(screen.getByText(/native job page opens for applications/i)).toBeInTheDocument();
-    expect(screen.getByText(/Full-score, assessment, ambiguous, interview, offer, and hire decisions remain human-controlled/i)).toBeInTheDocument();
+    expect(screen.getByText(/Full CV-score and assessment rejections still need approval/i)).toBeInTheDocument();
     expect(apiClient.roles.update).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
@@ -1085,8 +1085,8 @@ Banking transformation experience
     fireEvent.click(screen.getByRole('link', { name: /^Agent settings$/i }));
     expect(await screen.findByRole('heading', { name: /Role criteria/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Reject threshold/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Autonomy rules/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Screening threshold/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Automatic actions/i })).toBeInTheDocument();
 
     // HANDOFF v2 §4.4 / canvas jobs-detail-spec — the Job spec tab renders
     // the formatted Workable-ingested description + "At a glance" sidebar.

@@ -201,12 +201,12 @@ describe('SettingsPage recruiter surface', () => {
       expect(screen.getByRole('heading', { name: /Default role criteria/i })).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/never turn an agent on by themselves/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resend assessment invites automatically' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/do not turn the agent on/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.change(screen.getByLabelText('Default threshold strategy'), { target: { value: 'auto' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send assessments automatically' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Advance on-policy candidates automatically' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Reject deterministic screening failures automatically' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-send assessments' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }));
 
     const saveButton = await screen.findByRole('button', { name: 'Save agent defaults' });
     expect(saveButton).toBeEnabled();
@@ -245,15 +245,15 @@ describe('SettingsPage recruiter surface', () => {
 
     renderSettingsRoute('/settings/agent');
 
-    expect(await screen.findByRole('button', { name: 'Send assessments automatically' }))
+    expect(await screen.findByRole('button', { name: 'Auto-send assessments' }))
       .toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Resend assessment invites automatically' }))
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' }))
       .toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Advance on-policy candidates automatically' }))
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }))
       .toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Reject deterministic screening failures automatically' }))
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
       .toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('button', { name: 'Skip the assessment stage' }))
+    expect(screen.getByRole('button', { name: 'Skip assessment for strong candidates' }))
       .toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('spinbutton', { name: /Default budget/i }))
       .toHaveValue(200);
