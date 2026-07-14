@@ -16,6 +16,7 @@ import {
   ListChecks,
   RefreshCw,
   Search,
+  UserPlus,
   X,
 } from 'lucide-react';
 
@@ -103,7 +104,10 @@ const TYPE_CATEGORY_EXPANSION = {
 // view the list isn't searchable server-side, so we disable the box with a hint
 // instead of firing requests that visibly do nothing.
 const SearchInput = ({ filters, setFilters }) => {
-  const invited = filters.view === 'invited';
+  // Search is a decision-queue affordance only. Both trackers (Assessment stage
+  // and Sourced) list applications the queue doesn't cover and aren't searchable
+  // server-side, so the box is disabled on any tracker view.
+  const invited = Boolean(filters.view);
   const [text, setText] = useState(filters.q || '');
   const committed = useRef(filters.q || '');
 
@@ -136,13 +140,13 @@ const SearchInput = ({ filters, setFilters }) => {
         disabled={invited}
         onChange={(e) => setText(e.target.value)}
         aria-label="Search decisions"
-        title={invited ? "Search isn't available in the Assessment-stage view yet." : undefined}
+        title={invited ? "Search isn't available on the tracker views yet." : undefined}
       />
     </span>
   );
 };
 
-const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
+const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount, sourcedCount = 0 }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
       <span className="kicker mute" style={{ marginRight: 8 }}>ROLE</span>
@@ -190,6 +194,23 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
       >
         <ClipboardList size={13} strokeWidth={2} aria-hidden="true" />
         Assessment stage
+      </button>
+      {/* Sourced tracker — prospects added before they applied (Phase 3a):
+          un-scored, no decision, never in the queue. Mirrors the Assessment-stage
+          toggle. The count rides on the chip (from the polled role breakdown) so
+          the recruiter sees sourced leads exist without opening the view. */}
+      <button
+        type="button"
+        className={`rq-chiptoggle${filters.view === 'sourced' ? ' on' : ''}`}
+        aria-pressed={filters.view === 'sourced'}
+        onClick={() => setFilters((f) => ({ ...f, view: f.view === 'sourced' ? null : 'sourced' }))}
+        title="Sourced prospects — added before they applied, awaiting engagement. Not scored, no decision."
+      >
+        <UserPlus size={13} strokeWidth={2} aria-hidden="true" />
+        Sourced
+        {sourcedCount > 0 ? (
+          <span className="rq-chiptoggle-count">{sourcedCount.toLocaleString()}</span>
+        ) : null}
       </button>
       {/* Everything in this queue is pending, so there's no "Pending" filter to
           offer — just a standing warning chip for the ones whose score is out
@@ -549,6 +570,97 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
   );
 };
 
+// A sourced lead's ingestion channel, phrased for the recruiter. Prospects
+// added inside Taali carry source 'sourced'; Workable-originated leads carry
+// 'workable'. It's the honest "how did this lead enter" signal we have.
+const sourcedChannelLabel = (app) => {
+  const s = String(app?.source || '').trim().toLowerCase();
+  if (s === 'workable') return 'via Workable';
+  return 'added manually';
+};
+
+// Sourced tracker — the Home "Sourced" view. Prospects added to a role BEFORE
+// they applied (Phase 3a): no CV, never scored, never in the decision queue.
+// A read-only tracker (mirrors InvitedPanel), grouped by role, so the recruiter
+// can see who's been sourced and is awaiting engagement. No decision actions and
+// no score — sourced leads have no verdict. Each row deep-links to the candidate
+// report by application id, exactly like the pending queue rows.
+const SourcedPanel = ({ candidates, loading, roleNameById }) => {
+  if (loading) {
+    return (
+      <div className="home-empty">
+        <RefreshCw size={16} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
+        <div>Loading sourced candidates…</div>
+      </div>
+    );
+  }
+  if (!candidates.length) {
+    return (
+      <div className="home-empty">
+        <Inbox size={18} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
+        <div>No sourced candidates. Prospects added before they apply — by you or the agent — show up here, awaiting engagement. They aren&apos;t scored and never enter the decision queue.</div>
+      </div>
+    );
+  }
+  // Group by role so the tracker reads as "who's sourced, per role". Preserve
+  // the server's newest-first order within each group (the fetch sorts by
+  // created_at desc); groups appear in first-seen order.
+  const order = [];
+  const byRole = new Map();
+  for (const c of candidates) {
+    const key = String(c.role_id ?? 'none');
+    if (!byRole.has(key)) { byRole.set(key, []); order.push(key); }
+    byRole.get(key).push(c);
+  }
+  return (
+    <aside className="rq-split-list rq-sourced-list">
+      <div className="rq-split-list-head">
+        <span className="kicker">
+          Sourced
+          <span style={{ color: 'var(--purple)', marginLeft: 6 }}>{candidates.length}</span>
+        </span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-eyebrow)', color: 'var(--mute)', letterSpacing: '.06em' }}>
+          AWAITING ENGAGEMENT
+        </span>
+      </div>
+      <div className="rq-split-list-body">
+        {order.map((key) => {
+          const rows = byRole.get(key);
+          const roleName = rows[0].role_name || roleNameById?.(rows[0].role_id)
+            || (key === 'none' ? 'No role' : `Role #${key}`);
+          return (
+            <div key={key} className="rq-sourced-group">
+              <div className="rq-sourced-grouphdr">
+                <RolePill roleName={roleName} roleId={rows[0].role_id} />
+                <span className="rq-sourced-groupcount">{rows.length}</span>
+              </div>
+              {rows.map((c) => (
+                <div key={c.id} className="rq-split-row rq-sourced-row">
+                  <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email || `#${c.id}`)} size={30} />
+                  <div className="rq-sourced-main">
+                    <a
+                      href={pathForPage('candidate-report', { candidateApplicationId: c.id, fromHome: true })}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rq-sourced-name rq-inline-link"
+                      title="Open candidate report in a new tab"
+                    >
+                      {c.candidate_name || c.candidate_email || `Application #${c.id}`}
+                    </a>
+                    <div className="rq-sourced-sub">
+                      Sourced {formatRelativeAge(c.created_at)} ago · {sourcedChannelLabel(c)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </aside>
+  );
+};
+
 export const HomeNow = ({
   decisions,
   pendingOrdered,
@@ -630,6 +742,54 @@ export const HomeNow = ({
     return () => { cancelled = true; };
   }, [invitedView, filters.role_id, showToast]);
   const selectedInvited = invited.find((c) => c.id === selectedInvitedId) || invited[0] || null;
+
+  // Sourced tracker ("Sourced" view). Same on-demand fetch as the invited
+  // tracker, filtered to pipeline_stage=sourced — un-scored prospects that never
+  // ride the decision queue. Kept entirely separate from the decision data flow.
+  const sourcedView = filters.view === 'sourced';
+  const [sourced, setSourced] = useState([]);
+  const [sourcedLoading, setSourcedLoading] = useState(false);
+  useEffect(() => {
+    if (!sourcedView) return undefined;
+    let cancelled = false;
+    setSourcedLoading(true);
+    rolesApi
+      .listApplicationsGlobal({
+        pipeline_stage: 'sourced',
+        role_id: filters.role_id || undefined,
+        limit: 100,
+        include_stage_counts: false,
+        sort_by: 'created_at',
+        sort_order: 'desc',
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const raw = Array.isArray(res?.data?.items) ? res.data.items : [];
+        setSourced(raw);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSourced([]);
+        showToast?.(apiErrorMessage(err, "Couldn't load sourced candidates."), 'error');
+      })
+      .finally(() => {
+        if (!cancelled) setSourcedLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [sourcedView, filters.role_id, showToast]);
+
+  // Sourced count for the toolbar chip — read from the polled role breakdown
+  // (stage_counts.sourced), scoped to the selected role. Cheap: reuses data the
+  // page already fetches, no extra request just to badge the toggle.
+  const sourcedCount = useMemo(() => {
+    const list = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
+    if (filters.role_id) {
+      const role = list.find((r) => String(r.role_id) === String(filters.role_id));
+      return Number(role?.stage_counts?.sourced || 0);
+    }
+    return list.reduce((acc, r) => acc + (Number(r?.stage_counts?.sourced) || 0), 0);
+  }, [rolesBreakdown, filters.role_id]);
+
   const [teachFor, setTeachFor] = useState(null);
   // Alternative-action confirmation modal target. When set, OverrideModal
   // is rendered with the decision + the chosen alternative spec. Used for
@@ -1047,7 +1207,7 @@ export const HomeNow = ({
   // re-eval" (status 'stale', which status==='pending' already excludes) —
   // bulk-approving stale scores is what we want the recruiter to stop and
   // re-evaluate instead.
-  const bulkActionEl = !invitedView && filters.status === 'pending' && visiblePending.length > 0 ? (
+  const bulkActionEl = !invitedView && !sourcedView && filters.status === 'pending' && visiblePending.length > 0 ? (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <Button
         variant="primary"
@@ -1080,7 +1240,7 @@ export const HomeNow = ({
   // so search-as-you-type stays usable.
   useEffect(() => {
     const onKey = (e) => {
-      if (invitedView) return;  // invited tracker has no decision under focus
+      if (invitedView || sourcedView) return;  // trackers have no decision under focus
       if (teachFor || bulkConfirm || alternativeFor) return;  // an open modal owns the keyboard
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const tag = (e.target?.tagName || '').toLowerCase();
@@ -1099,7 +1259,7 @@ export const HomeNow = ({
     // — re-binding on each pending row is cheap and keeps the closure
     // pointing at the right target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status, teachFor, bulkConfirm, alternativeFor, invitedView]);
+  }, [selected?.id, selected?.status, teachFor, bulkConfirm, alternativeFor, invitedView, sourcedView]);
 
   // Esc cancels / Enter confirms the bulk-approve modal. Enter only fires once
   // every advancing role has its stage picked (bulkStagesReady) — matching the
@@ -1140,6 +1300,7 @@ export const HomeNow = ({
         roles={rolesBreakdown}
         bulkAction={bulkActionEl}
         staleCount={staleCount}
+        sourcedCount={sourcedCount}
       />
 
       {/* Open orchestrator questions across the org (or scoped to the
@@ -1172,6 +1333,12 @@ export const HomeNow = ({
             </div>
           </div>
         )
+      ) : sourcedView ? (
+        <SourcedPanel
+          candidates={sourced}
+          loading={sourcedLoading}
+          roleNameById={roleNameById}
+        />
       ) : (
         <>
           <div className="rq-hybrid-grid">

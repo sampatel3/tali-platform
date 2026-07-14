@@ -333,6 +333,32 @@ def test_create_sourced_candidate_endpoint(client):
         sess.close()
 
 
+def test_list_applications_filters_by_sourced_stage(client):
+    """The Home hub's Sourced tracker fetches
+    ``GET /applications?pipeline_stage=sourced`` — the filter must be accepted
+    (not 422) and return only the sourced prospect."""
+    headers, _ = auth_headers(client)
+    role = _make_role(client, headers)
+    created = client.post(
+        f"/api/v1/roles/{role['id']}/sourced-candidates",
+        json={"name": "Sourced Lead", "email": "sourced.lead@example.com"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    aid = created.json()["id"]
+
+    resp = client.get(
+        "/api/v1/applications",
+        params={"pipeline_stage": "sourced", "include_stage_counts": False},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    ids = {item["id"] for item in items}
+    assert aid in ids
+    assert all(item["pipeline_stage"] == "sourced" for item in items)
+
+
 def test_create_sourced_candidate_is_idempotent(client):
     headers, _ = auth_headers(client)
     role = _make_role(client, headers)

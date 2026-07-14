@@ -136,7 +136,11 @@ from .pipeline_service import (
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
 
-PIPELINE_STAGE_VALUES = {"applied", "invited", "in_assessment", "review"}
+# `sourced` is a valid filterable stage (Phase 3a prospects) so the Home hub's
+# Sourced tracker can request pipeline_stage=sourced without a 422. It stays a
+# read-only filter here — sourced apps are un-scored and never in the decision
+# queue (see pipeline_service.PIPELINE_STAGES).
+PIPELINE_STAGE_VALUES = {"sourced", "applied", "invited", "in_assessment", "review"}
 APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
 
 
