@@ -90,7 +90,10 @@
 
 .job-stats {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* Six stages (Sourced · Applied · Scored · Invited · Advanced · Rejected).
+     minmax(0,1fr) lets wide counts (e.g. 1,055) shrink to fit rather than
+     overflow and push a tile onto a second row. */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   margin-top: 16px;
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -98,9 +101,10 @@
 }
 
 .js-cell {
-  padding: 9px 6px;
+  padding: 9px 4px;
   text-align: center;
   border-right: 1px solid var(--line);
+  min-width: 0;
 }
 .js-cell:last-child {
   border-right: none;
@@ -122,12 +126,13 @@
 
 .js-cell .v {
   font-family: var(--font-display);
-  font-size: var(--fs-h2);
+  font-size: var(--fs-h3);
   font-weight: 600;
   line-height: 1.1;
   margin-top: 2px;
   letter-spacing: -0.02em;
   color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .job-foot {
