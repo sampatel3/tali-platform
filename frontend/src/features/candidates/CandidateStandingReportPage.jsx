@@ -12,9 +12,11 @@ import {
   MOTION_DURATION,
   MOTION_STAGGER,
   MotionNumber,
+  MotionDisclosure,
   MotionProgress,
   MotionStagger,
-  Reveal,
+  MotionTab,
+  MotionTabs,
 } from '../../shared/motion';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -23,6 +25,7 @@ import {
   Panel,
   PageLoader,
   Select,
+  Textarea,
 } from '../../shared/ui/TaaliPrimitives';
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { DecisionRail } from './DecisionRail';
@@ -33,7 +36,6 @@ import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
-import { ScorecardPanel } from './ScorecardPanel';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
 // recorder from the report body; the candidate's decision now lives in the
@@ -47,14 +49,13 @@ const AssessmentEvidencePanels = React.lazy(() =>
   import('./CandidateAssessmentDetailPanels').then((m) => ({ default: m.AssessmentEvidencePanels })));
 const EvaluatePanel = React.lazy(() =>
   import('./CandidateAssessmentDetailPanels').then((m) => ({ default: m.EvaluatePanel })));
-const InterviewTranscriptCapture = React.lazy(() =>
-  import('./CandidateAssessmentDetailPanels').then((m) => ({ default: m.InterviewTranscriptCapture })));
 import { AssessmentScorecard, readGradedRubricDimensions } from './AssessmentScorecard';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import { CvDocumentViewer } from './CvDocumentViewer';
 import { CvMatchReview } from './CvMatchReview';
 import { PrepQuestionCard } from './PrepQuestionCard';
 import { InterviewFeedbackSection } from './InterviewFeedbackSection';
+import { TranscriptPanel } from './CandidateInterviewStageViews';
 import { VerdictDetail } from './VerdictDetail';
 import {
   getErrorMessage,
@@ -93,14 +94,11 @@ const REPORT_TABS = [
   // pane via <EvaluatePanel hideDecision />.
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
-  { id: 'prep', label: 'Interview prep', recruiterOnly: true },
-  // "Notes & timeline" is the unified add-info surface: freeform notes, the
-  // interview transcript capture, ranking / link quick-adds, and the audit
-  // timeline.
-  { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
-  // Interviewer scorecards: draft/submit your own card + the panel summary.
-  // Recruiter app only — never shown on a share link.
-  { id: 'scorecards', label: 'Scorecards', internalOnly: true },
+  { id: 'prep', label: 'Interview', recruiterOnly: true },
+  // Notes are the single place for hiring-team context. The audit timeline is
+  // still available inside the tab, collapsed by default so it does not read
+  // like a second primary workflow.
+  { id: 'notes', label: 'Notes', recruiterOnly: true },
 ];
 
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
@@ -226,11 +224,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const assessmentsApi = 'assessments' in apiClient ? apiClient.assessments : null;
   const candidatesApi = 'candidates' in apiClient ? apiClient.candidates : null;
-  const organizationsApi = 'organizations' in apiClient ? apiClient.organizations : null;
 
   const [application, setApplication] = useState(null);
   const [completedAssessment, setCompletedAssessment] = useState(null);
-  const [orgData, setOrgData] = useState(null);
   const [loading, setLoading] = useState(true);
   // Silent revalidate after a recruiter action (approve, note save, re-evaluate).
   // Keeps the rendered report on screen (no full-page spinner, no scroll loss)
@@ -275,13 +271,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // Untick for pure team chatter the agent shouldn't read.
   const [noteForAgent, setNoteForAgent] = useState(true);
   const [eventsRefetchTick, setEventsRefetchTick] = useState(0);
-  // PR3 add-info quick-adds, stored via the same note endpoint with a `kind`:
-  //   ranking — a 1–5 score + optional comment (kind: 'ranking')
-  //   link    — a URL + optional label          (kind: 'link')
-  // Both default to agent-visible alongside the freeform note box.
-  const [rankingValue, setRankingValue] = useState('');
-  const [rankingComment, setRankingComment] = useState('');
-  const [savingRanking, setSavingRanking] = useState(false);
+  const [supportingLinkOpen, setSupportingLinkOpen] = useState(false);
+  const [auditTimelineOpen, setAuditTimelineOpen] = useState(false);
+  // Optional supporting link, stored via the same note endpoint with kind
+  // `link`. It defaults to agent-visible alongside the freeform note box.
   const [linkUrl, setLinkUrl] = useState('');
   const [linkLabel, setLinkLabel] = useState('');
   const [savingLink, setSavingLink] = useState(false);
@@ -323,6 +316,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [activeTab, setActiveTab] = useState(
     REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview'
   );
+  // Keep the expensive assessment module out of the initial report bundle.
+  // Once opened it stays mounted so an in-progress manual evaluation is not
+  // discarded when the recruiter briefly checks another tab.
+  const [assessmentContentMounted, setAssessmentContentMounted] = useState(
+    requestedTab === 'assessment'
+  );
+
+  useEffect(() => {
+    if (activeTab === 'assessment') setAssessmentContentMounted(true);
+  }, [activeTab]);
+
+  useEffect(() => {
+    setAssessmentContentMounted(requestedTab === 'assessment');
+    setSupportingLinkOpen(false);
+    setAuditTimelineOpen(false);
+  }, [routeApplicationKey, sharedRouteToken]);
 
   // Assessment-only tabs reveal once a completed assessment is linked.
   // `completedAssessment` is only fetched when the latest attempt is in a
@@ -387,7 +396,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       } = await import('../demo/productWalkthroughModels');
       setApplication(AI_SHOWCASE_APPLICATION);
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
-      setOrgData(null);
       setApplicationEvents(AI_SHOWCASE_APPLICATION_EVENTS);
       // Show the agent's deterministic recommendation (the demo previously fell
       // back to the "not yet decided" placeholder despite a completed score).
@@ -428,11 +436,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ? nextApplication.application_events
           : [];
         setCompletedAssessment(null);
-        setOrgData(null);
         setAgentDecision(null);
         setApplicationEvents(sharedEvents);
       } else {
-        // Recruiter path: org, events, and the pending decision only need the
+        // Recruiter path: events and the pending decision only need the
         // route's application id (== numericApplicationId), so fire them in the
         // SAME wave as getApplication instead of waterfalling after it — one
         // fewer full UAE→us-east4 round-trip on every open. Only the assessment
@@ -441,12 +448,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         // Drop include_cv_text: the CV tab is one of six and CvDocumentViewer
         // lazy-gates its own preview, so shipping the full parsed CV text on
         // every open was pure over-fetch.
-        const [appRes, orgRes, eventsRes, decisionRes] = await Promise.all([
+        const [appRes, eventsRes, decisionRes] = await Promise.all([
           rolesApi.getApplication(
             numericApplicationId,
             backFromRoleId ? { params: { view_role_id: backFromRoleId } } : {},
           ),
-          organizationsApi?.get ? organizationsApi.get() : Promise.resolve(null),
           rolesApi?.listApplicationEvents && Number.isFinite(numericApplicationId)
             ? rolesApi.listApplicationEvents(numericApplicationId).catch(() => null)
             : Promise.resolve(null),
@@ -472,7 +478,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           : null;
 
         setCompletedAssessment(assessmentRes?.data || null);
-        setOrgData(orgRes?.data || null);
         setAgentDecision(Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null);
         const sharedEvents = Array.isArray(nextApplication?.application_events)
           ? nextApplication.application_events
@@ -497,7 +502,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setLoading(false);
       setRefreshing(false);
     }
-  }, [assessmentsApi, backFromRoleId, isShareRoute, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
+  }, [assessmentsApi, backFromRoleId, isShareRoute, numericApplicationId, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
 
   // Refetch JUST the candidate's pending decision (after an approve / override /
   // teach) without reloading the whole report. Recruiter-view only.
@@ -900,37 +905,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   }, [application?.id, rolesApi, assessmentId, assessmentsApi, noteDraft, noteForAgent, showToast]);
 
-  // Ranking quick-add — a 1–5 score + optional comment, stored as a `ranking`
-  // note via the same endpoint (kind: 'ranking'). Requires an application id
-  // (the structured-kind endpoint is application-scoped) and a chosen score.
-  const handleSaveRanking = useCallback(async () => {
-    const appId = application?.id;
-    const score = Number(rankingValue);
-    if (!appId || !rolesApi?.addApplicationNote) return;
-    if (!Number.isFinite(score) || score < 1 || score > 5) {
-      showToast('Pick a 1–5 ranking first.', 'info');
-      return;
-    }
-    const comment = rankingComment.trim();
-    setSavingRanking(true);
-    try {
-      // The note body doubles as the human-readable `reason`; the agent-facing
-      // payload renders "Ranking: N/5 — …" from the structured metadata.
-      await rolesApi.addApplicationNote(appId, comment || `Ranking ${score}/5`, noteForAgent, {
-        kind: 'ranking',
-        ranking: score,
-      });
-      setRankingValue('');
-      setRankingComment('');
-      setEventsRefetchTick((prev) => prev + 1);
-      showToast('Ranking added.', 'success');
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to add ranking.'), 'error');
-    } finally {
-      setSavingRanking(false);
-    }
-  }, [application?.id, rolesApi, rankingValue, rankingComment, noteForAgent, showToast]);
-
   // Link quick-add — a URL + optional label, stored as a `link` note
   // (kind: 'link'). The note body is the label (or URL) so it's readable in the
   // timeline; the structured url/label ride in metadata for the clickable render.
@@ -1193,9 +1167,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         {/* refreshing = a silent revalidate after an action. Dim + mark busy so
             the recruiter sees "updating" without the report unmounting. */}
         <div
-          className="dossier"
+          className={`dossier ${refreshing ? 'is-refreshing' : ''}`.trim()}
           aria-busy={refreshing || undefined}
-          style={refreshing ? { opacity: 0.6, transition: 'opacity 120ms ease' } : undefined}
         >
           <DecisionRail
             candidateName={candidateLabel}
@@ -1256,47 +1229,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             onReEvaluate={handleDecisionReEvaluate}
             onRunFullEvaluation={handleRunFullEvaluation}
           />
-          <Reveal as="main" className="dossier-main">
-        <div className="vtabs report-tabs" role="tablist" aria-label="Candidate report sections">
+          <main className="dossier-main">
+        <MotionTabs
+          value={activeTab}
+          onValueChange={activateTab}
+          className="vtabs report-tabs"
+          aria-label="Candidate report sections"
+        >
           {(() => {
             const visibleTabs = REPORT_TABS.filter((tab) => availableTabIds.has(tab.id));
-            // Roving-tabindex tablist: only the active tab is in the tab order;
-            // Arrow/Home/End move focus AND activate (activateTab). Focus is
-            // moved to the sibling <button> so the keyboard user lands on it.
-            const onTabKeyDown = (event, index) => {
-              const { key } = event;
-              let nextIndex = null;
-              if (key === 'ArrowRight' || key === 'ArrowDown') nextIndex = (index + 1) % visibleTabs.length;
-              else if (key === 'ArrowLeft' || key === 'ArrowUp') nextIndex = (index - 1 + visibleTabs.length) % visibleTabs.length;
-              else if (key === 'Home') nextIndex = 0;
-              else if (key === 'End') nextIndex = visibleTabs.length - 1;
-              if (nextIndex == null) return;
-              event.preventDefault();
-              const nextTab = visibleTabs[nextIndex];
-              activateTab(nextTab.id);
-              event.currentTarget.parentElement
-                ?.querySelector(`#report-tab-${nextTab.id}`)
-                ?.focus();
-            };
-            return visibleTabs.map((tab, index) => (
-              <button
+            return visibleTabs.map((tab) => (
+              <MotionTab
                 key={tab.id}
+                value={tab.id}
                 id={`report-tab-${tab.id}`}
-                type="button"
                 className={`vtab ${activeTab === tab.id ? 'on' : ''}`.trim()}
+                indicatorClassName="vtab-motion-indicator"
                 data-internal-only={tab.internalOnly ? '' : undefined}
-                role="tab"
-                aria-selected={activeTab === tab.id}
                 aria-controls={`report-pane-${tab.id}`}
-                tabIndex={activeTab === tab.id ? 0 : -1}
-                onClick={() => activateTab(tab.id)}
-                onKeyDown={(event) => onTabKeyDown(event, index)}
               >
                 {tab.label}
-              </button>
+              </MotionTab>
             ));
           })()}
-        </div>
+        </MotionTabs>
 
         <div
           className={`pane ${activeTab === 'overview' ? 'active' : ''}`}
@@ -1407,6 +1363,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <span className="mc-overview-dim-note">from the assessment</span>
                   </div>
                   <MotionStagger
+                    active={activeTab === 'overview'}
                     className="mc-overview-dimensions-grid"
                     data-motion-stagger="standing-report-scorecard"
                   >
@@ -1422,7 +1379,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                             <MotionProgress
                               className={isLow ? 'low' : ''}
                               delay={MOTION_DURATION.fast + (i * MOTION_STAGGER.default)}
-                              style={{ width: `${pct}%` }}
+                              value={pct / 100}
+                              style={{ width: '100%' }}
                             />
                           </div>
                           <DimScore score={axis.score} hasSignal={axis.hasSignal} />
@@ -1519,7 +1477,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             return (
               <div className="assessment-head" data-internal-only>
                 {gradedDimensions.length > 0 ? (
-                  <AgentLoop as="div" kind="glow" className="abar abar-on abar-block">
+                  <div className="abar abar-on abar-block">
                     <AgentLoop kind="flow" className="abar-flow-layer" />
                     <span className="ab-spark"><Sparkles size={15} strokeWidth={2} /></span>
                     <span className="ab-label">Agent assessed</span>
@@ -1531,7 +1489,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <span className="ab-assess">
                       <b>{score != null ? Math.round(score) : '—'}</b><span>/100</span>
                     </span>
-                  </AgentLoop>
+                  </div>
                 ) : null}
                 {assessmentId ? (
                   <div className="assessment-actions" ref={assessmentActionsRef}>
@@ -1588,7 +1546,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           {/* Full assessment evidence migrated from the legacy /assessments
               page: AI-usage analytics, code/git, and the prompt-by-prompt
               timeline. Recruiter-only (this pane is internalOnly). */}
-          {candidateView ? (
+          {candidateView && assessmentContentMounted ? (
             <ErrorBoundary
               fallback={
                 <div className="mc-notes-empty">
@@ -1609,7 +1567,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               recorder, role criteria and chat log it used to carry are dropped:
               they duplicate the DecisionRail, the Requirements tab and the
               Prompts evidence panel. */}
-          {candidateView ? (
+          {candidateView && assessmentContentMounted ? (
             <ErrorBoundary
               fallback={
                 <div className="mc-notes-empty">
@@ -1698,7 +1656,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           role="tabpanel"
           aria-labelledby="report-tab-prep"
         >
-          {/* HANDOFF v2 §5.1 / canvas cand-prep — Interview prep is:
+          {/* HANDOFF v2 §5.1 / canvas cand-prep — Interview is:
               (1) purple-soft hero banner: READY FOR YOUR PANEL · {N} questions,
                   anchored in {candidate}'s actual evidence
               (2) STAGE 1 · RECRUITER SCREEN kicker + question cards
@@ -1764,12 +1722,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ))}
             </div>
           </div>
-          {/* Interview transcript capture moved to the "Notes & context" tab
-              (PR3) — it's add-info, not prep reference material. */}
+          {/* Transcript evidence is read-only here. Provider connections and
+              matching belong to the workspace transcription service, not the
+              candidate report. */}
+          {!isClientView ? (
+            <div className="mc-prep-stage" data-section="interview-record">
+              <div className="mc-kicker">INTERVIEW RECORD</div>
+              <div className="mt-2">
+                <TranscriptPanel application={application} />
+              </div>
+            </div>
+          ) : null}
 
           {/* Structured interview feedback — recruiters record what actually
-              happened (round, recommendation, 5-Ds ratings, probe results,
-              notes). Hidden on client shares (the payload strips it anyway);
+              happened (round, recommendation, probe results, notes). Hidden on
+              client shares (the payload strips it anyway);
               read-only on recruiter share links (entries arrive with the
               payload but the viewer is unauthenticated, so no record/edit). */}
           {!isClientView && application?.id ? (
@@ -1791,11 +1758,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           role="tabpanel"
           aria-labelledby="report-tab-notes"
         >
-          {/* HANDOFF v2 §5.1 / canvas cand-notes — "Notes & context" is the
-              unified add-info surface (PR3):
+          {/* HANDOFF v2 §5.1 / canvas cand-notes — Notes is the
+              hiring-team context surface:
               (1) HIRING TEAM NOTES column — note cards (who · role · time + body),
-                  the freeform note box + agent-visible toggle, the ranking and
-                  link quick-adds, and the interview-transcript capture.
+                  the freeform note box + agent-visible toggle and link quick-add.
               (2) AUDIT TIMELINE column — vertical line + colored dots,
                   each event has TIME · title · description.
               We synthesize "hiring team notes" from `recruiter_note` events on
@@ -1987,7 +1953,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     const canAddNote = Boolean(application?.id || assessmentId);
                     return (
                     <div className="mc-notes-input">
-                      <textarea
+                      <Textarea
                         value={noteDraft}
                         onChange={(event) => setNoteDraft(event.target.value)}
                         placeholder={canAddNote
@@ -2006,116 +1972,74 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         <span>Visible to the hiring agent — it’ll weigh this as standing guidance on this candidate.</span>
                       </label>
                       <div className="mc-notes-input-actions">
-                        <button
-                          type="button"
-                          className="btn btn-purple btn-sm"
+                        <Button
+                          variant="primary"
+                          size="sm"
                           onClick={handleSaveNote}
                           disabled={!canAddNote || savingNote || !noteDraft.trim()}
+                          loading={savingNote}
+                          loadingLabel="Adding…"
                         >
-                          {savingNote ? 'Adding…' : 'Add note'}
-                        </button>
+                          Add note
+                        </Button>
                       </div>
                     </div>
                     );
                   })()}
 
-                  {/* Add-info quick-adds (PR3): a 1–5 ranking and an external
-                      link, both stored via the note endpoint with a `kind` and
-                      visible to the agent alongside freeform notes. These need
+                  {/* Optional supporting link, stored via the note endpoint and
+                      visible to the agent alongside freeform notes. This needs
                       a real application id (the structured-kind endpoint is
-                      application-scoped), so they're hidden on share routes and
+                      application-scoped), so it is hidden on share routes and
                       when no application record exists. */}
                   {!isInterviewView && application?.id ? (
-                    <div className="mc-notes-addinfo" style={{ marginTop: 14, display: 'grid', gap: 12 }}>
-                      <div className="mc-notes-input">
-                        <div className="mc-kicker" style={{ marginBottom: 6 }}>QUICK RANKING</div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <Select
-                            bare
-                            triggerClassName="max-w-[120px]"
-                            value={rankingValue}
-                            onChange={(event) => setRankingValue(event.target.value)}
-                            disabled={savingRanking}
-                            aria-label="Ranking out of 5"
-                          >
-                            <option value="">★ Rank…</option>
-                            <option value="1">★ 1/5</option>
-                            <option value="2">★ 2/5</option>
-                            <option value="3">★ 3/5</option>
-                            <option value="4">★ 4/5</option>
-                            <option value="5">★ 5/5</option>
-                          </Select>
-                          <input
-                            type="text"
-                            className="taali-input"
-                            value={rankingComment}
-                            onChange={(event) => setRankingComment(event.target.value)}
-                            placeholder="Optional comment (why this ranking)…"
-                            disabled={savingRanking}
-                            style={{ flex: 1, minWidth: 180 }}
-                          />
+                    <div
+                      className="mc-audit-collapse mc-notes-addinfo"
+                      data-open={supportingLinkOpen ? 'true' : 'false'}
+                      style={{ marginTop: 14 }}
+                    >
+                      <button
+                        type="button"
+                        className="mc-audit-summary"
+                        aria-expanded={supportingLinkOpen}
+                        aria-controls="candidate-supporting-link"
+                        onClick={() => setSupportingLinkOpen((open) => !open)}
+                      >
+                        <span className="mc-kicker" style={{ margin: 0 }}>ADD SUPPORTING LINK</span>
+                        <span className="mc-audit-count">Optional</span>
+                      </button>
+                      <MotionDisclosure open={supportingLinkOpen} id="candidate-supporting-link">
+                        <div className="mc-notes-input">
+                          <div style={{ display: 'grid', gap: 8 }}>
+                            <Input
+                              type="url"
+                              value={linkUrl}
+                              onChange={(event) => setLinkUrl(event.target.value)}
+                              placeholder="https://… (portfolio, GitHub, reference)"
+                              disabled={savingLink}
+                            />
+                            <Input
+                              type="text"
+                              value={linkLabel}
+                              onChange={(event) => setLinkLabel(event.target.value)}
+                              placeholder="Optional label (e.g. “Portfolio”)"
+                              disabled={savingLink}
+                            />
+                          </div>
+                          <div className="mc-notes-input-actions">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={handleSaveLink}
+                              disabled={savingLink || !linkUrl.trim()}
+                              loading={savingLink}
+                              loadingLabel="Adding…"
+                            >
+                              Add link
+                            </Button>
+                          </div>
                         </div>
-                        <div className="mc-notes-input-actions">
-                          <button
-                            type="button"
-                            className="btn btn-outline btn-sm"
-                            onClick={handleSaveRanking}
-                            disabled={savingRanking || !rankingValue}
-                          >
-                            {savingRanking ? 'Adding…' : 'Add ranking'}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mc-notes-input">
-                        <div className="mc-kicker" style={{ marginBottom: 6 }}>ADD A LINK</div>
-                        <div style={{ display: 'grid', gap: 8 }}>
-                          <input
-                            type="url"
-                            className="taali-input"
-                            value={linkUrl}
-                            onChange={(event) => setLinkUrl(event.target.value)}
-                            placeholder="https://… (portfolio, GitHub, reference)"
-                            disabled={savingLink}
-                          />
-                          <input
-                            type="text"
-                            className="taali-input"
-                            value={linkLabel}
-                            onChange={(event) => setLinkLabel(event.target.value)}
-                            placeholder="Optional label (e.g. “Portfolio”)"
-                            disabled={savingLink}
-                          />
-                        </div>
-                        <div className="mc-notes-input-actions">
-                          <button
-                            type="button"
-                            className="btn btn-outline btn-sm"
-                            onClick={handleSaveLink}
-                            disabled={savingLink || !linkUrl.trim()}
-                          >
-                            {savingLink ? 'Adding…' : 'Add link'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {/* Interview transcript capture (Fireflies link / manual
-                      paste), moved here from the Prep tab (PR3) — it's add-info,
-                      not prep reference. Recruiter-only: it calls authed APIs, so
-                      it's not mounted on unauth share routes. */}
-                  {!isShareRoute ? (
-                    <div className="mc-notes-input" data-internal-only style={{ marginTop: 14 }}>
-                      <div className="mc-kicker" style={{ marginBottom: 6 }}>INTERVIEW TRANSCRIPT</div>
-                      <Suspense fallback={<PageLoader minHeight="5rem" />}>
-                        <InterviewTranscriptCapture
-                          application={application}
-                          firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}
-                          rolesApi={rolesApi}
-                          onRefresh={() => loadStandingReport({ silent: true })}
-                        />
-                      </Suspense>
+                      </MotionDisclosure>
                     </div>
                   ) : null}
 
@@ -2164,13 +2088,23 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
                   {/* Audit timeline — collapsed by default at the bottom so it
                       doesn't dominate the Notes tab; expand for the full log. */}
-                  <details className="mc-audit-collapse">
-                    <summary className="mc-audit-summary">
+                  <div
+                    className="mc-audit-collapse"
+                    data-open={auditTimelineOpen ? 'true' : 'false'}
+                  >
+                    <button
+                      type="button"
+                      className="mc-audit-summary"
+                      aria-expanded={auditTimelineOpen}
+                      aria-controls="candidate-audit-timeline"
+                      onClick={() => setAuditTimelineOpen((open) => !open)}
+                    >
                       <span className="mc-kicker" style={{ margin: 0 }}>AUDIT TIMELINE</span>
                       <span className="mc-audit-count">
                         {applicationEvents.length + workableActivity.length} event{(applicationEvents.length + workableActivity.length) === 1 ? '' : 's'}
                       </span>
-                    </summary>
+                    </button>
+                  <MotionDisclosure open={auditTimelineOpen} id="candidate-audit-timeline">
                   {applicationEvents.length === 0 ? (
                     <div className="mc-notes-empty" style={{ marginTop: 12 }}>
                       Audit events will appear here as the candidate moves through the pipeline.
@@ -2232,29 +2166,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       </div>
                     </>
                   ) : null}
-                  </details>
+                  </MotionDisclosure>
+                  </div>
               </div>
             );
           })()}
         </div>
 
-        {!isShareRoute && application?.id ? (
-          <div
-            className={`pane ${activeTab === 'scorecards' ? 'active' : ''}`}
-            data-p="scorecards"
-            data-internal-only=""
-            id="report-pane-scorecards"
-            role="tabpanel"
-            aria-labelledby="report-tab-scorecards"
-          >
-            <ScorecardPanel
-              applicationId={application.id}
-              rolesApi={rolesApi}
-              interviews={application.interviews || []}
-            />
-          </div>
-        ) : null}
-          </Reveal>
+          </main>
         </div>
       </div>
 

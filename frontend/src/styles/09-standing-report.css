@@ -2524,6 +2524,17 @@ button.eng-badge-button:focus-visible {
 
 /* The shared Motion system owns report entrances, row staggering, and score
    fills. Printing must always land on the fully revealed, final state. */
+.dossier {
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.dossier.is-refreshing {
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dossier { transition: none; }
+}
+
 @media print {
   .dossier [data-motion-reveal],
   .dossier .mc-overview-dim-row,

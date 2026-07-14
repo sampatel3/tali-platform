@@ -1,13 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 import {
   Badge,
   Button,
   Input,
   Panel,
-  Select,
-  Textarea,
 } from '../../shared/ui/TaaliPrimitives';
+import { MotionDisclosure } from '../../shared/motion';
 
 const safeList = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
 
@@ -369,18 +368,8 @@ export const CandidateStageOneScreeningTab = ({
 
 export const TranscriptPanel = ({
   application = null,
-  firefliesConnected = false,
-  firefliesLinkSupported = false,
-  firefliesLinkModel,
-  onFirefliesLinkChange,
-  onLinkFireflies,
-  linkingFireflies = false,
-  manualInterviewSupported = false,
-  manualInterviewModel,
-  onManualInterviewChange,
-  onSaveManualInterview,
-  manualInterviewSaving = false,
 }) => {
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const screeningInterview = latestInterviewForStage(application?.interviews, 'screening');
   const screeningPackQuestions = safeList(application?.screening_pack?.questions);
   const screeningSummary = safeText(
@@ -394,41 +383,29 @@ export const TranscriptPanel = ({
       || screeningInterview?.provider_payload?.transcript_url
   );
   const speakers = safeList(screeningInterview?.speakers).map((speaker) => safeText(speaker?.name)).filter(Boolean);
-  const linkModel = firefliesLinkModel || { meetingId: '', providerUrl: '' };
-  const manualModel = manualInterviewModel || {
-    stage: 'screening',
-    transcriptText: '',
-    providerUrl: '',
-    meetingDate: '',
-    summary: '',
-  };
+  const source = safeText(screeningInterview?.source).toLowerCase();
+  const isLegacyManual = source === 'manual';
 
   if (screeningInterview) {
     return (
-      <Panel
-        className="p-4"
-        style={{
-          borderColor: 'var(--taali-warning-border)',
-          background: 'color-mix(in oklab, var(--taali-warning) 7%, var(--taali-surface))',
-        }}
-      >
+      <Panel className="p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-              Screening Transcript
+              Interview transcript
             </div>
             <div className="mt-2 text-lg font-semibold text-[var(--taali-text)]">
               {safeText(screeningInterview?.provider_payload?.title) || 'Stage 1 call transcript'}
             </div>
             <p className="mt-1 text-sm text-[var(--taali-muted)]">
-              {screeningInterview?.source === 'fireflies'
-                ? 'Linked from Fireflies and attached to this application.'
-                : 'Manual transcript attached to the screening workflow.'}
+              {isLegacyManual
+                ? 'Attached to this candidate as a historical transcript record.'
+                : 'Synced to this candidate by the workspace transcription service.'}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge variant={screeningInterview?.source === 'fireflies' ? 'warning' : 'muted'} className="font-mono text-[0.6875rem]">
-              {screeningInterview?.source === 'fireflies' ? 'Fireflies linked' : 'Manual transcript'}
+            <Badge variant={isLegacyManual ? 'muted' : 'purple'} className="font-mono text-[0.6875rem]">
+              {isLegacyManual ? 'Attached' : 'Synced'}
             </Badge>
             <Badge variant="muted" className="font-mono text-[0.6875rem]">
               {formatDateTime(screeningInterview?.meeting_date || screeningInterview?.linked_at)}
@@ -440,7 +417,7 @@ export const TranscriptPanel = ({
           <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
             <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Provider</div>
             <div className="mt-2 text-sm font-semibold text-[var(--taali-text)]">
-              {safeText(screeningInterview?.provider) || 'Transcript'}
+              {safeText(screeningInterview?.provider) || (isLegacyManual ? 'Manual record' : 'Transcription service')}
             </div>
           </div>
           <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
@@ -500,133 +477,35 @@ export const TranscriptPanel = ({
         </div>
 
         {transcriptPreview ? (
-          <details className="mt-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
-            <summary className="cursor-pointer text-sm font-semibold text-[var(--taali-text)]">
-              Transcript excerpt
-            </summary>
-            <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-6 text-[var(--taali-text)]">{transcriptPreview}</pre>
-          </details>
+          <div className="mt-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={transcriptOpen}
+              aria-controls="candidate-transcript-excerpt"
+              onClick={() => setTranscriptOpen((open) => !open)}
+            >
+              {transcriptOpen ? 'Hide transcript excerpt' : 'Show transcript excerpt'}
+            </Button>
+            <MotionDisclosure open={transcriptOpen} id="candidate-transcript-excerpt">
+              <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-6 text-[var(--taali-text)]">{transcriptPreview}</pre>
+            </MotionDisclosure>
+          </div>
         ) : null}
       </Panel>
     );
   }
 
   return (
-    <Panel
-      className="p-4"
-      style={{
-        borderColor: 'var(--taali-warning-border)',
-        background: 'color-mix(in oklab, var(--taali-warning) 7%, var(--taali-surface))',
-      }}
-    >
+    <Panel className="p-4">
       <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-        Screening Transcript
+        Interview transcript
       </div>
-      <div className="mt-2 text-lg font-semibold text-[var(--taali-text)]">No screening call transcript is attached yet.</div>
+      <div className="mt-2 text-lg font-semibold text-[var(--taali-text)]">Waiting for the interview transcript.</div>
       <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-        Attach a Fireflies meeting or paste a manual transcript so Stage 2 follow-up questions can reference the real screening conversation.
+        Transcripts sync automatically from the workspace transcription service once a meeting is matched to this candidate. Provider connections are managed in Settings.
       </p>
-
-      {firefliesLinkSupported ? (
-        <div className="mt-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-[var(--taali-text)]">Link Fireflies meeting</div>
-              <p className="mt-1 text-xs text-[var(--taali-muted)]">
-                {firefliesConnected
-                  ? 'Paste the Fireflies meeting ID if auto-match missed this call.'
-                  : 'You can still link a Fireflies meeting ID manually if the workspace credentials are already configured.'}
-              </p>
-            </div>
-            <Badge variant={firefliesConnected ? 'success' : 'muted'} className="font-mono text-[0.6875rem]">
-              {firefliesConnected ? 'Workspace connected' : 'Manual link only'}
-            </Badge>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-            <Input
-              type="text"
-              value={linkModel.meetingId || ''}
-              onChange={(event) => onFirefliesLinkChange?.({ meetingId: event.target.value })}
-              placeholder="Fireflies meeting ID"
-            />
-            <Input
-              type="url"
-              value={linkModel.providerUrl || ''}
-              onChange={(event) => onFirefliesLinkChange?.({ providerUrl: event.target.value })}
-              placeholder="Optional transcript URL"
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onLinkFireflies}
-              disabled={linkingFireflies}
-            >
-              {linkingFireflies ? 'Linking…' : 'Link transcript'}
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      {manualInterviewSupported ? (
-        <div className="mt-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
-          <div className="text-sm font-semibold text-[var(--taali-text)]">Paste transcript manually</div>
-          <p className="mt-1 text-xs text-[var(--taali-muted)]">
-            Use this fallback when the screening call transcript lives outside Fireflies or still needs manual review.
-          </p>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Stage</span>
-              <Select
-                value={manualModel.stage || 'screening'}
-                onChange={(event) => onManualInterviewChange?.({ stage: event.target.value })}
-              >
-                <option value="screening">Stage 1 · screening</option>
-                <option value="tech_stage_2">Stage 2 · technical</option>
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Meeting date</span>
-              <Input
-                type="datetime-local"
-                value={manualModel.meetingDate || ''}
-                onChange={(event) => onManualInterviewChange?.({ meetingDate: event.target.value })}
-              />
-            </label>
-            <label className="block md:col-span-2">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Summary</span>
-              <Input
-                type="text"
-                value={manualModel.summary || ''}
-                onChange={(event) => onManualInterviewChange?.({ summary: event.target.value })}
-                placeholder="Optional high-level summary"
-              />
-            </label>
-            <label className="block md:col-span-2">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Provider URL</span>
-              <Input
-                type="url"
-                value={manualModel.providerUrl || ''}
-                onChange={(event) => onManualInterviewChange?.({ providerUrl: event.target.value })}
-                placeholder="Optional link to the recording or transcript"
-              />
-            </label>
-            <label className="block md:col-span-2">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Transcript</span>
-              <Textarea
-                rows={9}
-                value={manualModel.transcriptText || ''}
-                onChange={(event) => onManualInterviewChange?.({ transcriptText: event.target.value })}
-                placeholder="Paste the interview transcript here"
-              />
-            </label>
-          </div>
-          <div className="mt-4 flex justify-end">
-            <Button type="button" variant="secondary" onClick={onSaveManualInterview} disabled={manualInterviewSaving}>
-              {manualInterviewSaving ? 'Saving…' : 'Save transcript'}
-            </Button>
-          </div>
-        </div>
-      ) : null}
     </Panel>
   );
 };
@@ -634,17 +513,6 @@ export const TranscriptPanel = ({
 export const CandidateStageTwoTechnicalTab = ({
   application = null,
   hasCompletedAssessment = false,
-  firefliesConnected = false,
-  firefliesLinkSupported = false,
-  firefliesLinkModel = null,
-  onFirefliesLinkChange = null,
-  onLinkFireflies = null,
-  linkingFireflies = false,
-  manualInterviewSupported = false,
-  manualInterviewModel = null,
-  onManualInterviewChange = null,
-  onSaveManualInterview = null,
-  manualInterviewSaving = false,
   guidanceSlot = null,
 }) => {
   const screeningInterview = latestInterviewForStage(application?.interviews, 'screening');
@@ -684,31 +552,16 @@ export const CandidateStageTwoTechnicalTab = ({
           tone={hasCompletedAssessment ? 'success' : 'muted'}
         />
         <SourceCard
-          status={screeningInterview ? (screeningInterview.source === 'fireflies' ? 'Synced' : 'Attached') : 'Waiting'}
+          status={screeningInterview ? (screeningInterview.source === 'manual' ? 'Attached' : 'Synced') : 'Waiting'}
           title="Screening transcript"
           detail={screeningInterview
             ? 'The latest screening conversation is linked and available for technical follow-up.'
-            : (firefliesConnected
-              ? 'Fireflies is connected, but no Stage 1 transcript has been linked yet.'
-              : 'Attach a transcript manually or connect Fireflies to feed Stage 1 evidence in here.')}
+            : 'The workspace transcription service will add Stage 1 evidence here once a meeting is matched.'}
           tone={screeningInterview ? 'warning' : 'muted'}
         />
       </div>
 
-      <TranscriptPanel
-        application={application}
-        firefliesConnected={firefliesConnected}
-        firefliesLinkSupported={firefliesLinkSupported}
-        firefliesLinkModel={firefliesLinkModel}
-        onFirefliesLinkChange={onFirefliesLinkChange}
-        onLinkFireflies={onLinkFireflies}
-        linkingFireflies={linkingFireflies}
-        manualInterviewSupported={manualInterviewSupported}
-        manualInterviewModel={manualInterviewModel}
-        onManualInterviewChange={onManualInterviewChange}
-        onSaveManualInterview={onSaveManualInterview}
-        manualInterviewSaving={manualInterviewSaving}
-      />
+      <TranscriptPanel application={application} />
 
       <InterviewPackPanel
         title="Technical probing questions"
