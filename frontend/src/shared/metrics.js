@@ -158,6 +158,9 @@ export const applicationFunnelBucket = (application) => {
   // reached — regardless of Tali's own pipeline_stage.
   if (isPostHandoverWorkableStage(application?.workable_stage)) return 'advanced';
   const stage = String(application?.pipeline_stage || '').toLowerCase();
+  // A `sourced` prospect is pre-applied and un-scored — its OWN bucket, never
+  // folded into `applied` (mirrors the backend funnel_bucket_for).
+  if (stage === 'sourced') return 'sourced';
   if (stage === 'applied') {
     // Evaluated = real cv_match score OR a genuinely-RUN pre-screen (the list
     // payload serializes the score as `pre_screen_score`; `pre_screen_score_100`

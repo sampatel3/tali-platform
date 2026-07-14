@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Share2,
   Sparkles,
+  UserPlus,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
@@ -68,6 +69,7 @@ const PRE_SCREEN_FILTER_THRESHOLD = 30;
 // Kanban columns + segmented stage filters — keys are the shared funnel
 // buckets (applicationFunnelBucket) so they read identically to the funnel.
 const PIPELINE_STAGE_ORDER = [
+  { key: 'sourced', label: 'Sourced', countLabel: 'prospects' },
   { key: 'applied', label: 'Applied', countLabel: 'new' },
   { key: 'scored', label: 'Scored', countLabel: 'ready to invite' },
   { key: 'invited', label: 'Invited', countLabel: 'awaiting response' },
@@ -145,6 +147,7 @@ const resolveOptionalPercent = (value) => {
 // keyed by FUNNEL buckets (scored/completed), so it can't label the raw stages
 // in_assessment/review — this does, and never leaves a value lower-cased.
 const PIPELINE_STAGE_LABELS = {
+  sourced: 'Sourced',
   applied: 'Applied',
   invited: 'Invited',
   in_assessment: 'In assessment',
@@ -183,6 +186,8 @@ const resolvePipelineCardFooterStatus = (application, pendingDecision = null) =>
   const outcome = String(application?.application_outcome || '').toLowerCase();
   if (outcome === 'rejected') return 'Rejected';
   if (outcome === 'hired') return 'Hired';
+  // A sourced prospect hasn't applied — no score, no decision.
+  if (stage === 'sourced') return 'Sourced';
   if (stage === 'applied') return 'Not invited';
   if (stage === 'invited') return 'Awaiting start';
   if (stage === 'in_assessment') return 'Assessment live';
@@ -321,6 +326,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [processDialogOpen, setProcessDialogOpen] = useState(false);
   const [submittalDialogOpen, setSubmittalDialogOpen] = useState(false);
+  // Phase 3a — "Add sourced candidate" compact form (a pre-applied prospect).
+  const [sourcedFormOpen, setSourcedFormOpen] = useState(false);
+  const [sourcedDraft, setSourcedDraft] = useState({ name: '', email: '', linkedin: '' });
+  const [savingSourced, setSavingSourced] = useState(false);
   const [syncingStages, setSyncingStages] = useState(false);
   const [loading, setLoading] = useState(true);
   // Set only on a cold-load failure with nothing cached to paint — drives the
@@ -561,6 +570,36 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setLoading(false);
     }
   }, [numericRoleId, rolesApi, showToast, trackRole]);
+
+  // Phase 3a — add a SOURCED prospect (a pre-applied lead) to this role. The
+  // application lands at the `sourced` stage: un-scored, no decision. It moves
+  // to `applied` (and gets scored) only when the person engages / applies.
+  const handleAddSourcedCandidate = useCallback(async (event) => {
+    event?.preventDefault?.();
+    if (!Number.isFinite(numericRoleId) || savingSourced) return;
+    const email = sourcedDraft.email.trim();
+    const linkedin = sourcedDraft.linkedin.trim();
+    if (!email && !linkedin) {
+      showToast('Add an email or a LinkedIn URL for the prospect.', 'error');
+      return;
+    }
+    setSavingSourced(true);
+    try {
+      await rolesApi.createSourcedCandidate(numericRoleId, {
+        name: sourcedDraft.name.trim() || null,
+        email: email || null,
+        linkedin: linkedin || null,
+      });
+      showToast('Sourced candidate added.', 'success');
+      setSourcedDraft({ name: '', email: '', linkedin: '' });
+      setSourcedFormOpen(false);
+      await loadRoleWorkspace();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to add sourced candidate.'), 'error');
+    } finally {
+      setSavingSourced(false);
+    }
+  }, [numericRoleId, savingSourced, sourcedDraft, rolesApi, showToast, loadRoleWorkspace]);
 
   // Patch a SINGLE application row after a single-candidate mutation instead
   // of reloading the whole workspace (which refetches up to 2×2000 rows over
@@ -1961,6 +2000,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 ))}
               </div>
               <div className="ctable-toolbar-grow" />
+              {/* Phase 3a — add a sourced prospect (pre-applied lead) to the
+                  role. Toggles a compact inline form below the toolbar. */}
+              <button
+                type="button"
+                className={`btn btn-sm ${sourcedFormOpen ? 'btn-purple' : 'btn-outline'}`}
+                onClick={() => setSourcedFormOpen((v) => !v)}
+                aria-expanded={sourcedFormOpen}
+                title="Add a sourced candidate — a prospect you found before they applied (no CV, not scored)"
+              >
+                <UserPlus size={12} />Add sourced
+              </button>
               {/* Sorting lives on the column headers (Score / Last updated). */}
               {/* Manual stage refresh: pull each candidate's current Workable
                   stage on demand (recovery for sync lag / a move that raced a
@@ -2030,6 +2080,42 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 })()}
               </button>
             </div>
+            {/* Phase 3a — compact "add sourced candidate" form. A prospect added
+                here lands at the Sourced stage: no CV, not scored, no decision. */}
+            {sourcedFormOpen ? (
+              <form className="sourced-add-form" onSubmit={handleAddSourcedCandidate}>
+                <input
+                  type="text"
+                  className="taali-input"
+                  placeholder="Name (optional)"
+                  value={sourcedDraft.name}
+                  onChange={(e) => setSourcedDraft((d) => ({ ...d, name: e.target.value }))}
+                  aria-label="Prospect name"
+                />
+                <input
+                  type="email"
+                  className="taali-input"
+                  placeholder="Email"
+                  value={sourcedDraft.email}
+                  onChange={(e) => setSourcedDraft((d) => ({ ...d, email: e.target.value }))}
+                  aria-label="Prospect email"
+                />
+                <input
+                  type="url"
+                  className="taali-input"
+                  placeholder="LinkedIn URL"
+                  value={sourcedDraft.linkedin}
+                  onChange={(e) => setSourcedDraft((d) => ({ ...d, linkedin: e.target.value }))}
+                  aria-label="Prospect LinkedIn URL"
+                />
+                <button type="submit" className="btn btn-purple btn-sm" disabled={savingSourced}>
+                  {savingSourced ? <><Spinner size={12} className="!text-current" />Adding…</> : 'Add prospect'}
+                </button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSourcedFormOpen(false)} disabled={savingSourced}>
+                  Cancel
+                </button>
+              </form>
+            ) : null}
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
                 ctable with Candidate / Score / Stage / Workable / Status /
                 Agent / View →. Filtered by tableStageFilter, sorted client-side

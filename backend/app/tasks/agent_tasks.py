@@ -564,6 +564,11 @@ def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> 
                 CandidateApplication.cv_match_score.is_(None),
                 CandidateApplication.application_outcome == "open",
                 CandidateApplication.deleted_at.is_(None),
+                # HARD GUARD: never auto-score a `sourced` prospect. It has no CV
+                # (the cv_text filter below already excludes it), but keep the
+                # stage gate explicit so a sourced lead is never scored before it
+                # engages and transitions to `applied`.
+                CandidateApplication.pipeline_stage != "sourced",
                 CandidateApplication.cv_text.isnot(None),
                 CandidateApplication.cv_text != "",
                 # Skip recently-errored apps unless a fresh CV beats the

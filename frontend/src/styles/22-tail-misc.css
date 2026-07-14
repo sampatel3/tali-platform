@@ -603,6 +603,20 @@
   flex: 1 1 auto;
 }
 
+/* Phase 3a — compact "add sourced candidate" form, shown below the candidates
+   toolbar when toggled. Inputs share the row and wrap on narrow viewports. */
+.sourced-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.sourced-add-form .taali-input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
 /* Shown in the candidates toolbar when the agent is running this role: signals
    "the agent's got it" so the demoted manual Process / Sync buttons beside it
    read as a quiet manual override rather than the primary action. */

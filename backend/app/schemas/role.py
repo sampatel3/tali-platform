@@ -272,7 +272,7 @@ class ApplicationResponse(BaseModel):
     candidate_id: int
     role_id: int
     status: str
-    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "advanced"] = "applied"
+    pipeline_stage: Literal["sourced", "applied", "invited", "in_assessment", "review", "advanced"] = "applied"
     pipeline_stage_updated_at: Optional[datetime] = None
     pipeline_stage_source: Literal["system", "recruiter", "sync", "agent"] = "system"
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"] = "open"
