@@ -44,7 +44,11 @@ from .health_tasks import (
     queue_worker_heartbeat,
     release_stale_usage_credit_reservations,
 )
-from .sister_role_tasks import score_sister_evaluation, score_sister_role
+from .sister_role_tasks import (
+    recover_sister_role_evaluations,
+    score_sister_evaluation,
+    score_sister_role,
+)
 # Eager-import corroboration_tasks so the worker registers the async
 # (shortlist-gated) graph + GitHub enrichment job — same unregistered-drop
 # trap as scoring_tasks if skipped.
@@ -58,6 +62,15 @@ from .automation_tasks import (
     generate_role_interview_focus,
     parse_application_cv_sections,
     run_application_auto_reject,
+)
+# ATS sync writes application-created work to a transactional outbox. Eager
+# import its post-commit dispatcher + Beat recovery task so workers never drop
+# either task as unregistered.
+from .application_ingest_tasks import (
+    dispatch_application_cv_parse_outbox,
+    dispatch_application_created_outbox,
+    sweep_application_cv_parse_outbox,
+    sweep_application_created_outbox,
 )
 # Eager-import anthropic_batch_tasks so the worker registers the Message
 # Batches submit/poll beat tasks — same unregistered-drop trap as above.
@@ -73,6 +86,7 @@ from .workable_tasks import (
     run_workable_sync_run_task,
     retry_workable_disqualify_task,
     run_workable_op_task,
+    recover_dispatching_workable_ops,
 )
 # Eager-import bullhorn_tasks so the worker registers the Bullhorn full-sync
 # runner AND the two incremental beat sweeps (event poll + nightly reconcile).
@@ -82,6 +96,7 @@ from .workable_tasks import (
 # BULLHORN_ENABLED is off or the org isn't connected).
 from .bullhorn_tasks import (  # noqa: F401
     bullhorn_event_poll_sweep,
+    bullhorn_initial_sync_recovery_sweep,
     bullhorn_reconcile_sweep,
     run_bullhorn_sync_run_task,
 )
@@ -202,13 +217,19 @@ __all__ = [
     "generate_application_interview_pack",
     "parse_application_cv_sections",
     "run_application_auto_reject",
+    "dispatch_application_cv_parse_outbox",
+    "dispatch_application_created_outbox",
+    "sweep_application_cv_parse_outbox",
+    "sweep_application_created_outbox",
     "submit_cv_parse_batches",
     "poll_cv_parse_batches",
     "run_workable_sync_run_task",
     "retry_workable_disqualify_task",
     "run_workable_op_task",
+    "recover_dispatching_workable_ops",
     "run_bullhorn_sync_run_task",
     "bullhorn_event_poll_sweep",
+    "bullhorn_initial_sync_recovery_sweep",
     "bullhorn_reconcile_sweep",
     "reconcile_anthropic_usage",
     "agent_manual_run",

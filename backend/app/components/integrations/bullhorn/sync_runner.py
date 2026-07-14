@@ -28,16 +28,27 @@ from sqlalchemy.orm import Session
 from ....models.organization import Organization
 from ....platform.config import settings
 from ....platform.database import SessionLocal
-from ....platform.secrets import decrypt_text, encrypt_text
+from ....platform.secrets import decrypt_text
 from .auth import BullhornAuth
+from .bootstrap import (
+    CONNECT_BOOTSTRAP_TRIGGER,
+    DURABLE_FULL_SYNC_TRIGGERS,
+    retry_marker_after_run_failure,
+)
 from .service import BullhornService
 from .sync_service import BullhornSyncCancelled, BullhornSyncService
+from .credential_state import credential_generation, persist_rotated_credentials
+from .errors import BullhornAuthError
 
 logger = logging.getLogger("taali.bullhorn.sync")
 
 # Reuse the shared per-org mutex util; Bullhorn gets its own key namespace so a
 # Bullhorn sync/write and a Workable sync/write for the same org don't contend.
 BULLHORN_ORG_MUTEX_NAMESPACE = "celery:lock:bullhorn_org_sync"
+
+
+class BullhornMutexUnavailable(RuntimeError):
+    """Redis lock state is unknown; Bullhorn must retry, never fail open."""
 
 
 def _org_connected(org: Organization | None) -> bool:
@@ -50,7 +61,7 @@ def _org_connected(org: Organization | None) -> bool:
     )
 
 
-def _make_persist_hook(org_id: int):
+def _make_persist_hook(org_id: int, expected_generation: int):
     """A ``persist_tokens`` hook that re-encrypts + durably writes the rotation.
 
     Opens its OWN short-lived session (separate transaction from the sync's) so
@@ -60,37 +71,47 @@ def _make_persist_hook(org_id: int):
     """
 
     def _persist(*, refresh_token: str, rest_url: str | None = None) -> None:
-        hook_db = SessionLocal()
-        try:
-            org = hook_db.query(Organization).filter(Organization.id == org_id).first()
-            if org is None:
-                raise RuntimeError(f"org {org_id} vanished during Bullhorn token rotation")
-            org.bullhorn_refresh_token = encrypt_text(refresh_token, settings.SECRET_KEY)
-            if rest_url:
-                org.bullhorn_rest_url = rest_url
-            hook_db.commit()
-        finally:
-            hook_db.close()
+        persist_rotated_credentials(
+            org_id=org_id,
+            expected_generation=expected_generation,
+            refresh_token=refresh_token,
+            rest_url=rest_url,
+        )
 
     return _persist
 
 
 def _build_service(org: Organization) -> BullhornService:
     """Construct an authed :class:`BullhornService` from the org's stored creds."""
-    client_secret = decrypt_text(org.bullhorn_client_secret or "", settings.SECRET_KEY)
-    refresh_token = decrypt_text(org.bullhorn_refresh_token or "", settings.SECRET_KEY)
+    try:
+        client_secret = decrypt_text(
+            org.bullhorn_client_secret or "", settings.SECRET_KEY
+        )
+        refresh_token = decrypt_text(
+            org.bullhorn_refresh_token or "", settings.SECRET_KEY
+        )
+    except Exception:
+        raise BullhornAuthError(
+            "Stored Bullhorn credentials are unavailable; reconnect required"
+        ) from None
     auth = BullhornAuth(
         username=org.bullhorn_username,
         client_id=org.bullhorn_client_id,
         client_secret=client_secret,
         refresh_token=refresh_token or None,
-        persist_tokens=_make_persist_hook(org.id),
+        persist_tokens=_make_persist_hook(org.id, credential_generation(org)),
         rest_url=org.bullhorn_rest_url,
     )
     return BullhornService(auth, client_id=org.bullhorn_client_id)
 
 
-def execute_bullhorn_sync_run(*, org_id: int, mode: str = "full") -> None:
+def execute_bullhorn_sync_run(
+    *,
+    org_id: int,
+    mode: str = "full",
+    run_id: str | None = None,
+    trigger: str | None = None,
+) -> None:
     """Run one Bullhorn full sync for an org under the per-org mutex.
 
     No-op when the flag is off or the org isn't connected. Records a terminal
@@ -106,6 +127,7 @@ def execute_bullhorn_sync_run(*, org_id: int, mode: str = "full") -> None:
     lock_owned = False
     sync_completed = False
     cancelled = False
+    hitl_failure_code: str | None = None
     try:
         org = db.query(Organization).filter(Organization.id == org_id).first()
         if not _org_connected(org):
@@ -117,10 +139,35 @@ def execute_bullhorn_sync_run(*, org_id: int, mode: str = "full") -> None:
             logger.info("Bullhorn sync skipped org_id=%s — another sync/op holds the lock", org_id)
             return
 
-        # Only now do we own the run: this task acquired the lock (or ran
-        # unguarded because Redis was down). Any finalization below is ours to
-        # do — a task that bailed at the lock check above must NEVER touch the
-        # holder's last-sync status or clear its live progress marker.
+        # A recovery sweep may dispatch the same durable run more than once.
+        # Re-read after acquiring the mutex and refuse a completed/stale id before
+        # claiming finalization ownership, so at-least-once delivery is harmless.
+        db.expire_all()
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        if _tracked_run_is_terminal(org, run_id):
+            logger.info(
+                "Bullhorn sync duplicate skipped org_id=%s run_id=%s",
+                org_id,
+                run_id,
+            )
+            return
+        if not _prepare_tracked_run(
+            db,
+            org,
+            run_id=run_id,
+            mode=mode,
+            trigger=trigger,
+        ):
+            logger.info(
+                "Bullhorn sync stale task skipped org_id=%s run_id=%s",
+                org_id,
+                run_id,
+            )
+            return
+
+        # Only now do we own the run: this task acquired the lock. Any
+        # finalization below is ours to do. A task that bailed at the lock check
+        # must NEVER touch the holder's status or clear its live progress marker.
         lock_owned = True
 
         service = BullhornSyncService(_build_service(org))
@@ -130,15 +177,34 @@ def execute_bullhorn_sync_run(*, org_id: int, mode: str = "full") -> None:
         except BullhornSyncCancelled:
             cancelled = True
             logger.info("Bullhorn sync cancelled org_id=%s", org_id)
-    except Exception:
-        logger.exception("Bullhorn background sync failed org_id=%s", org_id)
+    except BullhornAuthError:
+        hitl_failure_code = "bullhorn_reconnect_required"
+        logger.error(
+            "Bullhorn background sync requires reconnect org_id=%s error_type=BullhornAuthError",
+            org_id,
+        )
+    except BullhornMutexUnavailable:
+        logger.warning("Bullhorn mutex unavailable org_id=%s; sync will retry", org_id)
+        raise
+    except Exception as exc:
+        logger.error(
+            "Bullhorn background sync failed org_id=%s error_type=%s",
+            org_id,
+            type(exc).__name__,
+        )
     finally:
         try:
             # Guard finalization on lock ownership: only the task that acquired
             # the lock finalizes. A duplicate task that returned at the lock
             # check must not mark the live run failed or clear its progress.
             if lock_owned:
-                _finalize(db, org_id, completed=sync_completed, cancelled=cancelled)
+                _finalize(
+                    db,
+                    org_id,
+                    completed=sync_completed,
+                    cancelled=cancelled,
+                    hitl_failure_code=hitl_failure_code,
+                )
         finally:
             if mutex_handle is not None:
                 _release_mutex(mutex_handle)
@@ -159,26 +225,92 @@ def _acquire_mutex(org_id: int):
         # Held by another Bullhorn sync/op for this org — skip this fire.
         return None
     if handle is False:
-        # Redis unavailable — the util contract is "run unguarded". Return the
-        # sentinel so the sync proceeds and release is a no-op.
-        return _NO_LOCK
+        raise BullhornMutexUnavailable(
+            f"Bullhorn mutex state unavailable for org {org_id}"
+        )
     return handle
 
 
 def _release_mutex(handle) -> None:
-    if handle is _NO_LOCK:
-        return
     from ....tasks.assessment_tasks import _release_workable_org_mutex
 
     _release_workable_org_mutex(handle)
 
 
-# Sentinel for "ran unguarded because Redis was unavailable" — not a real lock,
-# so release is a no-op, but the sync still ran (matching the util's fail-open).
-_NO_LOCK = object()
+def _tracked_run_is_terminal(org: Organization | None, run_id: str | None) -> bool:
+    if org is None or not run_id:
+        return False
+    progress = org.bullhorn_sync_progress
+    if isinstance(progress, dict) and str(progress.get("run_id") or "") == run_id:
+        if progress.get("phase") not in {"completed", "failed", "cancelled"}:
+            return False
+    config = org.bullhorn_config if isinstance(org.bullhorn_config, dict) else {}
+    if str(config.get("initial_full_sync_run_id") or "") == run_id:
+        return str(config.get("initial_full_sync_status") or "") in {
+            "success",
+            "failed",
+            "cancelled",
+        }
+    summary = (
+        org.bullhorn_last_sync_summary
+        if isinstance(org.bullhorn_last_sync_summary, dict)
+        else {}
+    )
+    return bool(
+        str(summary.get("run_id") or "") == run_id
+        and str(summary.get("status") or "") in {"success", "failed", "cancelled"}
+    )
 
 
-def _finalize(db: Session, org_id: int, *, completed: bool, cancelled: bool) -> None:
+def _prepare_tracked_run(
+    db: Session,
+    org: Organization | None,
+    *,
+    run_id: str | None,
+    mode: str,
+    trigger: str | None,
+) -> bool:
+    """Attach task metadata without overwriting a different live run."""
+    if org is None or not run_id:
+        return org is not None
+    current = (
+        org.bullhorn_sync_progress
+        if isinstance(org.bullhorn_sync_progress, dict)
+        else {}
+    )
+    active_id = str(current.get("run_id") or "")
+    if (
+        active_id
+        and active_id != run_id
+        and current.get("phase") not in {"completed", "failed", "cancelled"}
+    ):
+        return False
+    marker = dict(current) if active_id == run_id else {}
+    marker.update(
+        {
+            "phase": marker.get("phase") or "queued",
+            "mode": mode,
+            "run_id": run_id,
+            "trigger": trigger or marker.get("trigger") or "tracked_sync",
+            "cancel_requested": bool(marker.get("cancel_requested", False)),
+        }
+    )
+    if marker.get("trigger") in DURABLE_FULL_SYNC_TRIGGERS:
+        marker["run_attempts"] = int(marker.get("run_attempts") or 0) + 1
+    org.bullhorn_sync_progress = marker
+    db.add(org)
+    db.commit()
+    return True
+
+
+def _finalize(
+    db: Session,
+    org_id: int,
+    *,
+    completed: bool,
+    cancelled: bool,
+    hitl_failure_code: str | None = None,
+) -> None:
     """Stamp the org's last-sync status/summary from the final progress JSON."""
     try:
         org = db.query(Organization).filter(Organization.id == org_id).first()
@@ -191,12 +323,47 @@ def _finalize(db: Session, org_id: int, *, completed: bool, cancelled: bool) -> 
             status = "success"
         else:
             status = "failed"
-        org.bullhorn_last_sync_at = datetime.now(timezone.utc)
+        finished_at = datetime.now(timezone.utc)
+        org.bullhorn_last_sync_at = finished_at
         org.bullhorn_last_sync_status = status
-        org.bullhorn_last_sync_summary = {**progress, "status": status}
-        # Clear the live progress marker so the UI stops showing an in-flight run.
-        org.bullhorn_sync_progress = None
+        org.bullhorn_last_sync_summary = {
+            **progress,
+            "status": status,
+            **(
+                {
+                    "requires_human_action": True,
+                    "failure_code": hitl_failure_code,
+                }
+                if hitl_failure_code
+                else {}
+            ),
+        }
+        retry_marker = (
+            retry_marker_after_run_failure(progress, now=finished_at)
+            if status == "failed" and not hitl_failure_code
+            else None
+        )
+        org.bullhorn_sync_progress = retry_marker
+        if (
+            progress.get("trigger") == CONNECT_BOOTSTRAP_TRIGGER
+            and retry_marker is None
+            and progress.get("run_id")
+        ):
+            config = dict(org.bullhorn_config) if isinstance(org.bullhorn_config, dict) else {}
+            config.pop("initial_sync_bootstrap", None)
+            config.update(
+                {
+                    "initial_full_sync_run_id": str(progress["run_id"]),
+                    "initial_full_sync_status": status,
+                    "initial_full_sync_finished_at": finished_at.isoformat(),
+                }
+            )
+            org.bullhorn_config = config
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        logger.exception("Bullhorn sync finalization failed org_id=%s", org_id)
+        logger.error(
+            "Bullhorn sync finalization failed org_id=%s error_type=%s",
+            org_id,
+            type(exc).__name__,
+        )

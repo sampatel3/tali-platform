@@ -181,6 +181,13 @@ class RoleResponse(BaseModel):
     ats_owner_role_name: Optional[str] = None
     effective_workable_job_id: Optional[str] = None
     sister_role_count: int = 0
+    # Provider-neutral external job contract. New clients should use these
+    # fields; the Workable-specific fields below remain for compatibility.
+    # ``external_job_live`` is None when this role has no ATS link.
+    ats_provider: Optional[Literal["workable", "bullhorn"]] = None
+    external_job_id: Optional[str] = None
+    external_job_state: Optional[str] = None
+    external_job_live: Optional[bool] = None
     workable_job_id: Optional[str] = None
     # Requisition -> Workable job lifecycle: draft | open | filled |
     # filled_external | cancelled. None for legacy / Workable-synced roles
@@ -355,6 +362,11 @@ class ApplicationResponse(BaseModel):
     external_stage_raw: Optional[str] = None
     external_stage_normalized: Optional[str] = None
     integration_sync_state: Optional[dict[str, Any]] = None
+    # Present on a recruiter-initiated asynchronous ATS write (stage move or
+    # Bullhorn outcome). Writes are serialized with sync traffic, so the UI must
+    # treat them as queued until the tracked run reaches a terminal state.
+    ats_writeback_status: Optional[Literal["queued"]] = None
+    ats_writeback_job_run_id: Optional[int] = None
     pipeline_external_drift: bool = False
     version: int = 1
     notes: Optional[str] = None

@@ -174,6 +174,10 @@ def enqueue(
             "workable_target_stage": workable_target_stage,
         },
     )
+    # The non-replayable delivery compensator may have returned this decision to
+    # ``pending`` in a separate short-lived session when the broker rejected the
+    # initial publish. Refresh so the response never falsely reports processing.
+    db.refresh(decision)
     return decision
 
 

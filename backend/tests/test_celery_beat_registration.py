@@ -106,6 +106,7 @@ def test_bullhorn_incremental_sweeps_are_scheduled_and_registered():
     scheduled = _scheduled_task_names().values()
     for task_name in (
         "app.tasks.bullhorn_tasks.bullhorn_event_poll_sweep",
+        "app.tasks.bullhorn_tasks.bullhorn_initial_sync_recovery_sweep",
         "app.tasks.bullhorn_tasks.bullhorn_reconcile_sweep",
     ):
         assert task_name in celery_app.tasks, f"{task_name} not registered"

@@ -10,7 +10,7 @@ import pytest
 from app.models.organization import Organization
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.role import Role
+from app.models.role import JOB_STATUS_CANCELLED, JOB_STATUS_OPEN, Role
 from app.cv_parsing.origins import (
     CV_PARSE_ORIGIN_ATS_INGEST,
     CV_PARSE_ORIGIN_NATIVE_APPLY,
@@ -157,6 +157,37 @@ def test_queued_autonomous_cv_parse_does_not_start_after_role_stops(
 
     assert result["status"] == "skipped"
     assert result["reason"] == "role_not_runnable"
+    provider.assert_not_called()
+
+
+@pytest.mark.parametrize("terminal_kind", ("local", "workable", "bullhorn"))
+def test_queued_autonomous_cv_parse_obeys_provider_neutral_job_lifecycle(
+    db, terminal_kind: str
+):
+    suffix = f"terminal-{terminal_kind}"
+    role = _role(db, suffix=suffix, enabled=True, paused=False)
+    role.job_status = JOB_STATUS_OPEN
+    if terminal_kind == "local":
+        role.job_status = JOB_STATUS_CANCELLED
+    elif terminal_kind == "workable":
+        role.source = "workable"
+        role.workable_job_id = f"WORK-{role.id}"
+        role.workable_job_data = {"state": "closed"}
+    else:
+        role.source = "bullhorn"
+        role.bullhorn_job_order_id = str(90_000 + int(role.id))
+        role.bullhorn_job_data = {"status": "Closed", "isOpen": False}
+    db.commit()
+    app = _application(db, role, suffix=suffix, source=role.source)
+
+    with patch("app.cv_parsing.apply.parse_and_store_cv_sections") as provider:
+        result = parse_application_cv_sections.run(
+            app.id, origin=CV_PARSE_ORIGIN_ATS_INGEST
+        )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "role_not_runnable"
+    assert "not open" in result["detail"] or "not live" in result["detail"]
     provider.assert_not_called()
 
 

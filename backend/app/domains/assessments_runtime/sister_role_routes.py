@@ -17,6 +17,7 @@ from ...models.sister_role_evaluation import (
     SISTER_EVAL_DONE,
     SISTER_EVAL_ERROR,
     SISTER_EVAL_PENDING,
+    SISTER_EVAL_RETRY_WAIT,
     SISTER_EVAL_RUNNING,
     SISTER_EVAL_UNSCORABLE,
     SisterRoleEvaluation,
@@ -35,26 +36,13 @@ from ...services.related_role_service import (
     get_related_role_source,
     related_role_roster_counts,
 )
+from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.sister_role_service import ensure_sister_evaluations
 from ...tasks.sister_role_tasks import score_sister_role
 from .roles_management_routes import _serialize_role_detail
 
 router = APIRouter(tags=["Sister roles"])
 logger = logging.getLogger("taali.sister_roles")
-
-
-def _mark_dispatch_error(db: Session, *, role_id: int) -> None:
-    db.query(SisterRoleEvaluation).filter(
-        SisterRoleEvaluation.role_id == role_id,
-        SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
-    ).update(
-        {
-            SisterRoleEvaluation.status: SISTER_EVAL_ERROR,
-            SisterRoleEvaluation.error_message: "Scoring worker unavailable; retry the roster",
-        },
-        synchronize_session=False,
-    )
-    db.commit()
 
 
 def _source_role(db: Session, *, role_id: int, organization_id: int) -> Role:
@@ -102,6 +90,7 @@ def preview_sister_role(
     return SisterRolePreview(
         source_role_id=source.id,
         source_role_name=source.name,
+        source_ats_provider=ats_job_lifecycle(source).provider or "",
         candidates_total=counts["total"],
         candidates_with_cv=counts["with_cv"],
         candidates_missing_cv=counts["missing_cv"],
@@ -159,13 +148,12 @@ def rescore_sister_role(
     db.commit()
     try:
         score_sister_role.apply_async(args=[role.id], queue="scoring")
-    except Exception as exc:
-        logger.exception("Failed to dispatch sister re-score role_id=%s", role.id)
-        _mark_dispatch_error(db, role_id=role.id)
-        raise HTTPException(
-            status_code=503,
-            detail="Scores are queued but the scoring worker is unavailable. Retry shortly.",
-        ) from exc
+    except Exception as exc:  # Beat recovers pending rows without user action.
+        logger.error(
+            "Related-role rescore kick unavailable role_id=%s error_code=queue_unavailable error_type=%s",
+            role.id,
+            type(exc).__name__,
+        )
     return _scoring_status(db, role)
 
 
@@ -178,13 +166,17 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
     )
     counts = Counter({str(key): int(value) for key, value in rows})
     for key in (
-        SISTER_EVAL_PENDING, SISTER_EVAL_RUNNING, SISTER_EVAL_DONE,
+        SISTER_EVAL_PENDING, SISTER_EVAL_RUNNING, SISTER_EVAL_RETRY_WAIT, SISTER_EVAL_DONE,
         SISTER_EVAL_ERROR, SISTER_EVAL_UNSCORABLE,
     ):
         counts.setdefault(key, 0)
     total = sum(counts.values())
     completed = counts[SISTER_EVAL_DONE] + counts[SISTER_EVAL_ERROR] + counts[SISTER_EVAL_UNSCORABLE]
-    if counts[SISTER_EVAL_RUNNING] or counts[SISTER_EVAL_PENDING]:
+    if (
+        counts[SISTER_EVAL_RUNNING]
+        or counts[SISTER_EVAL_PENDING]
+        or counts[SISTER_EVAL_RETRY_WAIT]
+    ):
         overall = "running"
     elif counts[SISTER_EVAL_ERROR] and not counts[SISTER_EVAL_DONE]:
         overall = "error"

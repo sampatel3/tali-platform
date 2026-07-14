@@ -222,6 +222,17 @@ def build_app(state: FakeBullhornState | None = None) -> FastAPI:
             return r
         org = _org_of(sess)
         table = list(org.entities.get(entity, {}).values())
+        # Mirror the lifecycle selector used by every full/reconciliation read.
+        # Leaving this unfiltered made a closed JobOrder look remotely open and
+        # hid missed-close recovery bugs from the contract suite.
+        normalized_query = "".join((query or "").lower().split())
+        if entity == "JobOrder" and "isopen:true" in normalized_query:
+            table = [
+                record
+                for record in table
+                if record.get("isOpen") is True
+                or str(record.get("isOpen") or "").strip().lower() in {"true", "1", "yes"}
+            ]
         data, total = _page(table, start, count)
         return {
             "total": total,

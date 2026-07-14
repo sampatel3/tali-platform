@@ -131,6 +131,10 @@ for service in \
     "$ENV_NAME" "$service" "USAGE_METER_LIVE" "true"
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "ATS_PUBLIC_APPLY_ENABLED" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "BULLHORN_ENABLED" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "MVP_DISABLE_WORKABLE" "false"
 done
 
 echo "Railway ${STATUS_SCOPE} status validation passed."

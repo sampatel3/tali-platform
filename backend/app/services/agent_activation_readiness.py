@@ -29,6 +29,8 @@ def activation_readiness(
     auto_send_assessment: bool | None = None,
     auto_resend_assessment: bool | None = None,
     auto_advance: bool | None = None,
+    auto_reject: bool | None = None,
+    auto_reject_pre_screen: bool | None = None,
 ) -> dict[str, Any]:
     """Return production runtime readiness for this role's actual path.
 
@@ -130,6 +132,7 @@ def activation_readiness(
     if (
         getattr(role, "source", None) == "requisition"
         and not getattr(role, "workable_job_id", None)
+        and not getattr(role, "bullhorn_job_order_id", None)
         and not bool(getattr(settings_obj, "ATS_PUBLIC_APPLY_ENABLED", False))
     ):
         reasons.append(
@@ -308,36 +311,238 @@ def activation_readiness(
         if session is not None and getattr(role, "organization_id", None) is not None
         else None
     )
-    if org is not None and getattr(role, "workable_job_id", None):
+    if org is not None:
         from .agent_policy_settings import role_automation_enabled
-        from .workable_actions_service import workable_writeback_enabled
+        from .workable_actions_service import (
+            resolve_workable_invite_stage,
+            resolve_workable_interview_stage,
+            workable_writeback_enabled,
+        )
 
-        workable_config = (
-            org.workable_config
-            if isinstance(getattr(org, "workable_config", None), dict)
-            else {}
+        effective_auto_send = (
+            role_automation_enabled(role, "auto_send_assessment")
+            if auto_send_assessment is None
+            else bool(auto_send_assessment)
+        )
+        effective_auto_resend = (
+            role_automation_enabled(role, "auto_resend_assessment")
+            if auto_resend_assessment is None
+            else bool(auto_resend_assessment)
         )
         effective_auto_advance = (
             role_automation_enabled(role, "auto_advance")
             if auto_advance is None
             else bool(auto_advance)
         )
-        if (
-            effective_auto_advance
-            and workable_writeback_enabled(org)
-            and not str(
-                workable_config.get("interview_stage_name") or ""
-            ).strip()
-        ):
+        effective_auto_reject = (
+            bool(getattr(role, "auto_reject", False))
+            if auto_reject is None
+            else bool(auto_reject)
+        )
+        effective_auto_reject_pre_screen = (
+            bool(getattr(role, "auto_reject_pre_screen", False))
+            if auto_reject_pre_screen is None
+            else bool(auto_reject_pre_screen)
+        )
+
+    if org is not None and getattr(role, "workable_job_id", None):
+        workable_reject_enabled = bool(
+            effective_auto_reject or effective_auto_reject_pre_screen
+        )
+        workable_invite_enabled = bool(
+            uses_assessment and (effective_auto_send or effective_auto_resend)
+        )
+        workable_write_needed = bool(
+            workable_invite_enabled
+            or effective_auto_advance
+            or workable_reject_enabled
+        )
+        workable_connected = bool(
+            not getattr(settings_obj, "MVP_DISABLE_WORKABLE", False)
+            and getattr(org, "workable_connected", False)
+            and getattr(org, "workable_access_token", None)
+            and getattr(org, "workable_subdomain", None)
+        )
+        workable_writable = bool(
+            workable_connected and workable_writeback_enabled(org)
+        )
+        # This connection is the inbound candidate feed too. Even when all
+        # write actions are deliberately off, a disconnected external role
+        # cannot receive future applications or recruiter-side stage changes,
+        # so it is not autonomous. Require connectivity for every linked role;
+        # write-back remains a separate, action-dependent gate below.
+        if not workable_connected:
             reasons.append(
                 {
-                    "code": "workable_interview_stage_missing",
+                    "code": "workable_connection_required",
                     "detail": (
-                        "Configure workable_config.interview_stage_name before "
-                        "autonomous advances can write back to Workable"
+                        "Connect Workable for this workspace before turning on "
+                        "the agent for this Workable role."
                     ),
                 }
             )
+        elif workable_write_needed and not workable_writable:
+            reasons.append(
+                {
+                    "code": "workable_writeback_required",
+                    "detail": (
+                        "Enable Workable candidate write-back in Settings → "
+                        "Integrations → Workable before turning on the agent."
+                    ),
+                }
+            )
+
+        if workable_writable and workable_invite_enabled:
+            invite_stage, invite_error = resolve_workable_invite_stage(org, role)
+            if not invite_stage:
+                reasons.append(
+                    {
+                        "code": "workable_invite_stage_missing",
+                        "detail": invite_error
+                        or (
+                            "Choose the Workable assessment/invited stage in "
+                            "Agent settings before autonomous assessment sends."
+                        ),
+                    }
+                )
+
+        if effective_auto_advance and workable_writable:
+            target_stage, stage_error = resolve_workable_interview_stage(org, role)
+            if not target_stage:
+                reasons.append(
+                    {
+                        "code": "workable_interview_stage_missing",
+                        "detail": stage_error
+                        or (
+                            "Choose the Workable interview hand-off stage before "
+                            "autonomous advances can write back."
+                        ),
+                    }
+                )
+
+    bullhorn_role = bool(
+        not getattr(role, "workable_job_id", None)
+        and (
+            str(getattr(role, "source", None) or "").strip().lower()
+            == "bullhorn"
+            or getattr(role, "bullhorn_job_order_id", None)
+        )
+    )
+    if org is not None and bullhorn_role:
+        bullhorn_enabled = bool(getattr(settings_obj, "BULLHORN_ENABLED", False))
+        if not bullhorn_enabled:
+            reasons.append(
+                {
+                    "code": "bullhorn_feature_disabled",
+                    "detail": (
+                        "Enable BULLHORN_ENABLED before turning on the agent for "
+                        "this Bullhorn role."
+                    ),
+                }
+            )
+        if (
+            worker.get("capability_reporting") is True
+            and worker_capabilities.get("celery", {}).get("bullhorn_enabled")
+            is not True
+        ):
+            reasons.append(
+                {
+                    "code": "bullhorn_worker_feature_disabled",
+                    "detail": (
+                        "The default worker has BULLHORN_ENABLED off or has not "
+                        "reported the Bullhorn capability. Deploy the matching "
+                        "worker configuration before turning on the agent."
+                    ),
+                }
+            )
+        if not getattr(role, "bullhorn_job_order_id", None):
+            reasons.append(
+                {
+                    "code": "bullhorn_role_not_linked",
+                    "detail": (
+                        "Link this role to its Bullhorn JobOrder, then press Turn on again."
+                    ),
+                }
+            )
+        required_credentials = {
+            "username": getattr(org, "bullhorn_username", None),
+            "client id": getattr(org, "bullhorn_client_id", None),
+            "client secret": getattr(org, "bullhorn_client_secret", None),
+            "refresh token": getattr(org, "bullhorn_refresh_token", None),
+        }
+        missing_credentials = [
+            label
+            for label, value in required_credentials.items()
+            if not str(value or "").strip()
+        ]
+        connection_ready = bool(
+            getattr(org, "bullhorn_connected", False) and not missing_credentials
+        )
+        if not connection_ready:
+            missing_detail = (
+                f" Missing: {', '.join(missing_credentials)}."
+                if missing_credentials
+                else ""
+            )
+            reasons.append(
+                {
+                    "code": "bullhorn_connection_required",
+                    "detail": (
+                        "Connect Bullhorn for this workspace before turning on "
+                        f"the agent.{missing_detail}"
+                    ),
+                }
+            )
+
+        if (
+            bullhorn_enabled
+            and connection_ready
+            and getattr(role, "bullhorn_job_order_id", None)
+        ):
+            from ..components.integrations.bullhorn.write_back import (
+                resolved_write_targets,
+            )
+
+            write_targets = resolved_write_targets(session, org)
+            required_intents: list[tuple[str, str, str]] = []
+            if uses_assessment and (effective_auto_send or effective_auto_resend):
+                required_intents.append(
+                    (
+                        "invited",
+                        "bullhorn_assessment_stage_mapping_required",
+                        "assessment/invited",
+                    )
+                )
+            if effective_auto_advance:
+                required_intents.append(
+                    (
+                        "advanced",
+                        "bullhorn_advance_stage_mapping_required",
+                        "advanced/interview",
+                    )
+                )
+            if effective_auto_reject or effective_auto_reject_pre_screen:
+                required_intents.append(
+                    (
+                        "rejected",
+                        "bullhorn_reject_stage_mapping_required",
+                        "rejected",
+                    )
+                )
+            for intent, code, label in required_intents:
+                if write_targets.get(intent):
+                    continue
+                mapping_quantity = "exactly one" if intent == "invited" else "a"
+                reasons.append(
+                    {
+                        "code": code,
+                        "detail": (
+                            f"Map {mapping_quantity} Bullhorn status to Taali's {label} "
+                            "stage in Settings → Integrations → Bullhorn, then "
+                            "press Turn on again. Taali will never guess an ATS status."
+                        ),
+                    }
+                )
     available_credits = int(getattr(org, "credits_balance", 0) or 0)
     if available_credits < minimum_credits:
         reasons.append(

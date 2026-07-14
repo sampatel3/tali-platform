@@ -69,6 +69,28 @@ def test_adopts_via_ref_code_in_title_when_absent_from_description(db):
     assert adopted.job_status == JOB_STATUS_OPEN
 
 
+def test_adopts_an_already_open_native_role_after_one_click_turn_on(db):
+    org = _org(db)
+    _, role, code = _published_draft(db, org)
+    role.job_status = JOB_STATUS_OPEN
+    role.agentic_mode_enabled = True
+    db.flush()
+
+    adopted = _adopt_requisition_role(
+        db,
+        org,
+        job_id="LATE-LINK",
+        title="Backend Engineer",
+        description=_spec_with_code(code),
+    )
+
+    assert adopted is not None
+    assert adopted.id == role.id
+    assert adopted.workable_job_id == "LATE-LINK"
+    assert adopted.job_status == JOB_STATUS_OPEN
+    assert adopted.agentic_mode_enabled is True
+
+
 def test_no_code_in_spec_returns_none(db):
     org = _org(db)
     _published_draft(db, org)

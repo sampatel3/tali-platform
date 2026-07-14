@@ -8,6 +8,7 @@ from app.models.assessment_experiment import (
     AssessmentExperiment,
     AssessmentExperimentArm,
 )
+from app.models.ats_stage_map import AtsStageMap
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
@@ -37,6 +38,7 @@ def _settings(**overrides):
         "E2B_API_KEY": "e2b-live",
         "GITHUB_TOKEN": "github-live",
         "GITHUB_MOCK_MODE": False,
+        "BULLHORN_ENABLED": False,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -112,6 +114,41 @@ def test_production_readiness_passes_when_used_path_is_wired(_beat, db):
         _role(db, source="requisition", active_task=True),
         settings_obj=_settings(),
     )["ready"] is True
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_bullhorn_linked_requisition_does_not_require_native_public_apply(_beat, db):
+    role = _role(db, source="requisition")
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.bullhorn_job_order_id = "job-42"
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(
+            ATS_PUBLIC_APPLY_ENABLED=False,
+            BULLHORN_ENABLED=True,
+        ),
+        auto_skip_assessment=True,
+        auto_send_assessment=False,
+        auto_resend_assessment=False,
+        auto_advance=False,
+        auto_reject=False,
+        auto_reject_pre_screen=False,
+    )
+
+    assert result["ready"] is True
+    assert "native_apply_disabled" not in {
+        reason["code"] for reason in result["reasons"]
+    }
 
 
 @patch(
@@ -345,6 +382,8 @@ def test_readiness_uses_incoming_auto_advance_for_workable_writeback(_beat, db):
     role = _role(db, active_task=True)
     org = db.query(Organization).filter(Organization.id == role.organization_id).one()
     org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "ready"
     org.workable_config = {"workable_writeback": True}
     role.workable_job_id = "workable-role"
     role.auto_advance = True
@@ -362,6 +401,378 @@ def test_readiness_uses_incoming_auto_advance_for_workable_writeback(_beat, db):
     }
     assert incoming_policy["ready"] is True
     assert role.auto_advance is True
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_workable_readiness_uses_sole_cached_interview_kind_stage(_beat, db):
+    role = _role(db, active_task=True)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "ready"
+    org.workable_config = {"workable_writeback": True}
+    role.workable_job_id = "workable-role"
+    role.workable_stages = [
+        {"slug": "applied", "name": "Applied", "kind": "sourced"},
+        {
+            "slug": "final-interview",
+            "name": "Final interview",
+            "kind": "interview",
+        },
+    ]
+    role.auto_advance = True
+    db.flush()
+
+    assert activation_readiness(role, settings_obj=_settings())["ready"] is True
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_workable_readiness_requires_inbound_connection_when_writes_are_off(
+    _beat, db
+):
+    role = _role(db)
+    role.workable_job_id = "workable-role"
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(),
+        auto_skip_assessment=True,
+        auto_send_assessment=False,
+        auto_resend_assessment=False,
+        auto_advance=False,
+        auto_reject=False,
+        auto_reject_pre_screen=False,
+    )
+
+    assert "workable_connection_required" in {
+        reason["code"] for reason in result["reasons"]
+    }
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_workable_readiness_surfaces_ambiguous_cached_interview_stages(_beat, db):
+    role = _role(db, active_task=True)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "ready"
+    org.workable_config = {"workable_writeback": True}
+    role.workable_job_id = "workable-role"
+    role.workable_stages = [
+        {"slug": "technical", "name": "Technical", "kind": "interview"},
+        {"slug": "final", "name": "Final", "kind": "interview"},
+    ]
+    role.auto_advance = True
+    db.flush()
+
+    result = activation_readiness(role, settings_obj=_settings())
+
+    reason = next(
+        item
+        for item in result["reasons"]
+        if item["code"] == "workable_interview_stage_missing"
+    )
+    assert "Multiple cached Workable stages" in reason["detail"]
+    assert "Choose the intended" in reason["detail"]
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_workable_readiness_requires_unique_assessment_invite_stage(_beat, db):
+    role = _role(db, active_task=True)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "ready"
+    org.workable_config = {"workable_writeback": True}
+    role.workable_job_id = "workable-role"
+    db.flush()
+
+    missing = activation_readiness(
+        role,
+        settings_obj=_settings(),
+        auto_send_assessment=True,
+        auto_resend_assessment=False,
+        auto_advance=False,
+    )
+    assert "workable_invite_stage_missing" in {
+        reason["code"] for reason in missing["reasons"]
+    }
+
+    role.workable_stages = [
+        {"slug": "assessment", "name": "Assessment", "kind": "assessment"}
+    ]
+    db.flush()
+    assert activation_readiness(
+        role,
+        settings_obj=_settings(),
+        auto_send_assessment=True,
+        auto_resend_assessment=False,
+        auto_advance=False,
+    )["ready"] is True
+
+
+def _connect_bullhorn(org, role) -> None:
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-42"
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_bullhorn_readiness_requires_every_enabled_action_mapping(_beat, db):
+    role = _role(db, source="bullhorn", active_task=True)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    _connect_bullhorn(org, role)
+    role.auto_send_assessment = True
+    role.auto_resend_assessment = True
+    role.auto_advance = True
+    role.auto_reject_pre_screen = True
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(BULLHORN_ENABLED=True),
+    )
+
+    codes = {reason["code"] for reason in result["reasons"]}
+    assert {
+        "bullhorn_assessment_stage_mapping_required",
+        "bullhorn_advance_stage_mapping_required",
+        "bullhorn_reject_stage_mapping_required",
+    }.issubset(codes)
+    assert all(
+        "Settings → Integrations → Bullhorn" in reason["detail"]
+        for reason in result["reasons"]
+        if reason["code"].startswith("bullhorn_")
+    )
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_bullhorn_readiness_passes_with_connection_and_action_maps(_beat, db):
+    role = _role(db, source="bullhorn", active_task=True)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    _connect_bullhorn(org, role)
+    role.auto_send_assessment = True
+    role.auto_resend_assessment = True
+    role.auto_advance = True
+    role.auto_reject_pre_screen = True
+    db.add_all(
+        [
+            AtsStageMap(
+                org_id=org.id,
+                ats="bullhorn",
+                remote_status="Assessment Sent",
+                taali_stage="invited",
+                is_reject=False,
+            ),
+            AtsStageMap(
+                org_id=org.id,
+                ats="bullhorn",
+                remote_status="Client Interview",
+                taali_stage="advanced",
+                is_reject=False,
+            ),
+            AtsStageMap(
+                org_id=org.id,
+                ats="bullhorn",
+                remote_status="Rejected",
+                taali_stage="review",
+                is_reject=True,
+            ),
+        ]
+    )
+    db.flush()
+
+    assert activation_readiness(
+        role,
+        settings_obj=_settings(BULLHORN_ENABLED=True),
+    )["ready"] is True
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_bullhorn_readiness_surfaces_feature_and_connection_hitl(_beat, db):
+    role = _role(db, source="bullhorn", active_task=True)
+    role.bullhorn_job_order_id = "job-42"
+    result = activation_readiness(role, settings_obj=_settings())
+
+    codes = {reason["code"] for reason in result["reasons"]}
+    assert "bullhorn_feature_disabled" in codes
+    assert "bullhorn_connection_required" in codes
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_dual_linked_role_uses_workable_precedence_only(_beat, db):
+    role = _role(db, source="bullhorn")
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "ready"
+    org.workable_config = {
+        "workable_writeback": True,
+        "interview_stage_name": "final-interview",
+    }
+    role.workable_job_id = "workable-live"
+    role.bullhorn_job_order_id = "bullhorn-stale"
+    role.auto_advance = True
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(BULLHORN_ENABLED=False),
+        auto_skip_assessment=True,
+        auto_send_assessment=False,
+        auto_resend_assessment=False,
+    )
+
+    assert result["ready"] is True
+    assert not any(
+        reason["code"].startswith("bullhorn_") for reason in result["reasons"]
+    )
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_bullhorn_readiness_uses_incoming_reject_policy(_beat, db):
+    role = _role(db, source="bullhorn")
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    _connect_bullhorn(org, role)
+    role.auto_reject_pre_screen = False
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(BULLHORN_ENABLED=True),
+        auto_skip_assessment=True,
+        auto_send_assessment=False,
+        auto_resend_assessment=False,
+        auto_advance=False,
+        auto_reject_pre_screen=True,
+    )
+
+    assert "bullhorn_reject_stage_mapping_required" in {
+        reason["code"] for reason in result["reasons"]
+    }
+    assert role.auto_reject_pre_screen is False
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_bullhorn_readiness_rejects_ambiguous_reject_write_target(_beat, db):
+    role = _role(db, source="bullhorn")
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    _connect_bullhorn(org, role)
+    db.add_all(
+        [
+            AtsStageMap(
+                org_id=org.id,
+                ats="bullhorn",
+                remote_status="Rejected A",
+                taali_stage="review",
+                is_reject=True,
+            ),
+            AtsStageMap(
+                org_id=org.id,
+                ats="bullhorn",
+                remote_status="Rejected B",
+                taali_stage="review",
+                is_reject=True,
+            ),
+        ]
+    )
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(BULLHORN_ENABLED=True),
+        auto_skip_assessment=True,
+        auto_send_assessment=False,
+        auto_resend_assessment=False,
+        auto_advance=False,
+        auto_reject=True,
+    )
+
+    assert "bullhorn_reject_stage_mapping_required" in {
+        reason["code"] for reason in result["reasons"]
+    }
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={
+        "ready": True,
+        "reason": None,
+        "capability_reporting": True,
+        "queues": {
+            "celery": {
+                "ready": True,
+                "capabilities": {
+                    "anthropic_configured": True,
+                    "anthropic_probe_ok": True,
+                    "usage_meter_live": True,
+                    "bullhorn_enabled": False,
+                },
+            },
+            "scoring": {
+                "ready": True,
+                "capabilities": {
+                    "anthropic_configured": True,
+                    "anthropic_probe_ok": True,
+                    "usage_meter_live": True,
+                },
+            },
+        },
+    },
+)
+def test_bullhorn_readiness_requires_worker_feature_flag(_beat, db):
+    role = _role(db, source="bullhorn")
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    _connect_bullhorn(org, role)
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(BULLHORN_ENABLED=True),
+        auto_skip_assessment=True,
+        auto_send_assessment=False,
+        auto_resend_assessment=False,
+        auto_advance=False,
+    )
+
+    assert "bullhorn_worker_feature_disabled" in {
+        reason["code"] for reason in result["reasons"]
+    }
 
 
 def test_local_readiness_does_not_require_external_services(db):

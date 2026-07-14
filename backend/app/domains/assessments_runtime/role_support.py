@@ -17,11 +17,12 @@ from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...schemas.role import ApplicationResponse, RoleCriterionResponse, RoleResponse
+from ...services.ats_role_lifecycle import ats_job_lifecycle
+from ...services.evaluation_result_service import normalize_stored_application_decision
 from ...services.interview_support_service import (
     build_role_interview_pack_templates,
     refresh_application_interview_support,
 )
-from ...services.evaluation_result_service import normalize_stored_application_decision
 from ...services.pre_screening_service import pre_screen_snapshot, refresh_pre_screening_fields
 from ...services.workable_actions_service import workable_job_syncable
 from ...services.taali_scoring import (
@@ -312,6 +313,7 @@ def role_to_response(
     role_kind = str(getattr(role, "role_kind", None) or "standard")
     ats_owner = getattr(role, "ats_owner_role", None) if role_kind == "sister" else None
     operational_role = ats_owner or role
+    ats_lifecycle = ats_job_lifecycle(operational_role)
     loaded_sisters = _loaded_relationship_items(role, "sister_roles")
     sister_role_count = len(loaded_sisters or [])
     return RoleResponse(
@@ -326,6 +328,10 @@ def role_to_response(
         ats_owner_role_name=getattr(ats_owner, "name", None),
         effective_workable_job_id=getattr(operational_role, "workable_job_id", None),
         sister_role_count=sister_role_count,
+        ats_provider=ats_lifecycle.provider,
+        external_job_id=ats_lifecycle.external_job_id,
+        external_job_state=ats_lifecycle.external_job_state,
+        external_job_live=ats_lifecycle.external_job_live,
         workable_job_id=role.workable_job_id,
         job_status=getattr(operational_role, "job_status", None),
         requisition=requisition,

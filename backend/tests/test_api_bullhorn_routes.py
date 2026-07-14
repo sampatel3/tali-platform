@@ -23,8 +23,12 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from app.components.integrations.bullhorn.auth import BullhornAuth
+from app.components.integrations.bullhorn import bootstrap as bh_bootstrap
 from app.domains.bullhorn_sync import connect as bh_connect
+from app.domains.bullhorn_sync import connect_lifecycle as bh_connect_lifecycle
 from app.domains.bullhorn_sync import routes as bh_routes
 from app.models.ats_stage_map import AtsStageMap
 from app.models.organization import Organization
@@ -44,6 +48,15 @@ from tests.fakes.bullhorn_fakes import live_bullhorn_server
 def _enable(monkeypatch) -> None:
     """Flip the Bullhorn flag on for the route + connect modules under test."""
     monkeypatch.setattr(bh_routes.settings, "BULLHORN_ENABLED", True)
+    monkeypatch.setattr(bh_connect_lifecycle, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(bh_connect_lifecycle, "_release_mutex", lambda _handle: None)
+    # Unit route tests stop at the durable dispatch seam. The route-level E2E
+    # suite deliberately leaves this real and runs the eager full sync.
+    monkeypatch.setattr(
+        bh_bootstrap,
+        "_enqueue_initial_full_sync",
+        lambda **_kwargs: None,
+    )
 
 
 def _org_for(db, email) -> Organization:
@@ -169,6 +182,55 @@ def test_connect_success_persists_encrypted_creds_and_seeds_stage_map(client, db
     assert {r.remote_status for r in rows} == {"Interview Scheduled", "Placed", "Client Rejected"}
 
 
+def test_connect_durably_enqueues_tracked_initial_full_sync(client, db, monkeypatch):
+    """Connect commits a FULL-sync outbox marker, then dispatches that run."""
+    _enable(monkeypatch)
+    headers, email = auth_headers(client, email="bh-bootstrap@example.com")
+    state = FakeBullhornState()
+    org_state = state.make_org("org1")
+    dispatched: list[dict] = []
+    monkeypatch.setattr(
+        bh_bootstrap,
+        "_enqueue_initial_full_sync",
+        lambda **kwargs: dispatched.append(kwargs),
+    )
+
+    with live_bullhorn_server(state) as server:
+        _patch_connect_to_fake(monkeypatch, server, org_state)
+        resp = client.post(
+            "/api/v1/bullhorn/connect",
+            headers=headers,
+            json=_connect_body(org_state),
+        )
+
+    assert resp.status_code == 200, resp.text
+    signal = resp.json()["initial_sync"]
+    assert signal["mode"] == "full"
+    assert signal["status"] == "queued"
+    assert signal["status_path"] == "/api/v1/bullhorn/sync/status"
+    assert dispatched == [
+        {
+            "org_id": _org_for(db, email).id,
+            "run_id": signal["run_id"],
+            "mode": "full",
+            "trigger": bh_bootstrap.CONNECT_BOOTSTRAP_TRIGGER,
+        }
+    ]
+
+    db.expire_all()
+    org = _org_for(db, email)
+    assert org.bullhorn_sync_progress["run_id"] == signal["run_id"]
+    assert org.bullhorn_sync_progress["mode"] == "full"
+    assert org.bullhorn_sync_progress["trigger"] == "connect_bootstrap"
+    assert org.bullhorn_sync_progress["dispatch_attempts"] == 1
+
+    polled = client.get(signal["status_path"], headers=headers)
+    assert polled.status_code == 200, polled.text
+    assert polled.json()["sync_progress"]["run_id"] == signal["run_id"]
+    assert polled.json()["sync_progress"]["mode"] == "full"
+    assert polled.json()["initial_sync"]["run_id"] == signal["run_id"]
+
+
 def test_connect_password_never_in_response_or_logs(client, db, monkeypatch, caplog):
     """SECURITY: the one-time password must NOT appear in the connect response,
     nor in any log line emitted during connect. The secret + refresh token must
@@ -253,6 +315,73 @@ def test_connect_bad_credentials_fails_cleanly(client, db, monkeypatch):
     assert not org.bullhorn_connected
 
 
+def test_reconnect_waits_for_live_bullhorn_owner_without_changing_credentials(
+    client, db, monkeypatch
+):
+    """Reconnect cannot race a live sync/write token rotation."""
+    _enable(monkeypatch)
+    headers, email = auth_headers(client, email="bh-connect-busy@example.com")
+    org = _org_for(db, email)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "existing-user"
+    org.bullhorn_client_id = "existing-client"
+    org.bullhorn_refresh_token = "existing-ciphertext"
+    org.bullhorn_credential_generation = 7
+    db.commit()
+    monkeypatch.setattr(bh_connect_lifecycle, "_acquire_mutex", lambda _org_id: None)
+    monkeypatch.setattr(
+        bh_connect_lifecycle,
+        "run_connect",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("connect must not start without mutex ownership")
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/bullhorn/connect",
+        headers=headers,
+        json={
+            "username": "replacement-user",
+            "client_id": "replacement-client",
+            "client_secret": "replacement-secret",
+            "password": "replacement-password",
+        },
+    )
+
+    assert response.status_code == 409
+    db.expire_all()
+    fresh = _org_for(db, email)
+    assert fresh.bullhorn_username == "existing-user"
+    assert fresh.bullhorn_client_id == "existing-client"
+    assert fresh.bullhorn_refresh_token == "existing-ciphertext"
+    assert fresh.bullhorn_credential_generation == 7
+
+
+def test_reconnect_fails_closed_when_mutex_state_is_unavailable(
+    client, monkeypatch
+):
+    _enable(monkeypatch)
+    headers, _ = auth_headers(client, email="bh-connect-lock-down@example.com")
+
+    def _unavailable(_org_id):
+        raise bh_connect_lifecycle.BullhornMutexUnavailable("redis unavailable")
+
+    monkeypatch.setattr(bh_connect_lifecycle, "_acquire_mutex", _unavailable)
+    response = client.post(
+        "/api/v1/bullhorn/connect",
+        headers=headers,
+        json={
+            "username": "api-user",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "password": "one-time-password",
+        },
+    )
+
+    assert response.status_code == 503
+    assert "retry" in response.json()["detail"].lower()
+
+
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -309,19 +438,30 @@ def test_sync_started_enqueues_task(client, db, monkeypatch):
     org.bullhorn_username = "api@corp"
     db.commit()
 
-    dispatched = {}
-
-    def _fake_enqueue(org_id, mode):
-        dispatched["org_id"] = org_id
-        dispatched["mode"] = mode
-
-    monkeypatch.setattr(bh_routes, "_enqueue_sync", _fake_enqueue)
+    dispatched: list[dict] = []
+    monkeypatch.setattr(
+        bh_bootstrap,
+        "_enqueue_initial_full_sync",
+        lambda **kwargs: dispatched.append(kwargs),
+    )
 
     resp = client.post("/api/v1/bullhorn/sync", headers=headers, json={"mode": "full"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "started"
     assert resp.json()["mode"] == "full"
-    assert dispatched == {"org_id": org.id, "mode": "full"}
+    run_id = resp.json()["run_id"]
+    assert dispatched == [
+        {
+            "org_id": org.id,
+            "mode": "full",
+            "run_id": run_id,
+            "trigger": bh_bootstrap.MANUAL_FULL_SYNC_TRIGGER,
+        }
+    ]
+    db.expire_all()
+    fresh = db.query(Organization).filter(Organization.id == org.id).one()
+    assert fresh.bullhorn_sync_progress["run_id"] == run_id
+    assert fresh.bullhorn_sync_progress["trigger"] == bh_bootstrap.MANUAL_FULL_SYNC_TRIGGER
 
 
 def test_sync_already_running_short_circuits(client, db, monkeypatch):
@@ -337,7 +477,11 @@ def test_sync_already_running_short_circuits(client, db, monkeypatch):
     db.commit()
 
     called = {"n": 0}
-    monkeypatch.setattr(bh_routes, "_enqueue_sync", lambda org_id, mode: called.__setitem__("n", called["n"] + 1))
+    monkeypatch.setattr(
+        bh_bootstrap,
+        "_enqueue_initial_full_sync",
+        lambda **_kwargs: called.__setitem__("n", called["n"] + 1),
+    )
 
     resp = client.post("/api/v1/bullhorn/sync", headers=headers, json={})
     assert resp.status_code == 202, resp.text
@@ -388,6 +532,13 @@ def test_stage_map_list_and_replace(client, db, monkeypatch):
     assert got.status_code == 200, got.text
     assert "advanced" in got.json()["pipeline_stages"]
     assert any(m["remote_status"] == "Old Status" for m in got.json()["mappings"])
+    assert got.json()["resolved_write_targets"] == {
+        "invited": None,
+        "in_assessment": None,
+        "review": None,
+        "advanced": None,
+        "rejected": None,
+    }
 
     resp = client.put(
         "/api/v1/bullhorn/stage-map",
@@ -420,6 +571,38 @@ def test_stage_map_replace_rejects_unknown_taali_stage(client, db, monkeypatch):
     )
     assert resp.status_code == 422, resp.text
     assert "not_a_stage" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "mappings",
+    [
+        [
+            {"remote_status": "Rejected A", "taali_stage": "review", "is_reject": True},
+            {"remote_status": "Rejected B", "taali_stage": "review", "is_reject": True},
+        ],
+        [
+            {"remote_status": "Interview A", "taali_stage": "advanced", "is_reject": False},
+            {"remote_status": "Interview B", "taali_stage": "advanced", "is_reject": False},
+        ],
+    ],
+)
+def test_stage_map_editor_rejects_ambiguous_write_targets(
+    client, db, monkeypatch, mappings
+):
+    _enable(monkeypatch)
+    headers, email = auth_headers(client, email="bh-map-ambiguous@example.com")
+    org = _org_for(db, email)
+    org.bullhorn_config = {}
+    db.commit()
+
+    response = client.put(
+        "/api/v1/bullhorn/stage-map",
+        headers=headers,
+        json={"mappings": mappings},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "Multiple Bullhorn" in response.json()["detail"]
 
 
 def test_stage_map_replace_rejects_unknown_remote_status_when_list_cached(client, db, monkeypatch):

@@ -27,9 +27,10 @@ import mimetypes
 from typing import TYPE_CHECKING
 
 from ....platform.config import settings
-from ....platform.database import SessionLocal
 from ....platform.secrets import decrypt_text
 from .auth import BullhornAuth
+from .credential_state import credential_generation, persist_rotated_credentials
+from .errors import BullhornAuthError
 from .service import BullhornService
 from . import write_back
 
@@ -50,26 +51,25 @@ _PREVIEW_EXTS = {"pdf", "png", "jpg", "jpeg", "webp"}
 _CANDIDATE_FIELDS = "id,firstName,lastName,name,email,phone,mobile,occupation,address,dateLastModified"
 
 
-def _make_persist_hook(org_id: int):
+def _make_persist_hook(live_org: Organization):
     """A ``persist_tokens`` hook re-encrypting + durably writing a rotated refresh
     token in its own transaction (the single-use rotation invariant). Identical to
     ``sync_runner._make_persist_hook`` — kept here so the write-back path does not
     import the sync runner just for the hook."""
-    from ....models.organization import Organization
-    from ....platform.secrets import encrypt_text
+    expected_generation = credential_generation(live_org)
 
     def _persist(*, refresh_token: str, rest_url: str | None = None) -> None:
-        hook_db = SessionLocal()
-        try:
-            org = hook_db.query(Organization).filter(Organization.id == org_id).first()
-            if org is None:
-                raise RuntimeError(f"org {org_id} vanished during Bullhorn token rotation")
-            org.bullhorn_refresh_token = encrypt_text(refresh_token, settings.SECRET_KEY)
-            if rest_url:
-                org.bullhorn_rest_url = rest_url
-            hook_db.commit()
-        finally:
-            hook_db.close()
+        encrypted_refresh, persisted_rest_url = persist_rotated_credentials(
+            org_id=int(live_org.id),
+            expected_generation=expected_generation,
+            refresh_token=refresh_token,
+            rest_url=rest_url,
+        )
+        # The durable CAS commit above is authoritative. Mirror it into the ORM
+        # instance held by the caller for another client in this unit of work.
+        live_org.bullhorn_refresh_token = encrypted_refresh
+        if persisted_rest_url:
+            live_org.bullhorn_rest_url = persisted_rest_url
 
     return _persist
 
@@ -92,14 +92,23 @@ class BullhornProvider:
         refresh token, persist-hook for rotation crash-safety).
         """
         org = self.org
-        client_secret = decrypt_text(org.bullhorn_client_secret or "", settings.SECRET_KEY)
-        refresh_token = decrypt_text(org.bullhorn_refresh_token or "", settings.SECRET_KEY)
+        try:
+            client_secret = decrypt_text(
+                org.bullhorn_client_secret or "", settings.SECRET_KEY
+            )
+            refresh_token = decrypt_text(
+                org.bullhorn_refresh_token or "", settings.SECRET_KEY
+            )
+        except Exception:
+            raise BullhornAuthError(
+                "Stored Bullhorn credentials are unavailable; reconnect required"
+            ) from None
         auth = BullhornAuth(
             username=org.bullhorn_username,
             client_id=org.bullhorn_client_id,
             client_secret=client_secret,
             refresh_token=refresh_token or None,
-            persist_tokens=_make_persist_hook(org.id),
+            persist_tokens=_make_persist_hook(org),
             rest_url=org.bullhorn_rest_url,
         )
         return BullhornService(auth, client_id=org.bullhorn_client_id)
@@ -130,8 +139,12 @@ class BullhornProvider:
             attachments = client.list_file_attachments(
                 candidate_id=cand_id, fields=_FILE_ATTACHMENT_FIELDS
             )
-        except Exception:  # pragma: no cover — never hard-fail a CV fetch
-            logger.exception("Bullhorn fileAttachments listing failed candidate=%s", cand_id)
+        except Exception as exc:  # pragma: no cover — never hard-fail a CV fetch
+            logger.error(
+                "Bullhorn fileAttachments listing failed candidate=%s error_type=%s",
+                cand_id,
+                type(exc).__name__,
+            )
             return None
 
         def _ext_ok(meta: dict) -> bool:
@@ -151,8 +164,13 @@ class BullhornProvider:
         filename = str(meta.get("name") or f"resume-{file_id}")
         try:
             content = client.get_file_raw(candidate_id=cand_id, file_id=file_id)
-        except Exception:  # pragma: no cover
-            logger.exception("Bullhorn CV download failed candidate=%s file=%s", cand_id, file_id)
+        except Exception as exc:  # pragma: no cover
+            logger.error(
+                "Bullhorn CV download failed candidate=%s file=%s error_type=%s",
+                cand_id,
+                file_id,
+                type(exc).__name__,
+            )
             return None
         if not content:
             # Fallback: convertToText for a doc extension we don't extract locally.
@@ -205,9 +223,21 @@ class BullhornProvider:
             self.db, org=self.org, client=self._client(), submission_id=submission_id
         )
 
-    def post_note(self, *, candidate_id: str, member_id: str, body: str) -> dict:
+    def post_note(
+        self,
+        *,
+        candidate_id: str,
+        member_id: str,
+        body: str,
+        role: Role | None = None,
+    ) -> dict:
         """Post a Note about the candidate. ``member_id`` is unused for Bullhorn
         (authorship is the API user's session), kept for protocol parity."""
         return write_back.post_note(
-            self.db, org=self.org, client=self._client(), candidate_id=candidate_id, body=body
+            self.db,
+            org=self.org,
+            client=self._client(),
+            candidate_id=candidate_id,
+            body=body,
+            job_order_id=getattr(role, "bullhorn_job_order_id", None),
         )

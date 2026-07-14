@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from app.models.assessment import Assessment
+from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
@@ -430,6 +431,260 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
     assert second == {"status": "succeeded", "deduplicated": True}
     assert move.call_count == 1
     assert adapter_factory.return_value.post_candidate_comment.call_count == 1
+
+
+def _enable_bullhorn_invite_handoff(org, assessment) -> None:
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    assessment.role.source = "bullhorn"
+    assessment.role.bullhorn_job_order_id = "job-42"
+    assessment.candidate.bullhorn_candidate_id = "candidate-7"
+    assessment.application.source = "bullhorn"
+    assessment.application.bullhorn_job_submission_id = "submission-9"
+
+
+def test_confirmed_bullhorn_invite_uses_serialized_provider_ops(db, monkeypatch):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+    from app.services.workable_op_runner import OP_MOVE_STAGE, OP_POST_NOTE
+
+    monkeypatch.setattr(cfg, "BULLHORN_ENABLED", True)
+    monkeypatch.setattr(cfg, "FRONTEND_URL", "https://app.taali.test")
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    _enable_bullhorn_invite_handoff(org, assessment)
+    _commit_invite_intent(db, assessment, org)
+
+    confirmed = confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-bullhorn",
+        expected_generation=0,
+    )
+    assert confirmed["handoff_pending"] is True
+    db.refresh(assessment)
+    assert assessment.invite_channel == "bullhorn_pending"
+    assert assessment.invite_workable_handoff_stage == "invited"
+
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=[
+            {"status": "ok", "application_id": assessment.application_id},
+            {"status": "ok", "application_id": assessment.application_id},
+        ],
+    ) as execute:
+        result = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+
+    assert result["status"] == "succeeded"
+    assert [call.kwargs["op_type"] for call in execute.call_args_list] == [
+        OP_MOVE_STAGE,
+        OP_POST_NOTE,
+    ]
+    move_payload = execute.call_args_list[0].kwargs["payload"]
+    assert move_payload["target_intent"] == "invited"
+    assert move_payload["actor_type"] == "agent"
+    assert move_payload["source"] == "agent"
+    note_payload = execute.call_args_list[1].kwargs["payload"]
+    assert f"https://app.taali.test/assessment/{assessment.id}" in note_payload["body"]
+    assert note_payload["actor_type"] == "agent"
+    assert note_payload["source"] == "agent"
+    db.refresh(assessment)
+    assert assessment.invite_channel == "bullhorn_hybrid"
+    assert assessment.invite_sent_at is not None
+    assert assessment.application.pipeline_stage == "invited"
+
+
+def test_confirmed_bullhorn_handoff_uses_bullhorn_sync_mutex(db, monkeypatch):
+    from app.components.integrations.bullhorn.sync_runner import (
+        BULLHORN_ORG_MUTEX_NAMESPACE,
+    )
+    from app.components.notifications import tasks as notification_tasks
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.tasks import assessment_tasks
+
+    monkeypatch.setattr(cfg, "BULLHORN_ENABLED", True)
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    _enable_bullhorn_invite_handoff(org, assessment)
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-bullhorn-mutex",
+        expected_generation=0,
+    )
+
+    acquired: list[dict] = []
+
+    def _acquire(*args, **kwargs):
+        acquired.append(kwargs)
+        return (object(), "bullhorn-test-lock", None)
+
+    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", _acquire)
+    monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *_: None)
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    with patch(
+        "app.services.assessment_invite_workable_handoff.run_assessment_invite_workable_handoff",
+        return_value={"status": "succeeded"},
+    ):
+        result = notification_tasks.dispatch_assessment_invite_workable_handoff.run(
+            int(assessment.id), 0
+        )
+
+    assert result == {"status": "succeeded"}
+    assert acquired[0]["namespace"] == BULLHORN_ORG_MUTEX_NAMESPACE
+    assert acquired[0]["source"].startswith("bullhorn_op:")
+
+
+def test_bullhorn_invite_missing_mapping_preserves_email_and_surfaces_hitl(
+    db, monkeypatch
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+    from app.services.workable_actions_service import WorkableWritebackError
+
+    monkeypatch.setattr(cfg, "BULLHORN_ENABLED", True)
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    _enable_bullhorn_invite_handoff(org, assessment)
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-bullhorn-mapping",
+        expected_generation=0,
+    )
+
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=WorkableWritebackError(
+            action="move",
+            code="needs_mapping",
+            message="No Bullhorn status is mapped for Taali intent 'invited'",
+            retriable=False,
+        ),
+    ):
+        result = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+
+    assert result["status"] == "failed"
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    assert row.invite_sent_at is not None
+    assert row.invite_email_id == "em-bullhorn-mapping"
+    assert row.application.pipeline_stage == "invited"
+    assert row.invite_channel == "bullhorn_partial"
+    assert "needs_mapping" in row.invite_workable_handoff_last_error
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == row.application_id,
+            CandidateApplicationEvent.event_type
+            == "assessment_invite_bullhorn_handoff_failed",
+        )
+        .count()
+        == 1
+    )
+    hitl = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.role_id == row.role_id,
+            AgentNeedsInput.subject_id == row.application_id,
+            AgentNeedsInput.resolved_at.is_(None),
+        )
+        .one()
+    )
+    assert "Bullhorn assessment/invited stage mapped" in hitl.prompt
+    assert hitl.response_schema["link_label"] == "Open Bullhorn stage mapping"
+
+
+@pytest.mark.parametrize(
+    ("stages", "error_fragment"),
+    [
+        ([], "No cached Workable stage has kind=assessment"),
+        (
+            [
+                {"slug": "take-home", "name": "Take Home", "kind": "assessment"},
+                {"slug": "coding", "name": "Coding", "kind": "assessment"},
+            ],
+            "Multiple cached Workable stages have kind=assessment",
+        ),
+    ],
+)
+def test_workable_invite_without_unique_target_is_durable_hitl_after_email(
+    db, monkeypatch, stages, error_fragment
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        workable_writeback=True,
+        invite_stage_name="",
+    )
+    assessment = _make_assessment(
+        db, org=org, workable_candidate_id="workable-needs-map"
+    )
+    assessment.role.workable_job_id = "workable-role"
+    assessment.role.workable_stages = stages
+    _commit_invite_intent(db, assessment, org)
+
+    confirmed = confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-workable-needs-map",
+        expected_generation=0,
+    )
+    assert confirmed["handoff_pending"] is True
+
+    result = run_assessment_invite_workable_handoff(
+        db, assessment_id=int(assessment.id), generation=0
+    )
+
+    assert result["status"] == "failed"
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    assert row.invite_email_id == "em-workable-needs-map"
+    assert row.invite_sent_at is not None
+    assert row.invite_channel == "workable_partial"
+    assert "needs_mapping" in row.invite_workable_handoff_last_error
+    assert error_fragment in row.invite_workable_handoff_last_error
+    hitl = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.role_id == row.role_id,
+            AgentNeedsInput.subject_id == row.application_id,
+            AgentNeedsInput.resolved_at.is_(None),
+        )
+        .one()
+    )
+    assert hitl.response_schema["link_label"] == "Open Workable stage mapping"
 
 
 def test_stale_workable_generation_cannot_touch_new_handoff(db, monkeypatch):

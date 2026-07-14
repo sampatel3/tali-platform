@@ -1,23 +1,4 @@
-"""Bullhorn sync domain routes (``/api/v1/bullhorn/*``).
-
-The recruiter-facing + admin surface for the Bullhorn integration. Mirrors
-``workable_sync.routes`` (connect card, sync trigger/status/cancel, stage-map
-editor, admin diagnostic) against Bullhorn's data model.
-
-HARD GATING RULE: every route 503s when ``settings.BULLHORN_ENABLED`` is False —
-the exact analog of Workable's ``MVP_DISABLE_WORKABLE`` gate. On the live
-platform the flag is off, so this whole surface is inert.
-
-SECURITY:
-* Every route is org-scoped to ``current_user.organization_id`` and authed via
-  ``get_current_user`` (admin diagnostic instead requires the ``X-Admin-Secret``
-  header == ``SECRET_KEY``, exactly like the Workable admin diagnostic).
-* ``POST /connect`` takes the API-user password ONE-TIME for the automated OAuth
-  exchange; it is used in-memory only (see ``connect.run_connect``) and NEVER
-  persisted or logged. ``client_secret`` / ``refresh_token`` are stored as Fernet
-  ciphertext and never appear in any response.
-* The admin diagnostic redacts credentials.
-"""
+"""Org-scoped, feature-gated Bullhorn connect, sync, mapping, and diagnostics."""
 
 from __future__ import annotations
 
@@ -27,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from ...components.integrations.bullhorn import bootstrap as bootstrap_mod
 from ...components.integrations.bullhorn import stage_map as stage_map_mod
 from ...deps import get_current_user
 from ...domains.assessments_runtime.pipeline_service import SYNC_MAPPABLE_STAGES
@@ -38,7 +20,8 @@ from ...models.role import Role
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
-from .connect import BullhornConnectError, build_connect_auth, run_connect
+from .connect import BullhornConnectError, build_connect_auth
+from .connect_lifecycle import BullhornConnectBusy, connect_and_start_full_sync
 from .schemas import (
     ConnectRequest,
     StageMapReplaceRequest,
@@ -134,35 +117,25 @@ def connect_bullhorn(
     _assert_enabled()
     org = _get_org(db, current_user)
     try:
-        result = run_connect(
-            db,
-            org,
-            username=body.username.strip(),
-            client_id=body.client_id.strip(),
-            client_secret=body.client_secret,
-            password=body.password,
-        )
+        outcome = connect_and_start_full_sync(db, org, body)
+    except BullhornConnectBusy as exc:
+        raise HTTPException(
+            status_code=503 if exc.lock_unavailable else 409,
+            detail="Bullhorn is busy. Connection will not change; retry shortly.",
+        ) from exc
     except BullhornConnectError as exc:
         # Recruiter-safe message; no credential ever reaches here.
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    # Cache the fetched status list on bullhorn_config so the stage-map editor can
-    # offer the remote statuses and validate replacements. Preserve keys the seed
-    # step already wrote (e.g. confirmedJobResponseStatus).
-    config = dict(org.bullhorn_config) if isinstance(org.bullhorn_config, dict) else {}
-    config["status_list"] = list(result.statuses)
-    org.bullhorn_config = config
-    db.add(org)
-    db.commit()
+        raise HTTPException(status_code=400, detail=exc.public_message) from None
 
     return {
         "status": "connected",
         "bullhorn_connected": True,
-        "rest_url": result.rest_url,
-        "statuses_count": len(result.statuses),
-        "seeded_stage_rows": result.seeded_rows,
-        "unmapped_status_count": len(stage_map_mod.unmapped_statuses(db, org)),
+        "rest_url": outcome.connect.rest_url,
+        "statuses_count": len(outcome.connect.statuses),
+        "seeded_stage_rows": outcome.connect.seeded_rows,
+        "unmapped_status_count": outcome.unmapped_status_count,
+        "initial_sync": outcome.initial_sync,
     }
 
 
@@ -191,6 +164,7 @@ def bullhorn_status(
         "last_sync_summary": org.bullhorn_last_sync_summary or {},
         "sync_in_progress": _sync_in_progress(org),
         "sync_progress": org.bullhorn_sync_progress or {},
+        "initial_sync": bootstrap_mod.initial_sync_status(org),
         # Subscription health: the incremental event poll keeps a subscription id
         # + a checkpoint requestId; presence of the subscription is the health
         # signal the connect UI shows.
@@ -238,10 +212,12 @@ def run_bullhorn_sync(
         )
 
     mode = (body.mode if body is not None else "full") or "full"
-    _enqueue_sync(org.id, mode)
+    sync_signal = bootstrap_mod.start_manual_full_sync(db, org, mode=mode)
     return {
         "status": "started",
         "mode": mode,
+        "run_id": sync_signal["run_id"],
+        "tracking_status": sync_signal["status"],
         "message": "Sync started in the background. Poll /bullhorn/sync/status for progress.",
     }
 
@@ -257,6 +233,7 @@ def bullhorn_sync_status(
     return {
         "sync_in_progress": _sync_in_progress(org),
         "sync_progress": org.bullhorn_sync_progress or {},
+        "initial_sync": bootstrap_mod.initial_sync_status(org),
         "last_sync_at": org.bullhorn_last_sync_at,
         "last_sync_status": org.bullhorn_last_sync_status,
         "last_sync_summary": org.bullhorn_last_sync_summary or {},
@@ -317,6 +294,7 @@ def get_stage_map(
         .order_by(AtsStageMap.remote_status.asc())
         .all()
     )
+    from ...components.integrations.bullhorn.write_back import resolved_write_targets
     return {
         "pipeline_stages": list(SYNC_MAPPABLE_STAGES),
         "mappings": [
@@ -328,6 +306,7 @@ def get_stage_map(
             for r in rows
         ],
         "unmapped_statuses": stage_map_mod.unmapped_statuses(db, org),
+        "resolved_write_targets": resolved_write_targets(db, org),
     }
 
 
@@ -372,6 +351,13 @@ def replace_stage_map(
             continue
         seen.add(remote)
         cleaned.append((remote, stage, bool(row.is_reject)))
+
+    ambiguity = stage_map_mod.write_target_ambiguity_detail(org, cleaned)
+    if ambiguity:
+        raise HTTPException(
+            status_code=422,
+            detail=ambiguity,
+        )
 
     # Replace-org-mappings: drop this org's Bullhorn rows, then insert the new set
     # in one transaction.
@@ -450,13 +436,6 @@ def admin_bullhorn_diagnostic(
 # ---------------------------------------------------------------------------
 # internals
 # ---------------------------------------------------------------------------
-
-
-def _enqueue_sync(org_id: int, mode: str) -> None:
-    """Queue the Bullhorn sync run on Celery (thin wrapper over PR-5 task)."""
-    from ...tasks.bullhorn_tasks import run_bullhorn_sync_run_task
-
-    run_bullhorn_sync_run_task.delay(org_id=org_id, mode=mode)
 
 
 def _db_snapshot(db: Session, org_id: int) -> dict:

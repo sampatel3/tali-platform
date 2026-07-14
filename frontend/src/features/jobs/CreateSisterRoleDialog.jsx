@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 
 import { Button, Dialog, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { getErrorMessage } from '../candidates/candidatesUiUtils';
+import { atsProviderLabel, roleAtsProvider } from './atsType';
 
 export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, onCreated }) {
   const [name, setName] = useState('');
@@ -10,6 +11,7 @@ export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, on
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const sourceProviderLabel = atsProviderLabel(roleAtsProvider(sourceRole));
 
   useEffect(() => {
     if (!open || !sourceRole?.id) return undefined;
@@ -50,7 +52,7 @@ export function CreateSisterRoleDialog({ open, sourceRole, rolesApi, onClose, on
       open={open}
       onClose={saving ? () => {} : onClose}
       title="Create a related role"
-      description={`Create a new Taali scoring view over ${sourceRole?.name || 'this Workable role'}. Candidate stages and actions stay coupled to the original Workable job.`}
+      description={`Create a new Taali scoring view over ${sourceRole?.name || `this ${sourceProviderLabel} role`}. Candidate stages and actions stay coupled to the original ${sourceProviderLabel} job.`}
       panelClassName="max-w-3xl"
       footer={(
         <div className="flex items-center justify-end gap-2">

@@ -235,9 +235,17 @@ def confirm_assessment_invite_provider_success(
         email_id=provider_id,
     )
 
-    stage = str(_pipeline_intent(row).get("workable_handoff_stage") or "").strip()
-    if stage:
-        row.invite_workable_handoff_stage = stage
+    pipeline_intent = _pipeline_intent(row)
+    stage = str(pipeline_intent.get("workable_handoff_stage") or "").strip()
+    handoff_provider = str(
+        pipeline_intent.get("ats_handoff_provider")
+        or ("workable" if stage else "")
+    ).strip().lower()
+    if handoff_provider in {"workable", "bullhorn"}:
+        # Provider eligibility is frozen independently of target mapping. A
+        # missing target must enter the durable handoff rail and surface HITL
+        # after email confirmation, never disappear as a "manual" send.
+        row.invite_workable_handoff_stage = stage or None
         row.invite_workable_handoff_generation = generation
         row.invite_workable_handoff_status = HANDOFF_PENDING
         row.invite_workable_handoff_retry_count = 0
@@ -246,7 +254,7 @@ def confirm_assessment_invite_provider_success(
         row.invite_workable_handoff_last_error = None
         row.invite_workable_stage_moved_at = None
         row.invite_workable_note_posted_at = None
-        row.invite_channel = "workable_pending"
+        row.invite_channel = f"{handoff_provider or 'workable'}_pending"
         handoff_pending = True
     else:
         row.invite_workable_handoff_generation = generation

@@ -18,6 +18,7 @@ from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.request_context import get_request_id
 from ...services.workable_actions_service import (
+    resolve_workable_invite_stage,
     workable_writeback_enabled,
 )
 
@@ -121,13 +122,37 @@ def _workable_handoff_eligible(*, assessment: Assessment, org: Organization, con
         return False
     if not assessment.workable_candidate_id:
         return False
-    if not config["invite_stage_name"]:
-        return False
     # Honor read-only mode — even if everything else is wired, write-back off
     # means "no Workable side effects on assessment send".
     if not config["workable_writeback"]:
         return False
     return True
+
+
+def _bullhorn_handoff_eligible(*, assessment: Assessment, org: Organization) -> bool:
+    """Whether a confirmed email should enter the Bullhorn handoff outbox.
+
+    Stage-map availability is deliberately *not* checked here.  A missing
+    ``invited`` mapping must become an explicit terminal needs-mapping surface
+    after the email is confirmed, rather than silently suppressing the ATS
+    handoff. Activation readiness catches the normal autonomous case earlier;
+    this outbox rail also protects manual sends and mappings removed mid-run.
+    """
+    if not (
+        getattr(org, "bullhorn_connected", False)
+        and getattr(org, "bullhorn_client_id", None)
+        and getattr(org, "bullhorn_refresh_token", None)
+        and getattr(org, "bullhorn_username", None)
+    ):
+        return False
+    app = getattr(assessment, "application", None)
+    candidate = getattr(assessment, "candidate", None)
+    return bool(
+        app is not None
+        and getattr(app, "bullhorn_job_submission_id", None)
+        and candidate is not None
+        and getattr(candidate, "bullhorn_candidate_id", None)
+    )
 
 
 def dispatch_assessment_invite_now(
@@ -269,11 +294,19 @@ def dispatch_assessment_invite(
             CandidateApplication.organization_id == int(assessment.organization_id),
         ).one_or_none()
     config = _workable_config(org)
-    handoff_stage = (
-        config["invite_stage_name"]
-        if _workable_handoff_eligible(assessment=assessment, org=org, config=config)
-        else None
-    )
+    if _workable_handoff_eligible(assessment=assessment, org=org, config=config):
+        handoff_provider = "workable"
+        handoff_stage, _handoff_error = resolve_workable_invite_stage(
+            org, getattr(assessment, "role", None)
+        )
+    elif _bullhorn_handoff_eligible(assessment=assessment, org=org):
+        handoff_provider = "bullhorn"
+        # A Taali intent, not a Bullhorn free-text status. The provider reverse
+        # maps it through AtsStageMap in the serialized handoff worker.
+        handoff_stage = "invited"
+    else:
+        handoff_provider = None
+        handoff_stage = None
     assessment.invite_pipeline_transition = {
         "source": str(pipeline_source or "agent"),
         "actor_type": str(pipeline_actor_type or "system"),
@@ -287,6 +320,7 @@ def dispatch_assessment_invite(
         "expected_version": (
             int(app.version or 0) if app is not None else None
         ),
+        "ats_handoff_provider": handoff_provider,
         "workable_handoff_stage": handoff_stage,
     }
     payloads = session.info.setdefault(_SESSION_PAYLOADS_KEY, {})

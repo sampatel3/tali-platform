@@ -33,6 +33,7 @@ vi.mock('../../shared/api', () => ({
     updateApplicationStage: vi.fn(),
     createAssessment: vi.fn(),
     moveApplicationToWorkableStage: vi.fn(),
+    moveApplicationToAtsStage: vi.fn(),
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
     batchPreScreenStatus: vi.fn(),
@@ -68,6 +69,9 @@ vi.mock('../../shared/api', () => ({
     get: vi.fn().mockResolvedValue({ data: { default_role_requirements: [] } }),
     listCriteria: vi.fn().mockResolvedValue({ data: [] }),
     getWorkableStages: vi.fn().mockResolvedValue({ data: { stages: [] } }),
+    getBullhornStageMap: vi.fn().mockResolvedValue({
+      data: { mappings: [], resolved_write_targets: {} },
+    }),
   },
   agent: {
     status: vi.fn().mockResolvedValue({ data: null }),
@@ -414,6 +418,96 @@ describe('JobPipelinePage', () => {
       auto_resend_assessment: true,
       auto_advance: false,
     })));
+  });
+
+  it.each([
+    ['workable', 'Workable', 'WK-900'],
+    ['bullhorn', 'Bullhorn', 'BH-900'],
+  ])(
+    'keeps %s as intake when previewing agent activation',
+    async (provider, label, externalJobId) => {
+      apiClient.roles.get.mockResolvedValue({
+        data: {
+          ...baseRole,
+          source: null,
+          ats_provider: provider,
+          external_job_id: externalJobId,
+          external_job_state: 'open',
+          external_job_live: true,
+        },
+      });
+      apiClient.roles.listTasks.mockResolvedValue({
+        data: [{ id: 790, name: 'Approved task', is_active: true }],
+      });
+      renderPipeline();
+
+      fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+
+      expect(await screen.findByText(
+        new RegExp(`${label} remains the intake source`, 'i'),
+      )).toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    [
+      'workable',
+      'Workable',
+      { workable_stage: 'Phone screen', workable_candidate_id: 'WK-C-1' },
+      'Phone Screen',
+    ],
+    [
+      'bullhorn',
+      'Bullhorn',
+      { external_stage_raw: 'Interview Scheduled', bullhorn_job_submission_id: 'BH-S-1' },
+      'Interview Scheduled',
+    ],
+  ])(
+    'renders the raw %s candidate stage in its provider-owned column',
+    async (provider, label, externalFields, expectedStage) => {
+      apiClient.roles.get.mockResolvedValue({
+        data: {
+          ...baseRole,
+          source: null,
+          ats_provider: provider,
+          external_job_id: `${provider}-job-1`,
+          external_job_state: 'open',
+          external_job_live: true,
+        },
+      });
+      apiClient.roles.listApplications.mockResolvedValue({
+        data: [{
+          ...baseApplications[0],
+          source: provider,
+          ...externalFields,
+        }],
+      });
+      renderPipeline();
+
+      expect(await screen.findByRole('columnheader', { name: label })).toBeInTheDocument();
+      const row = (await screen.findByText('Sam Patel')).closest('tr');
+      expect(within(row).getByText(expectedStage)).toBeInTheDocument();
+    },
+  );
+
+  it('offers a provider-neutral related scoring role for Bullhorn jobs', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        source: 'bullhorn',
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-900',
+        bullhorn_job_order_id: 'BH-900',
+      },
+    });
+
+    renderPipeline();
+
+    const action = await screen.findByRole('button', { name: /create related role/i });
+    expect(action).toHaveAttribute(
+      'title',
+      'Create a separate scoring role over this Bullhorn candidate pool',
+    );
   });
 
   it('keeps an untouched first Turn on fully autonomous instead of sending the DB-default legacy false', async () => {
@@ -1143,6 +1237,8 @@ Banking transformation experience
     // Confirm dialog appears, with the opt-in discard checkbox (pending > 0).
     expect(await screen.findByText(/turn off the agent for this role\?/i)).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /also discard/i })).toBeInTheDocument();
+    expect(screen.getByText(/Workable intake is not closed by Taali/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Pause has the same intake hold/i)).not.toBeInTheDocument();
 
     // Confirm WITHOUT ticking discard → disable only, queue preserved.
     fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));

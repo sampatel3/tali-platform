@@ -6,6 +6,13 @@ import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
 import RoleFeedbackNotes from './RoleFeedbackNotes';
 import RoleScreeningQuestions from './RoleScreeningQuestions';
+import {
+  agentIntakeLifecycleCopy,
+  atsProviderLabel,
+  roleAtsProvider,
+  roleExternalJobLive,
+  roleExternalJobState,
+} from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 
@@ -101,12 +108,13 @@ const RoleAgentSettingsTab = ({
     ?? autoRejectPreScreen
     ?? autoReject
   ) || autoReject;
-  // When the linked Workable req is archived/closed/draft, Workable refuses
-  // candidate write-backs (disqualify/move) with a 403 — so Taali acts locally
-  // instead (rejects still complete here, just not synced upstream). The agent
-  // toggles stay functional; this only surfaces the no-sync reality.
-  const workableJobLive = role?.workable_job_live !== false;
-  const workableJobState = String(role?.workable_job_state || '').toLowerCase();
+  // Provider lifecycle is independent from the Agent settings themselves. A
+  // non-live external job can still be configured, but write-backs remain
+  // blocked until it is reopened in its owning ATS.
+  const externalProvider = roleAtsProvider(role);
+  const externalProviderLabel = atsProviderLabel(externalProvider);
+  const externalJobLive = roleExternalJobLive(role);
+  const externalJobState = roleExternalJobState(role);
   const handleAutonomyToggle = (key, value) => {
     if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
   };
@@ -506,7 +514,7 @@ const RoleAgentSettingsTab = ({
           <p className="mc-agent-settings-card-help" style={{ marginBottom: 14 }}>
             These are the exact reversible actions Turn on will authorize. Screening and scoring always run while the agent is on; irreversible full-score and assessment rejections always wait for you.
           </p>
-          {!workableJobLive && (
+          {externalProvider && externalJobLive === false && (
             <div className="mc-agent-warn" role="alert">
               <svg
                 className="mc-agent-warn-icon"
@@ -524,14 +532,14 @@ const RoleAgentSettingsTab = ({
               </svg>
               <div>
                 <div className="mc-agent-warn-title">
-                  Changes won’t sync to Workable — this job is {workableJobState || 'not live'}
+                  Changes won’t sync to {externalProviderLabel} — this job is {externalJobState || 'not live'}
                 </div>
                 <div className="mc-agent-warn-body">
-                  Workable doesn’t accept updates on a job in this state, so Taali
+                  {externalProviderLabel} doesn’t accept updates on a job in this state, so Taali
                   can’t write rejections or stage changes (such as moving a candidate
-                  to interview) back to it. Taali still applies them here — candidates
-                  are rejected, scored, and tracked as normal. Re-publish this job in
-                  Workable to restore two-way sync.
+                  to interview) back to it. Existing history and recruiter actions
+                  remain available here, while new autonomous ATS processing waits.
+                  Re-publish this job in {externalProviderLabel} to restore the full flow.
                 </div>
               </div>
             </div>
@@ -582,7 +590,7 @@ const RoleAgentSettingsTab = ({
                 && activeAssignedTasks.length === 0
               )
                 ? 'Choose an active assessment task above before turning this off. Until then, qualified candidates bypass the assessment stage.'
-                : 'Bypass the assessment stage: strong candidates queue as advance-to-interview cards in the Decision Hub instead of receiving an assessment invite. Combine with Auto-promote to advance them without approval.',
+                : 'Bypass the assessment stage: strong candidates queue as advance-to-interview cards in the Decision Hub instead of receiving an assessment invite. Combine with automatic advance to move them without approval.',
             },
           ].map((rule, idx) => (
             <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
@@ -732,7 +740,7 @@ const RoleAgentSettingsTab = ({
         <div className="mc-agent-settings-side-card">
           <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AUTOMATIC HOLDS</div>
           <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
-            The agent pauses at the monthly cap, when usage credits run out, or when startup cannot complete. System holds recover and retry automatically after the dependency clears; a manual Pause remains until you explicitly resume it. Pause or Turn off stops autonomous processing and AI spend. The native job page remains viewable, but applications close until Resume or Turn on; Workable intake follows its provider-side publish state.
+            The agent pauses at the monthly cap, when usage credits run out, or when startup cannot complete. System holds recover and retry automatically after the dependency clears; a manual Pause remains until you explicitly resume it. Pause or Turn off stops autonomous processing and AI spend. {agentIntakeLifecycleCopy(role)}
           </p>
         </div>
 

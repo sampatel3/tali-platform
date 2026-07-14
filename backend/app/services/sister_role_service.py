@@ -112,6 +112,10 @@ def ensure_sister_evaluations(
             evaluation.details = None
             evaluation.error_message = None if cv_text else "No CV text available"
             evaluation.cache_hit = False
+            evaluation.attempts = 0
+            evaluation.next_attempt_at = None
+            evaluation.dispatch_attempted_at = None
+            evaluation.last_error_code = None
             evaluation.queued_at = now
             evaluation.started_at = None
             evaluation.scored_at = None
@@ -129,8 +133,7 @@ def ensure_application_sister_evaluations(
     """Queue a new/changed source application for every coupled sister view.
 
     Returns evaluation ids that need worker dispatch. The caller owns commit
-    timing; Workable sync uses a short task countdown so its transaction is
-    visible before workers read these rows.
+    timing and must commit before publishing those ids to a worker.
     """
     sisters = sister_roles
     if sisters is None:
@@ -185,6 +188,10 @@ def ensure_application_sister_evaluations(
             evaluation.details = None
             evaluation.error_message = None if cv_text else "No CV text available"
             evaluation.cache_hit = False
+            evaluation.attempts = 0
+            evaluation.next_attempt_at = None
+            evaluation.dispatch_attempted_at = None
+            evaluation.last_error_code = None
             evaluation.queued_at = now
             evaluation.started_at = None
             evaluation.scored_at = None

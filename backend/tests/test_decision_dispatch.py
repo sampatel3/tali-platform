@@ -105,6 +105,105 @@ def _add_decision(db, org, role, *, status="processing", decision_type="skip_ass
     return app, decision
 
 
+def test_mixed_provider_decision_batch_acquires_both_mutexes(db, monkeypatch):
+    from app.components.integrations.bullhorn.sync_runner import (
+        BULLHORN_ORG_MUTEX_NAMESPACE,
+    )
+    from app.platform.config import settings
+    from app.tasks import assessment_tasks
+    from app.tasks.assessment_tasks import _WORKABLE_ORG_MUTEX_KEY_PREFIX
+
+    org, role, user = _seed(db, workable_connected=True)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    workable_app, workable_decision = _add_decision(
+        db, org, role, workable_linked=True
+    )
+    bullhorn_app, bullhorn_decision = _add_decision(db, org, role)
+    bullhorn_app.source = "bullhorn"
+    bullhorn_app.bullhorn_job_submission_id = "submission-mixed"
+    db.commit()
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+
+    acquired: list[str] = []
+
+    def _acquire(_org_id, *, namespace, **_kwargs):
+        acquired.append(namespace)
+        return (object(), f"{namespace}:{org.id}", None)
+
+    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", _acquire)
+    monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *_: None)
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        return_value={"succeeded": 2, "failed": 0},
+    ):
+        result = run_workable_op_task.run(
+            job_run_id=None,
+            organization_id=int(org.id),
+            op_type="approve_decisions",
+            payload={
+                "decision_ids": [
+                    int(workable_decision.id),
+                    int(bullhorn_decision.id),
+                ],
+                "user_id": int(user.id),
+            },
+        )
+
+    assert set(acquired) == {
+        _WORKABLE_ORG_MUTEX_KEY_PREFIX,
+        BULLHORN_ORG_MUTEX_NAMESPACE,
+    }
+    assert acquired == sorted(acquired)
+    assert result["status"] == "completed"
+
+
+def test_bullhorn_op_fails_closed_when_redis_lock_state_is_unknown(db, monkeypatch):
+    from app.platform.config import settings
+    from app.tasks import assessment_tasks
+    from app.tasks import workable_tasks
+
+    org, role, user = _seed(db)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-lock"
+    app, _decision = _add_decision(db, org, role)
+    app.source = "bullhorn"
+    app.bullhorn_job_submission_id = "submission-lock"
+    db.commit()
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    monkeypatch.setattr(
+        assessment_tasks, "_acquire_workable_org_mutex", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+
+    with patch.object(workable_tasks.run_workable_op_task, "apply_async") as retry, patch(
+        "app.services.workable_op_runner.execute_op"
+    ) as execute:
+        result = run_workable_op_task.run(
+            job_run_id=None,
+            organization_id=int(org.id),
+            op_type="manual_outcome",
+            payload={
+                "application_id": int(app.id),
+                "target_outcome": "rejected",
+                "user_id": int(user.id),
+            },
+        )
+
+    assert result["status"] == "lock_wait_requeued"
+    retry.assert_called_once()
+    execute.assert_not_called()
+
+
 # --- strict-mode gating primitive ------------------------------------------
 
 

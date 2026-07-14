@@ -17,6 +17,7 @@ class SisterRoleCreate(BaseModel):
 class SisterRolePreview(BaseModel):
     source_role_id: int
     source_role_name: str
+    source_ats_provider: str
     candidates_total: int
     candidates_with_cv: int
     candidates_missing_cv: int

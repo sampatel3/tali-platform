@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -49,6 +50,51 @@ def _source_role_with_candidates(db, *, organization_id: int) -> tuple[Role, lis
         applications.append(application)
     db.commit()
     return role, applications
+
+
+def _scorable_evaluation(db, *, organization_id: int):
+    source, applications = _source_role_with_candidates(
+        db, organization_id=organization_id
+    )
+    source.agentic_mode_enabled = True
+    source.monthly_usd_budget_cents = 5000
+    sister = Role(
+        organization_id=organization_id,
+        name="AI Engineer · Durable evaluation",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=source.id,
+        job_spec_text=(
+            "A detailed related-role specification requiring production Python, "
+            "RAG evaluation, distributed systems, and operational reliability."
+        ),
+    )
+    db.add(sister)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=organization_id,
+        role_id=sister.id,
+        source_application_id=applications[0].id,
+        status="pending",
+        spec_fingerprint="initial",
+    )
+    db.add(evaluation)
+    db.commit()
+    return source, evaluation
+
+
+def _match_output(*, ok: bool):
+    return SimpleNamespace(
+        scoring_status=SimpleNamespace(value="ok" if ok else "failed"),
+        role_fit_score=88.0 if ok else None,
+        summary="Strong production evidence." if ok else None,
+        error_reason=None if ok else "claude_call_failed: temporary upstream outage",
+        model_version="test-model",
+        prompt_version="test-prompt",
+        trace_id="trace-durable",
+        cache_hit=False,
+        model_dump=lambda **_: {"role_fit_score": 88.0},
+    )
 
 
 def test_create_sister_role_persists_separate_scores_and_projects_source_roster(client, db):
@@ -119,6 +165,72 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     assert rejected_rows.json()[0]["score_status"] == "unscorable"
 
 
+def test_create_related_role_from_bullhorn_uses_same_shared_roster(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    source = Role(
+        organization_id=user.organization_id,
+        name="Bullhorn Platform Engineer",
+        source="bullhorn",
+        bullhorn_job_order_id="BH-9001",
+        bullhorn_job_data={"id": 9001, "isOpen": True},
+        job_spec_text=(
+            "Original platform engineer role requiring Python, distributed "
+            "systems, production ownership, and observability."
+        ),
+    )
+    db.add(source)
+    db.flush()
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="bullhorn-related@example.com",
+        full_name="Bullhorn Candidate",
+        cv_text="Python platform engineer with production distributed systems experience.",
+    )
+    db.add(candidate)
+    db.flush()
+    db.add(
+        CandidateApplication(
+            organization_id=user.organization_id,
+            candidate_id=candidate.id,
+            role_id=source.id,
+            source="bullhorn",
+            bullhorn_job_submission_id="BH-SUB-1",
+            cv_text=candidate.cv_text,
+            application_outcome="open",
+        )
+    )
+    db.commit()
+
+    preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview",
+        headers=headers,
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["source_ats_provider"] == "bullhorn"
+
+    updated_spec = (
+        "Updated platform role requiring Python, distributed systems, reliable "
+        "data services, production observability, and technical leadership."
+    )
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        response = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={"name": "Platform Engineer · Data", "job_spec_text": updated_spec},
+            headers=headers,
+        )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["role"]["ats_provider"] == "bullhorn"
+    assert body["role"]["external_job_id"] == "BH-9001"
+    assert body["role"]["applications_count"] == 1
+    assert body["evaluation_counts"] == {"total": 1, "pending": 1, "unscorable": 0}
+    dispatch.assert_called_once()
+
+
 def test_sister_role_cannot_enable_candidate_automation(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
@@ -143,7 +255,7 @@ def test_sister_role_cannot_enable_candidate_automation(client, db):
     assert "score-only" in response.json()["detail"]
 
 
-def test_preview_rejects_non_workable_source(client, db):
+def test_preview_rejects_non_ats_source(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
     role = Role(organization_id=user.organization_id, name="Native role")
@@ -154,7 +266,7 @@ def test_preview_rejects_non_workable_source(client, db):
         f"/api/v1/roles/{role.id}/sisters/preview", headers=headers
     )
     assert response.status_code == 409
-    assert "Workable-linked" in response.json()["detail"]
+    assert "Workable- or Bullhorn-linked" in response.json()["detail"]
 
 
 def test_sister_evaluation_task_persists_holistic_score(client, db):
@@ -162,6 +274,8 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
     del headers
     user = db.query(User).filter(User.email == email).first()
     source, applications = _source_role_with_candidates(db, organization_id=user.organization_id)
+    source.agentic_mode_enabled = True
+    source.monthly_usd_budget_cents = 5000
     sister = Role(
         organization_id=user.organization_id,
         name="AI Engineer · Evaluation",
@@ -194,7 +308,9 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
         model_dump=lambda **_: {"role_fit_score": 86.0, "summary": "Strong RAG evaluation evidence."},
     )
     with (
-        patch("app.cv_matching.holistic.run_holistic_match", return_value=output),
+        patch(
+            "app.cv_matching.holistic.run_holistic_match", return_value=output
+        ) as holistic_match,
         patch("app.services.claude_client_resolver.get_metered_client", return_value=object()),
         patch("app.services.workable_context_service.format_workable_context", return_value=""),
     ):
@@ -208,6 +324,285 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
     assert saved.status == "done"
     assert saved.role_fit_score == 86.0
     assert saved.details["role_fit_score"] == 86.0
+    metering = holistic_match.call_args.kwargs["metering_context"]
+    assert metering["organization_id"] == user.organization_id
+    assert metering["role_id"] == source.id
+    assert metering["entity_id"] == f"sister_evaluation:{evaluation.id}"
+    assert metering["role_id"] != sister.id
+
+
+def test_related_role_transient_failures_continue_after_fast_retry_budget(
+    client, db
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+
+    from app.tasks.sister_role_tasks import (
+        recover_sister_role_evaluations,
+        score_sister_evaluation,
+    )
+
+    outputs = [_match_output(ok=False) for _ in range(4)] + [
+        _match_output(ok=True)
+    ]
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=outputs,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        first = score_sister_evaluation.run(evaluation.id)
+        assert first["status"] == "retry_wait"
+        for _ in range(4):
+            db.expire_all()
+            saved = db.get(SisterRoleEvaluation, evaluation.id)
+            assert saved.status == "retry_wait"
+            saved.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            db.commit()
+            recover_sister_role_evaluations.run()
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "done"
+    assert saved.attempts == 5
+    assert saved.role_fit_score == 88.0
+
+
+def test_related_role_hard_admission_uses_source_role_budget(
+    client, db, monkeypatch
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    source, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    # One cent is deliberately below the provider hold used by the fake
+    # scoring boundary. The score-only projection has no cap, so this test
+    # fails if metering ever regresses back to evaluation.role_id.
+    source.monthly_usd_budget_cents = 1
+    db.commit()
+
+    from app.services.pricing_service import Feature
+    from app.services.provider_usage_admission import reserve_provider_usage
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    monkeypatch.setattr(
+        "app.platform.config.settings.USAGE_METER_LIVE", False
+    )
+
+    def _admitted_match(*_args, metering_context, **_kwargs):
+        reserve_provider_usage(
+            organization_id=int(metering_context["organization_id"]),
+            role_id=int(metering_context["role_id"]),
+            feature=Feature.SCORE,
+            trace_id="related-role-source-budget-test",
+            entity_id=str(metering_context["entity_id"]),
+            amount=20_000,
+        )
+        return _match_output(ok=True)
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_admitted_match,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        result = score_sister_evaluation.run(evaluation.id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert result["status"] == "retry_wait"
+    assert result["error_code"] == "provider_exception"
+    assert saved.status == "retry_wait"
+    assert saved.attempts == 1
+    assert saved.role_fit_score is None
+
+
+def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    source, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    source.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    from app.tasks.sister_role_tasks import (
+        recover_sister_role_evaluations,
+        score_sister_evaluation,
+    )
+
+    with patch("app.cv_matching.holistic.run_holistic_match") as paid_call:
+        held = score_sister_evaluation.run(evaluation.id)
+    assert held["status"] == "authority_blocked"
+    paid_call.assert_not_called()
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "retry_wait"
+    assert saved.attempts == 0
+
+    source = db.get(Role, source.id)
+    source.agent_paused_at = None
+    saved.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            return_value=_match_output(ok=True),
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        recover_sister_role_evaluations.run()
+
+    db.expire_all()
+    assert db.get(SisterRoleEvaluation, evaluation.id).status == "done"
+
+
+def test_related_role_stale_worker_and_secret_broker_error_self_recover(
+    client, db, caplog
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    evaluation.status = "running"
+    evaluation.attempts = 1
+    evaluation.started_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    db.commit()
+
+    from app.tasks.sister_role_tasks import (
+        recover_sister_role_evaluations,
+        score_sister_evaluation,
+    )
+
+    secret = "redis://:SECRET@host"
+    with (
+        caplog.at_level("ERROR", logger="taali.tasks.sister_roles"),
+        patch.object(
+            score_sister_evaluation,
+            "apply_async",
+            side_effect=RuntimeError(secret),
+        ),
+    ):
+        result = recover_sister_role_evaluations.run()
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "retry_wait"
+    assert saved.last_error_code == "queue_unavailable_runtimeerror"
+    assert secret not in str(result)
+    assert secret not in str(saved.error_message)
+    assert secret not in caplog.text
+
+    saved.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    published: list[int] = []
+    with patch.object(
+        score_sister_evaluation,
+        "apply_async",
+        lambda *, args, queue: published.append(args[0]),
+    ):
+        recover_sister_role_evaluations.run()
+    assert published == [evaluation.id]
+
+
+def test_related_role_duplicate_delivery_does_not_repeat_paid_call(client, db):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            return_value=_match_output(ok=True),
+        ) as paid_call,
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        assert score_sister_evaluation.run(evaluation.id)["status"] == "done"
+        assert score_sister_evaluation.run(evaluation.id)["status"] == "skipped"
+    paid_call.assert_called_once()
+
+
+def test_related_role_only_deterministic_provider_failure_is_terminal(client, db):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    failed = _match_output(ok=False)
+    failed.error_reason = (
+        "holistic_score_failed: validation_failed_after_retry: redis://:SECRET@host"
+    )
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            return_value=failed,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        result = score_sister_evaluation.run(evaluation.id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert result["status"] == "error"
+    assert saved.status == "error"
+    assert saved.last_error_code == "validation_failed"
+    assert "SECRET" not in repr(result)
+    assert "SECRET" not in str(saved.error_message)
 
 
 def test_new_or_changed_workable_cv_queues_only_its_sister_evaluation(client, db):

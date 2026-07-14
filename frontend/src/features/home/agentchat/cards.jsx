@@ -83,6 +83,9 @@ export function ImpactCard({ card, onApply, busy }) {
     const total = card.candidates_total ?? 0;
     const scorable = card.candidates_with_cv ?? 0;
     const missing = card.candidates_missing_cv ?? 0;
+    const sourceProviderLabel = String(card.ats_provider || card.source_ats_provider || '').toLowerCase() === 'bullhorn'
+      ? 'Bullhorn'
+      : 'Workable';
     return (
       <div className="ac-card ac-card-constraint">
         <div className="ac-card-head">
@@ -90,7 +93,7 @@ export function ImpactCard({ card, onApply, busy }) {
           <span>Related role preview</span>
         </div>
         <div className="ac-rescreen-estimate">
-          <strong>{card.proposed_name || 'New related role'}</strong> will share {total} candidate{total === 1 ? '' : 's'} with {card.source_role_name || 'the original Workable role'}.
+          <strong>{card.proposed_name || 'New related role'}</strong> will share {total} candidate{total === 1 ? '' : 's'} with {card.source_role_name || `the original ${sourceProviderLabel} role`}.
         </div>
         <div className="ac-statrow">
           <span><b>{scorable}</b> score now</span>
@@ -98,7 +101,7 @@ export function ImpactCard({ card, onApply, busy }) {
           {typeof card.estimated_cost_usd === 'number' ? <span><b>~${card.estimated_cost_usd}</b> estimated AI usage</span> : null}
         </div>
         <div className="ac-rescreen-estimate">
-          Candidate stages and actions stay coupled to the original Workable job. Awaiting your confirmation.
+          Candidate stages and actions stay coupled to the original {sourceProviderLabel} job. Awaiting your confirmation.
         </div>
       </div>
     );

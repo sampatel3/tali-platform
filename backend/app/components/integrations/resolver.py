@@ -50,3 +50,59 @@ def resolve_ats_provider(
 
         return BullhornProvider(org, db)
     return None
+
+
+def resolve_application_ats_provider(
+    org: Organization | None,
+    db: Session | None,
+    application: object | None,
+) -> ATSProvider | None:
+    """Resolve the writable ATS for one application.
+
+    Org-level precedence remains Workable-first for unscoped operations, but a
+    dual-connected workspace can legitimately contain a Workable role and a
+    Bullhorn role at the same time.  Application-scoped writes must follow the
+    application's durable remote linkage; otherwise a Bullhorn JobSubmission
+    can be rejected or silently skipped merely because Workable is also
+    connected for another role.
+
+    When both application links are present, Workable retains the established
+    migration-edge precedence.  A linked but unavailable provider returns
+    ``None`` rather than falling through to the other ATS.
+    """
+    if org is None:
+        return None
+
+    workable_linked = bool(
+        str(getattr(application, "workable_candidate_id", None) or "").strip()
+    )
+    bullhorn_linked = bool(
+        str(
+            getattr(application, "bullhorn_job_submission_id", None) or ""
+        ).strip()
+    )
+
+    if workable_linked:
+        if (
+            org.workable_connected
+            and org.workable_access_token
+            and org.workable_subdomain
+        ):
+            return WorkableProvider(org)
+        return None
+
+    if bullhorn_linked:
+        if (
+            settings.BULLHORN_ENABLED
+            and db is not None
+            and getattr(org, "bullhorn_connected", False)
+            and getattr(org, "bullhorn_client_id", None)
+            and getattr(org, "bullhorn_refresh_token", None)
+            and getattr(org, "bullhorn_username", None)
+        ):
+            from .bullhorn.provider import BullhornProvider
+
+            return BullhornProvider(org, db)
+        return None
+
+    return resolve_ats_provider(org, db)

@@ -15,8 +15,10 @@ stars do not authorize spend. Recruiter uploads and native requisition
 applications retain their explicit low-latency scoring path, which is protected
 by their own request/readiness and credit-budget gates.
 
-These helpers must be cheap and synchronous — they only schedule Celery
-tasks via ``.delay()``. The actual Claude work happens on the worker.
+These helpers must be cheap and synchronous. Native/manual events schedule
+Celery directly for low latency. ATS events first persist a transactional
+outbox intent, then dispatch only after the sync's outer commit; the actual
+Claude work still happens on a worker.
 """
 
 from __future__ import annotations
@@ -103,6 +105,32 @@ def on_application_created(
         return
     application_id = int(getattr(app, "id", 0) or 0)
     if application_id <= 0:
+        return
+
+    # Workable/Bullhorn syncs own a larger transaction. A SessionLocal opened
+    # below cannot see a newly-flushed application until that outer transaction
+    # commits, and a broker task can win the same race. Persist the event intent
+    # atomically instead; its after-commit hook and Beat recovery rail perform
+    # the exact same cheap/paid work once the row is externally visible.
+    from ..cv_parsing.origins import CV_PARSE_ORIGIN_ATS_INGEST
+
+    if parse_origin == CV_PARSE_ORIGIN_ATS_INGEST:
+        from .ats_application_ingest_outbox import enqueue_ats_application_created
+
+        enqueue_ats_application_created(
+            app,
+            score=bool(score and allow_paid_work),
+            allow_paid_work=allow_paid_work,
+            requires_active_agent=requires_active_agent,
+            parse_origin=parse_origin,
+        )
+        logger.info(
+            "on_application_created persisted ATS outbox application_id=%s "
+            "score=%s allow_paid_work=%s",
+            application_id,
+            bool(score and allow_paid_work),
+            allow_paid_work,
+        )
         return
     try:
         from ..tasks.automation_tasks import run_application_auto_reject

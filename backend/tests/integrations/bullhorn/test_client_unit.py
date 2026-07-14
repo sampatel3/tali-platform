@@ -16,11 +16,15 @@ PR-4; this locks the client's own logic.
 
 from __future__ import annotations
 
+import traceback
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
 from app.components.integrations.bullhorn import (
     BullhornAuth,
+    BullhornApiError,
     BullhornAuthError,
     BullhornService,
 )
@@ -194,6 +198,44 @@ def test_search_requires_fields():
         svc._paged("search", "Candidate", fields="", selector="", count=100)
 
 
+def test_complete_open_job_snapshot_pages_to_exact_remote_total():
+    """A short server-capped page is followed until the stable total is exact."""
+    svc, _calls = _service_with_recorder()
+    starts: list[int] = []
+
+    def _page(_method, _path, **kwargs):
+        start = kwargs["params"]["start"]
+        starts.append(start)
+        row_id = start + 1
+        return {
+            "total": 2,
+            "start": start,
+            "data": [{"id": row_id, "isOpen": True}],
+        }
+
+    svc._request = _page  # type: ignore[assignment]
+    rows = svc.search_open_job_orders_complete(fields="id,isOpen")
+
+    assert [row["id"] for row in rows] == [1, 2]
+    assert starts == [0, 1]
+
+
+def test_complete_open_job_snapshot_rejects_partial_page_before_closure():
+    """A claimed total with no forward progress is never returned as complete."""
+    svc, _calls = _service_with_recorder()
+
+    def _partial(_method, _path, **kwargs):
+        start = kwargs["params"]["start"]
+        if start == 0:
+            return {"total": 2, "start": 0, "data": [{"id": 1, "isOpen": True}]}
+        return {"total": 2, "start": start, "data": []}
+
+    svc._request = _partial  # type: ignore[assignment]
+
+    with pytest.raises(BullhornApiError, match="partial"):
+        svc.search_open_job_orders_complete(fields="id,isOpen")
+
+
 # ============================================================================
 # End-to-end auth against the live fake
 # ============================================================================
@@ -328,6 +370,88 @@ def test_tokens_never_leak_into_httpx_logs(caplog):
     blob = "\n".join(r.getMessage() for r in caplog.records)
     assert "BhRestToken=" not in blob
     assert "access_token=" not in blob
+
+
+def test_auth_failure_traceback_never_retains_tokenized_request_url():
+    access_token = "ACCESS_TRACEBACK_SECRET"
+    corp_token = "CORP_TRACEBACK_SECRET"
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, request=request)
+
+    auth = BullhornAuth(
+        username="traceback-user",
+        client_id="traceback-client",
+        client_secret="client-secret",
+        refresh_token="refresh-secret",
+        persist_tokens=lambda **_kwargs: None,
+        rest_url=f"https://example.test/rest-services/{corp_token}/",
+        transport=httpx.MockTransport(fail),
+    )
+    auth._access_token = access_token  # noqa: SLF001 - exercise REST login
+
+    with pytest.raises(BullhornAuthError):
+        try:
+            auth._login()  # noqa: SLF001 - exact token-bearing request seam
+        except Exception:
+            rendered = traceback.format_exc()
+            assert access_token not in rendered
+            assert corp_token not in rendered
+            assert "access_token=" not in rendered
+            raise
+
+
+def test_rest_failure_traceback_never_retains_bh_or_corp_token():
+    bh_token = "BH_TRACEBACK_SECRET"
+    corp_token = "CORP_REST_TRACEBACK_SECRET"
+
+    class _Auth:
+        def ensure_session(self):
+            return SimpleNamespace(
+                bh_rest_token=bh_token,
+                rest_url=f"https://example.test/rest-services/{corp_token}/",
+            )
+
+        def reauthenticate(self):  # pragma: no cover - 500 never reauths
+            raise AssertionError("unexpected reauthentication")
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, request=request)
+
+    service = BullhornService(
+        _Auth(),
+        client_id="traceback-service-client",
+        transport=httpx.MockTransport(fail),
+    )
+    with pytest.raises(Exception):
+        try:
+            service.search_candidates(fields="id,name")
+        except Exception:
+            rendered = traceback.format_exc()
+            assert bh_token not in rendered
+            assert corp_token not in rendered
+            assert "BhRestToken=" not in rendered
+            raise
+
+
+def test_overlapping_quiet_httpx_contexts_never_restore_info_logging():
+    """Exiting one overlapping request cannot expose another request's URL."""
+    import logging
+
+    from app.components.integrations.bullhorn.auth import quiet_httpx
+
+    httpx_logger = logging.getLogger("httpx")
+    httpx_logger.setLevel(logging.INFO)
+    first = quiet_httpx()
+    second = quiet_httpx()
+    first.__enter__()
+    second.__enter__()
+    assert httpx_logger.level >= logging.WARNING
+
+    first.__exit__(None, None, None)
+    assert httpx_logger.level >= logging.WARNING
+    second.__exit__(None, None, None)
+    assert httpx_logger.level >= logging.WARNING
 
 
 def test_persistent_401_reauths_once_then_raises_auth_error():

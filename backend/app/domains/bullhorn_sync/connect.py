@@ -34,11 +34,14 @@ from sqlalchemy.orm import Session
 
 from ...components.integrations.bullhorn.auth import BullhornAuth
 from ...components.integrations.bullhorn.errors import BullhornError
+from ...components.integrations.bullhorn.credential_state import (
+    bump_credential_generation,
+)
 from ...components.integrations.bullhorn.service import BullhornService
 from ...components.integrations.bullhorn.stage_map import (
     seed_stage_map_from_categorization,
 )
-from ...models.organization import Organization
+from ...models.organization import Organization, SYNC_MODE_BULLHORN_PRIMARY
 from ...platform.config import settings
 from ...platform.secrets import encrypt_text
 
@@ -52,7 +55,7 @@ _REQUIRED_ENTITLEMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Candidate", ("GET",)),
     ("JobOrder", ("GET",)),
     ("JobSubmission", ("GET", "POST")),
-    ("Note", ("PUT",)),
+    ("Note", ("GET", "PUT")),
 )
 
 
@@ -62,6 +65,10 @@ class BullhornConnectError(Exception):
     Never carries a credential — the message is a short, human explanation of
     which step failed (discovery, auth, a missing entitlement, …).
     """
+
+    def __init__(self, public_message: str):
+        super().__init__(public_message)
+        self.public_message = public_message
 
 
 @dataclass
@@ -113,7 +120,7 @@ def _preflight_entitlements(service: BullhornService) -> None:
             raise BullhornConnectError(
                 f"Could not read Bullhorn entitlements for {entity}. "
                 "Check the API user has permission to view this entity."
-            ) from exc
+            ) from None
         for verb in required_verbs:
             if verb.upper() not in allowed:
                 raise BullhornConnectError(
@@ -151,12 +158,11 @@ def run_connect(
     try:
         auth.discover()
         auth.authorize_with_password()
-    except BullhornError as exc:
-        # redact_exc already stripped any token-bearing query string upstream.
+    except BullhornError:
         raise BullhornConnectError(
-            f"Bullhorn sign-in failed: {exc}. "
+            "Bullhorn sign-in failed. "
             "Check the username, client id, client secret, and API-user password."
-        ) from exc
+        ) from None
 
     service = BullhornService(auth, client_id=client_id)
 
@@ -164,10 +170,10 @@ def run_connect(
     # reachability with the freshly minted token before we commit to anything.
     try:
         service.ping()
-    except BullhornError as exc:
+    except BullhornError:
         raise BullhornConnectError(
-            f"Connected to Bullhorn but the REST session check failed: {exc}."
-        ) from exc
+            "Connected to Bullhorn but the REST session check failed. Please retry."
+        ) from None
 
     # 4. entitlement pre-flight — clear per-entity failure.
     _preflight_entitlements(service)
@@ -175,10 +181,10 @@ def run_connect(
     # 5. per-org status list + categorization settings.
     try:
         status_payload = service.get_status_list()
-    except BullhornError as exc:
+    except BullhornError:
         raise BullhornConnectError(
-            f"Could not read the Bullhorn status list: {exc}."
-        ) from exc
+            "Could not read the Bullhorn status list. Please retry."
+        ) from None
     statuses = [s for s in status_payload.get("statuses", []) if isinstance(s, str)]
     categorization = status_payload.get("categorization") or {}
 
@@ -204,6 +210,16 @@ def run_connect(
     if rest_url:
         org.bullhorn_rest_url = rest_url
     org.bullhorn_connected = True
+    bump_credential_generation(org)
+    # A Bullhorn-only connection makes Bullhorn the funnel authority. When an
+    # incumbent Workable connection is also present, preserve its posture: the
+    # shared ATS resolver deliberately routes dual-connected orgs to Workable.
+    if not (
+        org.workable_connected
+        and org.workable_access_token
+        and org.workable_subdomain
+    ):
+        org.sync_mode = SYNC_MODE_BULLHORN_PRIMARY
     db.add(org)
 
     logger.info(

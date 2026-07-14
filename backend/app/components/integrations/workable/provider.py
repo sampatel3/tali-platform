@@ -75,5 +75,12 @@ class WorkableProvider:
     ) -> dict:
         return revert_candidate_disqualification_in_workable(org=self.org, app=app, role=role)
 
-    def post_note(self, *, candidate_id: str, member_id: str, body: str) -> dict:
+    def post_note(
+        self,
+        *,
+        candidate_id: str,
+        member_id: str,
+        body: str,
+        role: Role | None = None,
+    ) -> dict:
         return self._client().post_candidate_comment(candidate_id, member_id, body)

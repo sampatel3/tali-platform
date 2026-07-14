@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from ....models.organization import Organization
-from ....models.role import Role
+from ....models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+from ....models.role_brief import RoleBrief
 from ....services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
@@ -39,6 +40,98 @@ def _now() -> datetime:
 
 def _job_order_id(job_order: dict) -> str:
     return str(job_order.get("id") or "").strip()
+
+
+def complete_open_job_order_ids(job_orders: list[dict]) -> set[str]:
+    """Validate a complete open-JobOrder snapshot and return its unique ids.
+
+    Pagination completeness is proven by
+    :meth:`BullhornService.search_open_job_orders_complete`; this second gate
+    proves that every returned row has a usable, unique id and is actually open.
+    Any malformed/duplicate row aborts before missing-id repair can mutate the
+    database.
+    """
+    open_ids: set[str] = set()
+    for job_order in job_orders:
+        if not isinstance(job_order, dict):
+            raise ValueError("complete JobOrder snapshot contains an invalid row")
+        job_id = _job_order_id(job_order)
+        if not job_id.isdigit():
+            raise ValueError("complete JobOrder snapshot contains an invalid id")
+        is_open = job_order.get("isOpen")
+        if isinstance(is_open, str):
+            is_open = is_open.strip().lower() in {"true", "1", "yes"}
+        elif type(is_open) is int:
+            is_open = is_open == 1
+        if is_open is not True:
+            raise ValueError("complete open JobOrder snapshot contains a non-open row")
+        if job_id in open_ids:
+            raise ValueError("complete JobOrder snapshot contains a duplicate id")
+        open_ids.add(job_id)
+    return open_ids
+
+
+def soft_close_role(role: Role, *, closed_at: datetime | None = None) -> bool:
+    """Apply the canonical Bullhorn close/delete semantics to one local role."""
+    if role.deleted_at is not None:
+        return False
+    role.deleted_at = closed_at or _now()
+    payload = dict(role.bullhorn_job_data) if isinstance(role.bullhorn_job_data, dict) else {}
+    payload["isOpen"] = False
+    role.bullhorn_job_data = sanitize_json_for_storage(payload)
+    return True
+
+
+def repair_roles_from_complete_open_snapshot(
+    db: Session,
+    org: Organization,
+    job_orders: list[dict],
+    *,
+    closed_at: datetime | None = None,
+) -> tuple[set[str], dict[str, int]]:
+    """Soft-close local Bullhorn roles absent from a proven-complete open set.
+
+    Callers fetch ``job_orders`` with ``search_open_job_orders_complete`` while
+    holding the existing per-org Bullhorn mutex. Validation happens in full
+    before the active local rows are read or changed. Workable-linked roles are
+    excluded because Workable is authoritative during a dual-connect migration.
+    The returned telemetry contains counts only, never remote ids or payloads.
+    """
+    open_ids = complete_open_job_order_ids(job_orders)
+    active_roles = (
+        db.query(Role)
+        .filter(
+            Role.organization_id == org.id,
+            Role.bullhorn_job_order_id.isnot(None),
+            Role.workable_job_id.is_(None),
+            Role.deleted_at.is_(None),
+        )
+        .order_by(Role.id.asc())
+        .all()
+    )
+    closed = 0
+    stamp = closed_at or _now()
+    for role in active_roles:
+        local_job_id = str(role.bullhorn_job_order_id or "").strip()
+        if local_job_id not in open_ids and soft_close_role(role, closed_at=stamp):
+            closed += 1
+    db.flush()
+    counts = {
+        "remote_open_count": len(open_ids),
+        "local_active_before": len(active_roles),
+        "roles_closed": closed,
+        "local_active_after": len(active_roles) - closed,
+    }
+    logger.info(
+        "Bullhorn open-role repair org_id=%s remote_open_count=%s "
+        "local_active_before=%s roles_closed=%s local_active_after=%s",
+        org.id,
+        counts["remote_open_count"],
+        counts["local_active_before"],
+        counts["roles_closed"],
+        counts["local_active_after"],
+    )
+    return open_ids, counts
 
 
 def format_job_spec_from_job_order(job_order: dict) -> str:
@@ -112,6 +205,83 @@ def format_job_spec_from_job_order(job_order: dict) -> str:
     return sanitize_text_for_storage(result)
 
 
+def _adopt_requisition_role(
+    db: Session,
+    org: Organization,
+    *,
+    job_id: str,
+    title: str,
+    job_order: dict,
+) -> Role | None:
+    """Link an open Bullhorn JobOrder to its stamped requisition role.
+
+    Requisition publish embeds a mint-once ``Taali ref: TAL-XXXXX`` marker in
+    the external job specification.  Before creating a Bullhorn-only duplicate,
+    scan the imported description/title and adopt the matching unlinked role.
+    It may still be a draft or already be native-live because Turn on does not
+    wait for the next ATS pull. The existing role retains its native JobPage,
+    workspace/brief criteria, agent settings, and budget; only its ATS linkage
+    and live job status change.
+    """
+
+    if not job_id:
+        return None
+
+    from ....services.role_brief_service import find_ref_code
+
+    code = None
+    for raw in (
+        job_order.get("description"),
+        job_order.get("publicDescription"),
+        title,
+    ):
+        if isinstance(raw, str):
+            code = find_ref_code(raw)
+            if code:
+                break
+    if not code:
+        return None
+
+    brief = (
+        db.query(RoleBrief)
+        .filter(
+            RoleBrief.organization_id == org.id,
+            RoleBrief.ref_code == code,
+        )
+        .first()
+    )
+    if brief is None or not brief.role_id:
+        return None
+
+    role = (
+        db.query(Role)
+        .filter(Role.id == brief.role_id, Role.organization_id == org.id)
+        .first()
+    )
+    if role is None:
+        return None
+    # Never hijack a terminal role or a role linked to either provider. Workable
+    # remains authoritative in dual-connect migrations, matching
+    # resolve_ats_provider's precedence.
+    if (
+        role.workable_job_id
+        or role.bullhorn_job_order_id
+        or role.job_status not in (None, JOB_STATUS_DRAFT, JOB_STATUS_OPEN)
+    ):
+        return None
+
+    role.bullhorn_job_order_id = job_id
+    role.job_status = JOB_STATUS_OPEN
+    role.deleted_at = None
+    logger.info(
+        "Bullhorn bridge: adopted requisition role_id=%s into job_order_id=%s via ref %s",
+        role.id,
+        job_id,
+        code,
+    )
+    return role
+
+
 def upsert_role_from_job_order(
     db: Session, org: Organization, job_order: dict
 ) -> tuple[Role | None, bool]:
@@ -137,6 +307,14 @@ def upsert_role_from_job_order(
         .first()
     )
     created = False
+    if not role:
+        role = _adopt_requisition_role(
+            db,
+            org,
+            job_id=job_id,
+            title=title,
+            job_order=job_order,
+        )
     if not role:
         role = Role(
             organization_id=org.id,
@@ -222,8 +400,12 @@ def _store_job_spec_attachment(role: Role) -> None:
                 "Skipping Bullhorn job-spec store for role_id=%s — object storage unavailable",
                 role.id,
             )
-    except Exception:  # pragma: no cover — never break the sync on storage
-        logger.exception("Failed saving Bullhorn job spec file for role_id=%s", role.id)
+    except Exception as exc:  # pragma: no cover — never break the sync on storage
+        logger.error(
+            "Failed saving Bullhorn job spec file role_id=%s error_type=%s",
+            role.id,
+            type(exc).__name__,
+        )
 
 
 def _sync_role_criteria(db: Session, role: Role, *, created: bool, spec_changed: bool) -> None:

@@ -49,4 +49,11 @@ class ATSProvider(Protocol):
         self, *, app: CandidateApplication | None, role: Role | None = None
     ) -> dict: ...
 
-    def post_note(self, *, candidate_id: str, member_id: str, body: str) -> dict: ...
+    def post_note(
+        self,
+        *,
+        candidate_id: str,
+        member_id: str,
+        body: str,
+        role: Role | None = None,
+    ) -> dict: ...

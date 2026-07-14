@@ -14,6 +14,8 @@ vi.mock('../../shared/api', () => ({
     get: vi.fn(),
     syncWorkable: vi.fn(),
     getWorkableSyncStatus: vi.fn(),
+    syncBullhorn: vi.fn(),
+    getBullhornSyncStatus: vi.fn(),
   },
   tasks: {
     list: vi.fn(),
@@ -93,7 +95,12 @@ describe('JobsPage Workable sync states', () => {
       data: { org_budget_spent_cents: 4200, org_budget_cap_cents: 9000 },
     });
     trackWorkableSync.mockReset();
-    useJobStatus.mockReturnValue({ workableSyncJob: null, trackWorkableSync });
+    useJobStatus.mockReturnValue({
+      workableSyncJob: null,
+      bullhornSyncJob: null,
+      trackWorkableSync,
+      trackBullhornSync: vi.fn(),
+    });
   });
 
   it('reattaches to an active sync on first load', async () => {
@@ -388,6 +395,121 @@ describe('JobsPage Workable sync states', () => {
     expect(within(syncedCard).queryByText('Full ATS')).toBeNull();
   });
 
+  it.each([
+    ['workable', 'Workable', 'WK-900'],
+    ['bullhorn', 'Bullhorn', 'BH-900'],
+  ])(
+    'classifies a provider-neutral %s role under its own source filter',
+    async (provider, label, externalJobId) => {
+      apiClient.roles.list.mockResolvedValue({
+        data: [{
+          ...baseRoles[0],
+          id: provider === 'workable' ? 301 : 302,
+          name: `${label} Neutral Role`,
+          source: null,
+          ats_provider: provider,
+          external_job_id: externalJobId,
+          external_job_state: 'open',
+          external_job_live: true,
+        }],
+      });
+      apiClient.organizations.get.mockResolvedValue({
+        data: provider === 'bullhorn'
+          ? {
+            id: 1,
+            name: 'Deeplight AI',
+            active_ats: 'bullhorn',
+            bullhorn_connected: true,
+            bullhorn_last_sync_at: '2026-04-25T13:00:00Z',
+            bullhorn_last_sync_status: 'success',
+          }
+          : { ...baseOrg, active_ats: 'workable' },
+      });
+
+      render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+      const roleCard = (await screen.findByText(`${label} Neutral Role`)).closest('.job-card');
+      expect(within(roleCard).getByText(label)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: new RegExp(`^From ${label}1$`, 'i') })).toBeInTheDocument();
+      expect(roleCard).not.toHaveClass('not-live');
+    },
+  );
+
+  it('runs Bullhorn sync through the same Jobs hub control', async () => {
+    const trackBullhornSync = vi.fn();
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        source: null,
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-900',
+        external_job_live: true,
+      }],
+    });
+    apiClient.organizations.get.mockResolvedValue({
+      data: {
+        id: 1,
+        name: 'Deeplight AI',
+        active_ats: 'bullhorn',
+        bullhorn_connected: true,
+        bullhorn_last_sync_at: '2026-04-25T13:00:00Z',
+        bullhorn_last_sync_status: 'success',
+        bullhorn_last_sync_summary: { candidates_upserted: 4 },
+      },
+    });
+    apiClient.organizations.syncBullhorn.mockResolvedValue({
+      data: { status: 'started', run_id: 55 },
+    });
+    useJobStatus.mockReturnValue({
+      workableSyncJob: null,
+      bullhornSyncJob: null,
+      trackWorkableSync,
+      trackBullhornSync,
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText(/Synced from Bullhorn · 1 role/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Sync now$/i }));
+
+    await waitFor(() => expect(apiClient.organizations.syncBullhorn).toHaveBeenCalledTimes(1));
+    expect(apiClient.organizations.syncWorkable).not.toHaveBeenCalled();
+    expect(trackBullhornSync).toHaveBeenCalled();
+  });
+
+  it('labels a Bullhorn related role with its actual owning provider', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        id: 303,
+        name: 'Bullhorn Related Role',
+        source: 'sister',
+        role_kind: 'sister',
+        ats_owner_role_id: 302,
+        ats_owner_role_name: 'Original Bullhorn Role',
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-900',
+        external_job_live: true,
+      }],
+    });
+    apiClient.organizations.get.mockResolvedValue({
+      data: {
+        id: 1,
+        active_ats: 'bullhorn',
+        bullhorn_connected: true,
+        bullhorn_last_sync_status: 'success',
+      },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const roleCard = (await screen.findByText('Bullhorn Related Role')).closest('.job-card');
+    expect(within(roleCard).getByText('Related · Bullhorn')).toBeInTheDocument();
+    expect(within(roleCard).getByText(/Coupled to Original Bullhorn Role in Bullhorn/i))
+      .toBeInTheDocument();
+    expect(within(roleCard).queryByText(/in Workable/i)).not.toBeInTheDocument();
+  });
+
   it('uses native job_status for Live and Draft filters', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
@@ -474,6 +596,12 @@ describe('JobsPage entrance motion', () => {
     });
     apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
       data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+    useJobStatus.mockReturnValue({
+      workableSyncJob: null,
+      bullhornSyncJob: null,
+      trackWorkableSync: vi.fn(),
+      trackBullhornSync: vi.fn(),
     });
   });
 

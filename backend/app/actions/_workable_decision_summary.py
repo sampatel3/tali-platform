@@ -94,10 +94,10 @@ def _try_bullhorn_advance(
     re-queues, identical to the Workable move.
     """
     from ..components.integrations.bullhorn.provider import BullhornProvider
-    from ..components.integrations.resolver import resolve_ats_provider
+    from ..components.integrations.resolver import resolve_application_ats_provider
     from ..services.workable_actions_service import WorkableWritebackError
 
-    provider = resolve_ats_provider(org, db)
+    provider = resolve_application_ats_provider(org, db, app)
     if not isinstance(provider, BullhornProvider):
         return None
     submission_id = (getattr(app, "bullhorn_job_submission_id", "") or "").strip()
@@ -109,9 +109,22 @@ def _try_bullhorn_advance(
         )
     except WorkableWritebackError:
         raise  # strict (batch) path — propagate so the batch re-queues.
-    except Exception:  # pragma: no cover — defensive
-        logger.exception("bullhorn advance raised unexpectedly (application_id=%s)", app.id)
-        return False
+    except Exception as exc:  # pragma: no cover — defensive/provider boundary
+        error_type = type(exc).__name__
+        logger.error(
+            "bullhorn advance raised unexpectedly application_id=%s error_type=%s",
+            app.id,
+            error_type,
+        )
+        # An unknown provider outcome is never safe to treat as a completed
+        # advance.  The shared decision runner catches this typed error, retries
+        # it, and returns the decision to the queue if Bullhorn stays unavailable.
+        raise WorkableWritebackError(
+            action="move",
+            code="unexpected",
+            message=f"Unexpected Bullhorn move failure ({error_type})",
+            retriable=True,
+        ) from None
     if not result.get("success"):
         append_application_event(
             db,
@@ -176,12 +189,11 @@ def try_workable_advance(
 
     target = (target_stage or "").strip()
     if not target and actor.type in {"agent", "system"} and org is not None:
-        config = (
-            org.workable_config
-            if isinstance(getattr(org, "workable_config", None), dict)
-            else {}
+        from ..services.workable_actions_service import (
+            resolve_workable_interview_stage,
         )
-        target = str(config.get("interview_stage_name") or "").strip()
+
+        target, _ = resolve_workable_interview_stage(org, role)
     if not target:
         return False
     if not _workable_writeback_ready(app=app, org=org):
@@ -461,12 +473,102 @@ def post_decision_summary_to_workable(
     override_action: Optional[str] = None,
     reason: Optional[str] = None,
 ) -> bool:
-    """Post the short decision-resolution note to Workable.
+    """Post the short decision-resolution note to the role's active ATS.
 
-    Returns True iff the note was posted. Skips silently (False) when
-    Workable isn't connected or the application isn't linked; logs +
-    records a failure event when the API call itself errors.
+    The historical name is retained for callers, but Bullhorn-only orgs route
+    through the same provider seam and receive the identical Taali audit note +
+    report link. Returns True iff the note was posted. Skips silently (False)
+    when no ATS is connected or the application isn't linked; logs + records a
+    provider-specific failure event when the API call itself errors.
     """
+    # Bullhorn-only workspace: post through the shared provider. Workable wins
+    # for the deliberate dual-connected migration edge (resolver precedence),
+    # preserving the incumbent behavior for DeepLight and every existing org.
+    from ..components.integrations.bullhorn.provider import BullhornProvider
+    from ..components.integrations.resolver import resolve_application_ats_provider
+
+    provider = resolve_application_ats_provider(org, db, app)
+    if isinstance(provider, BullhornProvider):
+        candidate = getattr(app, "candidate", None)
+        candidate_id = str(
+            getattr(candidate, "bullhorn_candidate_id", None) or ""
+        ).strip()
+        if not (
+            getattr(app, "bullhorn_job_submission_id", None) and candidate_id
+        ):
+            return False
+        share_url = _mint_30d_share_link(
+            db, app=app, created_by_user_id=actor.user_id
+        )
+        body = compose_decision_summary_note(
+            decision,
+            app,
+            verdict=verdict,
+            override_action=override_action,
+            reason=reason,
+            share_url=share_url,
+        )
+        try:
+            result = provider.post_note(
+                candidate_id=candidate_id,
+                member_id="",
+                body=body,
+                role=getattr(app, "role", None),
+            )
+        except Exception as exc:  # pragma: no cover - defensive/provider outage
+            error_type = type(exc).__name__
+            result = {
+                "success": False,
+                "code": "api_error",
+                "message": f"Bullhorn note provider failure ({error_type})",
+            }
+        if not result.get("success"):
+            append_application_event(
+                db,
+                app=app,
+                event_type="bullhorn_writeback_failed",
+                actor_type=actor.type,
+                actor_id=actor.event_actor_id,
+                reason="decision-summary note post failed",
+                metadata={
+                    "decision_id": int(decision.id),
+                    "verdict": verdict,
+                    "override_action": override_action,
+                    "share_url": share_url,
+                    "code": str(result.get("code") or "api_error"),
+                    "error": str(
+                        result.get("message") or result.get("error") or ""
+                    ),
+                    "source": "decision_summary",
+                    "ats": "bullhorn",
+                },
+            )
+            logger.warning(
+                "bullhorn decision-summary post failed application_id=%s "
+                "decision_id=%s err=%s",
+                app.id,
+                decision.id,
+                result.get("message") or result.get("error"),
+            )
+            return False
+        append_application_event(
+            db,
+            app=app,
+            event_type="bullhorn_decision_note_posted",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason=f"Decision resolution note posted to Bullhorn ({verdict})",
+            metadata={
+                "decision_id": int(decision.id),
+                "verdict": verdict,
+                "override_action": override_action,
+                "share_url": share_url,
+                "body_preview": body[:240],
+                "bullhorn_candidate_id": candidate_id,
+            },
+        )
+        return True
+
     if not _workable_writeback_ready(app=app, org=org):
         return False
     assert org is not None  # narrowed above

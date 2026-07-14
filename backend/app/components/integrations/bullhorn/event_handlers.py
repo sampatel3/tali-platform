@@ -102,14 +102,15 @@ def dispatch_event(
             return _handle_candidate(db, org, entity_id, client=client, now=now)
         if entity_name == ENTITY_NOTE:
             return _handle_note(db, org, entity_id, client=client, now=now)
-    except Exception:  # pragma: no cover — never break the batch on one event
+    except Exception as exc:  # pragma: no cover — never break the batch on one event
         db.rollback()
-        logger.exception(
-            "Bullhorn event handling failed org_id=%s entity=%s id=%s type=%s",
+        logger.error(
+            "Bullhorn event handling failed org_id=%s entity=%s id=%s type=%s error_type=%s",
             org.id,
             entity_name,
             entity_id,
             event_type,
+            type(exc).__name__,
         )
         return "error"
     return "skipped"
@@ -299,8 +300,7 @@ def _handle_delete(
             .filter(Role.organization_id == org.id, Role.bullhorn_job_order_id == entity_id)
             .first()
         )
-        if role is not None and role.deleted_at is None:
-            role.deleted_at = stamp
+        if role is not None and sync_jobs.soft_close_role(role, closed_at=stamp):
             db.commit()
             return "deleted_role"
         return "skipped"
@@ -377,14 +377,12 @@ def _resolve_candidate_payload(client: BullhornService, submission: dict) -> dic
         return nested
     cand_id = str((nested or {}).get("id") or "").strip()
     if not cand_id.isdigit():
-        return nested if isinstance(nested, dict) else {}
-    try:
-        rows = client.search_candidates(fields=sync_candidates.CANDIDATE_FIELDS, query=f"id:{cand_id}")
-    except Exception:  # pragma: no cover
-        logger.exception("Bullhorn candidate re-fetch failed id=%s", cand_id)
-        return nested if isinstance(nested, dict) else {}
+        raise ValueError("JobSubmission candidate id is missing")
+    rows = client.search_candidates(fields=sync_candidates.CANDIDATE_FIELDS, query=f"id:{cand_id}")
     matched = next((r for r in rows if str(r.get("id")) == cand_id), None)
-    return matched or (nested if isinstance(nested, dict) else {})
+    if matched is None:
+        raise LookupError(f"Bullhorn Candidate {cand_id} was not returned")
+    return matched
 
 
 def _refresh_candidate_fields(candidate: Candidate, payload: dict) -> None:
@@ -409,13 +407,9 @@ def _refresh_candidate_fields(candidate: Candidate, payload: dict) -> None:
 
 def _note_person_id(client: BullhornService, note_id: str) -> str | None:
     """Read a Note's ``personReference`` id via a direct entity read."""
-    try:
-        payload = client._request(  # noqa: SLF001 — a one-off id read; no typed method needed
-            "GET", f"entity/Note/{int(note_id)}", params={"fields": "id,personReference"}
-        )
-    except Exception:  # pragma: no cover — never break the batch on a note read
-        logger.exception("Bullhorn Note re-fetch failed id=%s", note_id)
-        return None
+    payload = client._request(  # noqa: SLF001 — a one-off id read; no typed method needed
+        "GET", f"entity/Note/{int(note_id)}", params={"fields": "id,personReference"}
+    )
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
         return None

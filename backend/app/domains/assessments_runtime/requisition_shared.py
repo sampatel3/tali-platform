@@ -17,6 +17,7 @@ from ...models.organization import Organization
 from ...models.role_brief import RoleBrief
 from ...platform.config import settings
 from ...services.client_service import compute_margin
+from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.requisition_chat_service import compute_gaps
 from ...services.requisition_template_service import resolve_template
 
@@ -133,15 +134,22 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     # org has no slug; lets the recruiter UI link the board.
     payload["careers_url"] = _careers_url(org.slug if org else None)
     # The INACTIVE Taali job stood up on publish (None until first published).
-    # Carries the lifecycle status (draft -> open once the Workable bridge links
-    # it) so the requisition UI can show "Inactive job created / now Open".
+    # Provider-neutral ATS metadata lets the requisition UI describe the same
+    # adoption flow for Workable and Bullhorn while the legacy ids remain for
+    # older clients.
     role = brief.role
+    ats_lifecycle = ats_job_lifecycle(role)
     payload["job"] = (
         {
             "role_id": role.id,
             "name": role.name,
             "job_status": role.job_status,
             "workable_job_id": role.workable_job_id,
+            "bullhorn_job_order_id": role.bullhorn_job_order_id,
+            "ats_provider": ats_lifecycle.provider,
+            "external_job_id": ats_lifecycle.external_job_id,
+            "external_job_state": ats_lifecycle.external_job_state,
+            "external_job_live": ats_lifecycle.external_job_live,
         }
         if role
         else None
@@ -149,19 +157,25 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     return payload
 
 
-def _workable_spec(jd_markdown: str, ref_code: str) -> str:
-    """The recruiter copies THIS into the Workable job description. It's the
-    rendered JD with a visible ref line appended — when the job syncs back, the
-    read-sync scans the description for ``ref_code`` and adopts the matching
-    inactive Taali job (Workable has no job-creation API, so the code rides
-    inside the spec the recruiter is already pasting). The wording asks them to
-    keep the line; ``find_ref_code`` tolerates any surrounding prose."""
+def _ats_spec(jd_markdown: str, ref_code: str) -> str:
+    """Return an ATS-portable job specification carrying the Taali link key.
+
+    Workable and Bullhorn imports both scan this visible reference and adopt the
+    already-published Taali role instead of creating a duplicate.  The native
+    Taali job never depends on this optional external-distribution bridge.
+    """
     body = (jd_markdown or "").rstrip()
     ref_line = (
         f"_Taali ref: {ref_code} — please keep this line so this role links "
         f"back to your Taali requisition._"
     )
     return f"{body}\n\n---\n{ref_line}\n" if body else f"{ref_line}\n"
+
+
+def _workable_spec(jd_markdown: str, ref_code: str) -> str:
+    """Backward-compatible alias for clients using the old response key."""
+
+    return _ats_spec(jd_markdown, ref_code)
 
 
 def _get_brief(db: Session, organization_id: int, brief_id: int) -> RoleBrief:

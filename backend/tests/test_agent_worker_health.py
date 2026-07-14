@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.services import agent_worker_health as health
 
 
@@ -27,6 +29,23 @@ class _Redis:
 
     def get(self, key):
         return self.values.get(key)
+
+
+def test_runtime_capabilities_report_worker_bullhorn_flag():
+    capabilities = health.runtime_capabilities(
+        settings_obj=SimpleNamespace(
+            ANTHROPIC_API_KEY="key",
+            USAGE_METER_LIVE=True,
+            E2B_API_KEY="e2b",
+            RESEND_API_KEY="resend",
+            GITHUB_TOKEN="github",
+            GITHUB_MOCK_MODE=False,
+            BULLHORN_ENABLED=True,
+            CLAUDE_MODEL="model",
+            CLAUDE_SCORING_BATCH_MODEL="score-model",
+        )
+    )
+    assert capabilities["bullhorn_enabled"] is True
 
 
 def test_worker_heartbeat_proves_beat_to_worker_path(monkeypatch):

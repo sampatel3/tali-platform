@@ -28,6 +28,7 @@ here defensively.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -48,6 +49,11 @@ EVENT_BATCH_SIZE = 100
 # monopolise a beat tick (rate budget matters — 100k calls/mo default). The next
 # cycle picks up where this left off.
 MAX_BATCHES_PER_CYCLE = 20
+# Retry a failed, exactly-replayable batch a small number of times before the
+# incremental runner replaces it through a clean gap sweep + reconciliation.
+POISON_EVENT_RETRY_LIMIT = 3
+_POISON_STATE_KEY = "event_poison_checkpoint"
+_SAFE_EVENT_TYPES = {"INSERTED", "UPDATED", "DELETED", "DELETE"}
 
 
 def _now() -> datetime:
@@ -83,6 +89,7 @@ def ensure_subscription(
     client.create_subscription(subscription_id=sub_id, entity_names=list(SUBSCRIBED_ENTITIES))
     org.bullhorn_event_subscription_id = sub_id
     org.bullhorn_event_request_id = None  # fresh queue → no replay checkpoint
+    _drop_poison_state(org)
     db.add(org)
     db.commit()
     logger.info("Bullhorn subscription created org_id=%s sub_id=%s", org.id, sub_id)
@@ -106,6 +113,7 @@ def recreate_subscription(db: Session, org: Organization, *, client: BullhornSer
     client.create_subscription(subscription_id=sub_id, entity_names=list(SUBSCRIBED_ENTITIES))
     org.bullhorn_event_subscription_id = sub_id
     org.bullhorn_event_request_id = None
+    _drop_poison_state(org)
     db.add(org)
     db.commit()
     logger.info("Bullhorn subscription recreated org_id=%s sub_id=%s", org.id, sub_id)
@@ -126,8 +134,10 @@ def poll_and_process_events(
       3. Process every event (idempotent re-fetch upserts); on completion clear
          the checkpoint and loop for the next batch, up to ``MAX_BATCHES_PER_CYCLE``.
 
-    Returns counters. Never raises for a per-event failure (the batch is already
-    checkpointed); a transport failure propagates so the task can log + retry.
+    Returns counters. Never raises for a per-event failure. A batch with any
+    failed event remains checkpointed and returns ``retry_pending`` so the next
+    worker replays the exact same destructive read. A transport failure
+    propagates so the task can retry without advancing its watermark.
     """
     sub_id = (org.bullhorn_event_subscription_id or "").strip()
     if not sub_id:
@@ -148,21 +158,47 @@ def poll_and_process_events(
                     # The subscription itself is gone/expired — surface so the
                     # caller recreates + runs a gap sweep (the checkpoint is dead).
                     return {**counters, "status": "subscription_dead"}
-                # A 400 = the requestId is superseded (not the subscription). The
-                # batch is unrecoverable; clear the checkpoint and move on rather
-                # than loop forever on an un-replayable id.
+                # The requestId may be temporarily unavailable or superseded.
+                # Never discard the only durable anchor here: a later 404 will
+                # drive subscription recreation + a gap sweep, while transient
+                # failures can replay normally on the next tick.
                 logger.warning(
-                    "Bullhorn event replay failed org_id=%s request_id=%s (%s) — clearing checkpoint",
+                    "Bullhorn event replay deferred org_id=%s batch=%s status=%s",
                     org.id,
-                    pending_request_id,
+                    _batch_fingerprint(pending_request_id),
                     status_code,
                 )
-                _clear_checkpoint(db, org)
-                continue
+                return {
+                    **counters,
+                    "status": "retry_pending",
+                    "reason": "replay_unavailable",
+                }
             events = _events_of(payload)
-            _process_batch(db, org, events, client=client, counters=counters)
-            _clear_checkpoint(db, org)
+            if not events:
+                return {
+                    **counters,
+                    "status": "retry_pending",
+                    "reason": "empty_replay",
+                }
+            batch_ok, failure_telemetry = _process_batch(
+                db, org, events, client=client, counters=counters
+            )
             counters["batches"] += 1
+            if not batch_ok:
+                poison = _record_poison_failure(
+                    db,
+                    org,
+                    request_id=pending_request_id,
+                    batch_size=len(events),
+                    failure_telemetry=failure_telemetry,
+                )
+                return {
+                    **counters,
+                    "status": "retry_pending",
+                    "reason": "event_handler_failed",
+                    "poison": poison,
+                }
+            _clear_checkpoint(db, org)
             # A replayed batch may be shorter than a full drain; keep looping to
             # drain anything that accumulated after the crash.
             continue
@@ -194,9 +230,41 @@ def poll_and_process_events(
                 org.id,
                 len(events),
             )
-        _process_batch(db, org, events, client=client, counters=counters)
-        _clear_checkpoint(db, org)
+        batch_ok, failure_telemetry = _process_batch(
+            db, org, events, client=client, counters=counters
+        )
         counters["batches"] += 1
+        if not batch_ok:
+            if not request_id:
+                return {
+                    **counters,
+                    "status": "retry_pending",
+                    "reason": "missing_request_id",
+                    "handler_errors": int(failure_telemetry["error_count"]),
+                }
+            poison = _record_poison_failure(
+                db,
+                org,
+                request_id=request_id,
+                batch_size=len(events),
+                failure_telemetry=failure_telemetry,
+            )
+            return {
+                **counters,
+                "status": "retry_pending",
+                "reason": "event_handler_failed",
+                "poison": poison,
+            }
+        if not request_id:
+            # The destructive batch succeeded, but without an exact replay
+            # anchor we cannot prove crash safety. Keep the prior watermark and
+            # let the caller run a gap sweep from it.
+            return {
+                **counters,
+                "status": "retry_pending",
+                "reason": "missing_request_id",
+            }
+        _clear_checkpoint(db, org)
         if len(events) < EVENT_BATCH_SIZE:
             break  # last (short) page — queue is drained
 
@@ -211,7 +279,7 @@ def _process_batch(
     *,
     client: BullhornService,
     counters: dict,
-) -> None:
+) -> tuple[bool, dict]:
     """Dispatch each event through the entity handler; tally outcomes.
 
     Each ``dispatch_event`` isolates its own failure (the batch is already
@@ -219,13 +287,30 @@ def _process_batch(
     idempotent, so replaying a partially-processed batch after a crash is safe.
     """
     now = _now()
+    errors_before = int(counters.get("errors") or 0)
+    failed_entities: set[str] = set()
+    failed_event_types: set[str] = set()
     for event in events:
         counters["events"] += 1
         outcome = dispatch_event(db, org, event, client=client, now=now)
         if outcome == "error":
             counters["errors"] += 1
+            entity = str(event.get("entityName") or "")
+            failed_entities.add(
+                entity if entity in SUBSCRIBED_ENTITIES else "unknown"
+            )
+            event_type = str(event.get("eventType") or "").upper()
+            failed_event_types.add(
+                event_type if event_type in _SAFE_EVENT_TYPES else "unknown"
+            )
         elif outcome != "skipped":
             counters["processed"] += 1
+    error_count = int(counters.get("errors") or 0) - errors_before
+    return error_count == 0, {
+        "error_count": error_count,
+        "entity_types": sorted(failed_entities),
+        "event_types": sorted(failed_event_types),
+    }
 
 
 def _events_of(payload) -> list[dict]:
@@ -238,6 +323,165 @@ def _events_of(payload) -> list[dict]:
 def _clear_checkpoint(db: Session, org: Organization) -> None:
     if (org.bullhorn_event_request_id or "") == "":
         return
+    poison = _poison_state(org)
     org.bullhorn_event_request_id = None
+    _drop_poison_state(org)
+    if poison is not None:
+        _record_public_poison(
+            org,
+            {
+                **_public_poison(poison),
+                "status": "replayed_successfully",
+                "resolved_at": _now().isoformat(),
+            },
+        )
     db.add(org)
     db.commit()
+
+
+def clear_checkpoint_after_gap_recovery(
+    db: Session,
+    org: Organization,
+    *,
+    expected_request_id: str,
+    reconciliation: dict | None = None,
+) -> bool:
+    """Clear an unreplayable anchor only after its gap sweep succeeded.
+
+    The expected-id guard is defensive (the per-org mutex already serializes
+    this path): a recovery for one batch must never clear a newer checkpoint.
+    """
+    current = str(org.bullhorn_event_request_id or "").strip()
+    if not expected_request_id or current != expected_request_id:
+        return False
+    poison = _poison_state(org)
+    org.bullhorn_event_request_id = None
+    _drop_poison_state(org)
+    if poison is not None and str(poison.get("request_id") or "") == current:
+        discrepancies = (
+            reconciliation.get("discrepancies")
+            if isinstance(reconciliation, dict)
+            and isinstance(reconciliation.get("discrepancies"), dict)
+            else {}
+        )
+        _record_public_poison(
+            org,
+            {
+                **_public_poison(poison),
+                "status": "recovered_by_gap_sweep",
+                "resolved_at": _now().isoformat(),
+                "reconciliation_ok": bool(
+                    isinstance(reconciliation, dict)
+                    and reconciliation.get("ok") is True
+                ),
+                "discrepancy_entities": sorted(discrepancies),
+            },
+        )
+    db.add(org)
+    db.commit()
+    return True
+
+
+def _poison_state(org: Organization) -> dict | None:
+    config = org.bullhorn_config if isinstance(org.bullhorn_config, dict) else {}
+    state = config.get(_POISON_STATE_KEY)
+    return dict(state) if isinstance(state, dict) else None
+
+
+def _drop_poison_state(org: Organization) -> None:
+    config = dict(org.bullhorn_config) if isinstance(org.bullhorn_config, dict) else {}
+    if _POISON_STATE_KEY in config:
+        config.pop(_POISON_STATE_KEY, None)
+        org.bullhorn_config = config
+
+
+def _public_poison(state: dict) -> dict:
+    return {
+        "code": "event_handler_failed",
+        "attempts": int(state.get("attempts") or 0),
+        "retry_limit": POISON_EVENT_RETRY_LIMIT,
+        "batch_fingerprint": str(state.get("batch_fingerprint") or ""),
+        "batch_size": int(state.get("batch_size") or 0),
+        "error_count": int(state.get("error_count") or 0),
+        "entity_types": list(state.get("entity_types") or []),
+        "event_types": list(state.get("event_types") or []),
+        "first_failed_at": state.get("first_failed_at"),
+        "last_failed_at": state.get("last_failed_at"),
+    }
+
+
+def _record_public_poison(org: Organization, telemetry: dict) -> None:
+    summary = (
+        dict(org.bullhorn_last_sync_summary)
+        if isinstance(org.bullhorn_last_sync_summary, dict)
+        else {}
+    )
+    summary["event_poison_batch"] = telemetry
+    org.bullhorn_last_sync_summary = summary
+
+
+def _record_poison_failure(
+    db: Session,
+    org: Organization,
+    *,
+    request_id: str,
+    batch_size: int,
+    failure_telemetry: dict,
+) -> dict:
+    """Durably count one identical failed replay without storing event payloads."""
+    now = _now().isoformat()
+    prior = _poison_state(org)
+    signature = _failure_signature(failure_telemetry)
+    same_failure = bool(
+        prior is not None
+        and str(prior.get("request_id") or "") == str(request_id)
+        and str(prior.get("failure_signature") or "") == signature
+    )
+    attempts = min(
+        POISON_EVENT_RETRY_LIMIT,
+        (int(prior.get("attempts") or 0) if same_failure and prior else 0) + 1,
+    )
+    state = {
+        "request_id": str(request_id),
+        "attempts": attempts,
+        "batch_fingerprint": _batch_fingerprint(request_id),
+        "failure_signature": signature,
+        "batch_size": int(batch_size),
+        "error_count": int(failure_telemetry.get("error_count") or 0),
+        "entity_types": list(failure_telemetry.get("entity_types") or []),
+        "event_types": list(failure_telemetry.get("event_types") or []),
+        "first_failed_at": (
+            prior.get("first_failed_at") if same_failure and prior else now
+        ),
+        "last_failed_at": now,
+    }
+    config = dict(org.bullhorn_config) if isinstance(org.bullhorn_config, dict) else {}
+    config[_POISON_STATE_KEY] = state
+    org.bullhorn_config = config
+    public = {
+        **_public_poison(state),
+        "status": (
+            "recovery_due"
+            if attempts >= POISON_EVENT_RETRY_LIMIT
+            else "retrying_exact_batch"
+        ),
+    }
+    _record_public_poison(org, public)
+    db.add(org)
+    db.commit()
+    return public
+
+
+def _batch_fingerprint(request_id: str) -> str:
+    return hashlib.sha256(str(request_id).encode("utf-8")).hexdigest()[:12]
+
+
+def _failure_signature(telemetry: dict) -> str:
+    source = "|".join(
+        (
+            str(int(telemetry.get("error_count") or 0)),
+            ",".join(telemetry.get("entity_types") or []),
+            ",".join(telemetry.get("event_types") or []),
+        )
+    )
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]

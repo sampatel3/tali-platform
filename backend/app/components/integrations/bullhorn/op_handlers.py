@@ -33,11 +33,13 @@ from .provider import BullhornProvider
 logger = logging.getLogger("taali.bullhorn.op_handlers")
 
 
-def _bullhorn_provider(db: Session, org: Organization) -> BullhornProvider | None:
-    """Resolve the provider iff this org routes to Bullhorn (else None)."""
-    from ..resolver import resolve_ats_provider
+def _bullhorn_provider(
+    db: Session, org: Organization, app: CandidateApplication
+) -> BullhornProvider | None:
+    """Resolve Bullhorn from this application's durable ATS linkage."""
+    from ..resolver import resolve_application_ats_provider
 
-    provider = resolve_ats_provider(org, db)
+    provider = resolve_application_ats_provider(org, db, app)
     return provider if isinstance(provider, BullhornProvider) else None
 
 
@@ -62,10 +64,11 @@ def _raise_if_failed(result: dict, *, default_action: str) -> None:
 def run_move_stage(db: Session, org: Organization, app: CandidateApplication, payload: dict) -> dict:
     """Bullhorn hand-back move — analogue of ``_op_move_stage``.
 
-    A recruiter hand-back in the Bullhorn context is an advance: the provider
-    reverse-maps the ``advanced`` intent to the org's status (never guessed),
-    writes it, and stamps local-write. Gated: Tali's advance transition only
-    follows a confirmed remote write (strict mode raises on failure).
+    The provider reverse-maps the supplied Taali intent (``advanced`` for a
+    recruiter hand-back, ``invited`` for the confirmed assessment handoff) to
+    the org's status, never guesses, writes it, and stamps local-write. Gated:
+    Tali's advance transition only follows a confirmed remote write (strict
+    mode raises on failure).
     """
     from ....domains.assessments_runtime.pipeline_service import (
         append_application_event,
@@ -76,40 +79,48 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
     application_id = int(app.id)
     if not app.bullhorn_job_submission_id:
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
-    provider = _bullhorn_provider(db, org)
+    provider = _bullhorn_provider(db, org, app)
     if provider is None:
         return {"status": "skipped", "reason": "not_connected", "application_id": application_id}
 
     reason = payload.get("reason")
     user_id = payload.get("user_id")
+    actor_type = str(payload.get("actor_type") or "recruiter")
+    actor_id = payload.get("actor_id", user_id)
+    source = str(payload.get("source") or actor_type)
+    target_intent = str(payload.get("target_intent") or "advanced").strip().lower()
     with strict_workable_writes():
         result = provider.move_application(
-            candidate_id=str(app.bullhorn_job_submission_id), target_stage="advanced", role=None
+            candidate_id=str(app.bullhorn_job_submission_id),
+            target_stage=target_intent,
+            role=getattr(app, "role", None),
         )
     _raise_if_failed(result, default_action="move")
     append_application_event(
         db,
         app=app,
         event_type="bullhorn_moved",
-        actor_type="recruiter",
-        actor_id=user_id,
-        reason=reason or "Recruiter handed candidate back to Bullhorn",
+        actor_type=actor_type,
+        actor_id=actor_id,
+        reason=reason or "Candidate handed back to Bullhorn",
         metadata={
             "bullhorn_status": result.get("config", {}).get("remote_status"),
             "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
+            "taali_intent": target_intent,
         },
     )
-    transition_stage(
-        db,
-        app=app,
-        to_stage="advanced",
-        source="recruiter",
-        actor_type="recruiter",
-        actor_id=user_id,
-        reason=reason or "Handed back to Bullhorn",
-        metadata={"bullhorn_status": result.get("config", {}).get("remote_status")},
-        idempotency_key=f"bullhorn_handback:{app.id}",
-    )
+    if target_intent in {"advanced", "advance", "skip_advanced"}:
+        transition_stage(
+            db,
+            app=app,
+            to_stage="advanced",
+            source=source,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason=reason or "Handed back to Bullhorn",
+            metadata={"bullhorn_status": result.get("config", {}).get("remote_status")},
+            idempotency_key=f"bullhorn_handback:{app.id}",
+        )
     db.commit()
     return {"status": "ok", "application_id": application_id}
 
@@ -127,13 +138,15 @@ def run_manual_outcome(db: Session, org: Organization, app: CandidateApplication
     application_id = int(app.id)
     if not app.bullhorn_job_submission_id:
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
-    provider = _bullhorn_provider(db, org)
+    provider = _bullhorn_provider(db, org, app)
     if provider is None:
         return {"status": "skipped", "reason": "not_connected", "application_id": application_id}
 
     target_outcome = payload.get("target_outcome")
     reason = payload.get("reason")
     user_id = payload.get("user_id")
+    actor_type = str(payload.get("actor_type") or "recruiter")
+    actor_id = payload.get("actor_id", user_id)
     with strict_workable_writes():
         if target_outcome == "open":
             result = provider.revert_application(app=app, role=None)
@@ -142,12 +155,21 @@ def run_manual_outcome(db: Session, org: Organization, app: CandidateApplication
             result = provider.reject_application(app=app, role=None, reason=reason)
             event_type = "bullhorn_rejected"
     _raise_if_failed(result, default_action="move")
+    from ....services.ats_writeback_state import set_outcome_writeback_state
+
+    set_outcome_writeback_state(
+        app,
+        provider="bullhorn",
+        status="confirmed",
+        target_outcome=str(target_outcome or ""),
+        remote_status=result.get("config", {}).get("remote_status"),
+    )
     append_application_event(
         db,
         app=app,
         event_type=event_type,
-        actor_type="recruiter",
-        actor_id=user_id,
+        actor_type=actor_type,
+        actor_id=actor_id,
         reason=reason or "Bullhorn outcome synced",
         metadata={
             "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
@@ -171,23 +193,30 @@ def run_post_note(db: Session, org: Organization, app: CandidateApplication, pay
     application_id = int(app.id)
     body = str(payload.get("body") or "").strip()
     user_id = payload.get("user_id")
+    actor_type = str(payload.get("actor_type") or "recruiter")
+    actor_id = payload.get("actor_id", user_id)
     candidate = getattr(app, "candidate", None)
     bullhorn_candidate_id = str(getattr(candidate, "bullhorn_candidate_id", None) or "").strip()
     if not app.bullhorn_job_submission_id or not bullhorn_candidate_id or not body:
         return {"status": "skipped", "reason": "not_linked_or_empty", "application_id": application_id}
-    provider = _bullhorn_provider(db, org)
+    provider = _bullhorn_provider(db, org, app)
     if provider is None:
         return {"status": "skipped", "reason": "not_connected", "application_id": application_id}
 
-    result = provider.post_note(candidate_id=bullhorn_candidate_id, member_id="", body=body)
+    result = provider.post_note(
+        candidate_id=bullhorn_candidate_id,
+        member_id="",
+        body=body,
+        role=getattr(app, "role", None),
+    )
     _raise_if_failed(result, default_action="note")
     append_application_event(
         db,
         app=app,
         event_type="bullhorn_note_posted",
-        actor_type="recruiter",
-        actor_id=user_id,
-        reason="Recruiter note posted to Bullhorn",
+        actor_type=actor_type,
+        actor_id=actor_id,
+        reason="Note posted to Bullhorn",
         metadata={"bullhorn_candidate_id": bullhorn_candidate_id},
     )
     db.commit()

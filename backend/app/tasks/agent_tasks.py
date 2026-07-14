@@ -176,6 +176,9 @@ def agent_daily_review_role(self, role_id: int) -> dict:
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.role_execution_guard import (
+        automatic_role_action_block_reason,
+    )
 
     db = SessionLocal()
     try:
@@ -190,6 +193,14 @@ def agent_daily_review_role(self, role_id: int) -> dict:
                 "reason": "agent_paused",
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
+            }
+        role_block = automatic_role_action_block_reason(role)
+        if role_block:
+            return {
+                "status": "skipped",
+                "reason": "role_not_runnable",
+                "detail": role_block,
+                "role_id": role_id,
             }
         try:
             run = run_cycle(
@@ -491,6 +502,9 @@ def agent_cohort_tick_role(
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.role_execution_guard import (
+        automatic_role_action_block_reason,
+    )
 
     db = SessionLocal()
     try:
@@ -520,8 +534,14 @@ def agent_cohort_tick_role(
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
-        if not bool(role.agentic_mode_enabled) or role.agent_paused_at is not None:
-            return {"status": "skipped", "reason": "not_eligible", "role_id": role_id}
+        role_block = automatic_role_action_block_reason(role)
+        if role_block:
+            return {
+                "status": "skipped",
+                "reason": "not_eligible",
+                "detail": role_block,
+                "role_id": role_id,
+            }
         # Both false→true activation and pause→resume stamp ``starting`` before
         # dispatch.  The Celery argument distinguishes the larger activation
         # scoring cap; the persisted state distinguishes any bootstrap that
@@ -792,7 +812,7 @@ ACTIVATION_AUTO_SCORE_CAP = 500
 
 
 def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[int]]:
-    """Replay the latest score attempts that Pause/Turn off held.
+    """Replay latest score attempts that temporary authority holds deferred.
 
     A normal unscored drain misses forced rescores whose previous numeric score
     is still present.  Persisting the hold as a stale CvScoreJob and draining it
@@ -804,14 +824,14 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import SCORE_JOB_STALE, CvScoreJob
     from ..services.cv_score_orchestrator import enqueue_score
+    from ..services.role_execution_guard import (
+        automatic_role_action_block_reason,
+    )
 
     bounded = max(0, int(limit))
     if bounded <= 0:
         return 0, set()
-    if (
-        not bool(getattr(role, "agentic_mode_enabled", False))
-        or getattr(role, "agent_paused_at", None) is not None
-    ):
+    if automatic_role_action_block_reason(role) is not None:
         return 0, set()
 
     latest_id = (
@@ -832,7 +852,11 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
         .filter(
             CvScoreJob.status == SCORE_JOB_STALE,
             CvScoreJob.error_message.in_(
-                ("deferred_agent_paused", "deferred_agent_off")
+                (
+                    "deferred_agent_paused",
+                    "deferred_agent_off",
+                    "deferred_role_not_runnable",
+                )
             ),
         )
         .order_by(CvScoreJob.id.asc())
@@ -912,6 +936,15 @@ def _auto_enqueue_scoring(
         )
         from ..services.cv_score_orchestrator import enqueue_score
         from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
+        from ..services.role_execution_guard import (
+            automatic_role_action_block_reason,
+        )
+
+        # This helper is also exercised directly by recovery and activation
+        # code. Keep the authority at the paid-work boundary instead of relying
+        # only on the outer cohort task having checked an earlier Role snapshot.
+        if automatic_role_action_block_reason(role) is not None:
+            return 0
 
         deferred_touched, deferred_app_ids = _requeue_deferred_agent_scores(
             db,

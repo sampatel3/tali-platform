@@ -232,6 +232,29 @@ def test_daily_review_role_skips_when_agentic_mode_off(db):
     assert result["reason"] == "agentic_mode_disabled"
 
 
+def test_daily_review_role_skips_when_linked_ats_job_is_closed(db):
+    from app.tasks import agent_tasks
+
+    org = _make_org(db)
+    role = _make_role(db, org, agentic=True)
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = str(93_000 + int(role.id))
+    role.bullhorn_job_data = {"status": "Closed", "isOpen": False}
+    db.commit()
+
+    from tests.conftest import TestingSessionLocal
+
+    with patch(
+        "app.platform.database.SessionLocal", new=TestingSessionLocal
+    ), patch("app.agent_runtime.orchestrator.run_cycle") as run_cycle:
+        result = agent_tasks.agent_daily_review_role.run(role_id=int(role.id))
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "role_not_runnable"
+    assert result["detail"] == "linked bullhorn job is not live"
+    run_cycle.assert_not_called()
+
+
 def test_daily_review_role_returns_skip_when_role_missing(db):
     from app.tasks import agent_tasks
 

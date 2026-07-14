@@ -513,6 +513,7 @@ def _health_payload() -> dict:
     try:
         from sqlalchemy import text
         from .platform.database import SessionLocal
+
         db = SessionLocal()
         db.execute(text("SELECT 1"))
         db.close()
@@ -547,10 +548,23 @@ def _health_payload() -> dict:
     # logs and returns — the user gets no email. Surface here so /health
     # is the one place to confirm transactional email is wired.
     resend_key = (settings.RESEND_API_KEY or "").strip().lower()
+    workable_connector_enabled = not bool(settings.MVP_DISABLE_WORKABLE)
+    workable_oauth_app_configured = _is_configured_secret(
+        settings.WORKABLE_CLIENT_ID
+    ) and _is_configured_secret(settings.WORKABLE_CLIENT_SECRET)
     integrations = {
         "e2b_configured": _is_configured_secret(settings.E2B_API_KEY),
         "claude_configured": _is_configured_secret(settings.ANTHROPIC_API_KEY),
-        "workable_configured": _is_configured_secret(settings.WORKABLE_CLIENT_ID) and _is_configured_secret(settings.WORKABLE_CLIENT_SECRET),
+        # Public health reports connector capability only. Tenant connection
+        # truth is org-scoped and belongs on authenticated OrgResponse.active_ats;
+        # exposing connection counts here would leak business metadata. Keep the
+        # legacy key, but make its meaning connector availability so a valid
+        # direct-token Workable tenant is not called "unconfigured" merely
+        # because this deployment has no global OAuth app credentials.
+        "workable_configured": workable_connector_enabled,
+        "workable_connector_enabled": workable_connector_enabled,
+        "workable_oauth_app_configured": workable_oauth_app_configured,
+        "bullhorn_connector_enabled": bool(settings.BULLHORN_ENABLED),
         "stripe_configured": _is_configured_secret(settings.STRIPE_API_KEY),
         "resend_configured": _is_configured_secret(settings.RESEND_API_KEY) and resend_key != "skip",
     }

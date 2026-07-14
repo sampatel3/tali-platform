@@ -2178,6 +2178,7 @@ def update_application_outcome(
     current_user: User = Depends(get_current_user),
 ):
     app = get_application(application_id, current_user.organization_id, db)
+    ats_writeback_job_run_id = None
     try:
         ensure_pipeline_fields(app)
         if data.expected_version is not None and int(data.expected_version) != int(app.version or 0):
@@ -2204,19 +2205,60 @@ def update_application_outcome(
             actor_id=current_user.id,
             reason="Pipeline initialized before outcome patch",
         )
+        current_outcome = (
+            sanitize_text_for_storage(str(app.application_outcome or "").strip())
+            or "open"
+        )
+        target_outcome = (
+            sanitize_text_for_storage(str(data.application_outcome or "").strip())
+            or current_outcome
+        )
+        mirrors_remote_outcome = (
+            current_outcome != target_outcome
+            and (current_outcome, target_outcome)
+            in {("open", "rejected"), ("rejected", "open")}
+        )
+        bullhorn_outcome_op = False
+        if mirrors_remote_outcome and app.bullhorn_job_submission_id and not app.workable_candidate_id:
+            from ...components.integrations.bullhorn.provider import BullhornProvider
+            from ...components.integrations.resolver import (
+                resolve_application_ats_provider,
+            )
+
+            org = (
+                db.query(Organization)
+                .filter(Organization.id == current_user.organization_id)
+                .one_or_none()
+            )
+            if not isinstance(
+                resolve_application_ats_provider(org, db, app), BullhornProvider
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This application is linked to Bullhorn, but Bullhorn "
+                        "is disabled or disconnected. Reconnect it in Settings "
+                        "before changing the candidate outcome."
+                    ),
+                )
+            bullhorn_outcome_op = True
+
         # The manual outcome PATCH keeps its stronger gated contract: the
         # Workable writeback runs first and the local outcome closes only when
         # it succeeds, so on a Workable failure the local state is preserved and
         # the recruiter gets a real 502 (never a silent divergence). This is a
         # single deliberate action, so synchronous gating is the right UX —
         # unlike the Decision Hub batches, which go async via the runner.
-        writeback_result = _sync_workable_outcome_change(
-            db=db,
-            app=app,
-            target_outcome=data.application_outcome,
-            current_user=current_user,
-            reason=data.reason,
-        )
+        writeback_result = None
+        local_outcome_committed = False
+        if not bullhorn_outcome_op:
+            writeback_result = _sync_workable_outcome_change(
+                db=db,
+                app=app,
+                target_outcome=data.application_outcome,
+                current_user=current_user,
+                reason=data.reason,
+            )
         transition_outcome(
             db,
             app=app,
@@ -2227,7 +2269,72 @@ def update_application_outcome(
             idempotency_key=data.idempotency_key,
             expected_version=data.expected_version,
         )
+        if bullhorn_outcome_op:
+            # Bullhorn writes use the same serialized/retried/meter-visible op
+            # rail as every other ATS action.  This is an explicit HITL action,
+            # so role agent pause/off state deliberately does not suppress it.
+            from ...services.workable_op_runner import (
+                OP_MANUAL_OUTCOME,
+                enqueue_workable_op,
+            )
+
+            from ...services.ats_writeback_state import (
+                set_outcome_writeback_state,
+            )
+
+            # Persist the honest remote state with the local decision. A page
+            # reload must say "queued", never "rejected in Bullhorn", until
+            # the worker records a confirmed provider receipt.
+            set_outcome_writeback_state(
+                app,
+                provider="bullhorn",
+                status="queued",
+                target_outcome=target_outcome,
+            )
+            # The worker contract assumes the local outcome is already durable.
+            # Commit before publishing so an eager/fast worker can never change
+            # Bullhorn while this request later rolls its local transition back.
+            db.commit()
+            db.refresh(app)
+            local_outcome_committed = True
+            try:
+                ats_writeback_job_run_id = enqueue_workable_op(
+                    organization_id=current_user.organization_id,
+                    op_type=OP_MANUAL_OUTCOME,
+                    payload={
+                        "application_id": int(app.id),
+                        "user_id": current_user.id,
+                        "target_outcome": target_outcome,
+                        "reason": data.reason,
+                    },
+                )
+            except Exception as exc:
+                # The local recruiter decision is already committed. Make the
+                # missing delivery visible and retryable rather than leaving a
+                # permanent false "queued" receipt.
+                db.rollback()
+                failed_app = db.get(CandidateApplication, int(app.id))
+                if failed_app is not None:
+                    set_outcome_writeback_state(
+                        failed_app,
+                        provider="bullhorn",
+                        status="failed",
+                        target_outcome=target_outcome,
+                        error_code=f"queue_persistence_{type(exc).__name__}",
+                    )
+                    db.commit()
+                raise
         if writeback_result and writeback_result.get("success"):
+            from ...services.ats_writeback_state import (
+                set_outcome_writeback_state,
+            )
+
+            set_outcome_writeback_state(
+                app,
+                provider="workable",
+                status="confirmed",
+                target_outcome=target_outcome,
+            )
             append_application_event(
                 db,
                 app=app,
@@ -2243,8 +2350,9 @@ def update_application_outcome(
                     "workable_disqualify_reason_id": (writeback_result.get("config") or {}).get("workable_disqualify_reason_id"),
                 },
             )
-        db.commit()
-        db.refresh(app)
+        if not local_outcome_committed:
+            db.commit()
+            db.refresh(app)
     except HTTPException:
         db.rollback()
         raise
@@ -2253,15 +2361,20 @@ def update_application_outcome(
         raise HTTPException(status_code=500, detail="Failed to update application outcome")
     # Outcome changes don't change scoring inputs; reuse the cached
     # interview pack so the PATCH stays snappy.
-    return application_to_response(app, use_cached_score_summary=True)
+    response = application_to_response(app, use_cached_score_summary=True)
+    if ats_writeback_job_run_id is not None:
+        response.ats_writeback_status = "queued"
+        response.ats_writeback_job_run_id = ats_writeback_job_run_id
+    return response
 
 
 class WorkableMoveStageRequest(BaseModel):
-    """Body for the recruiter-initiated hand-back to Workable.
+    """Body for the recruiter-initiated hand-back to the active ATS.
 
-    `target_stage` is the Workable stage slug or kind (e.g. ``"phone_screen"``,
-    ``"interview"``) — what the picker shows is what we POST. The Workable API
-    accepts this directly via ``POST /spi/v3/candidates/{id}/move``.
+    For Workable, ``target_stage`` is the remote stage slug/kind displayed by
+    the picker. For Bullhorn, it is the Taali stage intent (normally
+    ``"advanced"``); the provider resolves that intent through the org's
+    explicit stage map and never accepts/guesses a free-text remote status.
     """
 
     target_stage: str = Field(min_length=1, max_length=200)
@@ -2270,6 +2383,110 @@ class WorkableMoveStageRequest(BaseModel):
 
 class ApplicationWorkableNoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
+
+
+def _queue_application_ats_move(
+    *,
+    app: CandidateApplication,
+    data: WorkableMoveStageRequest,
+    db: Session,
+    current_user: User,
+    provider_name: str,
+) -> ApplicationResponse:
+    """Initialize the local pipeline and queue one provider-routed move."""
+    target_stage = str(data.target_stage or "").strip()
+    try:
+        ensure_pipeline_fields(app)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="system",
+            actor_id=current_user.id,
+            reason=f"Pipeline initialized before {provider_name.title()} hand-back",
+        )
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail="Failed to initialize pipeline for hand-back"
+        )
+
+    # The historical runner name is retained, but it resolves the connected
+    # provider before executing. Bullhorn receives a Taali intent and reverse-
+    # maps it through AtsStageMap; Workable receives its remote stage directly.
+    from ...services.workable_op_runner import OP_MOVE_STAGE, enqueue_workable_op
+
+    job_run_id = enqueue_workable_op(
+        organization_id=current_user.organization_id,
+        op_type=OP_MOVE_STAGE,
+        payload={
+            "application_id": int(app.id),
+            "user_id": current_user.id,
+            "target_stage": target_stage,
+            "target_intent": target_stage if provider_name == "bullhorn" else None,
+            "reason": data.reason,
+        },
+    )
+    db.refresh(app)
+    response = application_to_response(app, use_cached_score_summary=True)
+    response.ats_writeback_status = "queued"
+    response.ats_writeback_job_run_id = job_run_id
+    return response
+
+
+@router.post("/applications/{application_id}/ats/move-stage", response_model=ApplicationResponse)
+def move_application_in_active_ats(
+    application_id: int,
+    data: WorkableMoveStageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hand a candidate back through the workspace's connected ATS provider."""
+    app = get_application(application_id, current_user.organization_id, db)
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == current_user.organization_id)
+        .first()
+    )
+    from ...components.integrations.resolver import resolve_application_ats_provider
+
+    provider = resolve_application_ats_provider(org, db, app)
+    provider_name = str(getattr(provider, "ats", "") or "").strip().lower()
+    if provider_name == "workable":
+        if not app.workable_candidate_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Application is not linked to a Workable candidate",
+            )
+    elif provider_name == "bullhorn":
+        if not app.bullhorn_job_submission_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Application is not linked to a Bullhorn JobSubmission",
+            )
+    else:
+        if app.bullhorn_job_submission_id and not app.workable_candidate_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This application is linked to Bullhorn, but Bullhorn is "
+                    "disabled or disconnected. Reconnect it in Settings."
+                ),
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="No writable ATS is connected for this workspace",
+        )
+    return _queue_application_ats_move(
+        app=app,
+        data=data,
+        db=db,
+        current_user=current_user,
+        provider_name=provider_name,
+    )
 
 
 @router.post("/applications/{application_id}/workable/move-stage", response_model=ApplicationResponse)
@@ -2296,49 +2513,13 @@ def move_application_in_workable(
             status_code=400,
             detail="Application is not linked to a Workable candidate",
         )
-    org = (
-        db.query(Organization)
-        .filter(Organization.id == current_user.organization_id)
-        .first()
+    return _queue_application_ats_move(
+        app=app,
+        data=data,
+        db=db,
+        current_user=current_user,
+        provider_name="workable",
     )
-    target_stage = str(data.target_stage or "").strip()
-    try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason="Pipeline initialized before Workable hand-back",
-        )
-        db.commit()
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to initialize pipeline for hand-back")
-
-    # Hand-back runs through the serialized Workable runner: it performs the
-    # move in the background (one per-org Workable conversation at a time),
-    # sets ``workable_stage`` + advances Tali's stage only after Workable
-    # confirms, retries on a transient 429, and records a
-    # ``workable_move_stage_failed`` event on terminal failure — never a silent
-    # drop. (Eager Celery in tests finishes inline.)
-    from ...services.workable_op_runner import OP_MOVE_STAGE, enqueue_workable_op
-
-    enqueue_workable_op(
-        organization_id=current_user.organization_id,
-        op_type=OP_MOVE_STAGE,
-        payload={
-            "application_id": int(app.id),
-            "user_id": current_user.id,
-            "target_stage": target_stage,
-            "reason": data.reason,
-        },
-    )
-    db.refresh(app)
-    return application_to_response(app, use_cached_score_summary=True)
 
 
 @router.post("/applications/{application_id}/workable/note")

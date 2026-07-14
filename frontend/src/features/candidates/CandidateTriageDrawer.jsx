@@ -33,7 +33,7 @@ import { formatStatusLabel } from './candidatesUiUtils';
 // Pipeline stages — exported because tests and parents still import the
 // list. The drawer itself no longer renders a segmented control for
 // these (stage transitions happen automatically via Send assessment /
-// Reject / Move-to-Workable), but keeping the export avoids ripple-out
+// Reject / hand-back to the owning ATS), but keeping the export avoids ripple-out
 // breakage in callers that read it.
 export const TRIAGE_STAGE_OPTIONS = [
   { value: 'applied', label: 'Applied' },
@@ -42,7 +42,7 @@ export const TRIAGE_STAGE_OPTIONS = [
   { value: 'review', label: 'Review' },
 ];
 
-const formatWorkableStageOption = (stage) => {
+const formatAtsStageOption = (stage) => {
   // Workable's /stages payloads come in two shapes: ``{slug, kind, name}``
   // from the integration sync and ``{id, name}`` from a plain list call.
   // Previously this only checked ``slug || kind``, so the second shape
@@ -51,7 +51,11 @@ const formatWorkableStageOption = (stage) => {
   // Fall through to ``id`` so either shape yields a stable identifier.
   const value = stage?.slug || stage?.kind || stage?.id || '';
   const name = stage?.name || stage?.kind || stage?.slug || (stage?.id != null ? String(stage.id) : 'Stage');
-  return { value: String(value), label: String(name) };
+  return {
+    value: String(value),
+    label: String(name),
+    kind: String(stage?.kind || stage?.slug || value),
+  };
 };
 
 export const candidateReportHref = (application, fromRoleId = null) => {
@@ -122,6 +126,12 @@ export function CandidateTriageDrawer({
   stageBusy = false,
   assessmentBusy = false,
   rejectBusy = false,
+  atsProvider = null,
+  atsStages = null,
+  loadingAtsStages = null,
+  atsMoveBusy = null,
+  // Legacy aliases retained for direct callers while the role workspace uses
+  // the provider-neutral props above.
   workableStages = [],
   loadingWorkableStages = false,
   workableMoveBusy = false,
@@ -131,11 +141,12 @@ export function CandidateTriageDrawer({
   onSendAssessment,
   onViewFullReport,
   onReject,
+  onMoveToAtsStage,
   onMoveToWorkableStage,
   // True when the agent is actively running this role. Sending an assessment
   // is then a redundant mirror of what the agent does automatically, so the
   // Send control is demoted to a quiet manual override. Every decisive HITL
-  // control (move forward, reject, move-to-Workable) stays as-is.
+  // control (move forward, reject, ATS hand-back) stays as-is.
   agentRunning = false,
 }) {
   // Default to the "move forward" tab — recruiters open the drawer on a
@@ -143,7 +154,7 @@ export function CandidateTriageDrawer({
   // next pipeline step is the dominant action.
   const [activeTab, setActiveTab] = useState('move');
   const [selectedTaskId, setSelectedTaskId] = useState('');
-  // ``selectedMoveAction`` is either a Workable stage slug or
+  // ``selectedMoveAction`` is either an external ATS stage/status or
   // ``REJECT_VALUE``. One picker, one confirm button.
   const [selectedMoveAction, setSelectedMoveAction] = useState('');
   const [showDetails, setShowDetails] = useState(false);
@@ -154,17 +165,84 @@ export function CandidateTriageDrawer({
   const candidateName = formatCandidateTitle(application);
   const roleLabel = application?.role_name || application?.candidate_position || 'Role';
   const currentStage = String(application?.pipeline_stage || 'applied').toLowerCase();
-  const sourceLabel = application?.workable_sourced || application?.workable_candidate_id
-    ? 'Imported from Workable'
+  const applicationSource = String(application?.source || '').toLowerCase();
+  const hasWorkableLink = Boolean(application?.workable_candidate_id);
+  const hasBullhornLink = Boolean(
+    application?.bullhorn_job_submission_id
+    || application?.external_refs?.bullhorn_job_submission_id,
+  );
+  const applicationAtsProvider = hasBullhornLink || applicationSource === 'bullhorn'
+    ? 'bullhorn'
+    : hasWorkableLink || application?.workable_sourced || applicationSource === 'workable'
+      ? 'workable'
+      : null;
+  const resolvedAtsProvider = atsProvider
+    || applicationAtsProvider;
+  const providerLabel = resolvedAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable';
+  const sourceLabel = applicationAtsProvider
+    ? `Imported from ${applicationAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable'}`
     : 'Added in Taali';
   const canAct = application?.application_outcome === 'open';
-  const hasWorkableLink = Boolean(application?.workable_candidate_id);
-  const showMoveToWorkable = hasWorkableLink && Boolean(onMoveToWorkableStage);
-  const workableStageOptions = useMemo(
-    () => (Array.isArray(workableStages) ? workableStages.map(formatWorkableStageOption) : []),
-    [workableStages],
+  const hasAtsLink = resolvedAtsProvider === 'workable'
+    ? hasWorkableLink
+    : resolvedAtsProvider === 'bullhorn'
+      ? hasBullhornLink
+      : false;
+  const moveToAtsStage = onMoveToAtsStage || onMoveToWorkableStage;
+  const showMoveToAts = hasAtsLink && Boolean(moveToAtsStage);
+  const resolvedAtsStages = Array.isArray(atsStages) ? atsStages : workableStages;
+  const atsStageOptions = useMemo(
+    () => (Array.isArray(resolvedAtsStages) ? resolvedAtsStages.map(formatAtsStageOption) : []),
+    [resolvedAtsStages],
   );
-  const currentWorkableStage = String(application?.workable_stage || '').toLowerCase();
+  const currentAtsStage = String(
+    resolvedAtsProvider === 'bullhorn'
+      ? (application?.external_stage_raw || application?.bullhorn_status || application?.external_stage_normalized || '')
+      : (application?.workable_stage || application?.external_stage_raw || ''),
+  ).trim();
+  const currentAtsStageKey = currentAtsStage.toLowerCase();
+  const currentNormalizedAtsStageKey = String(application?.external_stage_normalized || '')
+    .trim()
+    .toLowerCase();
+  const outcomeWriteback = application?.integration_sync_state?.outcome_writeback;
+  const outcomeWritebackStatus = String(outcomeWriteback?.status || '').trim().toLowerCase();
+  const outcomeWritebackTarget = String(outcomeWriteback?.target_outcome || '').trim().toLowerCase();
+  const outcomeWritebackProvider = String(outcomeWriteback?.provider || '').trim().toLowerCase();
+  const closedOutcomeAtsCopy = (() => {
+    const outcome = String(application?.application_outcome || '').trim().toLowerCase();
+    if (!hasAtsLink || outcome !== 'rejected') return null;
+    const receiptMatches = outcomeWritebackTarget === outcome
+      && (!outcomeWritebackProvider || outcomeWritebackProvider === resolvedAtsProvider);
+
+    // Workable outcome writes are synchronous: the route persists a confirmed
+    // receipt with the local close. Older rows become provable after read-sync
+    // sets workable_disqualified. Never infer hired/withdrawn provider actions;
+    // those outcomes are local-only today.
+    if (resolvedAtsProvider === 'workable') {
+      return (receiptMatches && outcomeWritebackStatus === 'confirmed')
+        || application?.workable_disqualified === true
+        ? 'rejected in Workable'
+        : null;
+    }
+
+    if (resolvedAtsProvider !== 'bullhorn') return null;
+    if ((receiptMatches && outcomeWritebackStatus === 'confirmed')
+      || currentNormalizedAtsStageKey === 'rejected') {
+      return 'rejected in Bullhorn';
+    }
+    if (receiptMatches && outcomeWritebackStatus === 'queued') {
+      return 'Bullhorn rejection queued';
+    }
+    if (receiptMatches && outcomeWritebackStatus === 'failed') {
+      return 'Bullhorn rejection sync failed';
+    }
+    return null;
+  })();
+  const isPostHandoverAtsStage = resolvedAtsProvider === 'bullhorn'
+    ? currentNormalizedAtsStageKey === 'advanced' || currentStage === 'advanced'
+    : isPostHandoverWorkableStage(currentAtsStage);
+  const atsStagesLoading = loadingAtsStages == null ? loadingWorkableStages : loadingAtsStages;
+  const atsMovementBusy = atsMoveBusy == null ? workableMoveBusy : atsMoveBusy;
 
   // Reset selections whenever a different candidate's drawer opens.
   useEffect(() => {
@@ -185,13 +263,13 @@ export function CandidateTriageDrawer({
   }, [applicationId, roleTasks]);
 
   // Drop the stage selection if the underlying stage list changes (rare,
-  // but happens after the role's Workable shortcode is fetched).
+  // but happens after the provider stage catalogue is fetched).
   useEffect(() => {
     setSelectedMoveAction((current) => {
       if (!current || current === REJECT_VALUE) return current;
-      return workableStageOptions.some((stage) => stage.value === current) ? current : '';
+      return atsStageOptions.some((stage) => stage.value === current) ? current : '';
     });
-  }, [applicationId, workableStageOptions]);
+  }, [applicationId, atsStageOptions]);
 
   // Bring the drawer into view whenever the open application changes.
   // ``block: 'nearest'`` only scrolls if the drawer is currently off-
@@ -213,7 +291,7 @@ export function CandidateTriageDrawer({
   const reportHref = candidateReportHref(application, roleId);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
   const isRejectSelected = selectedMoveAction === REJECT_VALUE;
-  const moveBusy = isRejectSelected ? rejectBusy : workableMoveBusy;
+  const moveBusy = isRejectSelected ? rejectBusy : atsMovementBusy;
 
   const handleReportClick = (event) => {
     if (stopPlainNavigation(event)) return;
@@ -227,15 +305,16 @@ export function CandidateTriageDrawer({
       onReject?.(application);
       return;
     }
-    onMoveToWorkableStage?.(application, selectedMoveAction);
+    const picked = atsStageOptions.find((stage) => stage.value === selectedMoveAction);
+    moveToAtsStage?.(application, selectedMoveAction, picked?.label || null);
   };
 
   const moveButtonLabel = (() => {
     if (moveBusy) return isRejectSelected ? 'Rejecting…' : 'Sending…';
     if (isRejectSelected) return 'Reject candidate';
     if (selectedMoveAction) {
-      const picked = workableStageOptions.find((s) => s.value === selectedMoveAction);
-      return picked ? `Send to Workable: ${picked.label}` : 'Send to Workable';
+      const picked = atsStageOptions.find((s) => s.value === selectedMoveAction);
+      return picked ? `Send to ${providerLabel}: ${picked.label}` : `Send to ${providerLabel}`;
     }
     return 'Pick an option';
   })();
@@ -267,12 +346,12 @@ export function CandidateTriageDrawer({
             <span className="ctc-meta-stage">
               Stage <span className="ctc-stage-chip">{formatStatusLabel(currentStage)}</span>
             </span>
-            {currentWorkableStage ? (
+            {currentAtsStage ? (
               <>
                 <span className="ctc-meta-dot" />
                 <span className="ctc-meta-workable">
-                  Workable <span className="ctc-stage-chip ctc-stage-chip-workable">
-                    {formatStatusLabel(currentWorkableStage)}
+                  {providerLabel} <span className={`ctc-stage-chip ${resolvedAtsProvider === 'workable' ? 'ctc-stage-chip-workable' : ''}`.trim()}>
+                    {formatStatusLabel(currentAtsStage)}
                   </span>
                 </span>
               </>
@@ -295,14 +374,16 @@ export function CandidateTriageDrawer({
           <div className="ctc-scores">
             <span>Pre-screen <strong>{formatScore(resolvePreScreenScore(application))}</strong></span>
             <span>Taali <strong>{formatScore(resolveTaaliScore(application))}</strong></span>
-            <span>
-              Workable{' '}
-              {application.workable_score_raw != null ? (
-                <WorkableScorePip value={application.workable_score_raw} />
-              ) : (
-                <strong>—</strong>
-              )}
-            </span>
+            {resolvedAtsProvider === 'workable' ? (
+              <span>
+                Workable{' '}
+                {application.workable_score_raw != null ? (
+                  <WorkableScorePip value={application.workable_score_raw} />
+                ) : (
+                  <strong>—</strong>
+                )}
+              </span>
+            ) : null}
             <span className="ctc-grow" />
             <span className="ctc-meta-faint">{application?.candidate_email || 'No email captured'}</span>
           </div>
@@ -322,17 +403,7 @@ export function CandidateTriageDrawer({
         <div className="ctc-closed-banner">
           <span>
             Application <strong>{application?.application_outcome || 'closed'}</strong>
-            {(() => {
-              // Workable status copy must match the actual outcome — a
-              // hired or withdrawn candidate isn't "disqualified in
-              // Workable", they're moved to a hired stage / dropped.
-              if (!application?.workable_candidate_id) return null;
-              const outcome = application?.application_outcome;
-              if (outcome === 'rejected') return ' · disqualified in Workable';
-              if (outcome === 'hired') return ' · moved to hired in Workable';
-              if (outcome === 'withdrawn') return ' · withdrawn in Workable';
-              return null;
-            })()}
+            {closedOutcomeAtsCopy ? ` · ${closedOutcomeAtsCopy}` : null}
             . No further actions can be taken.
           </span>
         </div>
@@ -490,14 +561,19 @@ export function CandidateTriageDrawer({
           aria-labelledby="candidate-action-tab-move"
         >
           <div className="ctc-cards">
-            {showMoveToWorkable ? (
-              loadingWorkableStages ? (
-                <div className="ctc-empty">Loading Workable stages…</div>
-              ) : workableStageOptions.length === 0 ? (
-                <div className="ctc-empty">No Workable stages found for this role.</div>
+            {showMoveToAts ? (
+              atsStagesLoading ? (
+                <div className="ctc-empty">Loading {providerLabel} stages…</div>
+              ) : atsStageOptions.length === 0 ? (
+                <div className="ctc-empty">No mapped {providerLabel} stages found for this role.</div>
               ) : (
-                workableStageOptions.map((stage) => {
-                  const isCurrent = stage.value === currentWorkableStage;
+                atsStageOptions.map((stage) => {
+                  const isCurrent = [stage.value, stage.label, stage.kind]
+                    .map((value) => String(value || '').trim().toLowerCase())
+                    .some((value) => value && (
+                      value === currentAtsStageKey
+                      || value === currentNormalizedAtsStageKey
+                    ));
                   const isOn = selectedMoveAction === stage.value;
                   return (
                     <button
@@ -505,6 +581,7 @@ export function CandidateTriageDrawer({
                       type="button"
                       className={`ctc-card ${isOn ? 'on' : ''}`}
                       disabled={!canAct || isCurrent}
+                      aria-pressed={isOn}
                       onClick={() => setSelectedMoveAction(stage.value)}
                     >
                       <div className="ctc-card-title">{stage.label}</div>
@@ -515,27 +592,26 @@ export function CandidateTriageDrawer({
               )
             ) : null}
             {/* Reject is the only "move out of pipeline" option that
-                always appears, even for non-Workable candidates. Visually
+                always appears, even for native candidates. Visually
                 differentiated by a deeper plum tint per the platform's
                 "purple variations, not red/amber/green" convention. */}
             <button
               type="button"
               className={`ctc-card ctc-card-reject ${selectedMoveAction === REJECT_VALUE ? 'on' : ''}`}
               disabled={!canAct}
+              aria-pressed={selectedMoveAction === REJECT_VALUE}
               onClick={() => setSelectedMoveAction(REJECT_VALUE)}
             >
               <div className="ctc-card-title">Reject</div>
               <div className="ctc-card-sub">Closes the application</div>
             </button>
           </div>
-          {/* Reject is always allowed — even for a candidate the recruiter has
-              advanced in Workable — but a later-stage reject disqualifies them
-              in Workable, so warn clearly first. Advice, not a block. */}
-          {isRejectSelected && isPostHandoverWorkableStage(application?.workable_stage) ? (
+          {/* Reject is always allowed, including after provider hand-off. A
+              later-stage reject updates the owning ATS, so warn first. */}
+          {isRejectSelected && isPostHandoverAtsStage ? (
             <div className="ctc-reject-warning" role="alert">
               <strong>Heads up —</strong> this candidate is in{' '}
-              <strong>{formatStatusLabel(application?.workable_stage)}</strong> in Workable
-              {application?.workable_candidate_id ? ', so rejecting will disqualify them there' : ''}.
+              <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}, so rejecting will update them there.
               You can still reject — just make sure that&apos;s intended.
             </div>
           ) : null}

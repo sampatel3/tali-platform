@@ -1,4 +1,4 @@
-"""Create a Taali related-role scoring view over a Workable candidate pool.
+"""Create a Taali related-role scoring view over an ATS candidate pool.
 
 The persisted model and API routes retain their historical ``sister`` names,
 but product surfaces use the clearer term "related role".  Keeping creation in
@@ -17,12 +17,8 @@ from sqlalchemy.orm import Session
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
-from ..models.sister_role_evaluation import (
-    SISTER_EVAL_ERROR,
-    SISTER_EVAL_PENDING,
-    SisterRoleEvaluation,
-)
 from ..tasks.sister_role_tasks import score_sister_role
+from .ats_role_lifecycle import ats_job_lifecycle
 from .sister_role_service import ensure_sister_evaluations
 
 logger = logging.getLogger("taali.related_roles")
@@ -51,11 +47,11 @@ def get_related_role_source(
         raise RelatedRoleError("Role not found.")
     if str(role.role_kind or ROLE_KIND_STANDARD) == ROLE_KIND_SISTER:
         raise RelatedRoleError(
-            "Create a related role from the original Workable role, not from another related role."
+            "Create a related role from the original ATS role, not from another related role."
         )
-    if not role.workable_job_id:
+    if not ats_job_lifecycle(role).external_job_id:
         raise RelatedRoleError(
-            "Related roles currently require a Workable-linked original role."
+            "Related roles require a Workable- or Bullhorn-linked original role."
         )
     return role
 
@@ -95,10 +91,13 @@ def preview_related_role(
         db, role_id=role_id, organization_id=organization_id
     )
     counts = related_role_roster_counts(db, source)
+    source_ats_provider = ats_job_lifecycle(source).provider
+    provider_label = "Bullhorn" if source_ats_provider == "bullhorn" else "Workable"
     return {
         "type": "related_role_preview",
         "source_role_id": int(source.id),
         "source_role_name": source.name,
+        "source_ats_provider": source_ats_provider,
         "candidates_total": counts["total"],
         "candidates_with_cv": counts["with_cv"],
         "candidates_missing_cv": counts["missing_cv"],
@@ -108,25 +107,9 @@ def preview_related_role(
         "message": (
             f"The related role will share {counts['total']} candidates with "
             f"{source.name}; {counts['with_cv']} can be scored now. Candidate "
-            "stages and actions will continue to write back to the original Workable job."
+            f"stages and actions will continue to write back to the original {provider_label} job."
         ),
     }
-
-
-def _mark_dispatch_error(db: Session, *, role_id: int) -> None:
-    db.query(SisterRoleEvaluation).filter(
-        SisterRoleEvaluation.role_id == int(role_id),
-        SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
-    ).update(
-        {
-            SisterRoleEvaluation.status: SISTER_EVAL_ERROR,
-            SisterRoleEvaluation.error_message: (
-                "Scoring worker unavailable; retry the roster"
-            ),
-        },
-        synchronize_session=False,
-    )
-    db.commit()
 
 
 def create_related_role(
@@ -186,28 +169,33 @@ def create_related_role(
 
     try:
         score_sister_role.apply_async(args=[related.id], queue="scoring")
-    except Exception:  # pragma: no cover - persisted role remains retryable
-        logger.exception(
-            "Failed to dispatch initial related-role scoring role_id=%s", related.id
+    except Exception as exc:  # pragma: no cover - Beat owns durable recovery
+        logger.error(
+            "Initial related-role kick unavailable role_id=%s error_code=queue_unavailable error_type=%s",
+            related.id,
+            type(exc).__name__,
         )
-        _mark_dispatch_error(db, role_id=int(related.id))
     return related, evaluation_counts
 
 
 def related_role_created_payload(
     related: Role, evaluation_counts: dict[str, int]
 ) -> dict[str, Any]:
+    owner = getattr(related, "ats_owner_role", None)
+    source_ats_provider = ats_job_lifecycle(owner).provider
+    provider_label = "Bullhorn" if source_ats_provider == "bullhorn" else "Workable"
     return {
         "type": "related_role_created",
         "created": True,
         "role_id": int(related.id),
         "role_name": related.name,
         "source_role_id": int(related.ats_owner_role_id),
+        "source_ats_provider": source_ats_provider,
         "evaluation_counts": dict(evaluation_counts),
         "frontend_url": f"/jobs/{related.id}",
         "message": (
             f"Created {related.name} and queued its shared candidate roster for scoring. "
-            "Candidate stages and actions remain coupled to the original Workable role."
+            f"Candidate stages and actions remain coupled to the original {provider_label} role."
         ),
     }
 

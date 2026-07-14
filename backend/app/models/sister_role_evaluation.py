@@ -20,12 +20,14 @@ from ..platform.database import Base
 
 SISTER_EVAL_PENDING = "pending"
 SISTER_EVAL_RUNNING = "running"
+SISTER_EVAL_RETRY_WAIT = "retry_wait"
 SISTER_EVAL_DONE = "done"
 SISTER_EVAL_ERROR = "error"
 SISTER_EVAL_UNSCORABLE = "unscorable"
 SISTER_EVAL_STATUSES = {
     SISTER_EVAL_PENDING,
     SISTER_EVAL_RUNNING,
+    SISTER_EVAL_RETRY_WAIT,
     SISTER_EVAL_DONE,
     SISTER_EVAL_ERROR,
     SISTER_EVAL_UNSCORABLE,
@@ -47,6 +49,7 @@ class SisterRoleEvaluation(Base):
             name="uq_sister_evaluations_role_application",
         ),
         Index("ix_sister_evaluations_role_status", "role_id", "status"),
+        Index("ix_sister_evaluations_recovery", "status", "next_attempt_at"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -77,6 +80,10 @@ class SisterRoleEvaluation(Base):
     trace_id = Column(String(length=100), nullable=True)
     cache_hit = Column(Boolean, nullable=False, default=False, server_default="false")
     error_message = Column(Text, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    dispatch_attempted_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_code = Column(String(length=100), nullable=True)
     queued_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
     scored_at = Column(DateTime(timezone=True), nullable=True)

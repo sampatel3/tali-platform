@@ -188,9 +188,9 @@ def try_auto_resolve_knockout(
         .filter(Organization.id == int(live_role.organization_id))
         .one_or_none()
     )
-    from ...components.integrations.resolver import resolve_ats_provider
+    from ...components.integrations.resolver import resolve_application_ats_provider
 
-    provider = resolve_ats_provider(org, db)
+    provider = resolve_application_ats_provider(org, db, application)
     provider_name = str(getattr(provider, "ats", "") or "").strip().lower()
     provider_application_id = _provider_application_id(provider_name, application)
     ats_written = False

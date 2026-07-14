@@ -157,6 +157,11 @@ export const roles = {
   // the end of the Tali pipeline (typically when stage === 'review').
   moveApplicationToWorkableStage: (applicationId, data) =>
     api.post(`/applications/${applicationId}/workable/move-stage`, data),
+  // Provider-neutral ATS hand-back. The backend resolves the application's
+  // owning provider (Workable or Bullhorn) and applies the same target-stage
+  // contract without making the role UI branch on endpoint names.
+  moveApplicationToAtsStage: (applicationId, data) =>
+    api.post(`/applications/${applicationId}/ats/move-stage`, data),
   uploadApplicationCv: (applicationId, file) => {
     const form = new FormData();
     form.append('file', file);
@@ -257,6 +262,7 @@ export const roles = {
   // Background jobs panel: history listing across scoring batch / CV fetch / graph sync.
   // Workable sync history is at /workable/sync/runs.
   backgroundJobsRuns: (limit = 20) => api.get('/background-jobs/runs', { params: { limit } }),
+  backgroundJobRun: (runId) => api.get(`/background-jobs/runs/${runId}`),
   // Sourcing assist (copy-paste artefacts — no LinkedIn API/scraping).
   // Deterministic X-ray + LinkedIn boolean plus a metered refined expansion.
   sourcingSearches: (roleId) => api.post(`/roles/${roleId}/sourcing-searches`),

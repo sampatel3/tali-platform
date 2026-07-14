@@ -118,6 +118,29 @@ def test_health_exposes_live_production_usage_meter_mode(client, monkeypatch):
     }
 
 
+def test_health_names_connector_availability_separately_from_workable_oauth(
+    client, monkeypatch
+):
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(settings, "WORKABLE_CLIENT_ID", "")
+    monkeypatch.setattr(settings, "WORKABLE_CLIENT_SECRET", "")
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", False)
+
+    payload = client.get("/health").json()
+    integrations = payload["integrations"]
+
+    # The legacy key remains, but reflects connector availability. A deployment
+    # can therefore serve org-scoped direct-token Workable connections even when
+    # it has no global OAuth app configured.
+    assert integrations["workable_configured"] is True
+    assert integrations["workable_connector_enabled"] is True
+    assert integrations["workable_oauth_app_configured"] is False
+    assert integrations["bullhorn_connector_enabled"] is False
+    assert all("connected_org" not in key for key in integrations)
+
+
 def test_api_root(client):
     """API root should return some response."""
     resp = client.get("/api/v1/")

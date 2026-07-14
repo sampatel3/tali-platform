@@ -63,20 +63,21 @@ class StageMapping:
 def _remember_confirmed_placed_status(
     org: Organization, categorization: dict[str, str | None]
 ) -> None:
-    """Persist the org's confirmed/placed status onto ``org.bullhorn_config``.
+    """Persist Bullhorn's canonical write-target categorization settings.
 
     Reassigns the JSON dict (SQLAlchemy tracks JSON mutation by identity) and
     preserves any other config keys. No-op when the setting is absent. Idempotent:
     re-seeding just re-writes the same value.
     """
-    status = (categorization.get(_CONFIRMED_PLACED_SETTING) or "").strip()
-    if not status:
-        return
     config = dict(org.bullhorn_config) if isinstance(org.bullhorn_config, dict) else {}
-    if config.get(_CONFIRMED_PLACED_SETTING) == status:
-        return
-    config[_CONFIRMED_PLACED_SETTING] = status
-    org.bullhorn_config = config
+    changed = False
+    for setting, _stage, _is_reject in _CATEGORIZATION_DEFAULTS:
+        status = (categorization.get(setting) or "").strip()
+        if status and config.get(setting) != status:
+            config[setting] = status
+            changed = True
+    if changed:
+        org.bullhorn_config = config
 
 
 def resolve_stage(db: Session, org: Organization, remote_status: str | None) -> StageMapping | None:
@@ -140,6 +141,38 @@ def unmapped_statuses(db: Session, org: Organization) -> list[str]:
         )
     }
     return sorted(seen - mapped)
+
+
+def write_target_ambiguity_detail(
+    org: Organization, mappings: list[tuple[str, str, bool]]
+) -> str | None:
+    """Return an editor error when consequential write targets are ambiguous."""
+    config = org.bullhorn_config if isinstance(org.bullhorn_config, dict) else {}
+    canonical_reject = str(config.get("rejectedJobResponseStatus") or "").strip()
+    reject_targets = [remote for remote, _stage, is_reject in mappings if is_reject]
+    if len(reject_targets) > 1 and canonical_reject not in reject_targets:
+        return (
+            "Multiple Bullhorn reject statuses are mapped but no canonical "
+            "rejectedJobResponseStatus selects the write target. Keep one "
+            "reject target or refresh Bullhorn categorization settings."
+        )
+
+    placed_status = str(config.get("confirmedJobResponseStatus") or "").strip()
+    canonical_advance = str(
+        config.get("interviewScheduledJobResponseStatus") or ""
+    ).strip()
+    advance_targets = [
+        remote
+        for remote, stage, is_reject in mappings
+        if stage == "advanced" and not is_reject and remote != placed_status
+    ]
+    if len(advance_targets) > 1 and canonical_advance not in advance_targets:
+        return (
+            "Multiple Bullhorn advance statuses are mapped but no canonical "
+            "interviewScheduledJobResponseStatus selects the write target. "
+            "Keep one advance target or refresh Bullhorn categorization settings."
+        )
+    return None
 
 
 def seed_stage_map_from_categorization(

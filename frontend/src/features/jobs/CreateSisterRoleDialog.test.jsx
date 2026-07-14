@@ -7,6 +7,8 @@ import CreateSisterRoleDialog from './CreateSisterRoleDialog';
 const sourceRole = {
   id: 12,
   name: 'AI Engineer',
+  ats_provider: 'workable',
+  external_job_id: 'WK-12',
   job_spec_text: 'Original AI engineer specification with Python, production ML, evaluation, and observability responsibilities.',
 };
 
@@ -68,5 +70,30 @@ describe('CreateSisterRoleDialog', () => {
     );
 
     expect(screen.getByRole('button', { name: /create and score candidates/i })).toBeDisabled();
+  });
+
+  it('names Bullhorn as the owning provider for a Bullhorn source role', async () => {
+    const rolesApi = {
+      previewSister: vi.fn().mockResolvedValue({
+        data: { candidates_total: 2, candidates_with_cv: 2, candidates_missing_cv: 0 },
+      }),
+      createSister: vi.fn(),
+    };
+    render(
+      <CreateSisterRoleDialog
+        open
+        sourceRole={{
+          ...sourceRole,
+          ats_provider: 'bullhorn',
+          external_job_id: 'BH-12',
+        }}
+        rolesApi={rolesApi}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/actions stay coupled to the original Bullhorn job/i))
+      .toBeInTheDocument();
   });
 });

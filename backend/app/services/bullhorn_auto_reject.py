@@ -48,10 +48,10 @@ def try_bullhorn_reject(
     swallowed). Mirrors ``actions.reject_application._try_bullhorn_reject``.
     """
     from ..components.integrations.bullhorn.provider import BullhornProvider
-    from ..components.integrations.resolver import resolve_ats_provider
+    from ..components.integrations.resolver import resolve_application_ats_provider
     from .workable_actions_service import WorkableWritebackError
 
-    provider = resolve_ats_provider(org, db)
+    provider = resolve_application_ats_provider(org, db, app)
     if not isinstance(provider, BullhornProvider):
         return False
     if not (getattr(app, "bullhorn_job_submission_id", "") or "").strip():
@@ -63,7 +63,11 @@ def try_bullhorn_reject(
     except WorkableWritebackError:
         raise  # strict (batch) path — propagate so the batch re-queues.
     except Exception as exc:  # pragma: no cover — defensive
-        logger.exception("bullhorn auto-reject raised unexpectedly (application_id=%s)", app.id)
+        logger.error(
+            "bullhorn auto-reject raised unexpectedly application_id=%s error_type=%s",
+            app.id,
+            type(exc).__name__,
+        )
         # Unknown provider outcome is never success.  Returning True here used
         # to flip the local outcome to rejected even when Bullhorn failed,
         # producing split-brain ATS state.
@@ -82,8 +86,11 @@ def try_bullhorn_reject(
                     "trigger": trigger,
                 },
             )
-        except Exception:
-            logger.exception("failed to record Bullhorn write-back exception")
+        except Exception as record_exc:
+            logger.error(
+                "failed to record Bullhorn write-back exception error_type=%s",
+                type(record_exc).__name__,
+            )
         return False
     if result.get("success"):
         append_application_event(

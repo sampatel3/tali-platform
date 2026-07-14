@@ -306,6 +306,53 @@ def test_activation_runs_large_phase_one_even_with_old_agent_run_in_flight(db):
     assert refreshed.agent_bootstrap_status == "ready"
 
 
+@pytest.mark.parametrize("terminal_kind", ("local", "workable", "bullhorn"))
+def test_cohort_tick_does_not_start_for_terminal_job_lifecycle(
+    db, terminal_kind: str
+):
+    from app.models.role import JOB_STATUS_CANCELLED, JOB_STATUS_OPEN
+
+    _org, role = _seed_role(db)
+    role.job_status = JOB_STATUS_OPEN
+    if terminal_kind == "local":
+        role.job_status = JOB_STATUS_CANCELLED
+    elif terminal_kind == "workable":
+        role.source = "workable"
+        role.workable_job_id = f"WORK-{role.id}"
+        role.workable_job_data = {"state": "closed"}
+    else:
+        role.source = "bullhorn"
+        role.bullhorn_job_order_id = str(92_000 + int(role.id))
+        role.bullhorn_job_data = {"status": "Closed", "isOpen": False}
+    db.commit()
+
+    with patch("app.tasks.agent_tasks._auto_enqueue_scoring") as enqueue, patch(
+        "app.agent_runtime.orchestrator.run_cycle"
+    ) as run_cycle:
+        result = agent_cohort_tick_role.run(int(role.id))
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "not_eligible"
+    assert "not open" in result["detail"] or "not live" in result["detail"]
+    enqueue.assert_not_called()
+    run_cycle.assert_not_called()
+
+
+def test_auto_enqueue_boundary_rejects_terminal_role(db):
+    from app.models.role import JOB_STATUS_CANCELLED
+
+    org, role = _seed_role(db)
+    role.job_status = JOB_STATUS_CANCELLED
+    _seed_app(db, org=org, role=role)
+    db.commit()
+
+    with patch("app.services.cv_score_orchestrator.enqueue_score") as enqueue:
+        count = _auto_enqueue_scoring(db, role=role)
+
+    assert count == 0
+    enqueue.assert_not_called()
+
+
 def test_successful_tick_persists_bootstrap_acknowledgement(db):
     _org, role = _seed_role(db)
     role.agent_bootstrap_status = "starting"

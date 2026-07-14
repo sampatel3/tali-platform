@@ -9,7 +9,7 @@ The Workable sync history lives in its own table — see
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
@@ -28,6 +28,14 @@ def _iso(value):
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
+
+
+def _public_counters(value) -> dict:
+    """Strip encrypted/internal replay state from recruiter-facing telemetry."""
+
+    counters = dict(value or {})
+    counters.pop("recovery_payload", None)
+    return counters
 
 
 @router.get("/runs")
@@ -68,7 +76,7 @@ def list_background_job_runs(
                 "scope_id": r.scope_id,
                 "role_name": role_names.get(int(r.scope_id)) if r.scope_kind == SCOPE_KIND_ROLE else None,
                 "status": r.status,
-                "counters": dict(r.counters or {}),
+                "counters": _public_counters(r.counters),
                 "error": r.error,
                 "started_at": _iso(r.started_at),
                 "finished_at": _iso(r.finished_at),
@@ -76,4 +84,36 @@ def list_background_job_runs(
             }
             for r in rows
         ]
+    }
+
+
+@router.get("/runs/{run_id}")
+def get_background_job_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return one tracked run, scoped strictly to the caller's workspace."""
+
+    row = (
+        db.query(BackgroundJobRun)
+        .filter(
+            BackgroundJobRun.id == int(run_id),
+            BackgroundJobRun.organization_id == current_user.organization_id,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Background job not found")
+    return {
+        "id": row.id,
+        "kind": row.kind,
+        "scope_kind": row.scope_kind,
+        "scope_id": row.scope_id,
+        "status": row.status,
+        "counters": _public_counters(row.counters),
+        "error": row.error,
+        "started_at": _iso(row.started_at),
+        "finished_at": _iso(row.finished_at),
+        "cancel_requested_at": _iso(row.cancel_requested_at),
     }
