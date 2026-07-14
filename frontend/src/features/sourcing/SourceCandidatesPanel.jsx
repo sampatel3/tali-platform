@@ -4,6 +4,7 @@ import { ChevronDown, Copy, UserPlus } from 'lucide-react';
 import { roles as rolesApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import './sourcingPanels.css';
 
 // "Source candidates" toolbox owned by the standalone Sourcing workspace.
 // Search and outreach artefacts are run by the recruiter on LinkedIn / Google —

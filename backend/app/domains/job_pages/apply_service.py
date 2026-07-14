@@ -139,6 +139,52 @@ def _resolve_or_create_candidate(
     return fresh
 
 
+def _promote_matching_prospect(
+    db: Session,
+    org_id: int,
+    candidate: Candidate,
+    application: CandidateApplication,
+    *,
+    email: str | None,
+) -> None:
+    """Carry a sourced prospect's provenance onto the application it engaged into.
+
+    When the applicant matches an existing prospect for this org (same
+    normalized email — prospects are email-keyed), stamp the application's
+    ``source_strategy`` as ``"sourced"`` (it would otherwise read ``"inbound"``)
+    and flip the prospect to ``converted``, linking it to the resolved
+    candidate. This runs only for an ENGAGED applicant (someone who actually
+    applied), so it never triggers scoring for un-engaged prospects — scoring
+    stays event-triggered on the apply itself. A no-op when there's no email or
+    no matching prospect; never creates a prospect.
+    """
+    from ...models.prospect import Prospect, PROSPECT_STATUS_CONVERTED
+    from ...services.email_suppression_service import normalize_email
+
+    email_clean = normalize_email(email or "")
+    if not email_clean:
+        return
+    prospect = (
+        db.query(Prospect)
+        .filter(
+            Prospect.organization_id == org_id,
+            Prospect.email == email_clean,
+        )
+        .first()
+    )
+    if prospect is None:
+        return
+    application.source_strategy = "sourced"
+    # Only fill an empty source_name — never clobber an attribution the apply
+    # form already supplied.
+    if not (application.source_name or "").strip() and (prospect.source_name or "").strip():
+        application.source_name = prospect.source_name
+    if prospect.candidate_id is None:
+        prospect.candidate_id = candidate.id
+    prospect.status = PROSPECT_STATUS_CONVERTED
+    db.flush()
+
+
 def _restore_soft_deleted_application(
     db: Session,
     application: CandidateApplication,
@@ -270,6 +316,11 @@ def submit_application(
         )
         db.add(application)
         db.flush()
+
+    # Provenance: if this applicant was a sourced prospect, the application it
+    # engaged into should carry the "sourced" strategy and the prospect flips to
+    # converted. Runs for both a fresh and a reactivated application.
+    _promote_matching_prospect(db, org_id, candidate, application, email=email)
 
     if not passed:
         # Stamp the recommended-reject state (free-text), mirroring the

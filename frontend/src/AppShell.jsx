@@ -143,8 +143,8 @@ const CandidateStandingReportPage = lazy(() =>
 const JobsPage = lazy(() =>
   import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
 );
-const SourcingPage = lazy(() =>
-  import('./features/sourcing/SourcingPage')
+const ProspectsPage = lazy(() =>
+  import('./features/candidates/ProspectsPage')
 );
 const UnsubscribePage = lazy(() =>
   import('./features/outreach/UnsubscribePage')
@@ -242,7 +242,6 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/home',
     '/jobs',
     '/requisitions',
-    '/sourcing',
     '/assessments',
     '/candidates',
     '/analytics',
@@ -749,20 +748,6 @@ function AppContent() {
         )}
       />
 
-      {/* Outreach foundations — sourced-prospect list + CSV import. Protected
-          recruiter surface (see isProtectedRecruiterPath). */}
-      <Route
-        path="/sourcing"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <SourcingPage
-              onNavigate={navigateToPage}
-              NavComponent={DashboardNavWithMode}
-            />
-          </Suspense>
-        )}
-      />
-
       {/* Clients are managed directly in Settings → Clients (embedded
           ClientsManager); there is no standalone /clients page. Per-client
           pipeline lives on the Jobs page's client filter. */}
@@ -795,12 +780,22 @@ function AppContent() {
         )}
       />
 
-      {/* The standalone /candidates directory is deprecated — the
-          triage drawer now lives on the role page (JobPipelinePage), so
-          there is no separate "all candidates" list. Redirect any stale
-          bookmarks to /jobs. The drill-down route /candidates/:id
-          stays mounted below; that's the standing report, still used. */}
-      <Route path="/candidates" element={<Navigate to="/jobs" replace />} />
+      {/* The Candidates tab surfaces org-level prospects — not-yet-applied
+          contacts (CSV import, manual add, the job page's Find-candidates
+          helper), plus the outreach campaign machinery ("Reach out"). Per-role
+          candidate lists still live under each job. The drill-down route
+          /candidates/:id below is the standing report, still used. */}
+      <Route
+        path="/candidates"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ProspectsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
 
       {/* Taali Chat — agentic chat over the same MCP tools served at /mcp.
           Backend at /api/v1/taali-chat/*. The "Agents" sub-routes surface

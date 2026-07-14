@@ -13,6 +13,7 @@ from app.models import (
     CandidateApplicationEvent,
     JobPage,
     Organization,
+    Prospect,
     Role,
     RoleBrief,
 )
@@ -79,6 +80,49 @@ def test_apply_creates_candidate_and_application(client, db):
     assert app.source_strategy == "inbound"
     assert app.eeo_token == body["eeo_token"]
     assert db.query(Candidate).filter_by(email="casey@x.test").count() == 1
+
+
+def test_apply_matching_prospect_marks_sourced_and_converts(client, db):
+    """A sourced prospect who then applies: the application carries the
+    ``sourced`` strategy (not the default ``inbound``) and the prospect flips to
+    ``converted`` and links to the resolved candidate — provenance follows the
+    person onto the pipeline."""
+    org, role, page = _published_page(db, slug="sourced")
+    prospect = Prospect(
+        organization_id=org.id,
+        full_name="Dana Source",
+        email="dana@x.test",
+        source_strategy="sourced",
+        source_name="csv:q1-list.csv",
+        status="contacted",
+    )
+    db.add(prospect)
+    db.commit()
+    prospect_id = prospect.id
+
+    r = client.post(_url(page), data={"full_name": "Dana Source", "email": "Dana@x.test"})
+    assert r.status_code == 200, r.text
+    app_id = r.json()["application_id"]
+
+    db.expire_all()
+    app = db.query(CandidateApplication).filter_by(id=app_id).first()
+    assert app.source_strategy == "sourced"  # not the default "inbound"
+    assert app.source_name == "csv:q1-list.csv"  # empty apply source_name filled from prospect
+    prospect = db.query(Prospect).filter_by(id=prospect_id).first()
+    assert prospect.status == "converted"
+    assert prospect.candidate_id == app.candidate_id
+
+
+def test_apply_without_matching_prospect_stays_inbound(client, db):
+    """No prospect for the applicant → the application keeps the default
+    ``inbound`` strategy; the prospect promotion is a no-op."""
+    org, role, page = _published_page(db, slug="noprospect")
+    db.commit()
+    r = client.post(_url(page), data={"full_name": "Solo", "email": "solo@x.test"})
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    app = db.query(CandidateApplication).filter_by(id=r.json()["application_id"]).first()
+    assert app.source_strategy == "inbound"
 
 
 def test_apply_is_idempotent_per_candidate_role(client, db):

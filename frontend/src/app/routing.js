@@ -23,8 +23,6 @@ export const pathForPage = (page, options = {}) => {
       return '/jobs';
     case 'requisitions':
       return '/requisitions';
-    case 'sourcing':
-      return '/sourcing';
     case 'chat': {
       const base = options.chatConversationId
         ? `/chat/${encodeURIComponent(options.chatConversationId)}`
@@ -61,10 +59,9 @@ export const pathForPage = (page, options = {}) => {
     case 'blog-post':
       return options.slug ? `/blog/${options.slug}` : '/blog';
     case 'candidates':
-      // The standalone /candidates directory is deprecated. Anything
-      // that asked for it lands on /jobs — the triage drawer now lives
-      // there alongside the candidate list per role.
-      return '/jobs';
+      // The Candidates tab surfaces org-level prospects (not-yet-applied
+      // contacts). Per-role candidate lists still live under each job.
+      return '/candidates';
     case 'candidate-report': {
       if (!options.candidateApplicationId) return '/jobs';
       const base = `/candidates/${encodeURIComponent(options.candidateApplicationId)}`;

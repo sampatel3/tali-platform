@@ -37,7 +37,7 @@ describe('httpClient isPublicPath (401 interceptor guard)', () => {
   it('still bounces recruiter routes', () => {
     expect(isPublicPath('/jobs')).toBe(false);
     expect(isPublicPath('/home')).toBe(false);
-    expect(isPublicPath('/sourcing')).toBe(false);
+    expect(isPublicPath('/candidates')).toBe(false);
     expect(isPublicPath('/settings/billing')).toBe(false);
   });
 
