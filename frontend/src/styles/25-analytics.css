@@ -286,7 +286,7 @@
 .an-fleet-summary { margin-bottom: 14px; }
 .an-fleet-summary .kpi-l { font-size: var(--an-eyebrow); }
 .an-fleet-summary .kpi-v { font-size: var(--an-stat); }
-.an-fleet-summary .kpi-v .kpi-unit { font-size: var(--an-body); }
+.an-fleet-summary .kpi-v .kpi-unit { margin-left: 4px; font-size: var(--an-body); }
 .an-fleet-summary .kpi-d { font-size: var(--an-caption); }
 
 .an-fleet-status {
@@ -435,7 +435,12 @@
   font-size: var(--an-caption);
 }
 .an-agent-meta-item + .an-agent-meta-item { border-left: 1px solid var(--line); }
-.an-agent-meta-item span,
+.an-agent-meta-item span {
+  display: block;
+  min-height: 2.5em;
+  line-height: 1.25;
+  white-space: normal;
+}
 .an-agent-meta-item b,
 .an-agent-meta-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .an-agent-meta-item b,

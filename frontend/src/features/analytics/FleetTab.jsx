@@ -14,27 +14,59 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
+import { getAgentPauseCopy } from '../../shared/agentPauseCopy';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import {
   safeNum,
   fmtUsd,
   fmtUsdFine,
-  fmtRelShort,
-  fmtRelAgo,
+  stageLabel,
 } from './analyticsFormat';
 
 const PANEL_POLL_MS = 5000;
 const ACTIVITY_POLL_MS = 15000;
 const COHORT_BEAT_SECS = 1800;
 
-const nextCycleLabel = (lastCycleAt) => {
+const durationWords = (minutes) => {
+  const safeMinutes = Math.max(0, Math.round(minutes));
+  if (safeMinutes < 60) {
+    const value = Math.max(1, safeMinutes);
+    return `${value} minute${value === 1 ? '' : 's'}`;
+  }
+  const hours = Math.round(safeMinutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'}`;
+};
+
+const relativeTimeInWords = (value) => {
+  if (!value) return '—';
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) return '—';
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60000));
+  if (minutes < 1) return 'just now';
+  return `${durationWords(minutes)} ago`;
+};
+
+const nextRunInWords = (lastCycleAt) => {
   if (!lastCycleAt) return 'soon';
   const last = new Date(lastCycleAt).getTime();
   if (Number.isNaN(last)) return 'soon';
   const remaining = COHORT_BEAT_SECS - (Date.now() - last) / 1000;
-  if (remaining <= 0) return 'due';
-  return `${Math.ceil(remaining / 60)}m`;
+  if (remaining <= 0) return 'now';
+  return `in ${durationWords(Math.ceil(remaining / 60))}`;
+};
+
+const workingDetailInWords = (value) => {
+  const detail = String(value || '').trim();
+  const candidateCount = /\b(?:scoring|reviewing)\s+(\d+)\s+candidates?\b/i.exec(detail);
+  if (candidateCount) {
+    const count = Number(candidateCount[1]);
+    return `Reviewing ${count} candidate${count === 1 ? '' : 's'}`;
+  }
+  if (/\breasoning cycle\b|\bround\s+\d+\b/i.test(detail)) return 'Reviewing candidates';
+  return '';
 };
 
 const ActivityGlyph = ({ kind }) => {
@@ -47,27 +79,116 @@ const ActivityGlyph = ({ kind }) => {
   return <span className="gl">{map[kind] || <ArrowUpRight size={13} aria-hidden="true" />}</span>;
 };
 
+const ACTIVITY_CODE_LABELS = {
+  agent_decision_queued: 'Decision ready for review',
+  agent_cycle_aborted: 'Automatic review stopped',
+  cv_scored: 'Candidate scored',
+  assessment_invite_resent: 'Assessment invite resent',
+  workable_note_posted: 'Note added to Workable',
+  workable_decision_note_posted: 'Decision note added to Workable',
+  workable_moved: 'Candidate moved in Workable',
+  workable_move_skipped: 'Candidate was not moved in Workable',
+  workable_writeback_skipped: 'Workable update skipped',
+  workable_writeback_failed: 'Could not update Workable',
+  workable_disqualified: 'Candidate disqualified in Workable',
+  bullhorn_moved: 'Candidate moved in Bullhorn',
+  bullhorn_rejected: 'Candidate rejected in Bullhorn',
+  bullhorn_writeback_failed: 'Could not update Bullhorn',
+  auto_rejected: 'Candidate rejected automatically',
+  auto_reject_failed: 'Could not reject candidate automatically',
+};
+
+const activityTitleInWords = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Agent activity';
+
+  const started = /^Cycle started(?:\s*\(([^)]+)\))?/i.exec(raw);
+  if (started) {
+    const trigger = String(started[1] || '').toLowerCase();
+    if (trigger === 'scheduled') return 'Automatic review started';
+    if (trigger === 'started manually') return 'Review started manually';
+    if (trigger === 'new activity') return 'Review started after new activity';
+    return 'Review started';
+  }
+  const finished = /^Cycle finished\s*[—-]\s*(\d+)\s+decisions?/i.exec(raw);
+  if (finished) {
+    const count = Number(finished[1]);
+    return `Review finished · ${count} decision${count === 1 ? '' : 's'} ready`;
+  }
+  if (/^Cycle paused/i.test(raw)) return 'Review paused · Monthly budget reached';
+  if (/^Cycle failed/i.test(raw)) return 'Review failed';
+  if (/^Cycle aborted/i.test(raw)) return 'Review stopped';
+  if (/^Cycle\b/i.test(raw)) return 'Review updated';
+
+  const decisionCopy = [
+    [/^Recommended advance\b/i, 'Recommended an interview'],
+    [/^Recommended reject at pre-screen\b/i, 'Recommended rejecting at pre-screen'],
+    [/^Recommended reject\b/i, 'Recommended rejection'],
+    [/^Recommended send assessment\b/i, 'Recommended an assessment'],
+    [/^Recommended resend assessment\b/i, 'Recommended resending the assessment'],
+    [/^Escalated\s*[—-]\s*low confidence\b/i, 'Asked for your review because confidence was low'],
+  ];
+  for (const [pattern, replacement] of decisionCopy) {
+    if (pattern.test(raw)) return raw.replace(pattern, replacement);
+  }
+
+  const parts = raw.split(/\s+·\s+/);
+  const headline = parts.shift() || '';
+  const subject = parts.length ? ` · ${parts.join(' · ')}` : '';
+  if (ACTIVITY_CODE_LABELS[headline]) return `${ACTIVITY_CODE_LABELS[headline]}${subject}`;
+
+  const stageMove = /^([^→,]+)\s*→\s*([^,]+)(?:,\s*(.+))?$/.exec(headline);
+  if (stageMove) {
+    const from = stageLabel(stageMove[1].trim());
+    const to = stageLabel(stageMove[2].trim());
+    const outcome = stageMove[3] ? ` (${stageLabel(stageMove[3].trim())})` : '';
+    return `Moved from ${from} to ${to}${outcome}${subject}`;
+  }
+  const movedTo = /^→\s*([^,]+)(?:,\s*(.+))?$/.exec(headline);
+  if (movedTo) {
+    const outcome = movedTo[2] ? ` (${stageLabel(movedTo[2].trim())})` : '';
+    return `Moved to ${stageLabel(movedTo[1].trim())}${outcome}${subject}`;
+  }
+
+  // A code-shaped fallback is operational data, not customer copy. Known
+  // values are mapped above; an unknown code receives a safe generic label.
+  if (/^[a-z0-9]+(?:_[a-z0-9]+)+$/i.test(headline)) return `Agent activity${subject}`;
+  if (/\b\d+\s*c\b|(?:micro|monthly)[ _-]*usd|[<>]=/i.test(raw)) return 'Agent activity';
+  return raw;
+};
+
+const activityDetailInWords = (value) => {
+  const detail = String(value || '').trim();
+  if (!detail) return null;
+  if (
+    /\b\d+\s*c\b|(?:micro|monthly)[ _-]*usd|[<>]=|\b(?:role|agent|run|application)_id\s*=/i
+      .test(detail)
+  ) return null;
+  if (/^[a-z0-9]+(?:_[a-z0-9]+)+$/i.test(detail)) return null;
+  return detail;
+};
+
 const statusFor = (agent) => {
   const activity = agent?.activity || {};
   const label = String(activity.label || '').toUpperCase();
   const detail = String(activity.text || '').trim();
 
   if (agent?.running === false || label === 'PAUSED') {
-    const reason = String(agent?.paused_reason || detail || '').trim().replace(/_/g, ' ');
     return {
       kind: 'paused',
-      text: `Paused · ${reason && reason.toLowerCase() !== 'paused' ? reason : 'reason not provided'}`,
+      text: getAgentPauseCopy(agent?.paused_reason || detail).status,
     };
   }
   if (label === 'WORKING') {
+    const plainDetail = workingDetailInWords(detail);
     return {
       kind: 'work',
-      text: `Working${detail && detail.toLowerCase() !== 'working' ? ` · ${detail}` : ''}`,
+      text: `Working${plainDetail ? ` · ${plainDetail}` : ''}`,
     };
   }
   return {
     kind: 'idle',
-    text: `Idle · next run ${nextCycleLabel(agent?.last_run_at)}`,
+    text: `Idle · Next run ${nextRunInWords(agent?.last_run_at)}`,
   };
 };
 
@@ -84,7 +205,10 @@ const AgentCard = ({ agent }) => {
   const barPct = Math.min(100, Math.max(0, rawPct));
   const barHi = rawPct >= 90;
   const status = statusFor(agent);
-  const name = agent.name || `Role #${agent.role_id}`;
+  const name = String(agent.name || '').trim() || 'Unnamed role';
+  const budgetText = cap > 0
+    ? `${fmtUsdFine(spent)} of ${fmtUsdFine(cap)} used`
+    : `${fmtUsdFine(spent)} used · No limit set`;
 
   return (
     <article className="an-agent-card">
@@ -99,7 +223,7 @@ const AgentCard = ({ agent }) => {
       <div className="an-agent-budget">
         <div className="an-agent-budget-head">
           <span>Monthly budget</span>
-          <strong>{fmtUsdFine(spent)} / {cap > 0 ? fmtUsdFine(cap) : 'No cap'}</strong>
+          <strong>{budgetText}</strong>
         </div>
         <div
           className="an-agent-budget-track"
@@ -118,9 +242,9 @@ const AgentCard = ({ agent }) => {
       </div>
 
       <div className="an-agent-meta">
-        <div className="an-agent-meta-item"><span>Pending</span><strong>{safeNum(agent.pending)}</strong></div>
-        <div className="an-agent-meta-item"><span>Last run</span><strong>{agent.last_run_at ? fmtRelAgo(agent.last_run_at) : '—'}</strong></div>
-        <div className="an-agent-meta-item"><span>Cycles · 24h</span><strong>{safeNum(agent.cycles_24h)}</strong></div>
+        <div className="an-agent-meta-item"><span>Decisions waiting</span><strong>{safeNum(agent.pending)}</strong></div>
+        <div className="an-agent-meta-item"><span>Last run</span><strong>{relativeTimeInWords(agent.last_run_at)}</strong></div>
+        <div className="an-agent-meta-item"><span>Runs in 24 hours</span><strong>{safeNum(agent.cycles_24h)}</strong></div>
       </div>
     </article>
   );
@@ -140,7 +264,7 @@ export const FleetView = ({ panel, activity = [], onOpenDecisionLog }) => {
     : safeNum(kpis.agents_paused);
   const reviewCount = safeNum(kpis.pending_decisions ?? kpis.pending);
   const oldestHint = kpis.oldest_pending_age_seconds != null
-    ? `Oldest waiting ${fmtRelShort(new Date(Date.now() - safeNum(kpis.oldest_pending_age_seconds) * 1000).toISOString())}`
+    ? `Oldest item has waited ${durationWords(safeNum(kpis.oldest_pending_age_seconds) / 60)}`
     : (reviewCount > 0 ? 'Ready for your review' : 'Nothing waiting');
   const spent = safeNum(kpis.budget_spent_cents);
   const cap = safeNum(kpis.budget_cap_cents);
@@ -166,15 +290,15 @@ export const FleetView = ({ panel, activity = [], onOpenDecisionLog }) => {
       key: 'workspace-spend',
       label: 'Workspace spend',
       value: fmtUsd(spent),
-      unit: cap > 0 ? `/ ${fmtUsd(cap)}` : null,
+      unit: cap > 0 ? `of ${fmtUsd(cap)}` : null,
       bar: { pct: Math.min(100, Math.max(0, budgetPct)), over: budgetPct > 100 },
-      sub: cap > 0 ? `${budgetPct}% of monthly budget` : 'No monthly cap set',
+      sub: cap > 0 ? `${budgetPct}% of monthly budget used` : 'No monthly limit set',
     },
     {
       key: 'fleet-health',
-      label: 'Fleet health',
-      value: errors > 0 ? `${errors} issue${errors === 1 ? '' : 's'}` : 'Healthy',
-      sub: `${cycles} cycle${cycles === 1 ? '' : 's'} in 24h`,
+      label: 'Agent status',
+      value: errors > 0 ? `${errors} issue${errors === 1 ? '' : 's'}` : 'All clear',
+      sub: `${cycles} run${cycles === 1 ? '' : 's'} in the past 24 hours`,
     },
   ];
 
@@ -182,10 +306,10 @@ export const FleetView = ({ panel, activity = [], onOpenDecisionLog }) => {
     <div className="an-tabpanel">
       <div className="an-fleet-status">
         <span className="gp" aria-hidden="true" />
-        <span>Review cycle</span>
-        <span>Last run <strong>{pulse.last_cycle_at ? fmtRelAgo(pulse.last_cycle_at) : '—'}</strong></span>
-        <span>Next <strong>{nextCycleLabel(pulse.last_cycle_at)}</strong></span>
-        <span>Last activity <strong>{pulse.last_activity_at ? fmtRelAgo(pulse.last_activity_at) : '—'}</strong></span>
+        <span>Agent schedule</span>
+        <span>Last run <strong>{relativeTimeInWords(pulse.last_cycle_at)}</strong></span>
+        <span>Next run <strong>{nextRunInWords(pulse.last_cycle_at)}</strong></span>
+        <span>Last activity <strong>{relativeTimeInWords(pulse.last_activity_at)}</strong></span>
       </div>
 
       <div className="an-fleet-summary">
@@ -219,17 +343,20 @@ export const FleetView = ({ panel, activity = [], onOpenDecisionLog }) => {
           <div className="an-empty">No agent activity yet.</div>
         ) : (
           <div className="an-feed" role="list">
-            {entries.map((entry, index) => (
-              <div className="fi" role="listitem" key={`${entry.kind || 'activity'}-${entry.id ?? entry.created_at ?? index}`}>
-                <ActivityGlyph kind={entry.kind} />
-                <span>
-                  {entry.role_name ? <span className="rc">{entry.role_name}</span> : null}
-                  <span className="fbody">{entry.title || 'Agent activity'}</span>
-                  <span className="ft">{fmtRelShort(entry.created_at)}</span>
-                  {entry.detail ? <span className="fdetail">{entry.detail}</span> : null}
-                </span>
-              </div>
-            ))}
+            {entries.map((entry, index) => {
+              const detail = activityDetailInWords(entry.detail);
+              return (
+                <div className="fi" role="listitem" key={`${entry.kind || 'activity'}-${entry.id ?? entry.created_at ?? index}`}>
+                  <ActivityGlyph kind={entry.kind} />
+                  <span>
+                    {entry.role_name ? <span className="rc">{entry.role_name}</span> : null}
+                    <span className="fbody">{activityTitleInWords(entry.title)}</span>
+                    <span className="ft">{relativeTimeInWords(entry.created_at)}</span>
+                    {detail ? <span className="fdetail">{detail}</span> : null}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
       </article>

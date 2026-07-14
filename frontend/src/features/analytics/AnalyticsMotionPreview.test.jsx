@@ -63,7 +63,7 @@ describe('AnalyticsMotionPreview (/analytics-preview)', () => {
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Recent activity' })).toBeInTheDocument();
     expect(screen.getAllByText('AI Engineer').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Working · scoring 3 candidates/i)).toBeInTheDocument();
+    expect(screen.getByText(/Working · Reviewing 3 candidates/i)).toBeInTheDocument();
     expect(screen.getByText(/Paused · monthly budget reached/i)).toBeInTheDocument();
     expect(screen.queryByText('Taught')).not.toBeInTheDocument();
 

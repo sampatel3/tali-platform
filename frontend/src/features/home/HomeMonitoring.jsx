@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
+import { getAgentPauseCopy } from '../../shared/agentPauseCopy';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import { formatUsd } from './atoms';
 import { HomeActivityTrends } from './HomeActivityTrends';
@@ -274,12 +275,17 @@ export const HomeMonitoring = ({
                 <CheckCircle2 size={15} aria-hidden="true" /> All clear — nothing flagged.
               </span>
             ) : (
-              anomalies.map((a, i) => (
-                <div key={`${a.title}-${i}`} className={`hm-anom tone-${a.tone || 'neutral'}`}>
-                  <AlertTriangle size={14} aria-hidden="true" />
-                  <span><b>{a.title}</b>{a.body ? ` — ${a.body}` : ''}</span>
-                </div>
-              ))
+              anomalies.map((a, i) => {
+                const body = /^Paused agent\b/i.test(String(a.title || ''))
+                  ? getAgentPauseCopy(a.body).description
+                  : a.body;
+                return (
+                  <div key={`${a.title}-${i}`} className={`hm-anom tone-${a.tone || 'neutral'}`}>
+                    <AlertTriangle size={14} aria-hidden="true" />
+                    <span><b>{a.title}</b>{body ? ` — ${body}` : ''}</span>
+                  </div>
+                );
+              })
             )}
           </div>
 
