@@ -614,6 +614,152 @@ def create_application(
     return application_to_response(app)
 
 
+class SourcedCandidateCreate(BaseModel):
+    """Add a SOURCED prospect (a pre-applied lead) to a role. At least one of
+    email / phone is required (the identity key). ``linkedin`` is stored on the
+    candidate profile. No CV, never scored, never in the decision queue — the
+    application lands at the ``sourced`` stage and only advances (and gets
+    scored) when the person engages / applies."""
+
+    name: Optional[str] = Field(default=None, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=64)
+    linkedin: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post(
+    "/roles/{role_id}/sourced-candidates",
+    response_model=ApplicationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_sourced_candidate(
+    role_id: int,
+    data: SourcedCandidateCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add a candidate to a role at the ``sourced`` stage (Phase 3a).
+
+    Resolve-or-create the candidate by identity keys, then create (idempotent per
+    candidate+role) a ``CandidateApplication`` at ``pipeline_stage='sourced'`` via
+    ``on_application_created(score=False)`` — so it is NEVER auto-scored and NEVER
+    enters the decision queue. Returns the (existing or new) application.
+    """
+    from ...services.candidate_identity_service import normalize_phone, resolve_candidate
+
+    org_id = int(current_user.organization_id)
+    role = get_role(role_id, org_id, db)
+
+    email = (data.email or "").strip().lower() or None
+    phone = (data.phone or "").strip() or None
+    if not email and not phone:
+        raise HTTPException(
+            status_code=422, detail="Provide an email address or phone number."
+        )
+
+    candidate = resolve_candidate(db, org_id, email=email, phone=phone)
+    if candidate is None:
+        candidate = Candidate(
+            organization_id=org_id,
+            email=email,
+            full_name=(data.name or "").strip() or None,
+            phone=phone,
+            phone_normalized=normalize_phone(phone),
+            profile_url=(data.linkedin or "").strip() or None,
+            lead_source="sourced",
+        )
+        db.add(candidate)
+        db.flush()
+    else:
+        # Backfill only EMPTY identity fields — never clobber existing values.
+        if not candidate.full_name and (data.name or "").strip():
+            candidate.full_name = data.name.strip()
+        if not candidate.profile_url and (data.linkedin or "").strip():
+            candidate.profile_url = data.linkedin.strip()
+
+    # Idempotent per (candidate, role). The unique constraint spans soft-deletes,
+    # so match regardless of deleted_at and reuse the row.
+    existing = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.candidate_id == candidate.id,
+            CandidateApplication.role_id == role.id,
+        )
+        .first()
+    )
+    if existing is not None and existing.deleted_at is None:
+        # Already on the role (sourced or further along) — idempotent no-op.
+        db.commit()
+        app = get_application(existing.id, org_id, db)
+        return application_to_response(app)
+
+    if existing is not None:
+        # Reactivate a soft-deleted row as a fresh sourced prospect.
+        existing.deleted_at = None
+        existing.status = "sourced"
+        existing.pipeline_stage = "sourced"
+        existing.pipeline_stage_source = "recruiter"
+        existing.pipeline_stage_updated_at = utcnow()
+        existing.application_outcome = "open"
+        existing.application_outcome_updated_at = utcnow()
+        existing.source = "sourced"
+        existing.source_strategy = "sourced"
+        existing.auto_reject_state = None
+        existing.auto_reject_reason = None
+        existing.auto_reject_triggered_at = None
+        app = existing
+    else:
+        app = CandidateApplication(
+            organization_id=org_id,
+            candidate_id=candidate.id,
+            role_id=role.id,
+            status="sourced",
+            pipeline_stage="sourced",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="sourced",
+            source_strategy="sourced",
+        )
+        db.add(app)
+
+    try:
+        db.flush()
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="recruiter",
+            actor_id=int(current_user.id),
+            reason="Sourced candidate added to role",
+        )
+        db.commit()
+    except IntegrityError:
+        # Concurrent add for the same (candidate, role): adopt the winning row.
+        db.rollback()
+        winner = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.organization_id == org_id,
+                CandidateApplication.candidate_id == candidate.id,
+                CandidateApplication.role_id == role.id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if winner is None:
+            raise HTTPException(status_code=409, detail="Could not add sourced candidate")
+        app = winner
+
+    # score=False — a sourced prospect is un-scored; this only schedules the
+    # cheap, no-Claude bookkeeping. The auto-reject task itself hard-skips a
+    # sourced stage (automation_tasks.run_application_auto_reject), and the
+    # decision-creation emitters refuse a sourced app, so no card is ever made.
+    on_application_created(app, score=False)
+
+    app = get_application(app.id, org_id, db)
+    return application_to_response(app)
+
+
 _SORT_COLUMN_MAP = {
     "pre_screen_score": CandidateApplication.pre_screen_score_100,
     "rank_score": CandidateApplication.rank_score,

@@ -204,6 +204,11 @@ def run_application_auto_reject(
         )
         if app is None:
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
+        # HARD GUARD: a `sourced` prospect is pre-applied — un-scored and never in
+        # the decision queue. Skip auto-reject entirely (the decision-creation
+        # emitters also refuse a sourced app; this avoids the wasted evaluation).
+        if (app.pipeline_stage or "").strip().lower() == "sourced":
+            return {"status": "skipped", "reason": "sourced_prospect", "application_id": application_id}
         org = (
             db.query(Organization)
             .filter(Organization.id == app.organization_id)

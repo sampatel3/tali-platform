@@ -23,6 +23,12 @@ from ...models.role import Role
 # "Tali handed them off, and they were ultimately rejected downstream").
 #
 # pipeline_stage:
+#   sourced        — a PROSPECT: added to the role BEFORE they applied (recruiter
+#                    or agent sourced them). No CV, never scored, never in the
+#                    decision queue. Taali-NATIVE only — a synced ATS candidate is
+#                    already applied+, so sync/legacy mapping never yields this.
+#                    Moves to `applied` (and only then gets scored) when the person
+#                    engages / applies. This is the sole pre-`applied` stage.
 #   applied        — entered Tali; not yet actioned.
 #   invited        — invited to a Tali assessment.
 #   in_assessment  — assessment in progress.
@@ -42,9 +48,15 @@ from ...models.role import Role
 #   hired     — hired.
 #
 # pipeline_stage_source — who set the current stage: system | recruiter | sync | agent.
-PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "advanced")
+PIPELINE_STAGES = ("sourced", "applied", "invited", "in_assessment", "review", "advanced")
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 PIPELINE_STAGE_SOURCES = ("system", "recruiter", "sync", "agent")
+
+# Stages a synced ATS (Workable / Bullhorn) may map a remote status onto.
+# `sourced` is Taali-NATIVE only (a pre-applied lead added inside Taali); a synced
+# candidate is already applied+, so it must never be a sync mapping target. Used
+# by the Bullhorn stage-map config to keep `sourced` off the selectable list.
+SYNC_MAPPABLE_STAGES = tuple(stage for stage in PIPELINE_STAGES if stage != "sourced")
 
 # Workable stages that mean "the candidate is past Tali's handover point" —
 # they're now in the recruiter's interview/offer flow. We collapse all of
@@ -81,6 +93,12 @@ TERMINAL_WORKABLE_STAGES = frozenset({
 })
 
 _RECRUITER_STAGE_TRANSITIONS = {
+    # Engagement: a sourced prospect becomes a real applicant. The ONLY forward
+    # edge out of `sourced` — a sourced lead may never skip ahead to
+    # invited/review/advanced without first passing through `applied` (where
+    # scoring runs). A recruiter may promote a sourced lead by hand; the native
+    # apply / CV-arrival path does the same via the `system` set below.
+    ("sourced", "applied"),
     ("applied", "invited"),
     ("review", "invited"),
     # Any earlier Tali stage may jump to "advanced" — used by the
@@ -93,6 +111,9 @@ _RECRUITER_STAGE_TRANSITIONS = {
     ("advanced", "review"),
 }
 _SYSTEM_STAGE_TRANSITIONS = {
+    # Engagement (native apply / a CV arrives for a sourced lead). Scoring runs
+    # only AFTER this transition — a sourced prospect is never scored.
+    ("sourced", "applied"),
     ("invited", "in_assessment"),
     ("in_assessment", "review"),
     # Re-assessment: a candidate sitting in `review` (a prior attempt was
@@ -934,6 +955,9 @@ def apply_legacy_status_update(
 # Recruiter-facing funnel buckets (DISPLAY), derived from the stored
 # pipeline_stage + whether the CV has been scored. This is the single funnel
 # vocabulary surfaced on the home hub, jobs list and role page:
+#   Sourced   — stage `sourced` (a pre-applied prospect; un-scored, no decision).
+#               Its OWN bucket — never folded into Applied, so it can't inflate
+#               the applied count.
 #   Applied   — stage `applied`, CV not yet scored (= "new CVs / ready to score")
 #   Scored    — stage `applied`, CV scored, awaiting the send-assessment call
 #   Invited   — stage `invited` + `in_assessment` (assessment out / in progress)
@@ -942,13 +966,17 @@ def apply_legacy_status_update(
 #   Rejected  — application_outcome `rejected` (across all stages) } outside the flow
 # No DB enum change — the stored pipeline_stage is unchanged; this only buckets
 # it for display.
-FUNNEL_BUCKETS = ("applied", "scored", "invited", "completed", "advanced", "rejected")
+FUNNEL_BUCKETS = ("sourced", "applied", "scored", "invited", "completed", "advanced", "rejected")
 
 
 def funnel_bucket_for(stage_key: str, is_scored: bool) -> str | None:
     """Map a stored ``pipeline_stage`` (+ scored flag) to a display bucket.
     Returns None for stages with no open-bucket (none today). ``rejected`` is an
     outcome, counted separately by the callers below."""
+    if stage_key == "sourced":
+        # Its own bucket — a sourced prospect is pre-applied and un-scored, so it
+        # must never count as `applied` (or `scored`).
+        return "sourced"
     if stage_key == "applied":
         return "scored" if is_scored else "applied"
     if stage_key in ("invited", "in_assessment"):
@@ -964,7 +992,7 @@ def funnel_bucket_for(stage_key: str, is_scored: bool) -> str | None:
 # stages map onto the same 6 display buckets the FE expects (FUNNEL_BUCKETS).
 # Flag-off keeps the slug-based funnel_bucket_for above, byte-for-byte unchanged.
 _KIND_TO_BUCKET = {
-    "sourced": "applied",
+    "sourced": "sourced",
     "applied": "applied",
     "screening": "invited",
     "assessment": "invited",
