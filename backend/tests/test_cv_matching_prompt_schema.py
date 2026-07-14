@@ -61,6 +61,19 @@ def test_prompt_has_explicit_unknown_abstention():
     assert 'status: "unknown"' in CV_MATCH_PROMPT
 
 
+def test_prompt_requires_a_brief_candidate_synthesis_not_a_mini_report():
+    assert "2–3 concise plain-English sentences" in CV_MATCH_PROMPT
+    assert "aiming for about 75 words" in CV_MATCH_PROMPT
+    assert "not a hard word cutoff" in CV_MATCH_PROMPT
+    assert "one or two most material gaps or uncertainties" in CV_MATCH_PROMPT
+    assert "The structured requirements, skills, highlights, and concerns" in CV_MATCH_PROMPT
+    assert "Do NOT include requirement tallies" in CV_MATCH_PROMPT
+    assert "3–4 SHORT sentences" not in CV_MATCH_PROMPT
+
+    summary_schema = CVMatchResult.model_json_schema()["properties"]["summary"]
+    assert summary_schema["maxLength"] == 1000
+
+
 def test_prompt_evidence_first_field_ordering():
     out = build_cv_match_prompt(
         cv_text="x", jd_text="y", requirements=[], prompt_version=PROMPT_VERSION

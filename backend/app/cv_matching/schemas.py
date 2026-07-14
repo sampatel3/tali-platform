@@ -458,7 +458,14 @@ class CVMatchResult(BaseModel):
     missing_skills: list[str] = Field(default_factory=list)
     experience_highlights: list[str] = Field(default_factory=list, max_length=5)
     concerns: list[str] = Field(default_factory=list, max_length=5)
-    summary: str = ""
+    summary: str = Field(
+        default="",
+        max_length=1000,
+        description=(
+            "A 2-3 sentence plain-English candidate summary aiming for about "
+            "75 words. Supporting evidence belongs in the report fields."
+        ),
+    )
     candidate_snapshot: CandidateSnapshot | None = None
     claims_to_verify: list[ClaimToVerify] = Field(default_factory=list)
 

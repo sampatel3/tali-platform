@@ -22,7 +22,8 @@ from ...decision_policy.engine import DecisionInputs, evaluate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ..auto_threshold_service import resolve_role_fit_threshold
-from ..decision_evidence_service import must_have_blocked
+from ..decision_evidence_service import blocked_must_have_requirements, must_have_blocked
+from ..decision_presentation_service import normalize_candidate_summary
 
 logger = logging.getLogger("taali.bulk_decision")
 
@@ -147,6 +148,81 @@ def _assessment_inputs(app: CandidateApplication) -> tuple[dict[str, float], dic
         "assessment_completed": completed,
         "assessment_grading_incomplete": grading_incomplete,
     }
+
+
+def _fired_rule(verdict) -> str | None:
+    for step in reversed(list(getattr(verdict, "rule_path", None) or [])):
+        if isinstance(step, str) and step.startswith("rule:fired:"):
+            return step[len("rule:fired:") :]
+    return None
+
+
+def _policy_basis(*, verdict, decision_type: str, role_fit: float, pre_screen: float, eff, role, has_task: bool) -> str:
+    """Audit text led by the rule that caused the verdict, not just its score.
+
+    A hard must-have rule can reject an above-threshold candidate.  The old
+    unconditional ``score -> decision`` string made that look as if the score
+    caused the reject (for example, ``72 vs 55 -> reject``).  Preserve score
+    context while making the fired rule the causal statement.
+    """
+    threshold = eff if eff is not None else "default"
+    fired = _fired_rule(verdict)
+    score_context = f"role-fit {role_fit:.0f} vs threshold {threshold} (pre-screen {pre_screen:.0f})"
+    if fired in {"must_have_blocked", "pre_screen_auto_reject_eligible"}:
+        reason = str(getattr(verdict, "reasoning", "") or "Policy hard rule fired.").strip()
+        return f"{reason} Score context: {score_context}; hard rule took priority."
+    return (
+        f"{score_context} -> {decision_type}"
+        + _no_assessment_note(role, has_task)
+    )
+
+
+def _policy_evidence(
+    app,
+    *,
+    verdict,
+    decision_type: str,
+    role_fit: float,
+    pre_screen: float,
+    eff,
+    role,
+    has_task: bool,
+    source: str,
+) -> dict:
+    """Freeze the causal policy snapshot on a new deterministic decision."""
+    fired = _fired_rule(verdict)
+    details = getattr(app, "cv_match_details", None)
+    candidate_summary = normalize_candidate_summary(
+        details.get("summary") if isinstance(details, dict) else None
+    )
+    evidence = {
+        "role_fit_score": role_fit,
+        "pre_screen_score": pre_screen,
+        "effective_threshold": eff,
+        "has_assessment_task": has_task,
+        "rule_path": list(getattr(verdict, "rule_path", None) or []),
+        "engine_verdict": getattr(verdict, "decision_type", None),
+        "policy_reasoning": getattr(verdict, "reasoning", None),
+        "policy_revision_id": getattr(verdict, "policy_revision_id", None),
+        "decision_point": getattr(verdict, "decision_point", None),
+        "policy_basis": _policy_basis(
+            verdict=verdict,
+            decision_type=decision_type,
+            role_fit=role_fit,
+            pre_screen=pre_screen,
+            eff=eff,
+            role=role,
+            has_task=has_task,
+        ),
+        "decision_trigger": fired,
+        "decision_source": "policy",
+        "source": source,
+    }
+    if candidate_summary:
+        evidence["candidate_summary"] = candidate_summary
+    if fired == "must_have_blocked":
+        evidence["decision_factors"] = blocked_must_have_requirements(app)
+    return evidence
 
 
 def _inputs_for(app, *, role_id, org_id, eff, has_task):

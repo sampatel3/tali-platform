@@ -31,7 +31,15 @@ def _decision(db, org, role, app, decision_type, *, reasoning="r", evidence=None
 
 def test_send_flips_to_reject_is_corrected(db, monkeypatch):
     org, role, _, app = make_world(db)
-    d = _decision(db, org, role, app, "send_assessment")
+    d = _decision(
+        db, org, role, app, "send_assessment",
+        evidence={
+            "decision_source": "policy",
+            "decision_trigger": "role_fit_score >= role_fit_min",
+            "rule_path": ["rule:fired:role_fit_score >= role_fit_min"],
+            "policy_reasoning": "Send the assessment.",
+        },
+    )
     monkeypatch.setattr(bds, "recompute_persisted_verdict", lambda *a, **k: "reject")
 
     out = bds.auto_correct_stale_verdict(db, app=app, role=role)
@@ -44,11 +52,21 @@ def test_send_flips_to_reject_is_corrected(db, monkeypatch):
     assert d.status == "pending"  # corrected, not resolved
     assert d.model_version == "bulk-deterministic"
     assert (d.evidence or {}).get("auto_corrected_from") == "send_assessment"
+    assert (d.evidence or {}).get("decision_trigger") == "role_fit_score <= role_fit_max"
+    assert "Send the assessment" not in str(d.evidence)
 
 
 def test_reject_flips_to_send_is_corrected(db, monkeypatch):
     org, role, _, app = make_world(db)
-    d = _decision(db, org, role, app, "reject")
+    d = _decision(
+        db, org, role, app, "reject",
+        evidence={
+            "decision_source": "policy",
+            "decision_trigger": "role_fit_score <= role_fit_max",
+            "rule_path": ["rule:fired:role_fit_score <= role_fit_max"],
+            "policy_reasoning": "Reject under the old score.",
+        },
+    )
     monkeypatch.setattr(bds, "recompute_persisted_verdict", lambda *a, **k: "send_assessment")
 
     out = bds.auto_correct_stale_verdict(db, app=app, role=role)
@@ -56,6 +74,8 @@ def test_reject_flips_to_send_is_corrected(db, monkeypatch):
     db.refresh(d)
     assert out == "send_assessment"
     assert d.decision_type == "send_assessment"
+    assert (d.evidence or {}).get("decision_trigger") == "role_fit_score >= role_fit_min"
+    assert "Reject under the old score" not in str(d.evidence)
 
 
 def test_no_flip_is_left_untouched(db, monkeypatch):
@@ -90,6 +110,32 @@ def test_structured_must_have_gap_blocks_correction(db, monkeypatch):
     assert bds.auto_correct_stale_verdict(db, app=app, role=role) is None
     db.refresh(d)
     assert d.decision_type == "reject"
+
+
+def test_new_policy_factor_snapshot_blocks_correction(db, monkeypatch):
+    org, role, _, app = make_world(db)
+    d = _decision(
+        db,
+        org,
+        role,
+        app,
+        "reject",
+        evidence={
+            "decision_source": "policy",
+            "decision_trigger": "must_have_blocked",
+            "decision_factors": [
+                {"label": "Production security clearance", "status": "missing"}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        bds, "recompute_persisted_verdict", lambda *a, **k: "send_assessment"
+    )
+
+    assert bds.auto_correct_stale_verdict(db, app=app, role=role) is None
+    db.refresh(d)
+    assert d.decision_type == "reject"
+    assert d.evidence["decision_trigger"] == "must_have_blocked"
 
 
 def test_advance_to_interview_is_never_touched(db, monkeypatch):

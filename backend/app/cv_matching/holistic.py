@@ -65,9 +65,14 @@ logger = logging.getLogger(__name__)
 HOLISTIC_MODEL = "claude-sonnet-4-6"
 # prompt_version identifies the wire shape; ENGINE_VERSION is the semantic
 # a.b.c surfaced to recruiters. 2.x = the holistic Sonnet engine; 2.1.0 =
-# the two-call complete-report build. Bump c for calibration/prompt fixes,
-# b for new report features, a for an engine-architecture change.
-HOLISTIC_PROMPT_VERSION = "holistic_v2"
+# the two-call complete-report build. Bump c when a calibration/prompt change
+# alters scoring semantics, b for new report features, and a for an engine-
+# architecture change. Presentation-only prompt revisions use prompt_version.
+# Prompt-only revision: the score/report wire shape and semantic engine stay
+# at v2 / 2.1.0, but the candidate-summary contract is now deliberately
+# concise.  A distinct prompt version prevents the result cache from serving
+# verbose summaries produced under the previous instruction.
+HOLISTIC_PROMPT_VERSION = "holistic_v2_1"
 HOLISTIC_ENGINE_VERSION = "2.1.0"
 
 
@@ -187,8 +192,25 @@ class _LeanScore(BaseModel):
     # ``overall=0`` (real clear-misfit verdict) is a valid int and still passes.
     overall: int = Field(ge=0, le=100)
     core_capability_score: int = Field(default=0, ge=0, le=100)
-    verdict: str = ""
-    reasoning: str = ""
+    verdict: str = Field(
+        default="",
+        max_length=60,
+        description=(
+            "A 2-4 word plain-English fit label, such as Strong fit, "
+            "Partial fit, Weak fit, or Clear misfit."
+        ),
+    )
+    reasoning: str = Field(
+        default="",
+        max_length=1000,
+        description=(
+            "The candidate summary: 2-3 concise plain-English sentences, "
+            "aiming for about 75 words rather than a hard word cutoff. State "
+            "the strongest role-relevant evidence and the one or two most "
+            "material gaps or uncertainties; leave supporting detail to the "
+            "candidate report."
+        ),
+    )
     matching_skills: list[str] = Field(default_factory=list)
     missing_skills: list[str] = Field(default_factory=list)
     highlights: list[str] = Field(default_factory=list)
@@ -271,7 +293,14 @@ Calibration for `overall` — use the FULL range, be decisive, do NOT cluster at
   35-54  weak — lacks the core capability but has relevant transferable skills
   0-30   clear misfit — wrong profile ENTIRELY for this kind of work
 
-`overall` is your holistic calibrated judgment, weighting the core capability most — NOT a tally of how many requirements are partially met. Decide `overall` and `core_capability_score`, a short `verdict`, a 1-3 sentence `reasoning`, then `matching_skills` (role-relevant skills present), `missing_skills` (role-relevant skills absent), `highlights` (top achievements), `concerns` (risks) — terse, <=5 each. Do not write prose outside the tool call."""
+`overall` is your holistic calibrated judgment, weighting the core capability most — NOT a tally of how many requirements are partially met.
+
+For the recruiter-facing candidate summary:
+- `verdict`: ONLY a 2-4 word plain-English fit label (for example: Strong fit, Partial fit, Weak fit, Clear misfit).
+- `reasoning`: 2-3 concise plain-English sentences, aiming for about 75 words. This is a guide, not a hard word cutoff. Name the strongest role-relevant evidence and the one or two most material gaps or uncertainties.
+- This is a synthesis, not the report. Do NOT list every requirement, tool, employer, project, score, or caveat; the structured candidate report below carries that detail. Do NOT repeat the verdict in `reasoning`.
+
+Then return `matching_skills` (role-relevant skills present), `missing_skills` (role-relevant skills absent), `highlights` (top achievements), and `concerns` (risks) — terse, <=5 each. Do not write prose outside the tool call."""
 
 _SCORE_USER = """{workable}CANDIDATE CV:
 {cv}"""
@@ -572,7 +601,7 @@ def _cap_for_hidden_text(out: CVMatchOutput, cap: float) -> CVMatchOutput:
             "skills_match_score": cap,
             "experience_relevance_score": cap,
             "integrity_signals": sig,
-            "summary": (note + (out.summary or ""))[:2000],
+            "summary": note + (out.summary or ""),
         }
     )
 
@@ -802,7 +831,10 @@ def _to_output(
         missing_skills=[x[:120] for x in (s.missing_skills or [])[:8]],
         experience_highlights=[x[:200] for x in (s.highlights or [])[:5]],
         concerns=[x[:200] for x in (s.concerns or [])[:5]],
-        summary=summary[:2000],
+        # Preserve Claude's authored summary verbatim (apart from the explicit
+        # verdict separator above). Concision is a generation contract, not a
+        # presentation-layer truncation rule.
+        summary=summary,
         # CV-integrity surface — persisted on every score; timeline_flags +
         # claims_to_verify drive the "verify before interview" UI, and
         # integrity_signals.applied says whether the penalty was deducted.

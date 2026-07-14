@@ -109,6 +109,7 @@ export const DecisionRail = ({
   const confPct = decision?.confidence != null && !Number.isNaN(Number(decision.confidence))
     ? Math.round(Number(decision.confidence) * 100)
     : null;
+  const decisionSource = decision?.decision_explanation?.source === 'policy' ? 'policy' : 'agent';
   const outcome = resolvedOutcomeLabel(application);
   const isScored = application?.cv_match_score != null;
   const postHandover = isPostHandoverWorkableStage(application?.workable_stage);
@@ -207,8 +208,8 @@ export const DecisionRail = ({
               <div className="dr-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
             ) : null}
             <div className="dr-rec-kl">
-              <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> Agent recommends
-              {confPct != null ? ` · Confidence ${confPct}%` : ''}
+              <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> {decisionSource === 'policy' ? 'Policy recommends' : 'Agent recommends'}
+              {decisionSource === 'agent' && confPct != null ? ` · Confidence ${confPct}%` : ''}
             </div>
           </div>
 

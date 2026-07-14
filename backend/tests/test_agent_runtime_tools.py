@@ -1614,6 +1614,7 @@ def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
     role.auto_promote = True
     db.flush()
     app = _make_application(db, org=org, role=role, name="Strong", email="s2@x.test", taali=88.0)
+    app.cv_match_details = {"summary": "Strong production backend fit. Longer supporting analysis."}
     run = _make_agent_run(db, role)
 
     # The deterministic engine's advance verdict is the VERB (engine.py emits
@@ -1657,6 +1658,20 @@ def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
         "on-policy advance captured via the real evaluate_policy path must auto-execute"
     )
     assert result["off_policy_withheld"] is False
+    decision = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .order_by(AgentDecision.id.desc())
+        .first()
+    )
+    assert decision.evidence["decision_source"] == "policy"
+    assert decision.evidence["source"] == "agent_runtime_policy"
+    assert decision.evidence["engine_verdict"] == "queue_advance_decision"
+    assert decision.evidence["policy_reasoning"] == "clears advance threshold"
+    assert decision.evidence["rule_path"] == ["advance_rule"]
+    assert decision.evidence["candidate_summary"] == (
+        "Strong production backend fit. Longer supporting analysis."
+    )
 
 
 def test_evaluate_policy_escalated_verdict_withholds_advance(db):
@@ -1700,7 +1715,12 @@ def test_evaluate_policy_escalated_verdict_withholds_advance(db):
             {
                 "application_id": app.id,
                 "reasoning": "try advance",
-                "evidence": {"taali_score": 60},
+                "evidence": {
+                    "taali_score": 60,
+                    "decision_source": "policy",
+                    "decision_trigger": "must_have_blocked",
+                    "decision_factors": [{"label": "Invented blocker", "status": "missing"}],
+                },
                 "confidence": 0.6,
             },
             db=db, agent_run=run, role=role,
@@ -1708,6 +1728,87 @@ def test_evaluate_policy_escalated_verdict_withholds_advance(db):
 
     assert not mock_advance.called, "escalated verdict must not auto-execute an advance"
     assert result["off_policy_withheld"] is True
+    decision = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .order_by(AgentDecision.id.desc())
+        .first()
+    )
+    assert "decision_source" not in decision.evidence
+    assert "decision_trigger" not in decision.evidence
+    assert "decision_factors" not in decision.evidence
+
+
+def test_evaluate_policy_must_have_reject_freezes_authoritative_factors(db):
+    """A matching hard-rule reject carries server-derived factors; the model
+    cannot replace them with its own policy story."""
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Blocked", email="blocked@x.test", taali=72.0
+    )
+    app.cv_match_score = 72.0
+    app.cv_match_details = {
+        "summary": "Strong dimensional modelling background. Longer analysis.",
+        "requirements_assessment": [
+            {
+                "requirement_id": "criterion_12",
+                "criterion_text": "Production knowledge graph development",
+                "priority": "must_have",
+                "status": "missing",
+            }
+        ],
+    }
+    run = _make_agent_run(db, role)
+    engine_verdict = PolicyDecision(
+        decision_type="queue_reject_decision",
+        confidence=1.0,
+        reasoning="A configured must-have requirement is blocked.",
+        rule_path=["point:send_assessment", "rule:fired:must_have_blocked"],
+        decision_point="send_assessment",
+        policy_revision_id=42,
+    )
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(engine_verdict, {}),
+    ):
+        tool_registry.dispatch(
+            "evaluate_policy", {"application_id": app.id},
+            db=db, agent_run=run, role=role,
+        )
+
+    tool_registry.dispatch(
+        "queue_reject_decision",
+        {
+            "application_id": app.id,
+            "reasoning": "model copy",
+            "evidence": {
+                "decision_source": "agent",
+                "decision_factors": [{"label": "Invented", "status": "unknown"}],
+            },
+            "confidence": 1.0,
+        },
+        db=db, agent_run=run, role=role,
+    )
+    decision = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .order_by(AgentDecision.id.desc())
+        .first()
+    )
+    assert decision.evidence["decision_source"] == "policy"
+    assert decision.evidence["decision_trigger"] == "must_have_blocked"
+    assert decision.evidence["policy_revision_id"] == 42
+    assert decision.evidence["decision_factors"] == [
+        {
+            "label": "Production knowledge graph development",
+            "status": "missing",
+            "priority": "must_have",
+        }
+    ]
 
 
 def test_evaluate_policy_no_task_send_verdict_captures_as_advance(db):

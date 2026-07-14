@@ -41,6 +41,9 @@ from ..models.role import Role
 from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
 from ..services.agent_policy_settings import automation_enabled_for_decision
+from ..services.auto_threshold_service import resolve_role_fit_threshold
+from ..services.decision_evidence_service import blocked_must_have_requirements
+from ..services.decision_presentation_service import normalize_candidate_summary
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
 
 
@@ -1394,6 +1397,173 @@ def _stamp_policy_revision_in_evidence(
     return base
 
 
+# Evidence fields that assert *why policy acted* are owned by the server.  Tool
+# arguments are model-authored, so accepting these keys from ``args.evidence``
+# would let an agent label its own judgment as policy or invent decisive
+# requirements.  The matching evaluate_policy snapshot below is the only writer.
+_POLICY_EVIDENCE_KEYS = frozenset(
+    {
+        "decision_source",
+        "decision_trigger",
+        "decision_factors",
+        "decision_point",
+        "candidate_summary",
+        "engine_verdict",
+        "policy_basis",
+        "policy_confidence",
+        "policy_reasoning",
+        "policy_revision_id",
+        "rule_path",
+    }
+)
+
+
+def _fired_policy_rule(rule_path: Any) -> str | None:
+    if not isinstance(rule_path, list):
+        return None
+    for step in reversed(rule_path):
+        if isinstance(step, str) and step.startswith("rule:fired:"):
+            return step[len("rule:fired:") :] or None
+    return None
+
+
+def _candidate_summary_snapshot(app: CandidateApplication | None) -> str | None:
+    details = getattr(app, "cv_match_details", None) if app is not None else None
+    if not isinstance(details, dict):
+        return None
+    summary = normalize_candidate_summary(details.get("summary"))
+    if summary:
+        return summary
+    bullets = details.get("score_rationale_bullets")
+    if isinstance(bullets, list):
+        for bullet in bullets:
+            summary = normalize_candidate_summary(bullet)
+            if summary:
+                return summary
+    return None
+
+
+def _policy_snapshot_for_evaluation(
+    db: Session,
+    *,
+    role: Role,
+    application_id: int,
+    verdict: Any,
+    sub_outputs: dict[str, Any],
+    persisted_decision_type: str | None,
+) -> dict[str, Any]:
+    """Build the server-owned, cycle-scoped snapshot later attached by queue.
+
+    It stays transient until the model queues the exact persisted decision type.
+    That exact-match condition prevents an off-policy model action from borrowing
+    the engine's attribution or causal trace.
+    """
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .one_or_none()
+    )
+
+    def output_value(agent_name: str, key: str) -> Any:
+        result = sub_outputs.get(agent_name)
+        if result is None or not bool(getattr(result, "ok", False)):
+            return None
+        output = getattr(result, "output", None)
+        return output.get(key) if isinstance(output, dict) else None
+
+    rule_path = list(getattr(verdict, "rule_path", None) or [])
+    fired = _fired_policy_rule(rule_path)
+    role_fit = output_value("cv_scoring", "role_fit_score")
+    if role_fit is None and app is not None:
+        role_fit = getattr(app, "role_fit_score_cache_100", None)
+        if role_fit is None:
+            role_fit = getattr(app, "cv_match_score", None)
+    pre_screen = output_value("pre_screen", "score")
+    if pre_screen is None and app is not None:
+        pre_screen = getattr(app, "genuine_pre_screen_score_100", None)
+    taali_score = output_value("assessment_scoring", "taali_score")
+    if taali_score is None and app is not None:
+        taali_score = getattr(app, "taali_score_cache_100", None)
+
+    try:
+        threshold = resolve_role_fit_threshold(db, role=role)
+    except Exception:  # pragma: no cover - presentation context is best effort
+        threshold = None
+
+    snapshot: dict[str, Any] = {
+        "_persisted_decision_type": persisted_decision_type,
+        "decision_source": "policy",
+        "source": "agent_runtime_policy",
+        "engine_verdict": str(getattr(verdict, "decision_type", "") or ""),
+        "decision_point": getattr(verdict, "decision_point", None),
+        "rule_path": rule_path,
+        "decision_trigger": fired,
+        "policy_reasoning": getattr(verdict, "reasoning", None),
+        "policy_confidence": getattr(verdict, "confidence", None),
+        "policy_revision_id": getattr(verdict, "policy_revision_id", None),
+        "effective_threshold": threshold,
+        "has_assessment_task": decision_translation.role_has_assessment_stage(role),
+        "role_fit_score": role_fit,
+        "pre_screen_score": pre_screen,
+        "taali_score": taali_score,
+        "candidate_summary": _candidate_summary_snapshot(app),
+    }
+    if fired == "must_have_blocked" and app is not None:
+        snapshot["decision_factors"] = blocked_must_have_requirements(app)
+    return snapshot
+
+
+def _queue_evidence(
+    db: Session,
+    *,
+    agent_run: AgentRun,
+    role: Role,
+    application_id: int,
+    decision_type: str,
+    supplied: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Sanitize model evidence and merge an exact-match policy snapshot."""
+    base = dict(supplied or {})
+    for key in _POLICY_EVIDENCE_KEYS:
+        base.pop(key, None)
+    # Source is generic evidence in older decisions, but these reserved values
+    # imply policy provenance and must not be model-selectable.
+    if str(base.get("source") or "").strip().lower() in {
+        "agent_runtime_policy",
+        "bulk_decision",
+        "score_time_decision",
+        "post_handover_second_opinion",
+        "pre_screen_threshold",
+        "knockout_screening",
+    }:
+        base.pop("source", None)
+
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .one_or_none()
+    )
+    candidate_summary = _candidate_summary_snapshot(app)
+    if candidate_summary:
+        base["candidate_summary"] = candidate_summary
+
+    snapshots = getattr(agent_run, "__engine_policy_snapshots__", None) or {}
+    snapshot = snapshots.get(int(application_id))
+    if isinstance(snapshot, dict) and snapshot.get("_persisted_decision_type") == decision_type:
+        for key, value in snapshot.items():
+            if key.startswith("_") or value is None:
+                continue
+            base[key] = value
+
+    return _stamp_policy_revision_in_evidence(db, role=role, evidence=base)
+
+
 # Maps each queueable decision_type to the role attribute that expresses its
 # autonomy preference. A matching toggle is necessary but not sufficient for
 # auto-execution: the role must also be enabled/unpaused and on-policy, and the
@@ -1846,8 +2016,13 @@ def _queue(
     idempotency_key_suffix: Optional[str] = None,
 ) -> Any:
     actor = Actor.agent(int(agent_run.id))
-    evidence = _stamp_policy_revision_in_evidence(
-        db, role=role, evidence=args.get("evidence")
+    evidence = _queue_evidence(
+        db,
+        agent_run=agent_run,
+        role=role,
+        application_id=int(args["application_id"]),
+        decision_type=decision_type,
+        supplied=args.get("evidence"),
     )
     decision = queue_decision.run(
         db,
@@ -2021,9 +2196,22 @@ def _tool_evaluate_policy(
     # ``role_has_assessment_stage``. Non-queueable / escalated verdicts
     # (escalate_low_confidence / skip / no_action) translate to ``None`` -> stored as
     # None -> ``_is_on_policy`` fails SAFE (off-policy -> human review).
-    _verdicts[int(application_id)] = decision_translation.resolve_persisted_decision_type(
+    persisted_decision_type = decision_translation.resolve_persisted_decision_type(
         str(verdict.decision_type),
         has_assessment_task=decision_translation.role_has_assessment_stage(role),
+    )
+    _verdicts[int(application_id)] = persisted_decision_type
+    snapshots = getattr(agent_run, "__engine_policy_snapshots__", None)
+    if snapshots is None:
+        snapshots = {}
+        agent_run.__engine_policy_snapshots__ = snapshots  # type: ignore[attr-defined]
+    snapshots[int(application_id)] = _policy_snapshot_for_evaluation(
+        db,
+        role=role,
+        application_id=application_id,
+        verdict=verdict,
+        sub_outputs=sub_outputs,
+        persisted_decision_type=persisted_decision_type,
     )
     # Telemetry: structured log so the Hub's signals dashboard can
     # bucket evaluations per (org, role, decision_type, revision).

@@ -102,7 +102,7 @@ Provide a JSON response with EXACTLY this structure (no markdown, no explanation
     "missing_skills": ["skill1", "skill2"],
     "experience_highlights": ["relevant experience 1", "relevant experience 2"],
     "concerns": ["concern 1", "concern 2"],
-    "summary": "2-3 sentence summary of fit"
+    "summary": "2-3 concise plain-English sentences aiming for about 75 words: overall fit and strongest evidence, then the one or two most material gaps or uncertainties"
 }}
 
 Scoring policy:
@@ -111,6 +111,7 @@ Scoring policy:
 3) Be evidence-based; do not infer experience not present in the CV text.
 4) Use the full 0-100 scale with granular precision (do not round to 10-point bands): 50 = neutral baseline, 70+ = good match, 85+ = strong match.
 5) Include a requirements_assessment entry for each recruiter-added criterion when provided.
+6) The summary is a synthesis, not a miniature report. Around 75 words is guidance, not a hard cutoff. Do not list requirements, scores, tools, employers, projects, or caveats; the structured fields above carry that detail. Do not state a policy decision.
 """
 
 
@@ -158,11 +159,17 @@ Recruiter-added scoring criteria (treat these as explicit decision requirements)
 """
 
 
-def _safe_string(value: Any, *, max_chars: int = 300) -> str:
+def _safe_string(value: Any, *, max_chars: int | None = 300) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    return re.sub(r"\s+", " ", text)[:max_chars]
+    cleaned = re.sub(r"\s+", " ", text)
+    return cleaned[:max_chars] if max_chars is not None else cleaned
+
+
+def _safe_summary(value: Any) -> str:
+    """Normalise Claude's summary without truncating its authored content."""
+    return _safe_string(value, max_chars=None)
 
 
 def _safe_string_list(value: Any, *, max_items: int = 20, max_chars: int = 160) -> list[str]:
@@ -1054,7 +1061,7 @@ async def calculate_cv_job_match(
                 "score_rationale_bullets": rationale_bullets,
                 "scoring_version": "cv_fit_v3_evidence_enriched",
                 "score_rubric_version": TAALI_SCORING_RUBRIC_VERSION,
-                "summary": _safe_string(result.get("summary"), max_chars=600),
+                "summary": _safe_summary(result.get("summary")),
                 "_claude_usage": usage_ledger,
             },
         }
@@ -1201,7 +1208,7 @@ Return ONLY a single valid JSON object with EXACTLY this shape (no markdown, no 
   "experience_relevance_score": <0-100>,
   "requirements_match_score": <0-100>,
   "recommendation": "strong_yes|yes|lean_no|no",
-  "summary": "2-3 sentence summary of fit",
+  "summary": "2-3 concise plain-English sentences aiming for about 75 words: overall fit and strongest evidence, then the one or two most material gaps or uncertainties",
   "matching_skills": ["skill1", "skill2"],
   "missing_skills": ["skill1", "skill2"],
   "experience_highlights": ["highlight 1", "highlight 2"],
@@ -1228,6 +1235,7 @@ Rules:
 4) Set blocker=true only for must_have criteria that are missing or contradicted.
 5) Be evidence-based; do not invent experience that is not in the CV.
 6) Use the full 0-100 scale: 50 baseline, 70+ good, 85+ strong. If a must_have is missing or contradicted, reduce overall_match_score materially.
+7) The summary is a synthesis, not a miniature report. Around 75 words is guidance, not a hard cutoff. Do not list requirements, scores, tools, employers, projects, or caveats; the structured fields above carry that detail. Do not state a policy decision.
 """
 
 
@@ -1402,7 +1410,7 @@ def _validate_v4_payload(
         "experience_relevance_score": experience,
         "requirements_match_score": requirements,
         "recommendation": recommendation,
-        "summary": _safe_string(payload.get("summary"), max_chars=600),
+        "summary": _safe_summary(payload.get("summary")),
         "matching_skills": _safe_string_list(payload.get("matching_skills")),
         "missing_skills": _safe_string_list(payload.get("missing_skills")),
         "experience_highlights": _safe_string_list(payload.get("experience_highlights")),

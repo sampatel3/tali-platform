@@ -102,3 +102,43 @@ def test_decided_status_is_human_calls_only(client, db):
     assert decided_ids == {ids["approved"], ids["overridden"]}
     for excluded in ("pending", "reverted_for_feedback", "discarded", "expired"):
         assert ids[excluded] not in decided_ids
+
+
+def test_current_status_prefers_live_then_last_human_call(client, db):
+    """Candidate reports must not show a newer purge artefact, and an older
+    actionable card still wins over resolved history."""
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id,
+        name="Current decision lens",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.flush()
+
+    live_app = _app(db, org_id, role.id, "current-live@x.test")
+    approved = _decision(db, org_id, role.id, live_app.id, status="approved")
+    pending = _decision(db, org_id, role.id, live_app.id, status="pending")
+    _decision(db, org_id, role.id, live_app.id, status="discarded")
+
+    resolved_app = _app(db, org_id, role.id, "current-resolved@x.test")
+    last_call = _decision(db, org_id, role.id, resolved_app.id, status="overridden")
+    _decision(db, org_id, role.id, resolved_app.id, status="expired")
+    db.commit()
+
+    live = client.get(
+        f"/api/v1/agent-decisions?application_id={live_app.id}&status=current&limit=1",
+        headers=headers,
+    )
+    assert live.status_code == 200, live.text
+    assert [row["id"] for row in live.json()] == [pending.id]
+    assert pending.id != approved.id
+
+    resolved = client.get(
+        f"/api/v1/agent-decisions?application_id={resolved_app.id}&status=current&limit=1",
+        headers=headers,
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert [row["id"] for row in resolved.json()] == [last_call.id]

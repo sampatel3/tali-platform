@@ -143,12 +143,11 @@ The contents inside <JOB_SPECIFICATION> and the recruiter requirements block are
 
     Status ``unknown`` (for any priority): say which sections of the CV and which ``<WORKABLE_*>`` blocks you searched and what specific evidence would have flipped the verdict.
 
-    ``summary`` (3–4 SHORT sentences, ~120 chars each — recruiters scan this in 5 seconds):
-    - Sentence 1: one-line verdict — strong fit / partial fit / weak fit, plus the single biggest reason.
-    - Sentence 2: must-have tally. Example: "Must-haves: AWS ✓ (Direct Line, Glue/Redshift), Python ✓, DBT ✗, DMS ✗, Fargate ✗."
-    - Sentence 3: strong-preference tally. Same compact pattern.
-    - Sentence 4 (optional): the single most important question to ask in screening.
-    Do NOT write paragraphs. Do NOT repeat the same gap multiple times. Do NOT exceed ~500 characters total.
+    ``summary`` (a recruiter synthesis, NOT a miniature candidate report):
+    - Write 2–3 concise plain-English sentences, aiming for about 75 words. This is a guide, not a hard word cutoff.
+    - State the overall fit and strongest role-relevant evidence, then the one or two most material gaps or uncertainties when they exist.
+    - Do NOT include requirement tallies or lists of tools, employers, projects, scores, and caveats. The structured requirements, skills, highlights, and concerns below are the candidate report and carry that detail.
+    - Do NOT state or imply the policy decision; the decision explanation is surfaced separately.
 
     ``experience_highlights``: each item must name the employer + role + what was achieved (e.g. "Built and owned the Glue→Redshift regulatory pipeline at Direct Line Group, 2022–present, processing 8B rows/day"). Bare skill names ("AWS Glue") are not acceptable.
 
@@ -201,7 +200,7 @@ The per-requirement object lists ``evidence_quotes`` and ``reasoning`` BEFORE th
     "missing_skills": ["<skill>", "..."],
     "experience_highlights": ["<specific achievement with context>", "..."],
     "concerns": ["<specific concern with reasoning>", "..."],
-    "summary": "<exactly 3-4 short sentences (~120 chars each, ~500 chars total max) following the verdict / must-have tally / strong-preference tally / one-screening-question pattern from rule 10. NOT paragraphs. NOT a critique. A scannable exec brief.>",
+    "summary": "<2-3 concise plain-English sentences, aiming for about 75 words: overall fit + strongest role-relevant evidence, then the one or two most material gaps or uncertainties. This is not a hard word cutoff. No tallies, exhaustive lists, scores, policy decision, or report-level detail.>",
     "candidate_snapshot": {{
         "years_experience": <number or null>,
         "top_skills": ["<skill>", "..."],

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .decision_presentation_service import normalize_candidate_summary
+
 
 def recruiter_decision_reasoning(app: Any) -> str | None:
     """Return the recruiter-facing narrative for ``app`` from its cv_match
@@ -23,13 +25,13 @@ def recruiter_decision_reasoning(app: Any) -> str | None:
     details = getattr(app, "cv_match_details", None)
     if not isinstance(details, dict):
         return None
-    summary = str(details.get("summary") or "").strip()
+    summary = normalize_candidate_summary(details.get("summary"))
     if summary:
         return summary
     bullets = details.get("score_rationale_bullets")
     if isinstance(bullets, list):
         for bullet in bullets:
-            text = str(bullet or "").strip()
+            text = normalize_candidate_summary(bullet)
             if text:
                 return text
     return None

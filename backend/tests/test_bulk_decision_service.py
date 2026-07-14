@@ -221,6 +221,76 @@ def test_reasoning_falls_back_to_rationale_then_policy(db):
     assert any(r.startswith("Deterministic policy:") for r in reasons)
 
 
+def test_hard_rule_evidence_names_blockers_without_misrepresenting_score(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    _add_app(
+        db,
+        org,
+        role,
+        role_fit=80.0,
+        cv_match_details={
+            "summary": "Strong overall fit. Longer report detail that should not be copied to the card.",
+            "requirements_assessment": [
+                {
+                    "requirement_id": "crit_42",
+                    "requirement": "Production knowledge-graph delivery",
+                    "priority": "must_have",
+                    "status": "missing",
+                    "blocker": True,
+                }
+            ],
+        },
+    )
+
+    decide_role_cohort(db, role=role)
+
+    dec = _pending(db, role)[0]
+    assert dec.decision_type == "reject"
+    assert dec.reasoning == (
+        "Strong overall fit. Longer report detail that should not be copied to the card."
+    )
+    assert dec.evidence["candidate_summary"] == (
+        "Strong overall fit. Longer report detail that should not be copied to the card."
+    )
+    assert dec.evidence["decision_trigger"] == "must_have_blocked"
+    assert dec.evidence["decision_source"] == "policy"
+    assert dec.evidence["policy_revision_id"] is not None
+    assert dec.evidence["decision_factors"] == [
+        {
+            "label": "Production knowledge-graph delivery",
+            "status": "missing",
+            "priority": "must_have",
+        }
+    ]
+    assert "Candidate fails a must-have requirement" in dec.evidence["policy_basis"]
+    assert "hard rule took priority" in dec.evidence["policy_basis"]
+    assert "80 vs threshold 50" in dec.evidence["policy_basis"]
+
+
+def test_holistic_inferred_must_have_does_not_override_role_threshold(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    _add_app(
+        db,
+        org,
+        role,
+        role_fit=80.0,
+        cv_match_details={
+            "requirements_assessment": [
+                {
+                    "requirement_id": "holistic_3",
+                    "requirement": "Knowledge graph development",
+                    "priority": "must_have",
+                    "status": "missing",
+                }
+            ]
+        },
+    )
+
+    decide_role_cohort(db, role=role)
+
+    assert _pending(db, role)[0].decision_type == "advance_to_interview"
+
+
 def test_strong_candidate_sends_assessment_when_task_assigned(db):
     org, role = _seed_role(db, score_threshold=50, with_task=True)
     _add_app(db, org, role, role_fit=80.0)  # >= 50 + task -> send_assessment
@@ -424,6 +494,35 @@ def test_reconcile_noop_when_threshold_unchanged(db):
     summary = decide_role_cohort(db, role=role)
     assert summary.get("reconciled_discarded", 0) == 0
     assert len(_pending(db, role)) == 1
+
+
+def test_reconcile_explains_policy_input_flip_without_blaming_threshold(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=80.0, cv_match_details={"requirements_assessment": []})
+    decide_role_cohort(db, role=role)
+    first = _pending(db, role)[0]
+    assert first.decision_type == "advance_to_interview"
+
+    app.cv_match_details = {
+        "requirements_assessment": [
+            {
+                "requirement_id": "crit_7",
+                "requirement": "Required clearance",
+                "priority": "must_have",
+                "status": "missing",
+                "blocker": True,
+            }
+        ]
+    }
+    db.commit()
+
+    decide_role_cohort(db, role=role)
+
+    db.refresh(first)
+    assert first.status == "discarded"
+    assert first.resolution_note.startswith("policy inputs changed;")
+    assert "threshold recalibrated" not in first.resolution_note
+    assert _pending(db, role)[0].decision_type == "reject"
 
 
 def test_scored_below_pre_screen_line_still_rejected(db):

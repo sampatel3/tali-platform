@@ -37,6 +37,7 @@ import {
 } from '../../features/home/atoms';
 import { ScoreProvenance } from '../../features/candidates/ScoreProvenance';
 import { IntegrityFlags } from './IntegrityFlags';
+import { DecisionNarrative } from './DecisionNarrative';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from './decisionActions';
 import '../../features/home/home.css';
 
@@ -88,6 +89,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const isRejectType = isRejectDecisionType(decision.decision_type);
   const postHandoverWarn = isRejectType && Boolean(decision.candidate_post_handover);
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
+  const decisionSource = decision?.decision_explanation?.source === 'policy' ? 'policy' : 'agent';
   const PrimaryIcon = spec.primaryIcon || Check;
   const primaryTitle = staleEngineOnly
     ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
@@ -215,8 +217,10 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             {spec.primaryLabel}
           </Button>
           <div className="rq-rec-kl">
-            <Sparkles size={12} aria-hidden="true" /> Agent recommends
-            {decision.confidence != null ? ` · Confidence ${Math.round(decision.confidence * 100)}%` : ''}
+            <Sparkles size={12} aria-hidden="true" /> {decisionSource === 'policy' ? 'Policy recommends' : 'Agent recommends'}
+            {decisionSource === 'agent' && decision.confidence != null
+              ? ` · Confidence ${Math.round(decision.confidence * 100)}%`
+              : ''}
           </div>
           {isRejectType ? (
             <div className="rq-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
@@ -224,11 +228,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      {!hideDecisionParts && decision.reasoning ? (
-        <p style={{ margin: '0 0 14px', fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
-          {decision.reasoning}
-        </p>
-      ) : null}
+      {!hideDecisionParts ? <DecisionNarrative decision={decision} compact /> : null}
 
       {/* Trust readout right under the summary — the specific things to verify
           and the cross-source corroborations we confirmed. Same component the

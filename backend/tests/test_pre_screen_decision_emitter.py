@@ -124,6 +124,36 @@ def test_emitter_still_cards_pre_handover_stage(db):
     assert result is not None and result.status == "pending"
 
 
+def test_emitter_freezes_summary_and_owns_policy_attribution(db):
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    app.pre_screen_evidence = {
+        "summary": "Limited evidence for the role's core stack. Longer detail belongs in the report."
+    }
+    db.flush()
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+        evidence={
+            "decision_source": "agent",
+            "decision_trigger": "invented",
+            "source": "invented",
+        },
+    )
+
+    assert result is not None
+    assert result.evidence["decision_source"] == "policy"
+    assert result.evidence["decision_trigger"] == "pre_screen_auto_reject_eligible"
+    assert result.evidence["source"] == "pre_screen_threshold"
+    assert result.evidence["candidate_summary"] == (
+        "Limited evidence for the role's core stack. Longer detail belongs in the report."
+    )
+
+
 def test_reconcile_keeps_post_handover_card(db):
     """A pending pre-screen reject card stays LIVE when the candidate moves to
     a post-handover Workable stage while still below the threshold — Taali's
@@ -1337,12 +1367,18 @@ def test_backfill_recommendations_from_cvmatch_both_directions(db):
 def test_backfill_summaries_from_cvmatch(db):
     org, role, app = _seed(db, score=40.0, threshold=50.0)
     app.pre_screen_evidence = {}  # no summary
-    app.cv_match_details = {"summary": "Weak fit — missing must-have Kubernetes."}
+    generated = (
+        "Weak fit — relevant platform delivery is present. "
+        "The material gap is unproven Kubernetes ownership. "
+        + "Supporting report context remains intact. " * 8
+    ).strip()
+    assert len(generated) > 240
+    app.cv_match_details = {"summary": generated}
     db.flush()
     res = backfill_summaries_from_cvmatch(db, organization_id=int(org.id))
     assert res["updated"] == 1
     db.refresh(app)
-    assert "Weak fit" in (app.pre_screen_evidence or {}).get("summary", "")
+    assert (app.pre_screen_evidence or {}).get("summary") == generated
 
 
 def test_backfill_summaries_skips_when_present(db):
