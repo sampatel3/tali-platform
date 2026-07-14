@@ -143,8 +143,8 @@ const CandidateStandingReportPage = lazy(() =>
 const JobsPage = lazy(() =>
   import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
 );
-const ProspectsPage = lazy(() =>
-  import('./features/candidates/ProspectsPage')
+const CandidatesListPage = lazy(() =>
+  import('./features/candidates/CandidatesListPage')
 );
 const UnsubscribePage = lazy(() =>
   import('./features/outreach/UnsubscribePage')
@@ -780,16 +780,16 @@ function AppContent() {
         )}
       />
 
-      {/* The Candidates tab surfaces org-level prospects — not-yet-applied
-          contacts (CSV import, manual add, the job page's Find-candidates
-          helper), plus the outreach campaign machinery ("Reach out"). Per-role
-          candidate lists still live under each job. The drill-down route
-          /candidates/:id below is the standing report, still used. */}
+      {/* The Candidates tab is a real cross-role candidate list — every
+          application (candidate × role) the agent is working, searchable and
+          filterable by role / stage / decision / source. Per-role pipelines
+          still live under each job. The drill-down route /candidates/:id below
+          is the standing report, reached by application id. */}
       <Route
         path="/candidates"
         element={(
           <Suspense fallback={lazyFallback}>
-            <ProspectsPage
+            <CandidatesListPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />

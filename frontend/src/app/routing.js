@@ -59,8 +59,9 @@ export const pathForPage = (page, options = {}) => {
     case 'blog-post':
       return options.slug ? `/blog/${options.slug}` : '/blog';
     case 'candidates':
-      // The Candidates tab surfaces org-level prospects (not-yet-applied
-      // contacts). Per-role candidate lists still live under each job.
+      // The Candidates tab is a real cross-role candidate list — every
+      // application the agent is working, filterable by role / stage /
+      // decision. Per-role pipelines still live under each job.
       return '/candidates';
     case 'candidate-report': {
       if (!options.candidateApplicationId) return '/jobs';
