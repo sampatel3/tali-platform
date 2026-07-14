@@ -37,6 +37,7 @@ vi.mock('../../shared/api', () => ({
     fetchCvsStatus: vi.fn(),
     batchPreScreenStatus: vi.fn(),
     update: vi.fn(),
+    updateJobSpec: vi.fn(),
     regenerateInterviewFocus: vi.fn(),
     fetchCvs: vi.fn(),
     batchPreScreen: vi.fn(),
@@ -46,6 +47,8 @@ vi.mock('../../shared/api', () => ({
     deleteCriterion: vi.fn(),
     syncCriteriaWithWorkspace: vi.fn(),
     resetCriteriaToWorkspace: vi.fn(),
+    addTask: vi.fn(),
+    removeTask: vi.fn(),
     distribution: vi.fn(),
     sisterScoringStatus: vi.fn(),
     rescoreSister: vi.fn(),
@@ -149,6 +152,14 @@ describe('JobPipelinePage', () => {
     vi.clearAllMocks();
     apiClient.roles.get.mockResolvedValue({ data: baseRole });
     apiClient.roles.update.mockResolvedValue({ data: baseRole });
+    apiClient.roles.updateJobSpec.mockResolvedValue({
+      data: {
+        applied: true,
+        role: baseRole,
+        diff: { added: 0, removed: 0, criteria_count: 0 },
+        would_rescreen: { count: 0, est_cost_usd: 0 },
+      },
+    });
     apiClient.roles.listTasks.mockResolvedValue({ data: [] });
     apiClient.roles.listApplications.mockResolvedValue({ data: baseApplications });
     apiClient.roles.batchScoreStatus.mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0 } });
@@ -226,6 +237,12 @@ describe('JobPipelinePage', () => {
     expect(screen.getByRole('button', { name: /Open original role/i })).toBeInTheDocument();
     expect(screen.queryByText(/Not published/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Process \d+ candidate/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Edit job spec$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
+    expect(await screen.findByRole('heading', { name: /^Role specification$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
+    expect(apiClient.roles.updateJobSpec).not.toHaveBeenCalled();
   });
 
   it('removes manual sourcing, processing, syncing and distribution work from the role page', async () => {
@@ -618,14 +635,56 @@ Banking transformation experience
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();
 
-    // Read-first: the spec shows with an Edit button; the editable Role name
-    // field is hidden until you click Edit, and the job-spec file upload is
-    // gone entirely (spec is updated by pasting into the agent).
+    // Read-first: the spec shows with an Edit button; the focused document
+    // editor is hidden until requested, and assessment configuration stays out
+    // of this writing workflow.
     const editBtn = screen.getByRole('button', { name: /^Edit$/i });
-    expect(screen.queryByText(/Role name/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Role title$/i)).not.toBeInTheDocument();
     fireEvent.click(editBtn);
-    expect(await screen.findByText(/Role name/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^Role title$/i)).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Write/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Preview/i })).toBeInTheDocument();
     expect(screen.queryByText(/Choose a job specification file/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tasks · A\/B/i)).not.toBeInTheDocument();
+  });
+
+  it('saves the authoritative job spec through the dedicated endpoint', async () => {
+    const originalSpec = '## About the role\nBuild reliable data products for teams across the business and own delivery outcomes.';
+    const updatedSpec = `${originalSpec}\n\n## Requirements\n- AWS Glue\n- Python`;
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, source: 'workable', job_spec_text: originalSpec } });
+    apiClient.roles.updateJobSpec.mockResolvedValue({
+      data: {
+        applied: true,
+        role: { ...baseRole, source: 'workable', job_spec_text: updatedSpec },
+        diff: { added: 2, removed: 0, criteria_count: 2 },
+        would_rescreen: { count: 2, est_cost_usd: 0.04 },
+      },
+    });
+    // Task assignment belongs to Agent settings. Even when a role has linked
+    // tasks, a job-spec-only save must not send a stale replacement roster.
+    apiClient.roles.listTasks.mockResolvedValue({
+      data: [{ id: 91, name: 'AWS ingestion exercise' }],
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    fireEvent.change(screen.getByLabelText('Job description'), { target: { value: updatedSpec } });
+    fireEvent.click(screen.getByRole('button', { name: /Save job spec/i }));
+
+    await waitFor(() => {
+      expect(apiClient.roles.updateJobSpec).toHaveBeenCalledWith(101, {
+        job_spec_text: updatedSpec,
+      });
+    });
+    expect(apiClient.roles.update).not.toHaveBeenCalledWith(
+      101,
+      expect.objectContaining({ description: expect.anything() }),
+    );
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('updated criteria affect 2 existing candidates'),
+      'success',
+    ));
   });
 
   it('renders a Last updated column and sorts by it (independent of score) via the header', async () => {

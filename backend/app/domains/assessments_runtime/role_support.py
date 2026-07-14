@@ -339,6 +339,7 @@ def role_to_response(
         job_spec_filename=role.job_spec_filename,
         job_spec_text=None if summary else role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,
+        job_spec_manually_edited_at=getattr(role, "job_spec_manually_edited_at", None),
         job_spec_present=role_has_job_spec(role),
         interview_focus=None if summary else role.interview_focus,
         interview_focus_generated_at=role.interview_focus_generated_at,

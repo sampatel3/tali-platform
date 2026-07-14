@@ -26,6 +26,7 @@ from ....services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
 )
+from ....services.job_spec_override_service import has_manual_job_spec_override
 from ....services.s3_service import generate_s3_key, upload_bytes_to_s3
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,22 @@ def upsert_role_from_job_order(
         db.add(role)
         created = True
 
+    previous_job_data = (
+        role.bullhorn_job_data if isinstance(role.bullhorn_job_data, dict) else None
+    )
+    previous_ats_spec = None
+    if previous_job_data and any(
+        isinstance(previous_job_data.get(key), str)
+        and previous_job_data.get(key).strip()
+        for key in ("description", "publicDescription")
+    ):
+        previous_ats_spec = format_job_spec_from_job_order(previous_job_data)
+    manual_spec_override = has_manual_job_spec_override(
+        role,
+        ats_source="bullhorn",
+        cached_ats_spec=previous_ats_spec,
+    )
+
     role.deleted_at = None  # restore if soft-deleted
     role.source = "bullhorn"
     role.bullhorn_job_order_id = job_id
@@ -163,9 +180,14 @@ def upsert_role_from_job_order(
 
     prev_job_spec = role.job_spec_text or ""
     formatted_spec = format_job_spec_from_job_order(job_order)
-    if formatted_spec:
+    if formatted_spec and not manual_spec_override:
         role.job_spec_text = formatted_spec
         role.description = formatted_spec
+    elif formatted_spec and manual_spec_override:
+        logger.info(
+            "Preserving recruiter-edited job spec during Bullhorn sync role_id=%s",
+            role.id,
+        )
     db.flush()
 
     spec_changed = (role.job_spec_text or "") != prev_job_spec

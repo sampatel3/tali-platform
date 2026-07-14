@@ -9,6 +9,7 @@ export const roles = {
   rescoreSister: (roleId) => api.post(`/roles/${roleId}/sister-rescore`),
   sisterScoringStatus: (roleId) => api.get(`/roles/${roleId}/sister-scoring-status`),
   update: (id, data) => api.patch(`/roles/${id}`, data),
+  updateJobSpec: (id, data) => api.put(`/roles/${id}/job-spec`, data),
   remove: (id) => api.delete(`/roles/${id}`),
   star: (id) => api.post(`/roles/${id}/star`),
   unstar: (id) => api.delete(`/roles/${id}/star`),

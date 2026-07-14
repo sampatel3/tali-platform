@@ -160,9 +160,16 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
         return {"ok": False, "error": "That doesn't look like a full job spec — paste the whole description and I'll apply it."}
 
     before = _criteria_text_map(db, role)
+    now = datetime.now(timezone.utc)
     role.job_spec_text = text
+    # Text edits are first-class recruiter overrides, not an ephemeral agent
+    # note. Keep the legacy description reader truthful and protect the edit
+    # from the next ATS sync.
+    role.description = text
     if hasattr(role, "job_spec_uploaded_at"):
-        role.job_spec_uploaded_at = datetime.now(timezone.utc)
+        role.job_spec_uploaded_at = now
+    if hasattr(role, "job_spec_manually_edited_at"):
+        role.job_spec_manually_edited_at = now
     try:
         from ..services.role_criteria_service import sync_derived_criteria
 

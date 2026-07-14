@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
@@ -54,8 +54,8 @@ describe('RoleAgentSettingsTab assessment task', () => {
         allTasks={catalogue}
       />,
     );
-    expect(screen.getByText(/Sending/)).toBeInTheDocument();
-    // The assigned task name is surfaced in the "currently sending" line.
+    expect(screen.getByText('1 task assigned')).toBeInTheDocument();
+    // The assigned task name is surfaced in the compact selection summary.
     expect(screen.getAllByText('React Component Build').length).toBeGreaterThan(0);
     // No unassigned warning when a task is linked.
     expect(screen.queryByText('No assessment task assigned')).not.toBeInTheDocument();
@@ -71,52 +71,80 @@ describe('RoleAgentSettingsTab assessment task', () => {
     );
     expect(screen.getByText('No assessment task assigned')).toBeInTheDocument();
     expect(
-      screen.getByText(/nothing to send when a candidate passes screening/i),
+      screen.getByText(/nothing to send after screening/i),
     ).toBeInTheDocument();
   });
 
-  it('assigns a task from settings via the existing role↔task link', () => {
-    const onAssignAssessmentTask = vi.fn();
+  it('assigns a task by sending the complete selected ID set', async () => {
+    const onAssignAssessmentTasks = vi.fn();
     render(
       <RoleAgentSettingsTab
         {...baseProps()}
         roleTasks={[]}
         allTasks={catalogue}
-        onAssignAssessmentTask={onAssignAssessmentTask}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
       />,
     );
-    // Open the assessment-task select and pick a task.
-    fireEvent.click(screen.getByRole('button', { name: 'Assessment task' }));
-    fireEvent.click(screen.getByRole('option', { name: 'Async Debugging Challenge' }));
-    expect(onAssignAssessmentTask).toHaveBeenCalledWith(700);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Async Debugging Challenge' }));
+    });
+    expect(onAssignAssessmentTasks).toHaveBeenCalledWith([700]);
   });
 
-  it('clears the assigned task when "No assessment task" is chosen', () => {
-    const onAssignAssessmentTask = vi.fn();
+  it('clears the assigned task without a destructive single-select', async () => {
+    const onAssignAssessmentTasks = vi.fn();
     render(
       <RoleAgentSettingsTab
         {...baseProps()}
         roleTasks={[{ id: 701, name: 'React Component Build' }]}
         allTasks={catalogue}
-        onAssignAssessmentTask={onAssignAssessmentTask}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Assessment task' }));
-    fireEvent.click(screen.getByRole('option', { name: 'No assessment task' }));
-    expect(onAssignAssessmentTask).toHaveBeenCalledWith(null);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'React Component Build' }));
+    });
+    expect(onAssignAssessmentTasks).toHaveBeenCalledWith([]);
   });
 
-  it('hands off multi-task A/B sets to the Job spec tab instead of a destructive single-select', () => {
+  it('manages a multi-task A/B set directly in Agent settings', async () => {
+    const onAssignAssessmentTasks = vi.fn();
     render(
       <RoleAgentSettingsTab
         {...baseProps()}
         roleTasks={catalogue}
         allTasks={catalogue}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
       />,
     );
-    expect(screen.getByText(/A\/B test/)).toBeInTheDocument();
-    expect(screen.getByText(/Job spec tab/)).toBeInTheDocument();
-    // No single-select in the A/B case.
-    expect(screen.queryByRole('button', { name: 'Assessment task' })).not.toBeInTheDocument();
+    expect(screen.getByText('2 tasks in A/B rotation')).toBeInTheDocument();
+    expect(screen.getByText(/split evenly and stays stable/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Async Debugging Challenge' }));
+    });
+    expect(onAssignAssessmentTasks).toHaveBeenCalledWith([701]);
+  });
+
+  it('adds search when the task library is long', () => {
+    const longCatalogue = Array.from({ length: 7 }, (_, index) => ({
+      id: 800 + index,
+      name: `Assessment ${index + 1}`,
+    }));
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        roleTasks={[]}
+        allTasks={longCatalogue}
+        onAssignAssessmentTasks={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search assessment tasks' }), {
+      target: { value: 'Assessment 7' },
+    });
+    expect(screen.getByRole('checkbox', { name: 'Assessment 7' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Assessment 1' })).not.toBeInTheDocument();
   });
 });

@@ -13,6 +13,7 @@ import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
@@ -45,7 +46,7 @@ import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { AtsTypeTag, atsTypeColumnLabel, roleAtsType } from './atsType';
-import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
   formatCount,
   budgetTile,
@@ -434,14 +435,28 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   useEffect(() => {
     setTableVisibleCount(TABLE_PAGE_SIZE);
   }, [tableStageFilter, tableSortField, tableSortBy]);
-  const [roleSheetError, setRoleSheetError] = useState('');
+  const [jobSpecError, setJobSpecError] = useState('');
   // The legacy slide-out <AgentSettingsPanel> drawer state has been
   // retired — the canvas-spec Agent settings tab on this page owns
   // the same controls inline. See the AgentBar onPause handler below.
-  const [savingRoleSheet, setSavingRoleSheet] = useState(false);
+  const [savingJobSpec, setSavingJobSpec] = useState(false);
   // Job Specification tab is read-first: it shows the spec, and this flips it
   // into the inline edit form.
   const [editingSpec, setEditingSpec] = useState(false);
+  const [specEditorDirty, setSpecEditorDirty] = useState(false);
+  const [pendingRoleView, setPendingRoleView] = useState(null);
+
+  // Sister roles are read-only scoring projections. Their authoritative job
+  // specification belongs to the original ATS role, and the API rejects spec
+  // writes here, so do not expose an editor that can only fail on save.
+  const canEditJobSpec = Boolean(role) && role?.role_kind !== 'sister';
+  useEffect(() => {
+    if (role?.role_kind !== 'sister') return;
+    setEditingSpec(false);
+    setSpecEditorDirty(false);
+    setPendingRoleView(null);
+    setJobSpecError('');
+  }, [role?.role_kind]);
   // Only the most recently started loadRoleWorkspace may write state, so a
   // slow earlier load can't clobber fresher state (e.g. revert an optimistic
   // agent toggle to OFF). loadedRoleIdRef marks the last fully-loaded role so
@@ -636,14 +651,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [loadRoleWorkspace, sisterScoringStatus?.status]);
 
-  // The org-wide task list feeds the role-edit task picker on the Job
-  // Specification tab and the assessment-task picker on the Agent settings
-  // tab. It's not needed for the candidate table, so defer the fetch until
-  // one of those tabs is first opened — one fewer request on every role-page
-  // load. `loadedAllTasksRef` keeps it to a single fetch.
+  // The org-wide task catalogue belongs to Agent settings. The job-spec editor
+  // is a focused writing surface and never needs to load it.
   const loadedAllTasksRef = useRef(false);
   useEffect(() => {
-    if ((activeView !== 'activity' && activeView !== 'role-fit') || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
+    if (activeView !== 'role-fit' || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
     let cancelled = false;
     const loadAllTasks = async () => {
       try {
@@ -1037,74 +1049,65 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [numericRoleId, role, rolesApi, showToast]);
 
-  const handleRoleSheetSubmit = async ({
-    name,
-    description,
-    jobSpecFile,
-    taskIds,
-  }) => {
-    if (!Number.isFinite(numericRoleId)) return;
-    setSavingRoleSheet(true);
-    setRoleSheetError('');
+  const handleJobSpecSubmit = async ({ name, jobSpecText }) => {
+    if (!Number.isFinite(numericRoleId) || !canEditJobSpec) return false;
+    setSavingJobSpec(true);
+    setJobSpecError('');
     try {
-      await rolesApi.update(numericRoleId, {
-        name,
-        description: trimOrUndefined(description),
-      });
-
-      if (jobSpecFile && rolesApi.uploadJobSpec) {
-        await rolesApi.uploadJobSpec(numericRoleId, jobSpecFile);
+      const payload = {
+        job_spec_text: jobSpecText,
+        ...(name ? { name } : {}),
+      };
+      const response = await rolesApi.updateJobSpec(numericRoleId, payload);
+      if (response?.data?.role) {
+        setRole(response.data.role);
       }
-
-      const nextTaskIds = new Set((taskIds || []).map((value) => Number(value)));
-      const currentTaskIds = new Set((roleTasks || []).map((task) => Number(task.id)));
-
-      if (rolesApi.addTask) {
-        for (const taskId of nextTaskIds) {
-          if (!currentTaskIds.has(taskId)) {
-            await rolesApi.addTask(numericRoleId, taskId);
-          }
-        }
-      }
-      if (rolesApi.removeTask) {
-        for (const taskId of currentTaskIds) {
-          if (!nextTaskIds.has(taskId)) {
-            await rolesApi.removeTask(numericRoleId, taskId);
-          }
-        }
-      }
-
-      if (jobSpecFile && rolesApi.regenerateInterviewFocus) {
-        try {
-          await rolesApi.regenerateInterviewFocus(numericRoleId);
-        } catch {
-          // Keep edit flow resilient if interview-focus generation is temporarily unavailable.
-        }
-      }
-
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
-      showToast('Role updated.', 'success');
+      const affectedCount = Number(response?.data?.would_rescreen?.count || 0);
+      showToast(
+        affectedCount > 0
+          ? `Job spec saved. The updated criteria affect ${formatCount(affectedCount)} existing candidate${affectedCount === 1 ? '' : 's'}.`
+          : 'Job spec saved.',
+        'success',
+      );
       return true;
     } catch (error) {
-      setRoleSheetError(getErrorMessage(error, 'Failed to save role.'));
+      setJobSpecError(getErrorMessage(error, 'Failed to save the job specification.'));
       return false;
     } finally {
-      setSavingRoleSheet(false);
+      setSavingJobSpec(false);
     }
   };
 
-  // Assign / change / clear the role's assessment task from the Agent settings
-  // tab. Reuses the same role↔task link the Job spec editor writes
-  // (rolesApi.addTask/removeTask) — this is a single-task convenience path, so
-  // it drives the role to exactly [taskId] (or [] to clear). Multi-task A/B
-  // sets are managed on the Job spec tab, which is why the settings control
-  // hands off to that tab when more than one task is linked.
-  const handleAssignAssessmentTask = useCallback(async (taskId) => {
-    if (!Number.isFinite(numericRoleId)) return;
+  const handleRoleViewNavigate = useCallback((event, nextView) => {
+    if (!editingSpec || nextView === 'activity') return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (specEditorDirty) {
+      event.preventDefault();
+      setPendingRoleView(nextView);
+      return;
+    }
+    setEditingSpec(false);
+    setJobSpecError('');
+  }, [editingSpec, specEditorDirty]);
+
+  const discardSpecAndNavigate = useCallback(() => {
+    const nextView = pendingRoleView;
+    setPendingRoleView(null);
+    setSpecEditorDirty(false);
+    setEditingSpec(false);
+    setJobSpecError('');
+    if (nextView) setActiveView(nextView);
+  }, [pendingRoleView, setActiveView]);
+
+  // Assign, change, clear, or A/B-test assessment tasks from Agent settings.
+  // The callback always drives the role to exactly the requested id set.
+  const handleAssignAssessmentTasks = useCallback(async (taskIds) => {
+    if (!Number.isFinite(numericRoleId)) return false;
     setSavingAssessmentTask(true);
     try {
-      const desired = taskId == null ? [] : [Number(taskId)];
+      const desired = [...new Set((taskIds || []).map((id) => Number(id)).filter(Number.isFinite))];
       const currentIds = (roleTasks || []).map((task) => Number(task.id));
       if (rolesApi.addTask) {
         for (const id of desired) {
@@ -1118,13 +1121,29 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       }
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
-      showToast(taskId == null ? 'Assessment task cleared.' : 'Assessment task assigned.', 'success');
+      showToast(
+        desired.length === 0
+          ? 'Assessment tasks cleared.'
+          : desired.length === 1
+            ? 'Assessment task assigned.'
+            : `${desired.length}-task A/B set saved.`,
+        'success',
+      );
+      return true;
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to update the assessment task.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to update assessment tasks.'), 'error');
+      throw error;
     } finally {
       setSavingAssessmentTask(false);
     }
-  }, [numericRoleId, roleTasks, loadRoleWorkspace, showToast]);
+  }, [numericRoleId, roleTasks, rolesApi, loadRoleWorkspace, showToast]);
+
+  /*
+   * Job-spec text and linked assessments intentionally have separate owners:
+   * this editor updates the screening document atomically, while Agent settings
+   * owns the assessment set. Keeping those workflows separate prevents a text
+   * edit from silently changing candidate assignment behavior.
+   */
 
   const handleRescoreSister = useCallback(async () => {
     if (!Number.isFinite(numericRoleId) || sisterRescoring) return;
@@ -1397,17 +1416,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 {sisterScoringStatus?.status === 'running' ? `Scoring ${sisterScoringStatus.progress_percent || 0}%` : 'Re-score roster'}
               </button>
             ) : null}
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              onClick={() => {
-                setRoleSheetError('');
-                setEditingSpec(true);
-                setActiveView('activity');
-              }}
-            >
-              Edit job spec
-            </button>
+            {canEditJobSpec ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => {
+                  setJobSpecError('');
+                  setSpecEditorDirty(false);
+                  setEditingSpec(true);
+                  setActiveView('activity');
+                }}
+              >
+                Edit job spec
+              </button>
+            ) : null}
           </>
         )}
         postTitle={(
@@ -1454,7 +1476,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             variant — one funnel look across surfaces. */}
         <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
 
-        <RoleViewTabs activeView={activeView} />
+        <RoleViewTabs activeView={activeView} onBeforeNavigate={handleRoleViewNavigate} />
 
         <PresenceSwap presenceKey={activeView} className="role-view-panel">
           {activeView === 'pipeline' ? (
@@ -1670,22 +1692,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             onThresholdModeChange={handleThresholdModeChange}
             roleTasks={roleTasks}
             allTasks={allTasks}
-            onAssignAssessmentTask={handleAssignAssessmentTask}
+            onAssignAssessmentTasks={handleAssignAssessmentTasks}
             savingAssessmentTask={savingAssessmentTask}
           />
         ) : activeView === 'activity' ? (
-          <div className="role-spec-layout">
+          <div className={`role-spec-layout${editingSpec ? ' is-editing' : ''}`}>
             <section className="role-spec-document" aria-labelledby="job-spec-heading">
               <header className="role-spec-document-head">
                 <div>
-                  <span className="role-spec-eyebrow">Job brief</span>
-                  <h2 id="job-spec-heading">Role specification</h2>
+                  <span className="role-spec-eyebrow">{editingSpec ? 'Editing job brief' : 'Job brief'}</span>
+                  <h2 id="job-spec-heading">{editingSpec ? 'Edit job specification' : 'Role specification'}</h2>
                 </div>
-                {!editingSpec ? (
+                {!editingSpec && canEditJobSpec ? (
                   <button
                     type="button"
                     className="btn btn-outline btn-sm"
-                    onClick={() => { setRoleSheetError(''); setEditingSpec(true); }}
+                    onClick={() => { setJobSpecError(''); setSpecEditorDirty(false); setEditingSpec(true); }}
                   >
                     Edit
                   </button>
@@ -1696,16 +1718,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 {editingSpec ? (
                   <RoleSpecEditPanel
                     role={role}
-                    roleTasks={roleTasks}
-                    allTasks={allTasks}
-                    saving={savingRoleSheet}
-                    error={roleSheetError}
-                    showJobSpec={false}
+                    saving={savingJobSpec}
+                    error={jobSpecError}
+                    onDirtyChange={setSpecEditorDirty}
                     onSubmit={async (payload) => {
-                      const ok = await handleRoleSheetSubmit(payload);
+                      const ok = await handleJobSpecSubmit(payload);
                       if (ok) setEditingSpec(false);
                     }}
-                    onCancel={() => { setRoleSheetError(''); setEditingSpec(false); }}
+                    onCancel={() => { setJobSpecError(''); setEditingSpec(false); }}
                   />
                 ) : (
                   <div className="role-spec-read">
@@ -1737,7 +1757,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     <div className="role-spec-source-row">
                       <div>
                         <span className="role-spec-source-label">
-                          {role?.source === 'workable' ? 'Workable source description' : 'Source description'}
+                          {role?.job_spec_manually_edited_at
+                            ? `Taali override${role?.source === 'workable' ? ' · Workable connected' : ''}`
+                            : role?.source === 'workable'
+                              ? 'Workable source description'
+                              : 'Source description'}
                         </span>
                         {parsedJobSpec.meta.applyUrl ? (
                           <a href={parsedJobSpec.meta.applyUrl} target="_blank" rel="noopener noreferrer">Open source posting ↗</a>
@@ -1796,7 +1820,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </PresenceSwap>
             </section>
 
-            <aside className="role-highlights" aria-labelledby="job-glance-heading">
+            {!editingSpec ? <aside className="role-highlights" aria-labelledby="job-glance-heading">
               <h3 id="job-glance-heading">At a glance</h3>
               {roleHighlights.map((item) => (
                 <div key={item.title} className="hi">
@@ -1815,7 +1839,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </span>
                 </div>
               </div>
-            </aside>
+            </aside> : null}
           </div>
         ) : activeView === 'hiring-team' ? (
           <HiringTeamPanel roleId={role?.id} />
@@ -2025,6 +2049,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         {/* Role editing is now inline on the Job Specification tab
             (<RoleSpecEditPanel>), so the role-edit slide-over is retired here. */}
+
+        <ConfirmActionDialog
+          open={pendingRoleView != null}
+          title="Leave without saving?"
+          description="Your unsaved job specification edits will be lost."
+          warning="Save the job specification first if you want to keep this draft."
+          confirmLabel="Discard and leave"
+          variant="danger"
+          onClose={() => setPendingRoleView(null)}
+          onConfirm={discardSpecAndNavigate}
+        />
 
         <Dialog
           open={turnOffOpen}
