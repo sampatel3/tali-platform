@@ -102,6 +102,82 @@
   border-bottom-color: var(--purple);
 }
 
+.mc-nav-jobs-wrap {
+  position: relative;
+  height: 100%;
+}
+
+.mc-nav-jobs-wrap > .mc-nav-tab {
+  height: 100%;
+}
+
+.mc-nav-jobs-wrap .mc-nav-tab > svg:last-child {
+  margin-left: -3px;
+  transition: transform 0.16s ease;
+}
+
+.mc-nav-jobs-wrap .mc-nav-tab > svg:last-child.is-open {
+  transform: rotate(180deg);
+}
+
+.mc-jobs-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 260px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-2);
+  box-shadow: var(--shadow-md);
+  z-index: 80;
+}
+
+.mc-jobs-menu > a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.mc-jobs-menu > a:hover {
+  color: var(--purple);
+  background: var(--bg);
+}
+
+.mc-jobs-menu > a > svg,
+.mc-jobs-menu-plus {
+  flex: none;
+  color: var(--purple);
+}
+
+.mc-jobs-menu-plus {
+  width: 15px;
+  font-size: 20px;
+  line-height: 1;
+  text-align: center;
+}
+
+.mc-jobs-menu > a > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mc-jobs-menu strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.mc-jobs-menu small {
+  color: var(--mute);
+  font-size: 0.6875rem;
+}
+
 .mc-nav-tab .mc-badge {
   font-family: var(--font-mono);
   font-size: 0.625rem;
@@ -241,6 +317,23 @@
   font-weight: 600;
 }
 .mc-drawer-tab.on .mc-badge { background: var(--bg-2); }
+.mc-drawer-job-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: -1px 0 4px 42px;
+}
+.mc-drawer-job-links a {
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: var(--mute);
+  font-size: 0.8125rem;
+  text-decoration: none;
+}
+.mc-drawer-job-links a:hover {
+  color: var(--purple);
+  background: var(--bg-3);
+}
 .mc-drawer-divider {
   height: 1px;
   background: var(--line);

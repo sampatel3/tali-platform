@@ -390,7 +390,7 @@ export function LiveBrief({ template, brief, onSave, savingKey, readOnly = false
         </div>
 
         {sections.length === 0 ? (
-          <div className="rq-side-empty">No template configured. Set one up in Settings → Requisition template.</div>
+          <div className="rq-side-empty">No template configured. Set one up in Settings → Job brief template.</div>
         ) : (
           sections.map((section) => (
             <div key={section.key} className="rq-section">

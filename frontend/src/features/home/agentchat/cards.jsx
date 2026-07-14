@@ -5,7 +5,7 @@
 // intentionally NOT rendered here in Option C — those live in the main feed.
 
 import { useState } from 'react';
-import { Check, CircleHelp, FileText, SlidersHorizontal, X } from 'lucide-react';
+import { Check, CircleHelp, ExternalLink, FileText, GitFork, SlidersHorizontal, X } from 'lucide-react';
 import { AgentLoop } from '../../../shared/motion';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
@@ -75,6 +75,57 @@ export function ImpactCard({ card, onApply, busy }) {
             {typeof card.would_rescreen.est_cost_usd === 'number' ? ` (~$${card.would_rescreen.est_cost_usd})` : ''} — awaiting your OK.
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (card.type === 'related_role_preview') {
+    const total = card.candidates_total ?? 0;
+    const scorable = card.candidates_with_cv ?? 0;
+    const missing = card.candidates_missing_cv ?? 0;
+    return (
+      <div className="ac-card ac-card-constraint">
+        <div className="ac-card-head">
+          <GitFork size={14} />
+          <span>Related role preview</span>
+        </div>
+        <div className="ac-rescreen-estimate">
+          <strong>{card.proposed_name || 'New related role'}</strong> will share {total} candidate{total === 1 ? '' : 's'} with {card.source_role_name || 'the original Workable role'}.
+        </div>
+        <div className="ac-statrow">
+          <span><b>{scorable}</b> score now</span>
+          <span><b>{missing}</b> missing CV text</span>
+          {typeof card.estimated_cost_usd === 'number' ? <span><b>~${card.estimated_cost_usd}</b> estimated AI usage</span> : null}
+        </div>
+        <div className="ac-rescreen-estimate">
+          Candidate stages and actions stay coupled to the original Workable job. Awaiting your confirmation.
+        </div>
+      </div>
+    );
+  }
+
+  if (card.type === 'related_role_created') {
+    const counts = card.evaluation_counts || {};
+    return (
+      <div className="ac-card ac-card-applied">
+        <div className="ac-card-head">
+          <Check size={14} />
+          <span>Related role created</span>
+        </div>
+        <div className="ac-rescreen-estimate">
+          <strong>{card.role_name}</strong> is scoring the shared roster now.
+        </div>
+        <div className="ac-statrow">
+          <span><b>{counts.pending ?? 0}</b> queued</span>
+          <span><b>{counts.unscorable ?? 0}</b> missing CV text</span>
+        </div>
+        {card.frontend_url ? (
+          <div className="ac-card-actions">
+            <a className="ac-btn ac-btn-soft" href={card.frontend_url}>
+              Open related role <ExternalLink size={12} />
+            </a>
+          </div>
+        ) : null}
       </div>
     );
   }

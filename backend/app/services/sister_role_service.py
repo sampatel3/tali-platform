@@ -61,7 +61,7 @@ def ensure_sister_evaluations(
     reset_existing: bool = False,
 ) -> dict[str, int]:
     if str(role.role_kind or "") != ROLE_KIND_SISTER or not role.ats_owner_role_id:
-        raise ValueError("Role is not a coupled sister role")
+        raise ValueError("Role is not a coupled related role")
 
     applications = (
         db.query(CandidateApplication)
@@ -218,7 +218,7 @@ def project_sister_application(
         "score_mode": "sister_role",
         "score_provenance": {
             "source": "sister_role_evaluation",
-            "label": "Sister role fit",
+            "label": "Related role fit",
         },
     })
     projected.update({

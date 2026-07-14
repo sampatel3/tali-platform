@@ -267,7 +267,7 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
       hydrate(res?.template || { version: 1, sections: [] });
       setCompanyBlurb(typeof res?.company_blurb === 'string' ? res.company_blurb : '');
     } catch {
-      showToast('Could not load the requisition template.', 'error');
+      showToast('Could not load the role template.', 'error');
       hydrate({ version: 1, sections: [] });
     } finally {
       setLoading(false);
@@ -375,13 +375,13 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
     if (tplOk) hydrate(tplResult.value?.template || template);
     if (tplOk && blurbOk) {
       setSavedSnapshot(JSON.stringify({ tpl: serialize(), blurb: companyBlurb }));
-      showToast('Requisition template saved.', 'success');
+      showToast('Role template saved.', 'success');
     } else if (tplOk && !blurbOk) {
       showToast('Template saved, but the company description failed — try saving again.', 'error');
     } else if (!tplOk && blurbOk) {
       showToast('Company description saved, but the template failed — try saving again.', 'error');
     } else {
-      showToast('Failed to save the requisition template.', 'error');
+      showToast('Failed to save the role template.', 'error');
     }
   };
 
@@ -442,7 +442,7 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
                 <p className="rqt-jd-sub">
                   Your standard "About us" blurb — the same on every job spec, so it's set here once,
                   not per role. Generate it from your recent role specs, then edit. It fills the{' '}
-                  <code>{'{{company_description}}'}</code> placeholder on every requisition.
+                  <code>{'{{company_description}}'}</code> placeholder on every job.
                 </p>
               </div>
               <label className="field rqt-full">
@@ -472,7 +472,7 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
               <div className="rqt-jd-head">
                 <h2 className="rqt-jd-title">Job spec template</h2>
                 <p className="rqt-jd-sub">
-                  The job-description document shown live on the Requisitions page. Write it in markdown;
+                  The job-description document shown live while creating a job. Write it in markdown;
                   the agent fills <code>{'{{placeholder}}'}</code> tokens from the captured brief as it goes.
                 </p>
               </div>

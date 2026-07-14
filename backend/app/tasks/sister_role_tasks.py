@@ -76,7 +76,7 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
             scoring_status = getattr(output.scoring_status, "value", str(output.scoring_status))
             if str(scoring_status).lower() != "ok":
                 evaluation.status = SISTER_EVAL_ERROR
-                evaluation.error_message = (output.error_reason or "Sister-role scoring failed")[:1000]
+                evaluation.error_message = (output.error_reason or "Related-role scoring failed")[:1000]
             else:
                 evaluation.status = SISTER_EVAL_DONE
                 evaluation.role_fit_score = output.role_fit_score

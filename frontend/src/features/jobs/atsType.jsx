@@ -36,7 +36,7 @@ export const atsTypeColumnLabel = (role) => {
 export const AtsTypeTag = ({ role, size = 'md', className = '' }) => {
   switch (roleAtsType(role)) {
     case 'sister':
-      return <FullAtsTag label="Sister · Workable" size={size} className={className} />;
+      return <FullAtsTag label="Related · Workable" size={size} className={className} />;
     case 'workable':
       return <WorkableTag label="Workable" size={size} className={className} />;
     case 'bullhorn':

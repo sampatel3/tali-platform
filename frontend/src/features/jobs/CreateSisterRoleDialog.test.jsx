@@ -11,8 +11,8 @@ const sourceRole = {
 };
 
 describe('CreateSisterRoleDialog', () => {
-  it('previews the coupled roster and creates the sister scoring view', async () => {
-    const createdRole = { id: 22, name: 'AI Engineer · Sister', role_kind: 'sister' };
+  it('previews the coupled roster and creates the related scoring view', async () => {
+    const createdRole = { id: 22, name: 'AI Engineer · Related', role_kind: 'sister' };
     const rolesApi = {
       previewSister: vi.fn().mockResolvedValue({
         data: { candidates_total: 14, candidates_with_cv: 12, candidates_missing_cv: 2 },
@@ -33,7 +33,7 @@ describe('CreateSisterRoleDialog', () => {
 
     expect(await screen.findByText((_, element) => (
       element?.tagName === 'DIV'
-      && element.textContent === '14 candidates will appear in the sister role.'
+      && element.textContent === '14 candidates will appear in the related role.'
     ))).toBeInTheDocument();
     expect(screen.getByText((_, element) => (
       element?.tagName === 'DIV'
@@ -45,7 +45,7 @@ describe('CreateSisterRoleDialog', () => {
 
     await waitFor(() => {
       expect(rolesApi.createSister).toHaveBeenCalledWith(sourceRole.id, {
-        name: 'AI Engineer · Sister',
+        name: 'AI Engineer · Related',
         job_spec_text: sourceRole.job_spec_text,
       });
       expect(onCreated).toHaveBeenCalledWith(createdRole);

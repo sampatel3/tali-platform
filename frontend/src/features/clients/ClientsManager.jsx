@@ -123,7 +123,7 @@ export function ClientsManager() {
         <div className="cl-empty">
           <div className="cl-empty-glyph"><Building2 size={22} /></div>
           <h2>No hiring departments yet</h2>
-          <p>Add your first one above — an external client like ADCB or an internal team like Engineering — then assign it to a requisition. Filter the Jobs page by department to see its pipeline.</p>
+          <p>Add your first one above — an external client like ADCB or an internal team like Engineering — then assign jobs to it. Filter the Jobs page by department to see its pipeline.</p>
         </div>
       ) : (
         <ul className="cl-list">

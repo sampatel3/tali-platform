@@ -240,7 +240,7 @@ export function JobSpec({
           </div>
         ) : empty ? (
           <div className="rq-side-empty">
-            No job-spec template configured. Set one up in Settings → Requisition template.
+            No job-spec template configured. Set one up in Settings → Role template.
           </div>
         ) : (
           <>
