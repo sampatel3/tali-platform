@@ -2,16 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '../../styles/16-job-pipeline.css';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  BriefcaseBusiness,
   ChevronDown,
-  Copy,
-  ExternalLink,
-  GitFork,
   Link2,
   RefreshCw,
-  Share2,
   Sparkles,
-  UserPlus,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
@@ -22,24 +16,27 @@ import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimit
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
-import { SourceCandidatesPanel } from '../sourcing/SourceCandidatesPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
 import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
 import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
-import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
-import CreateSisterRoleDialog from './CreateSisterRoleDialog';
-import SubmittalPackDialog from './SubmittalPackDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
-import { AgentLoop, motionSafeScrollBehavior } from '../../shared/motion';
+import {
+  AgentLoop,
+  MotionDisclosure,
+  MotionStagger,
+  PresenceSwap,
+  m,
+  motionSafeScrollBehavior,
+  motionTransition,
+} from '../../shared/motion';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
 // role detail layout — top AgentBar replaces it. Component file stays
 // in the tree until any other surface that may import it is also
 // migrated; remove that import here to avoid unused-import warnings.
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
-import { CandidateSheet } from '../candidates/CandidateSheet';
 // CandidatesDirectoryPage is no longer embedded on the role detail —
 // the Candidates tab now renders a canvas-spec inline ctable directly.
 // Standalone /candidates route still uses the directory.
@@ -47,7 +44,6 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
-import { DistributeRolePanel } from './DistributeRolePanel';
 import { AtsTypeTag, atsTypeColumnLabel, roleAtsType } from './atsType';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
@@ -72,13 +68,19 @@ const PRE_SCREEN_FILTER_THRESHOLD = 30;
 // Kanban columns + segmented stage filters — keys are the shared funnel
 // buckets (applicationFunnelBucket) so they read identically to the funnel.
 const PIPELINE_STAGE_ORDER = [
-  { key: 'sourced', label: 'Sourced', countLabel: 'prospects' },
-  { key: 'applied', label: 'Applied', countLabel: 'new' },
-  { key: 'scored', label: 'Scored', countLabel: 'ready to invite' },
-  { key: 'invited', label: 'Invited', countLabel: 'awaiting response' },
-  { key: 'completed', label: 'Completed', countLabel: 'need a decision' },
-  { key: 'advanced', label: 'Advanced', countLabel: 'with you' },
+  { key: 'sourced', label: 'Sourced' },
+  { key: 'applied', label: 'Applied' },
+  { key: 'scored', label: 'Scored' },
+  // Completed assessments stay inside Invited, matching the canonical funnel.
+  { key: 'invited', label: 'Invited' },
+  { key: 'advanced', label: 'Advanced' },
 ];
+const matchesPipelineStage = (application, stageKey) => {
+  const bucket = applicationFunnelBucket(application);
+  return stageKey === 'invited'
+    ? bucket === 'invited' || bucket === 'completed'
+    : bucket === stageKey;
+};
 
 // Hover-intent CV prefetch. A recruiter sweeping the cursor down a long table
 // would otherwise fire a presigned-S3 PDF download per row crossed — a burst
@@ -133,12 +135,6 @@ const buildApplicationTitle = (application) => (
   || `Candidate #${application?.candidate_id || application?.id || '—'}`
 );
 
-const resolveAssessmentId = (application) => (
-  application?.score_summary?.assessment_id
-  || application?.valid_assessment_id
-  || null
-);
-
 const resolveOptionalPercent = (value) => {
   if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
@@ -179,29 +175,6 @@ const formatDecisionLabel = (recommendation) => {
   return DECISION_LABELS[key] || key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 };
 
-// The "what's actually needed" lens — complementary to the funnel stage, and
-// HONEST about whether a decision is genuinely pending. 'Decision ready' shows
-// ONLY when a real agent decision is queued; a completed assessment with none
-// reads as 'Completed — your decision' (a human call); a candidate the recruiter
-// is interviewing in Workable reads as 'With recruiter'.
-const resolvePipelineCardFooterStatus = (application, pendingDecision = null) => {
-  const stage = String(application?.pipeline_stage || '').toLowerCase();
-  const outcome = String(application?.application_outcome || '').toLowerCase();
-  if (outcome === 'rejected') return 'Rejected';
-  if (outcome === 'hired') return 'Hired';
-  // A sourced prospect hasn't applied — no score, no decision.
-  if (stage === 'sourced') return 'Sourced';
-  if (stage === 'applied') return 'Not invited';
-  if (stage === 'invited') return 'Awaiting start';
-  if (stage === 'in_assessment') return 'Assessment live';
-  if (stage === 'advanced') return 'With recruiter';
-  if (stage === 'review') {
-    if (pendingDecision) return 'Decision ready';
-    return resolveAssessmentId(application) ? 'Completed — your decision' : 'With recruiter';
-  }
-  return resolveAssessmentId(application) ? 'Assessment linked' : 'No assessment yet';
-};
-
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
   const navigate = useNavigate();
@@ -210,9 +183,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const { showToast } = useToast();
   const {
     jobs,
-    processJobs,
     trackRole,
-    trackRoleProcess,
   } = useJobStatus() ?? {};
   void onViewCandidate;
 
@@ -268,8 +239,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         return next;
       });
     } catch {
-      // Quiet failure — the kanban cards just fall back to the
-      // score-based decision verb until next poll succeeds.
+      // Quiet failure — no recommendation is shown until the next successful
+      // poll. A score alone must never masquerade as an agent decision.
     }
   }, [numericRoleId]);
   useEffect(() => {
@@ -309,11 +280,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
-  // Public job-page state for the header actions. Reuses the distribution
-  // endpoint (the same data DistributeRolePanel reads) so the pipeline —
-  // the daily working surface — can reach the public job page directly
-  // instead of only from Requisitions. `null` = not fetched yet.
-  const [distribution, setDistribution] = useState(null);
   // Workspace chips loaded once per role-workspace load. Used by the
   // role page chip editor for the "Show hidden" suppressed-chips view
   // (we need the workspace text/bucket for chips the recruiter has
@@ -327,18 +293,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [roleApplications, setRoleApplications] = useState([]);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
-  const [processDialogOpen, setProcessDialogOpen] = useState(false);
-  const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
   const [sisterRescoring, setSisterRescoring] = useState(false);
   const [sisterPollVersion, setSisterPollVersion] = useState(0);
   const previousSisterScoringStateRef = useRef(null);
-  const [submittalDialogOpen, setSubmittalDialogOpen] = useState(false);
-  // Phase 3a — "Add sourced candidate" compact form (a pre-applied prospect).
-  const [sourcedFormOpen, setSourcedFormOpen] = useState(false);
-  const [sourcedDraft, setSourcedDraft] = useState({ name: '', email: '', linkedin: '' });
-  const [savingSourced, setSavingSourced] = useState(false);
-  const [syncingStages, setSyncingStages] = useState(false);
   const [loading, setLoading] = useState(true);
   // Set only on a cold-load failure with nothing cached to paint — drives the
   // in-page error state (with Retry) instead of stranding an empty shell.
@@ -449,8 +407,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setSavingClient(false);
     }
   }, [numericRoleId, role?.client_id, role?.client_name, clients, rolesApi, showToast]);
-  const [refreshTick, setRefreshTick] = useState(0);
-  const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
+  const [, setRefreshTick] = useState(0);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [activeView, setActiveView] = useRoleView();
   // HANDOFF v2 §4 / canvas jobs-detail-candidates — primary stage filter
@@ -467,11 +424,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setTableSortBy((dir) => (tableSortField === field ? (dir === 'asc' ? 'desc' : 'asc') : 'desc'));
     setTableSortField(field);
   }, [tableSortField]);
-  // Per-row Process selection. Non-empty → Process sends just these IDs
-  // and ignores stage_filter. Reset on tab switch so off-screen ticks
-  // don't silently fire when the recruiter jumps tabs.
-  const [selectedAppIds, setSelectedAppIds] = useState(() => new Set());
-  useEffect(() => { setSelectedAppIds(new Set()); }, [tableStageFilter]);
   // Table windowing — render the first PAGE_SIZE rows and reveal more on
   // demand. A thousand-applicant role otherwise mounts thousands of <tr>
   // (each with a ScoreProvenance subtree + hover prefetch), so every poll
@@ -482,9 +434,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   useEffect(() => {
     setTableVisibleCount(TABLE_PAGE_SIZE);
   }, [tableStageFilter, tableSortField, tableSortBy]);
-  const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
-  const [candidateSheetError, setCandidateSheetError] = useState('');
   // The legacy slide-out <AgentSettingsPanel> drawer state has been
   // retired — the canvas-spec Agent settings tab on this page owns
   // the same controls inline. See the AgentBar onPause handler below.
@@ -492,7 +442,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Job Specification tab is read-first: it shows the spec, and this flips it
   // into the inline edit form.
   const [editingSpec, setEditingSpec] = useState(false);
-  const [addingCandidate, setAddingCandidate] = useState(false);
   // Only the most recently started loadRoleWorkspace may write state, so a
   // slow earlier load can't clobber fresher state (e.g. revert an optimistic
   // agent toggle to OFF). loadedRoleIdRef marks the last fully-loaded role so
@@ -623,36 +572,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [numericRoleId, rolesApi, showToast, trackRole]);
 
-  // Phase 3a — add a SOURCED prospect (a pre-applied lead) to this role. The
-  // application lands at the `sourced` stage: un-scored, no decision. It moves
-  // to `applied` (and gets scored) only when the person engages / applies.
-  const handleAddSourcedCandidate = useCallback(async (event) => {
-    event?.preventDefault?.();
-    if (!Number.isFinite(numericRoleId) || savingSourced) return;
-    const email = sourcedDraft.email.trim();
-    const linkedin = sourcedDraft.linkedin.trim();
-    if (!email && !linkedin) {
-      showToast('Add an email or a LinkedIn URL for the prospect.', 'error');
-      return;
-    }
-    setSavingSourced(true);
-    try {
-      await rolesApi.createSourcedCandidate(numericRoleId, {
-        name: sourcedDraft.name.trim() || null,
-        email: email || null,
-        linkedin: linkedin || null,
-      });
-      showToast('Sourced candidate added.', 'success');
-      setSourcedDraft({ name: '', email: '', linkedin: '' });
-      setSourcedFormOpen(false);
-      await loadRoleWorkspace();
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to add sourced candidate.'), 'error');
-    } finally {
-      setSavingSourced(false);
-    }
-  }, [numericRoleId, savingSourced, sourcedDraft, rolesApi, showToast, loadRoleWorkspace]);
-
   // Patch a SINGLE application row after a single-candidate mutation instead
   // of reloading the whole workspace (which refetches up to 2×2000 rows over
   // the UAE→us-east4 link for one rejected/moved candidate). Refetches just
@@ -703,24 +622,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       // Quiet — the row keeps its last-known state until the next full load.
     }
   }, [loadRoleWorkspace, role?.role_kind, rolesApi, numericRoleId]);
-
-  // Pull this role's candidates' CURRENT Workable stages on demand — the manual
-  // recovery for when the periodic sync lags or a Taali-side move raced a stale
-  // sync snapshot. Updates workable_stage only (fast; no re-import / scoring).
-  const handleSyncWorkableStages = useCallback(async () => {
-    if (syncingStages) return;
-    setSyncingStages(true);
-    try {
-      const res = await rolesApi.refreshWorkableStages(numericRoleId);
-      const data = res?.data || {};
-      showToast(data.message || 'Synced stages from Workable.', data.updated > 0 ? 'success' : 'info');
-      if (data.updated > 0) await loadRoleWorkspace();
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Could not sync stages from Workable.'), 'error');
-    } finally {
-      setSyncingStages(false);
-    }
-  }, [numericRoleId, rolesApi, showToast, loadRoleWorkspace, syncingStages]);
 
   useEffect(() => {
     void loadRoleWorkspace();
@@ -929,9 +830,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
       ...stage,
-      items: activeApplications.filter((application) => applicationFunnelBucket(application) === stage.key),
+      items: activeApplications.filter((application) => matchesPipelineStage(application, stage.key)),
     })),
-    { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', countLabel: 'closed', items: rejectedApplications },
+    { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', items: rejectedApplications },
   ], [activeApplications, rejectedApplications, role?.role_kind]);
 
   // Candidates-table rows: filter by the active stage segment, then sort by
@@ -943,7 +844,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ? rejectedApplications
       : tableStageFilter === 'all'
         ? activeApplications
-        : activeApplications.filter((a) => applicationFunnelBucket(a) === tableStageFilter);
+        : activeApplications.filter((a) => matchesPipelineStage(a, tableStageFilter));
     const cmpScore = (a) => {
       const raw = a?.score_summary?.taali_score
         ?? a?.taali_score
@@ -989,35 +890,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     parsedJobSpec.summary
     || String(role?.summary || role?.job_summary || '').trim()
   ), [parsedJobSpec.summary, role?.job_summary, role?.summary]);
-  const roleHighlights = useMemo(() => {
-    const questions = Array.isArray(role?.interview_focus?.questions) ? role.interview_focus.questions : [];
-    const triggers = Array.isArray(role?.interview_focus?.manual_screening_triggers)
-      ? role.interview_focus.manual_screening_triggers
-      : [];
-    const items = [];
-    if (role?.workable_job_id) items.push({ title: 'Workable-linked role', description: 'Candidate sync and role metadata stay anchored to your ATS source of truth.' });
-    if (recruiterCriteria.length) items.push({ title: 'Recruiter-specific criteria', description: `${recruiterCriteria.length} recruiter requirement${recruiterCriteria.length === 1 ? '' : 's'} shape the CV scoring pass.` });
-    if (questions.length) items.push({ title: 'Interview focus ready', description: `${questions.length} generated interview prompts are ready for the hiring loop.` });
-    if (triggers.length) items.push({ title: 'Screening triggers', description: triggers.slice(0, 2).join(' · ') });
-    if (!items.length) {
-      items.push({ title: 'Role workspace', description: 'Tune scoring, review pipeline flow, and move quickly from screening to decision.' });
-    }
-    return items.slice(0, 4);
-  }, [recruiterCriteria.length, role?.interview_focus?.manual_screening_triggers, role?.interview_focus?.questions, role?.workable_job_id]);
-
   const roleFactValues = useMemo(() => ({
     location: role?.location || role?.candidate_location || parsedJobSpec.meta.location || 'Location not captured',
     department: role?.department || parsedJobSpec.meta.department || role?.organization_name || 'Hiring team',
     employment: role?.employment_type || parsedJobSpec.meta.employmentType || 'Full-time',
   }), [parsedJobSpec.meta.department, parsedJobSpec.meta.employmentType, parsedJobSpec.meta.location, role?.candidate_location, role?.department, role?.employment_type, role?.location, role?.organization_name]);
+  const roleHighlights = useMemo(() => ([
+    { title: 'Location', description: roleFactValues.location },
+    { title: 'Department', description: roleFactValues.department },
+    { title: 'Employment', description: roleFactValues.employment },
+    {
+      title: roleTasks.length === 1 ? 'Assessment' : 'Assessments',
+      description: roleTasks.length ? roleTasks.map((task) => task.name).join(' · ') : 'No assessment task linked',
+    },
+  ]), [roleFactValues, roleTasks]);
 
-  // NOTE: the legacy 3-step batch-action confirm flow (openConfirm /
-  // runConfirmedAction / ConfirmActionDialog) was removed here — it was dead
-  // (nothing called openConfirm since ProcessCandidatesDialog took over) and
-  // its score branch referenced an undefined setBatchScoreProgress, a
-  // ReferenceError waiting for anyone who re-wired a button to it. Batch
-  // progress is owned by JobStatusContext; ProcessCandidatesDialog owns the
-  // cascade run.
+  // Batch progress is owned by JobStatusContext. This page observes the agent's
+  // work but does not expose a second manual processing flow.
 
   const handleSaveRoleConfig = async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1237,73 +1126,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [numericRoleId, roleTasks, loadRoleWorkspace, showToast]);
 
-  const handleCandidateSubmit = async ({ email, name, position, cvFile }) => {
-    if (!Number.isFinite(numericRoleId) || !rolesApi.createApplication) return;
-    setAddingCandidate(true);
-    setCandidateSheetError('');
-    try {
-      const res = await rolesApi.createApplication(numericRoleId, {
-        candidate_email: email,
-        candidate_name: name,
-        candidate_position: trimOrUndefined(position),
-      });
-      if (cvFile && rolesApi.uploadApplicationCv && res?.data?.id) {
-        await rolesApi.uploadApplicationCv(res.data.id, cvFile);
-      }
-      setCandidateSheetOpen(false);
-      setActiveView('table');
-      await loadRoleWorkspace();
-      setRefreshTick((value) => value + 1);
-      showToast('Candidate added to this role.', 'success');
-    } catch (error) {
-      setCandidateSheetError(getErrorMessage(error, 'Failed to add candidate.'));
-    } finally {
-      setAddingCandidate(false);
-    }
-  };
-
-  const handleShareRole = async () => {
-    const shareUrl = `${window.location.origin}/jobs/${numericRoleId}`;
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      showToast('Role pipeline link copied.', 'success');
-    } catch {
-      showToast('Copy failed. Copy the URL from your browser instead.', 'error');
-    }
-  };
-
-  // Public job page ({ published, apply_url }) from the distribution endpoint,
-  // fetched once per role so the header can offer "View public page" / "Copy
-  // link" when the role is live. Failures leave it null — the header simply
-  // omits the action rather than showing an error for a secondary affordance.
-  useEffect(() => {
-    if (!Number.isFinite(numericRoleId)) return undefined;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data } = await rolesApi.distribution(numericRoleId);
-        if (!cancelled) setDistribution(data || null);
-      } catch {
-        if (!cancelled) setDistribution(null);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [numericRoleId, rolesApi]);
-
-  const publicJobUrl = distribution?.published === true
-    ? (distribution.apply_url || distribution.share_urls?.apply_url || '')
-    : '';
-
-  const handleCopyPublicLink = useCallback(async () => {
-    if (!publicJobUrl) return;
-    try {
-      await navigator.clipboard.writeText(publicJobUrl);
-      showToast('Public job page link copied.', 'success');
-    } catch {
-      showToast('Copy failed. Copy the URL from the public page instead.', 'error');
-    }
-  }, [publicJobUrl, showToast]);
-
   const handleRescoreSister = useCallback(async () => {
     if (!Number.isFinite(numericRoleId) || sisterRescoring) return;
     setSisterRescoring(true);
@@ -1353,20 +1175,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     viewCandidateReport,
   });
 
-  const handleRegenerateInterviewFocus = async () => {
-    if (!Number.isFinite(numericRoleId)) return;
-    setInterviewFocusGenerating(true);
-    try {
-      await rolesApi.regenerateInterviewFocus(numericRoleId);
-      await loadRoleWorkspace();
-      showToast('Interview focus regenerated.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to regenerate interview focus.'), 'error');
-    } finally {
-      setInterviewFocusGenerating(false);
-    }
-  };
-
   // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
   // AgentHeader with a role-scoped agent panel on the right. Builds the
   // panel agent prop from the polled /agent/status payload, with the
@@ -1388,12 +1196,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     return buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
   }, [agentStatus, role]);
 
-  // When the agent is actively running this role it already processes new
-  // candidates and keeps stages synced on its own, so the manual "Process"
-  // and "Sync" buttons are redundant mirrors. We don't remove them (they stay
-  // as a manual override) — we just demote them from primary/secondary to a
-  // muted state so they stop competing with "the agent's got it". HITL
-  // controls (approve / reject / override / share / submittal) are untouched.
+  // Agent state remains explicit in decision/candidate detail surfaces. Routine
+  // processing and ATS sync controls are intentionally absent from this page:
+  // the role agent owns that operational work.
   const agentRunning = Boolean(roleAgent?.on && !roleAgent?.paused);
 
   // Turn-off confirm dialog state (the "also discard pending decisions" opt-in).
@@ -1551,7 +1356,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
       <AgentHeader
-        kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
+        kicker={`ROLE · #${role?.id || '—'}`}
         title={(
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <span>{role?.name || 'Role'}<span className="ah-period">.</span></span>
@@ -1586,44 +1391,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 {roleAgent.pending} pending → Home
               </button>
             ) : null}
-            {/* Public job page access, straight from the pipeline. When the
-                role is published, jump to the live /job/{token} page or copy
-                its link; when it isn't, a quiet hint that publishing happens
-                from the requisition (no publish button here). */}
-            {role?.role_kind !== 'sister' && publicJobUrl ? (
-              <>
-                <a
-                  className="btn btn-outline btn-sm"
-                  href={publicJobUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  title="Open the public job page in a new tab"
-                >
-                  <ExternalLink size={13} />
-                  View public page
-                </a>
-                <button type="button" className="btn btn-outline btn-sm" title="Copy the public job page link" onClick={handleCopyPublicLink}>
-                  <Copy size={13} />
-                  Copy link
-                </button>
-              </>
-            ) : role?.role_kind !== 'sister' && distribution && distribution.published !== true ? (
-              <span className="btn btn-outline btn-sm is-muted" title="This role isn't published yet — publish it from its requisition to create a public job page." style={{ cursor: 'default', opacity: 0.75 }}>
-                Not published
-              </span>
-            ) : null}
-            {role?.role_kind !== 'sister' ? (
-              <button type="button" className="btn btn-outline btn-sm" title="Share role" onClick={handleShareRole}>
-                <Share2 size={13} />
-                Share
-              </button>
-            ) : null}
-            {role?.role_kind !== 'sister' && roleAtsType(role) === 'workable' ? (
-              <button type="button" className="btn btn-outline btn-sm" onClick={() => setSisterDialogOpen(true)}>
-                <GitFork size={13} />
-                Create sister role
-              </button>
-            ) : null}
             {role?.role_kind === 'sister' ? (
               <button type="button" className="btn btn-outline btn-sm" onClick={handleRescoreSister} disabled={sisterRescoring || sisterScoringStatus?.status === 'running'}>
                 {sisterRescoring || sisterScoringStatus?.status === 'running' ? <Spinner size={12} /> : <RefreshCw size={12} />}
@@ -1635,23 +1402,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               className="btn btn-outline btn-sm"
               onClick={() => {
                 setRoleSheetError('');
+                setEditingSpec(true);
                 setActiveView('activity');
               }}
             >
-              Edit role
+              Edit job spec
             </button>
-            {role?.role_kind !== 'sister' ? (
-              <button
-                type="button"
-                className="btn btn-purple btn-sm"
-                onClick={() => {
-                  setCandidateSheetError('');
-                  setCandidateSheetOpen(true);
-                }}
-              >
-                Invite candidate <span className="arrow">→</span>
-              </button>
-            ) : null}
           </>
         )}
         postTitle={(
@@ -1700,9 +1456,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         <RoleViewTabs activeView={activeView} />
 
-        {activeView === 'pipeline' ? (
+        <PresenceSwap presenceKey={activeView} className="role-view-panel">
+          {activeView === 'pipeline' ? (
           <div className="pipeline-layout">
-            <div className="kanban">
+            <MotionStagger className="kanban" data-motion-stagger="job-pipeline-columns">
               {groupedApplications.map((stage) => {
                 const visibleItems = stage.items.slice(0, 3);
                 const hiddenCount = Math.max(0, stage.items.length - visibleItems.length);
@@ -1710,89 +1467,75 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   <div key={stage.key} className="kanban-col" data-stage={stage.key}>
                     <div className="kanban-col-head">
                       <div className="title"><span className="dot" />{stage.label}</div>
-                      <div className="count">{stage.items.length} · {stage.countLabel}</div>
+                      <div className="count">{formatCount(stage.items.length)}</div>
                     </div>
-                    {/* HANDOFF v2 §4 / canvas jobs-detail-pipeline — kanban
-                        card per v3:
-                          avatar · name + position
-                          CV n% · score · ago [· LIVE]
-                          (review stage only) agent recommendation block:
-                            Advance / Reject + reasoning + Approve · Override
-                        Approve/Override are surfaced in the
-                        PendingAgentDecisionsPanel above the table for now;
-                        the in-card buttons are deep-link entry points. */}
                     {visibleItems.map((application) => {
-                      const cvPct = Number.isFinite(Number(application?.cv_match_score))
-                        ? Math.round(Number(application.cv_match_score))
+                      const cvRaw = application?.cv_match_score;
+                      const cvPct = cvRaw != null && Number.isFinite(Number(cvRaw))
+                        ? Math.round(Number(cvRaw))
                         : null;
                       const compositeRaw = application?.score_summary?.taali_score
                         ?? application?.taali_score
                         ?? application?.assessment_score
                         ?? null;
-                      const compositeScore = Number.isFinite(Number(compositeRaw))
+                      const compositeScore = compositeRaw != null && Number.isFinite(Number(compositeRaw))
                         ? Math.round(Number(compositeRaw))
                         : null;
                       const isLive = String(application?.pipeline_stage || '').toLowerCase() === 'in_assessment';
-                      // 'review'-stage candidates bucket into the 'completed' column.
-                      const isReview = stage.key === 'completed';
+                      const isReview = applicationFunnelBucket(application) === 'completed';
                       // Approve/Override act ONLY on the freshly-polled map, not
                       // the per-row snapshot (which can go stale and expose
                       // actions against an already-resolved decision).
                       const pendingDecision = pendingAgentDecisions[application?.id] || null;
                       const decisionResolving = pendingDecision?.id != null
                         && resolvingDecisionId === pendingDecision.id;
+                      const applicationTitle = buildApplicationTitle(application);
                       return (
-                        <a
+                        <div
                           key={application.id}
                           className={`kanban-card text-left ${isReview ? 'is-review' : ''}`}
-                          href={candidateReportHref(application, numericRoleId)}
-                          onClick={(event) => handlePipelineReportClick(event, application)}
                           onMouseEnter={() => hoverPrefetchRef.current.start(application.id)}
                           onMouseLeave={() => hoverPrefetchRef.current.cancel()}
                         >
-                          <div className="cc-top">
-                            <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
-                            <div className="cc-id">
-                              <div className="n">{buildApplicationTitle(application)}</div>
-                              <div className="pos">
-                                {application?.candidate_position
-                                  || application?.candidate_email
-                                  || 'No position captured'}
+                          <a
+                            className="kanban-card-main"
+                            href={candidateReportHref(application, numericRoleId)}
+                            aria-label={`Open ${applicationTitle}`}
+                            onClick={(event) => handlePipelineReportClick(event, application)}
+                          >
+                            <div className="cc-top">
+                              <div className="av">{applicationTitle.slice(0, 2).toUpperCase()}</div>
+                              <div className="cc-id">
+                                <div className="n">{applicationTitle}</div>
+                                <div className="pos">
+                                  {application?.candidate_position
+                                    || application?.candidate_email
+                                    || 'No position captured'}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          {/* Inline meta, left-aligned to match pipeline-preview's
-                              .kline: CV n% · score · LIVE · ago (LIVE before the
-                              timestamp, no right-pushed spacer). */}
-                          <div className="cc-line">
-                            {cvPct != null ? <span>CV {cvPct}%</span> : <span className="mute">No CV score</span>}
-                            {compositeScore != null ? <>
+                            <div className="cc-line">
+                              <span>CV {cvPct != null ? `${cvPct}%` : '—'}</span>
+                              {compositeScore != null ? <>
+                                <span className="dot-sep">·</span>
+                                <span className="score-pip">{compositeScore}</span>
+                              </> : null}
+                              {isLive ? <>
+                                <span className="dot-sep">·</span>
+                                <span className="live-pip">LIVE</span>
+                              </> : null}
                               <span className="dot-sep">·</span>
-                              <span className="score-pip">{compositeScore}</span>
-                            </> : null}
-                            {isLive ? <>
-                              <span className="dot-sep">·</span>
-                              <span className="live-pip">LIVE</span>
-                            </> : null}
-                            <span className="dot-sep">·</span>
-                            <span>{formatRelativeShort(application?.updated_at || application?.created_at)}</span>
-                          </div>
-                          <ScoreProvenance
-                            provenance={application?.score_summary?.score_provenance}
-                            density="pill"
-                          />
+                              <span>{formatRelativeShort(application?.updated_at || application?.created_at)}</span>
+                            </div>
+                          </a>
                           {pendingDecision ? (
                             <div className="cc-agent">
                               <div className="cc-agent-glyph" aria-hidden="true">
                                 <Sparkles size={11} strokeWidth={2} />
                               </div>
                               <div className="cc-agent-body">
-                                <AgentLoop kind="flow" className="cc-agent-action agent-flow-text">
+                                <div className="cc-agent-action">
                                   {formatDecisionLabel(pendingDecision.recommendation)}
-                                </AgentLoop>
-                                <div className="cc-agent-why">
-                                  {pendingDecision.reasoning
-                                    || resolvePipelineCardFooterStatus(application, pendingDecision)}
                                 </div>
                                 <div className="cc-agent-actions">
                                   <AgentLoop
@@ -1801,7 +1544,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                     type="button"
                                     className="btn btn-purple btn-xs"
                                     onClick={(event) => {
-                                      event.preventDefault();
                                       event.stopPropagation();
                                       void handleApproveDecision(pendingDecision.id);
                                     }}
@@ -1813,7 +1555,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                     type="button"
                                     className="btn btn-outline btn-xs"
                                     onClick={(event) => {
-                                      event.preventDefault();
                                       event.stopPropagation();
                                       void handleOverrideDecision(pendingDecision.id);
                                     }}
@@ -1825,7 +1566,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               </div>
                             </div>
                           ) : null}
-                        </a>
+                        </div>
                       );
                     })}
                     {hiddenCount > 0 ? (
@@ -1836,7 +1577,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </div>
                 );
               })}
-            </div>
+            </MotionStagger>
 
             {triageApplication ? (
               <div className="kanban-triage-row">
@@ -1933,154 +1674,151 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             savingAssessmentTask={savingAssessmentTask}
           />
         ) : activeView === 'activity' ? (
-          // HANDOFF v2 §4.4 / canvas jobs-detail-spec — Job spec tab is the
-          // dedicated spec view: workable-ingested description with formatted
-          // sections + recruiter requirements + an "At a glance" sidebar.
-          // The pipeline-activity timeline that previously rendered here was
-          // a leftover from the v1 "Activity" tab; v2 only has 4 tabs and
-          // this one is "Job spec".
-          <div className="role-desc">
-            <div className="role-desc-main">
-              {/* Read-first Job Specification: show the spec, with a single
-                  Edit button that flips these fields (name, description, tasks)
-                  into the inline form. The spec text is updated by pasting it
-                  into the agent — no file upload here (showJobSpec={false}). */}
-              {editingSpec ? (
-                <RoleSpecEditPanel
-                  role={role}
-                  roleTasks={roleTasks}
-                  allTasks={allTasks}
-                  saving={savingRoleSheet}
-                  error={roleSheetError}
-                  showJobSpec={false}
-                  onSubmit={async (payload) => {
-                    const ok = await handleRoleSheetSubmit(payload);
-                    if (ok) setEditingSpec(false);
-                  }}
-                  onCancel={() => { setRoleSheetError(''); setEditingSpec(false); }}
-                />
-              ) : (
-                <>
-                  <div className="mb-4 flex items-center justify-between gap-3">
-                    <h3 className="text-lg font-semibold text-[var(--taali-text)]">{role?.name || 'Job specification'}</h3>
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-sm"
-                      onClick={() => { setRoleSheetError(''); setEditingSpec(true); }}
-                    >
-                      Edit
-                    </button>
-                  </div>
-
-              {/* Job lifecycle control (mark filled / external / cancelled) —
-                  shown for requisition-origin roles that carry a job_status. */}
-              {role?.job_status ? (
-                <JobStatusControl
-                  status={role.job_status}
-                  onChange={handleSetJobStatus}
-                  busy={savingJobStatus}
-                />
-              ) : null}
-
-              {/* Hiring-department assignment — shown whenever the org has any
-                  departments (or this role already has one), so legacy / imported
-                  roles with no requisition can still be tagged. */}
-              {(clients.length > 0 || role?.client_id) ? (
-                <ClientControl
-                  clientId={role?.client_id ?? null}
-                  clientName={role?.client_name ?? null}
-                  clients={clients}
-                  onChange={handleSetClient}
-                  busy={savingClient}
-                />
-              ) : null}
-
-              {/* The linked requisition's structured spec — always visible (it's
-                  the richest source); the raw ingested spec sits in the expand. */}
-              {role?.requisition ? (
-                <RequisitionSpecSections requisition={role.requisition} />
-              ) : null}
-
-              {/* Distribute this role — copy-paste LinkedIn post + share links +
-                  the careers XML feed URL. Points at the public job page; no
-                  LinkedIn API/automation. */}
-              {role?.id ? <DistributeRolePanel key={role.id} roleId={role.id} /> : null}
-
-              <button
-                type="button"
-                className={`desc-toggle ${detailsExpanded ? 'open' : ''}`}
-                onClick={() => setDetailsExpanded((current) => !current)}
-              >
-                <span>{detailsExpanded ? 'Hide full description' : 'Read full description'}</span>
-                <ChevronDown className="caret" size={10} />
-              </button>
-
-              <div className={`role-sections ${detailsExpanded ? 'expanded' : ''}`}>
-                <div className="role-spec-source">
-                  {role?.source === 'workable' ? 'Workable ingested job spec' : 'Role job spec'}
-                  {parsedJobSpec.meta.applyUrl ? (
-                    <a href={parsedJobSpec.meta.applyUrl} target="_blank" rel="noopener noreferrer">Open source posting</a>
-                  ) : null}
+          <div className="role-spec-layout">
+            <section className="role-spec-document" aria-labelledby="job-spec-heading">
+              <header className="role-spec-document-head">
+                <div>
+                  <span className="role-spec-eyebrow">Job brief</span>
+                  <h2 id="job-spec-heading">Role specification</h2>
                 </div>
-                {parsedJobSpec.sections.length ? parsedJobSpec.sections.map((section, index) => (
-                  <FormattedJobSpecSection
-                    key={`${section.title}-${index}`}
-                    section={section}
-                    marker={String(index + 1).padStart(2, '0')}
+                {!editingSpec ? (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => { setRoleSheetError(''); setEditingSpec(true); }}
+                  >
+                    Edit
+                  </button>
+                ) : null}
+              </header>
+
+              <PresenceSwap presenceKey={editingSpec ? 'edit' : 'read'} className="role-spec-mode">
+                {editingSpec ? (
+                  <RoleSpecEditPanel
+                    role={role}
+                    roleTasks={roleTasks}
+                    allTasks={allTasks}
+                    saving={savingRoleSheet}
+                    error={roleSheetError}
+                    showJobSpec={false}
+                    onSubmit={async (payload) => {
+                      const ok = await handleRoleSheetSubmit(payload);
+                      if (ok) setEditingSpec(false);
+                    }}
+                    onCancel={() => { setRoleSheetError(''); setEditingSpec(false); }}
                   />
-                )) : (
-                  <div className="role-sec">
-                    <div className="role-sec-title"><span className="marker">01</span>About the role</div>
-                    <p>{roleSummary || 'This recruiter workspace mirrors the job spec, scoring guidance, and active pipeline for the role.'}</p>
+                ) : (
+                  <div className="role-spec-read">
+                    {roleSummary ? <p className="role-desc-summary">{roleSummary}</p> : null}
+
+                    {(role?.job_status || clients.length > 0 || role?.client_id) ? (
+                      <div className="role-spec-controls">
+                        {role?.job_status ? (
+                          <JobStatusControl
+                            status={role.job_status}
+                            onChange={handleSetJobStatus}
+                            busy={savingJobStatus}
+                          />
+                        ) : null}
+                        {(clients.length > 0 || role?.client_id) ? (
+                          <ClientControl
+                            clientId={role?.client_id ?? null}
+                            clientName={role?.client_name ?? null}
+                            clients={clients}
+                            onChange={handleSetClient}
+                            busy={savingClient}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {role?.requisition ? <RequisitionSpecSections requisition={role.requisition} /> : null}
+
+                    <div className="role-spec-source-row">
+                      <div>
+                        <span className="role-spec-source-label">
+                          {role?.source === 'workable' ? 'Workable source description' : 'Source description'}
+                        </span>
+                        {parsedJobSpec.meta.applyUrl ? (
+                          <a href={parsedJobSpec.meta.applyUrl} target="_blank" rel="noopener noreferrer">Open source posting ↗</a>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="desc-toggle"
+                        aria-expanded={detailsExpanded}
+                        aria-controls="job-source-description"
+                        onClick={() => setDetailsExpanded((current) => !current)}
+                      >
+                        <span>{detailsExpanded ? 'Hide description' : 'View description'}</span>
+                        <m.span
+                          aria-hidden="true"
+                          className="desc-toggle-caret"
+                          animate={{ rotate: detailsExpanded ? 180 : 0 }}
+                          transition={motionTransition.fast}
+                        >
+                          <ChevronDown size={11} />
+                        </m.span>
+                      </button>
+                    </div>
+
+                    <MotionDisclosure open={detailsExpanded} id="job-source-description">
+                      <MotionStagger className="role-sections expanded" data-motion-stagger="job-spec-sections">
+                        {parsedJobSpec.sections.length ? parsedJobSpec.sections.map((section, index) => (
+                          <FormattedJobSpecSection
+                            key={`${section.title}-${index}`}
+                            section={section}
+                            marker={String(index + 1).padStart(2, '0')}
+                          />
+                        )) : (
+                          <div className="role-sec">
+                            <div className="role-sec-title"><span className="marker">01</span>About the role</div>
+                            <p>{roleSummary || 'No source description has been captured for this role yet.'}</p>
+                          </div>
+                        )}
+                        {recruiterCriteria.length ? (
+                          <div className="role-sec">
+                            <div className="role-sec-title">
+                              <span className="marker">{String((parsedJobSpec.sections.length || 1) + 1).padStart(2, '0')}</span>
+                              Recruiter requirements
+                            </div>
+                            <ul>
+                              {recruiterCriteria.map((criterion, index) => (
+                                <li key={`${criterion}-${index}`}>{criterion}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </MotionStagger>
+                    </MotionDisclosure>
                   </div>
                 )}
-                {recruiterCriteria.length ? (
-                  <div className="role-sec">
-                    <div className="role-sec-title">
-                      <span className="marker">{String((parsedJobSpec.sections.length || 1) + 1).padStart(2, '0')}</span>
-                      Recruiter requirements
-                    </div>
-                    <ul>
-                      {recruiterCriteria.map((criterion, index) => (
-                        <li key={`${criterion}-${index}`}>{criterion}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </div>
-                </>
-              )}
-            </div>
+              </PresenceSwap>
+            </section>
 
-            <div className="role-highlights">
-              <h4>At a glance</h4>
+            <aside className="role-highlights" aria-labelledby="job-glance-heading">
+              <h3 id="job-glance-heading">At a glance</h3>
               {roleHighlights.map((item) => (
                 <div key={item.title} className="hi">
-                  <div className="icon"><BriefcaseBusiness size={13} /></div>
-                  <div>
-                    <div className="t">{item.title}</div>
-                    <div className="d">{item.description}</div>
-                  </div>
+                  <div className="t">{item.title}</div>
+                  <div className="d">{item.description}</div>
                 </div>
               ))}
-            </div>
+              <div className="role-spec-agent-note">
+                <Sparkles size={13} aria-hidden="true" />
+                <div>
+                  <strong>Agent context</strong>
+                  <span>
+                    {agentCriteria.length
+                      ? `${agentCriteria.length} role requirement${agentCriteria.length === 1 ? '' : 's'} shape screening.`
+                      : 'Scoring rules live in Agent settings.'}
+                  </span>
+                </div>
+              </div>
+            </aside>
           </div>
         ) : activeView === 'hiring-team' ? (
           <HiringTeamPanel roleId={role?.id} />
-        ) : activeView === 'find' ? (
-          <div>
-            <p className="src-find-intro">
-              <strong>Find people for this role.</strong>
-              <span>
-                Turn the role criteria into LinkedIn and Google searches, and draft a
-                grounded first message from a pasted profile. Nothing is sent or
-                automated — you run the search and the outreach yourself.
-              </span>
-            </p>
-            {numericRoleId ? (
-              <SourceCandidatesPanel roleId={numericRoleId} defaultOpen />
-            ) : null}
-          </div>
         ) : (
           <>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — KPI row
@@ -2092,12 +1830,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               <KpiStrip columns={5} tiles={pipelineStats} />
             </div>
 
-            {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — segmented
-                stage filter + Sort + Score new toolbar above the table.
-                Stage counts read off groupedApplications (already memoized).
-                Sort is currently a label-only display until the directory
-                exposes a controlled sort-by; "Score new" is wired to the
-                same handler the score panel uses. */}
+            {/* Read-only stage lens. Candidate ingestion, processing and ATS
+                sync are operational agent work, not toolbar actions. */}
             <div className="ctable-toolbar">
               <div className="seg" role="tablist" aria-label="Filter candidates by stage">
                 {[
@@ -2106,10 +1840,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     const items = (groupedApplications.find((g) => g.key === stage.key)?.items) || [];
                     return { key: stage.key, label: stage.label, count: items.length };
                   }),
-                  // Rejected is an *outcome* not a *stage*; it lives at
-                  // the right so the active-pipeline tabs (All / Applied /
-                  // Invited / In assessment / Review / Advanced) read
-                  // left-to-right as a recruiter would walk the funnel.
+                  // Rejected is an outcome, kept at the far edge of the lens.
                   { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', count: rejectedApplications.length },
                 ].map((seg) => (
                   <button
@@ -2126,128 +1857,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 ))}
               </div>
               <div className="ctable-toolbar-grow" />
-              {/* Phase 3a — add a sourced prospect (pre-applied lead) to the
-                  role. Toggles a compact inline form below the toolbar. */}
-              <button
-                type="button"
-                className={`btn btn-sm ${sourcedFormOpen ? 'btn-purple' : 'btn-outline'}`}
-                onClick={() => setSourcedFormOpen((v) => !v)}
-                aria-expanded={sourcedFormOpen}
-                title="Add a sourced candidate — a prospect you found before they applied (no CV, not scored)"
-              >
-                <UserPlus size={12} />Add sourced
-              </button>
-              {/* Sorting lives on the column headers (Score / Last updated). */}
-              {/* Manual stage refresh: pull each candidate's current Workable
-                  stage on demand (recovery for sync lag / a move that raced a
-                  stale sync). Only for Workable-linked roles. */}
-              {agentRunning ? (
-                <span className="pipeline-agent-running" title="The agent is processing and syncing this role automatically. The controls to the right are a manual override.">
-                  <AgentLoop kind="pulse"><Sparkles size={12} strokeWidth={2} /></AgentLoop>
-                  Agent is running this role
-                </span>
-              ) : null}
-              {role?.workable_job_id ? (
-                <button
-                  type="button"
-                  className={`btn btn-sm ${agentRunning ? 'btn-ghost' : 'btn-outline'}`}
-                  onClick={handleSyncWorkableStages}
-                  disabled={syncingStages}
-                  title={agentRunning
-                    ? 'Manual override — the agent already keeps candidate stages synced. Use this only to force a refresh.'
-                    : "Pull each candidate's current Workable stage and update it here"}
-                >
-                  {syncingStages ? (
-                    <><Spinner size={12} className="!text-current" />Syncing…</>
-                  ) : (
-                    <><RefreshCw size={12} />Sync from Workable</>
-                  )}
-                </button>
-              ) : null}
-              {/* WS2 — curated multi-candidate client submittal. Only offered
-                  once the recruiter has ticked the candidates to include, so it
-                  reads as an action on the current selection. */}
-              {role?.role_kind !== 'sister' && selectedAppIds.size > 0 ? (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => setSubmittalDialogOpen(true)}
-                  title="Share a curated, client-safe shortlist for this role as one link"
-                >
-                  <Share2 size={12} />Create submittal pack
-                </button>
-              ) : null}
-              {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
-                  recruiter action: cascade Process opened via
-                  ProcessCandidatesDialog. Label flips live during runs. */}
-              {role?.role_kind !== 'sister' ? (
-                <button
-                  type="button"
-                  className={`btn btn-sm ${agentRunning ? 'btn-outline' : 'btn-purple'}`}
-                  onClick={() => setProcessDialogOpen(true)}
-                  disabled={String(processJobs?.[numericRoleId]?.status || '').toLowerCase() === 'running'}
-                  title={agentRunning
-                    ? 'Manual override — the agent processes new candidates automatically. Use this only to run a pass yourself.'
-                    : undefined}
-                >
-                {(() => {
-                  const pj = processJobs?.[numericRoleId];
-                  const status = String(pj?.status || '').toLowerCase();
-                  if (status === 'running') {
-                    const step = pj?.current_step;
-                    const label = step === 'fetch' ? 'Fetching CVs' : step === 'pre_screen' ? 'Pre-screening' : step === 'score' ? 'Scoring' : 'Processing';
-                    return (<><Spinner size={12} className="!text-current" />{label}…</>);
-                  }
-                  const selCount = selectedAppIds.size;
-                  if (selCount > 0) return (<><Sparkles size={12} />Process {selCount} selected</>);
-                  const tabCount = tableStageFilter === 'rejected' ? rejectedApplications.length
-                    : tableStageFilter === 'all' ? activeApplications.length
-                    : activeApplications.filter((a) => applicationFunnelBucket(a) === tableStageFilter).length;
-                  return (<><Sparkles size={12} />Process {tabCount} candidate{tabCount === 1 ? '' : 's'}</>);
-                })()}
-                </button>
-              ) : sisterScoringStatus?.status === 'running' ? (
+              {role?.role_kind === 'sister' && sisterScoringStatus?.status === 'running' ? (
                 <span className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
                   <Spinner size={12} /> Sister scores {sisterScoringStatus.progress_percent || 0}% complete
                 </span>
               ) : null}
             </div>
-            {/* Phase 3a — compact "add sourced candidate" form. A prospect added
-                here lands at the Sourced stage: no CV, not scored, no decision. */}
-            {sourcedFormOpen ? (
-              <form className="sourced-add-form" onSubmit={handleAddSourcedCandidate}>
-                <input
-                  type="text"
-                  className="taali-input"
-                  placeholder="Name (optional)"
-                  value={sourcedDraft.name}
-                  onChange={(e) => setSourcedDraft((d) => ({ ...d, name: e.target.value }))}
-                  aria-label="Prospect name"
-                />
-                <input
-                  type="email"
-                  className="taali-input"
-                  placeholder="Email"
-                  value={sourcedDraft.email}
-                  onChange={(e) => setSourcedDraft((d) => ({ ...d, email: e.target.value }))}
-                  aria-label="Prospect email"
-                />
-                <input
-                  type="url"
-                  className="taali-input"
-                  placeholder="LinkedIn URL"
-                  value={sourcedDraft.linkedin}
-                  onChange={(e) => setSourcedDraft((d) => ({ ...d, linkedin: e.target.value }))}
-                  aria-label="Prospect LinkedIn URL"
-                />
-                <button type="submit" className="btn btn-purple btn-sm" disabled={savingSourced}>
-                  {savingSourced ? <><Spinner size={12} className="!text-current" />Adding…</> : 'Add prospect'}
-                </button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSourcedFormOpen(false)} disabled={savingSourced}>
-                  Cancel
-                </button>
-              </form>
-            ) : null}
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
                 ctable with Candidate / Score / Stage / Workable / Status /
                 Agent / View →. Filtered by tableStageFilter, sorted client-side
@@ -2267,21 +1882,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </div>
                 );
               }
-              // Window: only render the first tableVisibleCount rows. "Select
-              // all" and "Load more" both operate on the rendered window, so a
-              // recruiter never ticks rows they can't see.
+              // Window: only render the first tableVisibleCount rows.
               const visible = sorted.slice(0, tableVisibleCount);
               const hiddenCount = sorted.length - visible.length;
-              const visibleIds = visible.map((a) => a.id);
-              const allSel = visibleIds.length > 0 && visibleIds.every((id) => selectedAppIds.has(id));
-              const someSel = visibleIds.some((id) => selectedAppIds.has(id));
-              const toggleAll = (checked) => { const next = new Set(selectedAppIds); visibleIds.forEach((id) => { if (checked) next.add(id); else next.delete(id); }); setSelectedAppIds(next); };
               return (
                 <div className="ctable-wrap">
                   <table className="ctable">
                     <thead>
                       <tr>
-                        <th aria-label="Select" style={{ width: 28 }}><input type="checkbox" aria-label="Select all visible candidates" checked={allSel} ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }} onChange={(e) => toggleAll(e.target.checked)} /></th>
                         <th>Candidate</th>
                         <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
                           <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">{role?.role_kind === 'sister' ? 'Sister score' : 'Score'}{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
@@ -2322,7 +1930,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                           triageApplication
                           && Number(triageApplication.id) === Number(application.id)
                         );
-                        const isSelected = selectedAppIds.has(application.id);
                         return (
                           <React.Fragment key={application.id}>
                             <tr
@@ -2332,7 +1939,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               onMouseLeave={() => hoverPrefetchRef.current.cancel()}
                               style={{ cursor: 'pointer' }}
                             >
-                              <td onClick={(e) => e.stopPropagation()} style={{ width: 28 }}><input type="checkbox" aria-label={`Select ${buildApplicationTitle(application)}`} checked={isSelected} onChange={() => { const next = new Set(selectedAppIds); if (next.has(application.id)) next.delete(application.id); else next.add(application.id); setSelectedAppIds(next); }} /></td>
                               <td>
                                 <div className="name">{buildApplicationTitle(application)}</div>
                                 <div className="sub">
@@ -2386,7 +1992,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={8} className="ctable-triage-cell">
+                                <td colSpan={role?.role_kind === 'sister' ? 8 : 7} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} agentRunning={agentRunning} />
                                 </td>
                               </tr>
@@ -2414,31 +2020,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               );
             })()}
           </>
-        )}
+          )}
+        </PresenceSwap>
 
         {/* Role editing is now inline on the Job Specification tab
             (<RoleSpecEditPanel>), so the role-edit slide-over is retired here. */}
-
-        <CreateSisterRoleDialog
-          open={sisterDialogOpen}
-          sourceRole={role}
-          rolesApi={rolesApi}
-          onClose={() => setSisterDialogOpen(false)}
-          onCreated={(createdRole) => {
-            setSisterDialogOpen(false);
-            showToast('Sister role created. Candidate scoring has started.', 'success');
-            if (createdRole?.id) navigate(`/jobs/${createdRole.id}`);
-          }}
-        />
-
-        <CandidateSheet
-          open={candidateSheetOpen}
-          role={role}
-          saving={addingCandidate}
-          error={candidateSheetError}
-          onClose={() => setCandidateSheetOpen(false)}
-          onSubmit={handleCandidateSubmit}
-        />
 
         <Dialog
           open={turnOffOpen}
@@ -2474,47 +2060,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             )}
           </div>
         </Dialog>
-
-        {/* Candidates in table order, not raw fetch order — the backend
-            freezes the submitted order into the pack, so the client sees the
-            same ranking the recruiter curated on screen. */}
-        <SubmittalPackDialog
-          open={submittalDialogOpen}
-          roleId={numericRoleId}
-          roleTitle={role?.name || ''}
-          applications={sortedTableApplications.filter((a) => selectedAppIds.has(a.id))}
-          onClose={() => setSubmittalDialogOpen(false)}
-        />
-
-        <ProcessCandidatesDialog
-          open={processDialogOpen}
-          roleId={numericRoleId}
-          stage={tableStageFilter}
-          stageLabel={tableStageFilter === 'all' ? null : tableStageFilter === 'rejected' ? 'Rejected' : (PIPELINE_STAGE_ORDER.find((s) => s.key === tableStageFilter)?.label || tableStageFilter)}
-          applicationIds={selectedAppIds.size > 0 ? Array.from(selectedAppIds) : null}
-          onClose={() => setProcessDialogOpen(false)}
-          onConfirm={async (body) => {
-            try {
-              const res = await rolesApi.processRole(numericRoleId, body);
-              const payload = res?.data ?? {};
-              if (payload.status === 'already_running') {
-                showToast('This role is already being processed.', 'info');
-              } else {
-                // No success toast — the persistent BackgroundJobsToaster
-                // already shows the cascade progress in the bottom-right.
-                // Two surfaces for the same event was visual noise.
-                trackRoleProcess?.(numericRoleId);
-                // Clear selection now that the cascade has been launched
-                // — leaving it ticked would suggest the next click still
-                // targets the same rows when actually they're now mid-run.
-                setSelectedAppIds(new Set());
-              }
-              setProcessDialogOpen(false);
-            } catch (error) {
-              showToast(getErrorMessage(error, 'Failed to start.'), 'error');
-            }
-          }}
-        />
           </div>
 
         {/* The legacy slide-out <AgentSettingsPanel scope="role"> drawer

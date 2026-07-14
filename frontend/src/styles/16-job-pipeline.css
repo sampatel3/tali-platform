@@ -1,24 +1,5 @@
 /* ================== JOB PIPELINE COCKPIT — Phase 4 ================== */
 
-/* Funnel summary strip on the role detail page — frames the shared
-   `.job-stats` six-stage stat row (reused from the home/jobs-list role card)
-   as a standalone card. The base `.job-stats` carries a top border meant to
-   divide it from a card header; inside this standalone card it sits alone, so
-   we drop that divider and the row's top padding. */
-.job-summary-card {
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 14px 18px;
-  box-shadow: var(--shadow-sm);
-  margin-bottom: 18px;
-}
-
-.job-summary-card .job-stats {
-  padding-top: 0;
-  border-top: none;
-}
-
 .mc-cockpit {
   display: grid;
   grid-template-columns: 1fr;
@@ -305,3 +286,283 @@
 }
 
 .mc-rail-feed:hover { color: var(--purple); border-color: var(--purple); }
+
+/* ================== ROLE DETAIL — read-first job specification ================== */
+
+.role-view-panel {
+  min-width: 0;
+}
+
+.role-spec-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 20px;
+  align-items: start;
+  padding-bottom: 28px;
+}
+
+.role-spec-document {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.role-spec-document-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.role-spec-eyebrow,
+.role-spec-source-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  line-height: var(--lh-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--purple);
+}
+
+.role-spec-document-head h2 {
+  margin-top: 4px;
+  font-family: var(--font-display);
+  font-size: var(--fs-h2);
+  line-height: var(--lh-tight);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.role-spec-read {
+  padding: 0 24px 26px;
+}
+
+.role-spec-read .role-desc-summary {
+  max-width: 72ch;
+  margin: 0;
+  padding: 22px 0 20px;
+  font-size: var(--fs-subtitle);
+  line-height: var(--lh-normal);
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--line-2);
+}
+
+.role-spec-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.role-spec-controls .job-status-control {
+  min-width: 0;
+  margin: 0;
+  padding: 11px 12px;
+  align-content: start;
+  background: var(--bg);
+}
+
+.role-spec-controls .client-control .jsc-actions {
+  min-width: 180px;
+}
+
+.role-spec-document .role-sec.req-spec {
+  margin: 18px 0 0;
+  padding: 18px 20px;
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+  border-color: color-mix(in oklab, var(--purple) 18%, var(--line));
+}
+
+.role-spec-source-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.role-spec-source-row > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.role-spec-source-row a {
+  font-size: var(--fs-caption);
+  color: var(--purple-2);
+  white-space: nowrap;
+}
+
+.role-spec-source-row .desc-toggle {
+  flex: none;
+  margin: 0;
+  padding: 7px 11px;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-label);
+}
+
+.desc-toggle-caret {
+  display: inline-flex;
+}
+
+.role-spec-document .role-sections {
+  max-height: none;
+  overflow: visible;
+  gap: 0;
+}
+
+.role-spec-document .role-sec:not(.req-spec) {
+  padding: 22px 0 16px;
+  border-top: 1px solid var(--line-2);
+}
+
+.role-spec-document .role-sec-title {
+  margin-bottom: 12px;
+  font-family: var(--font-display);
+  font-size: var(--fs-h3);
+  line-height: var(--lh-snug);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--ink);
+}
+
+.role-spec-document .role-sec-title::after {
+  background: var(--line-2);
+}
+
+.role-spec-document .role-sec-title .marker {
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+}
+
+.role-spec-document .role-sec p,
+.role-spec-document .role-sec li,
+.role-spec-document .role-spec-subheading {
+  max-width: 72ch;
+  font-size: var(--fs-body-lg);
+  line-height: var(--lh-normal);
+}
+
+.role-spec-document .role-edit-inline {
+  margin: 0;
+  padding: 22px 24px 24px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.role-spec-layout .role-highlights {
+  position: sticky;
+  top: 80px;
+  padding: 18px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.role-spec-layout .role-highlights h3 {
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: var(--fs-h3);
+  line-height: var(--lh-snug);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.role-spec-layout .role-highlights .hi {
+  display: block;
+  padding: 11px 0;
+}
+
+.role-spec-layout .role-highlights .hi .t {
+  margin-bottom: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  line-height: var(--lh-label);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.role-spec-layout .role-highlights .hi .d {
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+  color: var(--ink-2);
+}
+
+.role-spec-agent-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in oklab, var(--purple) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+  color: var(--purple-2);
+}
+
+.role-spec-agent-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.role-spec-agent-note strong,
+.role-spec-agent-note span {
+  display: block;
+}
+
+.role-spec-agent-note strong {
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+
+.role-spec-agent-note span {
+  margin-top: 2px;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-normal);
+  color: var(--ink-2);
+}
+
+@media (max-width: 1100px) {
+  .role-spec-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .role-spec-layout .role-highlights {
+    position: static;
+  }
+}
+
+@media (max-width: 720px) {
+  .role-spec-document-head,
+  .role-spec-read,
+  .role-spec-document .role-edit-inline {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .role-spec-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .role-spec-source-row,
+  .role-spec-source-row > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
