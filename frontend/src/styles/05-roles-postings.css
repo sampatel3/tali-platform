@@ -358,6 +358,22 @@
   text-decoration: line-through;
 }
 
+/* "Live" badge — the role has an OPEN public job page (candidates can apply,
+   careers feed carries it). Distinct from the Workable lifecycle chip. */
+.job-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+
 /* Client chip on a role card — subtle, building icon + name. */
 .job-client-chip {
   display: inline-flex;
@@ -1479,3 +1495,56 @@
   align-items: center;
   gap: 4px;
 }
+
+/* Distribution STATUS view — is this job live, where can it go, since when. */
+.dist-status {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.dist-status-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dist-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--purple);
+}
+.dist-live-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #fff;
+}
+.dist-status-since { font-size: 0.75rem; color: var(--ink-soft, var(--mute)); }
+.dist-status-line { font-size: 0.8125rem; color: var(--ink-2); margin-top: 8px; }
+.dist-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.dist-channel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.71875rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  background: var(--bg-1, transparent);
+}
+.dist-channel.off { color: var(--mute); opacity: 0.7; }

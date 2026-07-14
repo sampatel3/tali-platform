@@ -16,6 +16,7 @@ vi.mock('../../shared/api', () => ({
     reportingSummary: vi.fn(),
     decisionsBreakdown: vi.fn(),
     decisionTrend: vi.fn(),
+    costPerOutcome: vi.fn(),
   },
 }));
 vi.mock('../../context/ToastContext', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
@@ -42,6 +43,7 @@ const seedApi = () => {
   agentApi.listFeedback.mockResolvedValue({ data: [] });
   agentApi.listDecisions.mockResolvedValue({ data: [] });
   analyticsApi.decisionTrend.mockResolvedValue({ data: {} });
+  analyticsApi.costPerOutcome.mockResolvedValue({ data: null });
   analyticsApi.decisionsBreakdown.mockResolvedValue({
     data: { totals: { advance_conversion: { advanced_total: 200, hired: 40 } } },
   });

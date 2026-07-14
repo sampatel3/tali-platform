@@ -234,6 +234,32 @@
 .an-bigstat .sub { font-size: var(--fs-body); color: var(--mute); line-height: 1.5; }
 .an-bigstat .sub b { color: var(--ink-2); font-weight: 600; }
 
+/* ── cost per outcome (unit economics next to the funnel) ────────────────── */
+.an-cpo {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.an-cpo-cell {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  padding: 12px 14px;
+  background: var(--bg-1, transparent);
+}
+.an-cpo-cell .k { font-size: var(--fs-caption); color: var(--mute); }
+.an-cpo-cell .v {
+  font-size: var(--fs-h3, var(--fs-h2));
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-top: 4px;
+  color: var(--purple-2);
+  font-variant-numeric: tabular-nums;
+}
+.an-cpo-cell .v.muted { color: var(--mute); }
+.an-cpo-cell .s { font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.an-cpo-foot { font-size: var(--fs-caption); color: var(--mute); margin-top: 12px; }
+@media (max-width: 720px) { .an-cpo { grid-template-columns: 1fr 1fr; } }
+
 /* ── by-role table / generic data table ─────────────────────────────────── */
 .an-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 .an-table th {

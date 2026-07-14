@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from ...deps import get_current_user
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
+from ...models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
 from ...models.organization import Organization
 from ...models.role import Role
+from ...models.role_brief import RoleBrief
 from ...models.task import Task
 from ...models.user import User
 from ...platform.database import get_db
@@ -242,6 +244,25 @@ def list_roles(
         db, organization_id=current_user.organization_id, role_ids=role_ids
     )
 
+    # Batched "has an OPEN public job page" — one DISTINCT query joining
+    # JobPage → RoleBrief for the whole page, not a per-card lookup. Drives the
+    # Jobs list "Live" badge (role has a live /job/{token} apply page).
+    published_role_ids = {
+        int(rid)
+        for (rid,) in (
+            db.query(RoleBrief.role_id)
+            .join(JobPage, JobPage.brief_id == RoleBrief.id)
+            .filter(
+                RoleBrief.organization_id == current_user.organization_id,
+                RoleBrief.role_id.in_(role_ids),
+                JobPage.status == JOB_PAGE_STATUS_OPEN,
+            )
+            .distinct()
+            .all()
+        )
+        if rid is not None
+    }
+
     return [
         role_to_response(
             role,
@@ -252,6 +273,7 @@ def list_roles(
             active_candidates_count=active_counts.get(role.id, 0),
             last_candidate_activity_at=last_activity_by_role.get(role.id),
             client=clients_by_role.get(role.id),
+            is_published=role.id in published_role_ids,
         )
         for role in roles
     ]

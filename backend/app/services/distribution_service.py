@@ -162,9 +162,16 @@ def build_distribution_artefacts(
         excerpt=excerpt,
         apply_url=apply_url,
     )
+    published_at = (
+        page.published_at.isoformat()
+        if isinstance(page.published_at, datetime)
+        else None
+    )
     return {
         "published": True,
         "apply_url": apply_url,
+        # When the public job page went live — lets the panel show "Live since …".
+        "published_at": published_at,
         "title": page.title,
         "linkedin_post": linkedin_post,
         "share_urls": build_share_urls(apply_url=apply_url, title=page.title),

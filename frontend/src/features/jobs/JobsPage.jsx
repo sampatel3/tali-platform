@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Building2,
   Filter,
+  Globe,
   Inbox,
   Pause,
   RefreshCw,
@@ -996,6 +997,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             {role?.job_status && JOB_STATUS_META[role.job_status] ? (
                               <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
                                 {JOB_STATUS_META[role.job_status].label}
+                              </span>
+                            ) : null}
+                            {role?.is_published ? (
+                              <span
+                                className="job-live-badge"
+                                title="Public job page is live — candidates can apply"
+                              >
+                                <Globe size={10} strokeWidth={2} /> Live
                               </span>
                             ) : null}
                             {role?.client_name ? (
