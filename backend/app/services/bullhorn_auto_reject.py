@@ -62,9 +62,29 @@ def try_bullhorn_reject(
         result = provider.reject_application(app=app, role=role, reason=reason)
     except WorkableWritebackError:
         raise  # strict (batch) path — propagate so the batch re-queues.
-    except Exception:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover — defensive
         logger.exception("bullhorn auto-reject raised unexpectedly (application_id=%s)", app.id)
-        return True
+        # Unknown provider outcome is never success.  Returning True here used
+        # to flip the local outcome to rejected even when Bullhorn failed,
+        # producing split-brain ATS state.
+        try:
+            append_application_event(
+                db,
+                app=app,
+                event_type="bullhorn_writeback_failed",
+                actor_type=actor_type,
+                actor_id=actor_id,
+                reason="Bullhorn reject raised unexpectedly",
+                metadata={
+                    "code": "unexpected_error",
+                    "error_type": type(exc).__name__,
+                    "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
+                    "trigger": trigger,
+                },
+            )
+        except Exception:
+            logger.exception("failed to record Bullhorn write-back exception")
+        return False
     if result.get("success"):
         append_application_event(
             db,

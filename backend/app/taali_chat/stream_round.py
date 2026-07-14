@@ -40,6 +40,7 @@ def _stream_one_round(
     model: str,
     messages: list[dict[str, Any]],
     system: list[dict[str, Any]],
+    metering: dict[str, Any],
 ) -> Iterator[streaming.Frame]:
     """Stream one Anthropic call. Yields frames; returns (blocks, stop, usage)."""
     with client.messages.stream(
@@ -48,14 +49,9 @@ def _stream_one_round(
         system=system,
         tools=TAALI_CHAT_TOOLS,
         messages=messages,
-        # Skip the wrapper's per-call UsageEvent: ``service.run_chat_turn``
-        # records ONE aggregate event (Feature.TAALI_CHAT) for the whole turn
-        # via ``record_event``. Without this skip the wrapper would write a
-        # second Feature.OTHER event per round on top of that self-recorded
-        # one (double-count). Mirrors agent_chat/engine.py's
-        # ``MeteringContext.skipped(metered_by="agent_chat")``. The
-        # unconditional claude_call_log row still lands (#237 invariant).
-        metering={"skip": True, "metered_by": "taali_chat"},
+        # The metered wrapper writes this paid round in its own committed
+        # session, including interrupted streams when the SDK exposes usage.
+        metering=metering,
     ) as stream:
         # Per-block accumulator for tool_use input JSON (Anthropic streams
         # arguments as ``input_json`` partial deltas; we have to glue them

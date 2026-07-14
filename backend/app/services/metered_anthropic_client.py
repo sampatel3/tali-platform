@@ -662,7 +662,11 @@ class _MeteredStreamCtx:
                 )
         result = self._inner.__exit__(exc_type, exc, tb)
 
-        if exc_type is None and usage is not None:
+        # A client disconnect / generator cancellation can interrupt a stream
+        # after Anthropic has already billed tokens.  If the SDK exposes a
+        # usage snapshot, meter it even on exceptional exit; otherwise those
+        # are exactly the paid calls reconciliation can never attribute.
+        if usage is not None:
             usage_event: Optional[UsageEvent] = None
             try:
                 usage_event = self._messages._record_from_usage(
@@ -688,8 +692,8 @@ class _MeteredStreamCtx:
                     model=self._model,
                     usage=usage,
                     feature_hint=self._messages._feature_hint_from(self._metering),
-                    status="ok",
-                    error_reason=None,
+                    status="ok" if exc_type is None else "interrupted",
+                    error_reason=None if exc_type is None else getattr(exc_type, "__name__", str(exc_type)),
                     anthropic_request_id=None,
                     usage_event_id=int(usage_event.id) if usage_event is not None else None,
                 )

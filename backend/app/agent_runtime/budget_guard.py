@@ -11,17 +11,12 @@ checked from every Anthropic-spending entry point that has role context
 does for that role, not just the agent. This is the *only* condition
 that should ever auto-pause a role.
 
-Removed history (all in 2026-05):
-- per-cycle TOKEN gate (default 50k) — redundant with MAX_TOOL_ROUNDS,
-  fired on legitimate large cohorts, and worst of all leaked into
-  ``pause_role`` so any single cycle that ran a bit long permanently
-  disabled the role.
-- per-cycle DECISION gate (default 20) — intended as "pacing" so the
-  reviewer's queue wouldn't get blasted with 100 decisions at once, but
-  in practice meant a role with 400 candidates needed dozens of daily
-  cron cycles to clear. Pacing is a UI concern, not an orchestrator
-  one. Trust the monthly $ cap as the only spending guard;
-  MAX_TOOL_ROUNDS bounds runaway loops.
+Per-cycle limits are intentionally enforced at the boundaries that own them:
+``orchestrator.run_cycle`` enforces ``agent_token_budget_per_cycle`` before and
+after each paid call, while ``tool_registry.dispatch`` enforces
+``agent_decision_budget_per_cycle`` plus the candidate-facing action caps. They
+abort one cycle but never permanently pause a role.  The monthly cap below is
+the only condition that auto-pauses a role.
 
 Org-level credit balance is enforced separately by the existing
 ``usage_metering_service`` ledger.

@@ -271,8 +271,8 @@ def test_run_cycle_increments_decisions_when_queue_tool_called(db):
 # ---------------------------------------------------------------------------
 
 
-def test_run_cycle_aborts_when_max_rounds_exceeded(db):
-    """Agent that never calls complete should abort cleanly."""
+def test_run_cycle_aborts_repeated_tool_loop_before_max_rounds(db):
+    """An identical no-progress tool loop should trip the cheap breaker."""
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_app(db, org=org, role=role)
@@ -300,9 +300,8 @@ def test_run_cycle_aborts_when_max_rounds_exceeded(db):
     db.commit()
 
     assert run.status == "aborted"
-    assert "MAX_TOOL_ROUNDS" in (run.error or "")
-    # Loop ran exactly the cap.
-    assert client.messages.create.call_count == orchestrator.MAX_TOOL_ROUNDS
+    assert "no-progress circuit breaker" in (run.error or "")
+    assert client.messages.create.call_count == orchestrator.MAX_IDENTICAL_TOOL_ROUNDS + 1
 
 
 def test_build_system_prompt_called_once_per_cycle(db):
@@ -342,8 +341,8 @@ def test_build_system_prompt_called_once_per_cycle(db):
         )
     db.commit()
 
-    # Many rounds executed...
-    assert client.messages.create.call_count == orchestrator.MAX_TOOL_ROUNDS
+    # Multiple rounds executed before the no-progress breaker...
+    assert client.messages.create.call_count == orchestrator.MAX_IDENTICAL_TOOL_ROUNDS + 1
     # ...but the system prompt was built exactly once.
     assert spy_build.call_count == 1
 
@@ -372,6 +371,36 @@ def test_run_cycle_pauses_role_on_monthly_budget_exhausted(db):
     db.refresh(role)
     assert role.agent_paused_at is not None
     assert role.agent_paused_reason
+
+
+def test_run_cycle_token_budget_blocks_actions_from_over_budget_response(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_token_budget_per_cycle = 1_000
+    app = _make_app(db, org=org, role=role)
+    response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_over",
+                name="queue_advance_decision",
+                input_={
+                    "application_id": int(app.id),
+                    "reasoning": "Strong",
+                    "evidence": {},
+                    "confidence": 0.9,
+                },
+            )
+        ],
+        stop_reason="tool_use",
+        input_tokens=900,
+        output_tokens=200,
+    )
+    client = _scripted_client([response])
+    with patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client):
+        run = orchestrator.run_cycle(db, role=role, trigger="manual", application_id=app.id)
+    assert run.status == "aborted"
+    assert "token budget exceeded" in (run.error or "")
+    assert run.decisions_emitted == 0
 
 
 def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
@@ -536,7 +565,7 @@ def test_aborted_cycle_persists_last_cycle_to_calibration(db):
     assert "last_cycle" in cal
     assert cal["last_cycle"]["status"] == "aborted"
     assert cal["last_cycle"]["finished_via_complete"] is False
-    assert cal["last_cycle"]["rounds_used"] == orchestrator.MAX_TOOL_ROUNDS
+    assert cal["last_cycle"]["rounds_used"] == orchestrator.MAX_IDENTICAL_TOOL_ROUNDS + 1
 
 
 def test_successful_cycle_persists_last_cycle_with_finished_via_complete(db):

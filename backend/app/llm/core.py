@@ -57,10 +57,10 @@ class CallUsage:
 class MeteringContext:
     """Typed view over the ``metering`` dict the wrapper consumes.
 
-    ``feature`` is required unless ``skip`` is set. ``skip=True`` mirrors
-    the agent orchestrator's pattern: the caller records its own richer
-    ``UsageEvent`` (with role/entity metadata) and only wants the
-    unconditional ``claude_call_log`` row, not a duplicate usage event.
+    ``feature`` is required unless ``skip`` is set. ``skip=True`` is reserved
+    for callers that intentionally meter the logical operation elsewhere;
+    agent and chat loops should use a feature-bearing context on every paid
+    round so interrupted or aborted runs remain durably attributed.
     Retry threading (``retry_attempt`` / ``trace_id``) is added per-call
     by ``as_dict`` so ``claude_call_log`` rows chain across retries.
     """
@@ -71,6 +71,7 @@ class MeteringContext:
     entity_id: Optional[str] = None
     user_id: Optional[int] = None
     trace_id: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
     skip: bool = False
     metered_by: Optional[str] = None
 
@@ -106,6 +107,7 @@ class MeteringContext:
             entity_id=meter.get("entity_id"),
             user_id=meter.get("user_id"),
             trace_id=meter.get("trace_id"),
+            metadata=meter.get("metadata"),
         )
 
     def as_dict(self, *, retry_attempt: int = 0) -> dict[str, Any]:
@@ -123,6 +125,8 @@ class MeteringContext:
                 out["entity_id"] = str(self.entity_id)
             if self.user_id is not None:
                 out["user_id"] = int(self.user_id)
+            if self.metadata:
+                out["metadata"] = dict(self.metadata)
         if self.trace_id:
             out["trace_id"] = str(self.trace_id)
         if retry_attempt:

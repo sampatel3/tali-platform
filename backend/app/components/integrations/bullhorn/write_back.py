@@ -15,9 +15,10 @@ PR-1 seam"):
   failure dict, exactly like the Workable helpers — this is the transport-agnostic
   gating exception the op_runner already keys its retry / requeue / surface logic
   off, so Bullhorn needs NO new op types and NO change to gated/ungated semantics.
-* On a successful status write we set ``bullhorn_status`` +
-  ``bullhorn_status_local_write_at`` on the application (local-write-wins source),
-  mirroring how the Workable move stamps ``workable_stage_local_write_at``.
+* On a successful status write we set ``bullhorn_status``, the normalized
+  external-stage fields, and ``bullhorn_status_local_write_at`` on the
+  application (local-write-wins source), mirroring how the Workable move stamps
+  ``workable_stage_local_write_at``.
 
 REVERSE STAGE MAPPING — Taali intent → remote status, NEVER guessed
 ------------------------------------------------------------------
@@ -43,6 +44,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ....domains.assessments_runtime.pipeline_service import normalize_pipeline_key
 from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....services.document_service import sanitize_text_for_storage
@@ -216,12 +218,16 @@ def _app_by_submission(db: Session, org: Organization, submission_id: str) -> Ca
     )
 
 
-def _stamp_local_write(app: CandidateApplication | None, status: str) -> None:
+def _stamp_local_write(
+    app: CandidateApplication | None, status: str, *, normalized_stage: str
+) -> None:
     """Local-write-wins: record our own status + the write timestamp so a stale
     inbound event / sweep won't revert it (see ``local_write.py``)."""
     if app is None:
         return
     app.bullhorn_status = sanitize_text_for_storage(status) if status else None
+    app.external_stage_raw = sanitize_text_for_storage(status) if status else None
+    app.external_stage_normalized = normalize_pipeline_key(normalized_stage) or None
     app.bullhorn_status_local_write_at = datetime.now(timezone.utc)
 
 
@@ -280,7 +286,16 @@ def move_submission_status(
             message=sanitize_text_for_storage(str(exc)) or "Bullhorn status write failed",
             config=config,
         )
-    _stamp_local_write(_app_by_submission(db, org, clean_submission_id), remote_status)
+    normalized_stage = (
+        "rejected"
+        if str(taali_intent or "").strip().lower() in {"reject", "rejected"}
+        else "advanced"
+    )
+    _stamp_local_write(
+        _app_by_submission(db, org, clean_submission_id),
+        remote_status,
+        normalized_stage=normalized_stage,
+    )
     return _build_success_result(
         action="move",
         message=f"JobSubmission moved to '{remote_status}' in Bullhorn",

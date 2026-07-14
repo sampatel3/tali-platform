@@ -24,11 +24,16 @@ from ..models.role import Role
 from ..platform.config import settings
 from ..llm import CallUsage, MeteringContext, one_call
 from ..services.claude_client_resolver import get_client_for_org
-from ..services.pricing_service import Feature
-from ..services.usage_metering_service import record_event
+from ..services.pricing_service import Feature, raw_cost_usd_micro
+from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import budget_guard, calibration, data_readiness
 from .system_prompt import PROMPT_VERSION, build_system_prompt
-from .tool_registry import AGENT_TOOLS, QUEUE_DECISION_TOOL_NAMES, dispatch, is_run_complete
+from .tool_registry import (
+    QUEUE_DECISION_TOOL_NAMES,
+    dispatch,
+    is_run_complete,
+    tools_for_role,
+)
 
 
 logger = logging.getLogger("taali.agent_runtime")
@@ -43,6 +48,26 @@ logger = logging.getLogger("taali.agent_runtime")
 # read → batch_score → 2-3 evaluate_policy → queue → complete.
 MAX_TOOL_ROUNDS = 18
 MAX_TOKENS_PER_ROUND = 2048
+MAX_IDENTICAL_TOOL_ROUNDS = 2
+MAX_CONSECUTIVE_ERROR_ROUNDS = 2
+
+
+def _cycle_tokens(run: AgentRun) -> int:
+    return int(
+        (run.input_tokens or 0)
+        + (run.output_tokens or 0)
+        + (run.cache_read_tokens or 0)
+        + (run.cache_creation_tokens or 0)
+    )
+
+
+def _tool_round_signature(blocks: list[dict[str, Any]]) -> str:
+    calls = [
+        {"name": block.get("name"), "input": block.get("input") or {}}
+        for block in blocks
+        if block.get("type") == "tool_use"
+    ]
+    return json.dumps(calls, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _emit_cycle_abort_event(
@@ -420,6 +445,9 @@ def run_cycle(
     finished_via_complete_tool = False
     run_complete_observations: dict[str, Any] = {}
     rounds_used = 0
+    previous_tool_round_signature: str | None = None
+    identical_tool_rounds = 0
+    consecutive_error_rounds = 0
 
     # Build the system prompt ONCE per cycle, not per round. Its content
     # (role spec, criteria, intent, recruiter notes, calibration) is fixed
@@ -437,23 +465,47 @@ def run_cycle(
         trigger_context=trigger_context,
     )
 
-    # Skip the wrapper's usage_event write per round — the explicit
-    # ``record_event`` below carries richer context (role_id, entity_id,
-    # agent_run_id, round_idx) and is the canonical source for agent
-    # spend. Without skip we'd get TWO UsageEvent rows per Anthropic call
-    # (one as Feature.OTHER from the wrapper fallback, one as
-    # Feature.AGENT_AUTONOMOUS here) — the platform metered Sonnet 4.5 at
-    # exactly 2× Anthropic billing on 2026-05-21 because of this exact bug.
-    round_metering = MeteringContext.skipped(
-        metered_by="agent_runtime.orchestrator.run_cycle"
-    )
+    role_tools = tools_for_role(role)
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         rounds_used = round_idx + 1
 
-        # Fresh sink per round so we can read per-round deltas for
-        # ``record_event``; cumulative tokens land on the ``AgentRun`` row.
+        # Re-check every paid round.  A long cycle must not spend past a cap
+        # that another worker reached after this cycle's initial preflight.
+        monthly = budget_guard.check_monthly_usd(db, role=role)
+        if not monthly.ok:
+            budget_guard.pause_role(db, role=role, reason=monthly.reason or "monthly cap reached")
+            run.status = "budget_paused"
+            run.error = monthly.reason or "monthly cap reached"
+            break
+
+        token_budget = getattr(role, "agent_token_budget_per_cycle", None)
+        if token_budget is not None and _cycle_tokens(run) >= int(token_budget):
+            run.status = "aborted"
+            run.error = f"per-cycle token budget reached ({int(token_budget)})"
+            break
+
+        try:
+            reserve(
+                db,
+                organization_id=int(role.organization_id),
+                feature=Feature.AGENT_AUTONOMOUS,
+            )
+        except InsufficientCreditsError as exc:
+            run.status = "budget_paused"
+            run.error = f"insufficient organization credits: {exc.available} < {exc.required}"
+            break
+
+        # Fresh sink per round for the AgentRun rollup. The metered wrapper
+        # independently commits the authoritative UsageEvent + call log.
         round_usage = CallUsage()
+        round_metering = MeteringContext(
+            feature=Feature.AGENT_AUTONOMOUS,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+            entity_id=str(role.id),
+            metadata={"agent_run_id": int(run.id), "round": int(round_idx)},
+        )
         try:
             response = one_call(
                 client,
@@ -461,7 +513,7 @@ def run_cycle(
                 system=system,
                 messages=messages,
                 max_tokens=MAX_TOKENS_PER_ROUND,
-                tools=AGENT_TOOLS,
+                tools=role_tools,
                 metering=round_metering,
                 usage_sink=round_usage,
             )
@@ -476,24 +528,24 @@ def run_cycle(
         run.cache_read_tokens += round_usage.cache_read_tokens
         run.cache_creation_tokens += round_usage.cache_creation_tokens
 
-        try:
-            event = record_event(
-                db,
-                organization_id=role.organization_id,
-                role_id=int(role.id),
-                feature=Feature.AGENT_AUTONOMOUS,
-                model=model,
-                input_tokens=round_usage.input_tokens,
-                output_tokens=round_usage.output_tokens,
-                cache_read_tokens=round_usage.cache_read_tokens,
-                cache_creation_tokens=round_usage.cache_creation_tokens,
-                user_id=None,
-                entity_id=str(role.id),
-                metadata={"agent_run_id": int(run.id), "round": int(round_idx)},
-            )
-            run.total_cost_micro_usd += int(getattr(event, "cost_usd_micro", 0) or 0)
-        except Exception:  # pragma: no cover — never let metering kill the cycle
-            logger.exception("agent_runtime: usage_metering record_event failed")
+        # The metered client already wrote the UsageEvent + ClaudeCallLog in
+        # independent committed sessions. Keep the run's raw-cost rollup using
+        # the same canonical pricing function without creating a second event.
+        run.total_cost_micro_usd += raw_cost_usd_micro(
+            model=model,
+            input_tokens=round_usage.input_tokens,
+            output_tokens=round_usage.output_tokens,
+            cache_read_tokens=round_usage.cache_read_tokens,
+            cache_creation_tokens=round_usage.cache_creation_tokens,
+        )
+
+        # Do not execute actions produced by a response that already pushed the
+        # cycle over its configured token ceiling.  The paid call is still
+        # durably metered above; the next cycle starts cleanly.
+        if token_budget is not None and _cycle_tokens(run) > int(token_budget):
+            run.status = "aborted"
+            run.error = f"per-cycle token budget exceeded ({_cycle_tokens(run)} > {int(token_budget)})"
+            break
 
         assistant_blocks = [_block_to_dict(b) for b in (response.content or [])]
         messages.append({"role": "assistant", "content": assistant_blocks})
@@ -504,12 +556,31 @@ def run_cycle(
         tool_results: list[dict[str, Any]] = []
         run_complete_payload: Optional[dict[str, Any]] = None
 
+        # Generic no-progress breaker.  The existing evaluate_policy guard is
+        # candidate-specific; this catches every tool, including repeated reads
+        # and repeated cache bypasses.  Two retries are permitted; a third
+        # identical tool round aborts before any further side effect or spend.
+        current_signature = _tool_round_signature(assistant_blocks)
+        if current_signature == previous_tool_round_signature:
+            identical_tool_rounds += 1
+        else:
+            identical_tool_rounds = 0
+        previous_tool_round_signature = current_signature
+        if identical_tool_rounds >= MAX_IDENTICAL_TOOL_ROUNDS:
+            run.status = "aborted"
+            run.error = "no-progress circuit breaker: repeated identical tool round"
+            break
+
+        round_tool_count = 0
+        round_error_count = 0
+
         for block in assistant_blocks:
             if block.get("type") != "tool_use":
                 continue
             tool_use_id = str(block.get("id", ""))
             name = str(block.get("name", ""))
             args = block.get("input") or {}
+            round_tool_count += 1
             tools_called_summary[name] = tools_called_summary.get(name, 0) + 1
 
             try:
@@ -526,6 +597,8 @@ def run_cycle(
                 logger.exception("agent_runtime: tool %s failed", name)
                 result = {"error": str(exc), "tool": name}
                 is_error = True
+            if is_error:
+                round_error_count += 1
 
             tool_results.append(
                 {
@@ -537,6 +610,15 @@ def run_cycle(
             )
 
         messages.append({"role": "user", "content": tool_results})
+
+        if round_tool_count > 0 and round_error_count == round_tool_count:
+            consecutive_error_rounds += 1
+        else:
+            consecutive_error_rounds = 0
+        if consecutive_error_rounds >= MAX_CONSECUTIVE_ERROR_ROUNDS:
+            run.status = "aborted"
+            run.error = "no-progress circuit breaker: consecutive tool-error rounds"
+            break
 
         if run_complete_payload is not None:
             finished_via_complete_tool = True

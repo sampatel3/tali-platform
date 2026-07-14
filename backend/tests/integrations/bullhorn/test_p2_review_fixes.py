@@ -321,6 +321,37 @@ def test_try_bullhorn_reject_api_error_not_handled(db, monkeypatch):
     assert handled is False
 
 
+def test_try_bullhorn_reject_unexpected_exception_fails_closed(db, monkeypatch):
+    import app.components.integrations.resolver as resolver_mod
+    import app.services.bullhorn_auto_reject as bar
+
+    org = _bullhorn_org(db)
+    role = _seed_role(db, org)
+    app = _bullhorn_app(db, org, role)
+    db.commit()
+
+    provider = BullhornProvider(org, db)
+
+    def _boom(**_kwargs):
+        raise RuntimeError("network exploded")
+
+    monkeypatch.setattr(provider, "reject_application", _boom)
+    monkeypatch.setattr(resolver_mod, "resolve_ats_provider", lambda _o, _d: provider)
+
+    handled = bar.try_bullhorn_reject(
+        db,
+        app=app,
+        org=org,
+        role=role,
+        actor_type="agent",
+        actor_id=None,
+        reason="below threshold",
+        trigger="auto_reject_pre_screen",
+    )
+    assert handled is False
+    assert app.application_outcome == "open"
+
+
 def test_try_bullhorn_reject_success_is_handled(db, monkeypatch):
     """Control: a successful write-back returns True (handled)."""
     import app.services.bullhorn_auto_reject as bar

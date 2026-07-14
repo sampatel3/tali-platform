@@ -41,6 +41,7 @@ from ..platform.config import settings
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
+from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
 from .stream_round import _RunningUsage, _stream_one_round
 from .system_prompt import build_system_blocks
@@ -53,6 +54,8 @@ logger = logging.getLogger("taali.taali_chat")
 # anything past this is almost certainly a runaway loop. 8 rounds is enough
 # headroom for "search → compare → drill into one CV" multi-step flows.
 MAX_TOOL_ROUNDS = 8
+MAX_IDENTICAL_TOOL_ROUNDS = 2
+MAX_CONSECUTIVE_ERROR_ROUNDS = 2
 
 # Tools whose results must stay scoped to the conversation's role. The
 # system prompt tells the model it may omit role_id for these in a
@@ -225,6 +228,9 @@ def run_chat_turn(
     model = settings.resolved_claude_model
     running_usage = _RunningUsage()
     final_stop_reason: str | None = None
+    previous_tool_signature: str | None = None
+    identical_tool_rounds = 0
+    consecutive_error_rounds = 0
 
     # Anthropic-side message log: starts as the persisted history (which
     # already includes the just-added user message).
@@ -235,6 +241,16 @@ def run_chat_turn(
     system_blocks = build_system_blocks(db, conversation=conversation)
 
     for round_index in range(MAX_TOOL_ROUNDS):
+        try:
+            reserve(
+                db,
+                organization_id=int(user.organization_id),
+                feature=Feature.TAALI_CHAT,
+            )
+        except InsufficientCreditsError:
+            yield streaming.error("This organization does not have enough credits for another chat step.")
+            final_stop_reason = "stop"
+            break
         # Each round is a fresh "step" in AI SDK terms; the message id is
         # synthetic but useful for the React client when annotating.
         yield streaming.start_step(
@@ -246,6 +262,14 @@ def run_chat_turn(
                 model=model,
                 messages=messages,
                 system=system_blocks,
+                metering={
+                    "feature": Feature.TAALI_CHAT,
+                    "organization_id": int(user.organization_id),
+                    "user_id": int(user.id),
+                    "role_id": int(conversation.role_id) if conversation.role_id else None,
+                    "entity_id": str(conversation.id),
+                    "metadata": {"feature": "taali_chat", "round": round_index},
+                },
             )
         except Exception as exc:
             logger.exception("Anthropic stream failed: %s", exc)
@@ -279,12 +303,35 @@ def run_chat_turn(
             break
 
         tool_results: list[dict[str, Any]] = []
+        signature = json.dumps(
+            [
+                {"name": b.get("name"), "input": b.get("input") or {}}
+                for b in assistant_blocks
+                if b.get("type") == "tool_use"
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if signature == previous_tool_signature:
+            identical_tool_rounds += 1
+        else:
+            identical_tool_rounds = 0
+        previous_tool_signature = signature
+        if identical_tool_rounds >= MAX_IDENTICAL_TOOL_ROUNDS:
+            yield streaming.error("Stopped a repeated tool loop before it could waste more credits.")
+            final_stop_reason = "stop"
+            break
+
+        tool_count = 0
+        error_count = 0
         for block in assistant_blocks:
             if block.get("type") != "tool_use":
                 continue
             tool_call_id = str(block["id"])
             name = str(block["name"])
             args = block.get("input") or {}
+            tool_count += 1
             # Enforce role scope: when the chat is role-scoped and the model
             # omitted role_id for a role-scoped tool, inject the
             # conversation's role_id so the handler doesn't fall back to
@@ -302,6 +349,8 @@ def run_chat_turn(
                 logger.exception("Tool %s failed: %s", name, exc)
                 result = {"error": str(exc), "tool": name}
                 is_error = True
+            if is_error:
+                error_count += 1
             yield streaming.tool_result(tool_call_id=tool_call_id, result=result)
             tool_results.append(
                 {
@@ -336,6 +385,14 @@ def run_chat_turn(
             content=tool_results,
         )
         messages.append({"role": "user", "content": tool_results})
+        if tool_count > 0 and error_count == tool_count:
+            consecutive_error_rounds += 1
+        else:
+            consecutive_error_rounds = 0
+        if consecutive_error_rounds >= MAX_CONSECUTIVE_ERROR_ROUNDS:
+            yield streaming.error("Stopped after repeated tool errors. Try a narrower request.")
+            final_stop_reason = "stop"
+            break
     else:
         # Exhausted MAX_TOOL_ROUNDS without a terminal stop_reason.
         yield streaming.error(
@@ -347,24 +404,6 @@ def run_chat_turn(
     # Bump conversation.updated_at + meter the call.
     conversation.updated_at = datetime.now(timezone.utc)
     db.flush()
-
-    try:
-        record_event(
-            db,
-            organization_id=user.organization_id,
-            feature=Feature.TAALI_CHAT,
-            model=model,
-            input_tokens=running_usage.input_tokens,
-            output_tokens=running_usage.output_tokens,
-            cache_read_tokens=running_usage.cache_read_tokens,
-            cache_creation_tokens=running_usage.cache_creation_tokens,
-            user_id=user.id,
-            entity_id=str(conversation.id),
-            metadata={"feature": "taali_chat"},
-        )
-    except Exception:
-        # Metering must never break the chat — log and continue.
-        logger.exception("Failed to record usage_event for taali_chat turn")
 
     aisdk_usage = {
         "promptTokens": running_usage.input_tokens,

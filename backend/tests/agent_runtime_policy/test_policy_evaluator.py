@@ -44,6 +44,27 @@ def test_recent_recruiter_send_skips_send_assessment(db):
     assert verdict.decision_type in {"skip", "no_action"}
 
 
+def test_explicit_must_have_failure_hits_deterministic_reject_rule(db):
+    _org, role, _, app = make_world(db)
+    app.cv_match_details = {
+        "role_fit_score": 90.0,
+        "dimension_scores": {},
+        "requirements_assessment": [
+            {
+                "requirement_id": "crit_1",
+                "priority": "must_have",
+                "status": "missing",
+                "blocker": True,
+            }
+        ],
+    }
+    app.pre_screen_score_100 = 90.0
+    db.flush()
+    verdict, _ = evaluate_for_application(db, role=role, application_id=int(app.id))
+    assert verdict.decision_type == "auto_reject"
+    assert any("must_have_blocked" in step for step in verdict.rule_path)
+
+
 def test_missing_application_returns_no_action(db):
     _org, role, _, _app = make_world(db)
     verdict, outputs = evaluate_for_application(

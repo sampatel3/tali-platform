@@ -66,17 +66,15 @@ def evaluate_auto_reject_decision(
     # is eligible the reject is carded for manual review instead of written back.
     agentic_eligible = bool(getattr(role, "agentic_mode_enabled", False)) if role is not None else False
     auto_disqualify_eligible = bool(config["enabled"]) or agentic_eligible
-    # HARD RAIL: never auto-disqualify a candidate a human recruiter has
-    # already advanced in Workable (phone/technical/final interview, offer,
-    # hired) — e.g. moved forward there before the application ever synced
-    # into Taali. The reject verdict still surfaces as a HITL card (the
-    # caller diverts to the Decision Hub when not eligible) where the UI
-    # warns the recruiter; the automated Workable write-back must not fire.
-    from ..domains.assessments_runtime.pipeline_service import (
-        is_post_handover_workable_stage,
-    )
+    # HARD RAIL: irreversible rejection fails closed across every ATS.  A
+    # normalized post-handover state means a recruiter already advanced the
+    # candidate; an unmapped Bullhorn state is intentionally unknown and must
+    # be reviewed before automation acts.  The deterministic reject still
+    # surfaces as a HITL card in both cases.
+    from ..services.ats_context_service import application_ats_context
 
-    if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
+    ats_context = application_ats_context(app)
+    if ats_context["post_handover"] or ats_context["needs_mapping"]:
         auto_disqualify_eligible = False
 
     if app.application_outcome != "open":

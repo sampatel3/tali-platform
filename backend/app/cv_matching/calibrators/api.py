@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -29,6 +30,46 @@ logger = logging.getLogger("taali.cv_match.calibrators")
 
 _SNAPSHOT_DIR = Path(__file__).resolve().parent / "snapshots"
 _PLATT_THRESHOLD = 1000  # N < this → Platt; otherwise Isotonic
+_REMOTE_REFRESH_SECONDS = 300.0
+_remote_checked_at: dict[tuple[str, str], float] = {}
+
+
+def _remote_key(role_family: str, dimension: str) -> str:
+    return f"calibrators/{role_family}/{dimension}/latest.json"
+
+
+def _remote_enabled() -> bool:
+    from ...platform.config import settings
+
+    return bool(
+        not getattr(settings, "S3_DISABLED", False)
+        and getattr(settings, "AWS_ACCESS_KEY_ID", None)
+        and getattr(settings, "AWS_SECRET_ACCESS_KEY", None)
+        and getattr(settings, "AWS_S3_BUCKET", None)
+    )
+
+
+def _refresh_from_remote(role_family: str, dimension: str, latest: Path) -> None:
+    """Refresh a worker's local read-through cache at most every five minutes."""
+    if not _remote_enabled():
+        return
+    key = (role_family, dimension)
+    now = time.monotonic()
+    if now - _remote_checked_at.get(key, 0.0) < _REMOTE_REFRESH_SECONDS:
+        return
+    _remote_checked_at[key] = now
+    try:
+        from ...services.s3_service import download_from_s3
+
+        body = download_from_s3(_remote_key(role_family, dimension))
+        if body:
+            # Validate before replacing the local cache so corrupt remote data
+            # cannot take a working calibrator offline.
+            json.loads(body.decode("utf-8"))
+            latest.parent.mkdir(parents=True, exist_ok=True)
+            latest.write_bytes(body)
+    except Exception as exc:  # pragma: no cover - remote store is best effort
+        logger.warning("Calibrator remote refresh failed for %s/%s: %s", role_family, dimension, exc)
 
 
 def _calibrator_path(
@@ -80,6 +121,19 @@ def save_calibrator(role_family: str, dimension: str, cal) -> Path:
     body = json.dumps(payload, indent=2)
     timestamped.write_text(body, encoding="utf-8")
     latest.write_text(body, encoding="utf-8")
+    if _remote_enabled():
+        try:
+            from ...services.s3_service import upload_bytes_to_s3
+
+            uploaded = upload_bytes_to_s3(
+                body.encode("utf-8"),
+                _remote_key(role_family, dimension),
+                content_type="application/json",
+            )
+            if not uploaded:
+                logger.warning("Calibrator saved locally but durable upload was unavailable")
+        except Exception as exc:  # pragma: no cover - local fallback remains valid
+            logger.warning("Calibrator durable upload failed: %s", exc)
     logger.info(
         "Saved calibrator role_family=%s dim=%s -> %s",
         role_family,
@@ -92,6 +146,7 @@ def save_calibrator(role_family: str, dimension: str, cal) -> Path:
 def load_calibrator(role_family: str, dimension: str):
     """Load the latest calibrator for (role_family, dimension), or None."""
     path = _calibrator_path(role_family, dimension)
+    _refresh_from_remote(role_family, dimension, path)
     if not path.exists():
         return None
     try:

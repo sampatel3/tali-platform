@@ -178,8 +178,10 @@ def test_save_calibrator_writes_timestamped_and_latest():
 from types import SimpleNamespace  # noqa: E402
 
 from app.cv_matching.calibrators.extractor import (  # noqa: E402
+    _default_role_family_mapper,
     _outcome_action,
     _extract_raw_scores,
+    _role_family_for,
 )
 
 
@@ -187,6 +189,14 @@ def _app(**kw):
     base = {"workable_disqualified": False, "application_outcome": "open", "workable_stage": None}
     base.update(kw)
     return SimpleNamespace(**base)
+
+
+def test_role_family_prefers_persisted_archetype_and_falls_back_to_role_name():
+    role = SimpleNamespace(name="Senior Backend Engineer")
+    assert _role_family_for(
+        {"archetype_id": "backend_platform"}, role, _default_role_family_mapper
+    ) == "backend_platform"
+    assert _role_family_for({}, role, _default_role_family_mapper) == "senior_backend_engineer"
 
 
 class TestOutcomeAction:

@@ -45,6 +45,8 @@ class CandidateRow:
     recommendation: str | None
     pipeline_stage: str | None
     workable_stage: str | None
+    bullhorn_status: str | None
+    external_stage_normalized: str | None
     pending_decision_type: str | None  # None ⇒ no pending decision
     # Synced Workable recruiter comments/ratings [{author, created_at, body}],
     # newest first — only populated when load_open_candidates(with_comments=True);
@@ -149,6 +151,8 @@ def load_open_candidates(
                 recommendation=app.pre_screen_recommendation,
                 pipeline_stage=app.pipeline_stage,
                 workable_stage=app.workable_stage,
+                bullhorn_status=app.bullhorn_status,
+                external_stage_normalized=app.external_stage_normalized,
                 pending_decision_type=pending_by_app.get(int(app.id)),
                 comments=comments,
             )

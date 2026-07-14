@@ -2,12 +2,9 @@
 -73.7% drift (Anthropic billed $69.78, platform metered $18.35):
 
 1. **Orchestrator double-record** (Sonnet 4.5 over-counted at exactly 2×).
-   The agent loop called ``client.messages.create(...)`` on a
-   ``MeteredAnthropicClient`` *without* a ``metering=`` kwarg, so the
-   wrapper auto-recorded an event as ``Feature.OTHER``. Immediately
-   after, the loop also called ``record_event(..., Feature.AGENT_AUTONOMOUS)``
-   explicitly. Two rows per Anthropic call. Fix: pass
-   ``metering={"skip": True}`` so the wrapper stays out of the way.
+   Every paid round now passes a feature-bearing ``MeteringContext`` to the
+   shared wrapper. The wrapper durably writes the one UsageEvent and linked
+   ClaudeCallLog; the orchestrator only keeps an AgentRun token/cost rollup.
 
 2. **cv_match runner retry overwrite** (Haiku under-counted).
    ``_call_claude`` set ``ctx.input_tokens = ...`` on every retry,
@@ -56,47 +53,40 @@ event.listen(AgentRun, "before_insert", _assign_big_pk)
 # Bug 1: orchestrator must not double-record
 # ---------------------------------------------------------------------------
 
-def test_orchestrator_passes_metering_skip_to_messages_create():
-    """The orchestrator must keep the MeteredAnthropicClient wrapper from
-    auto-recording a per-round UsageEvent, because it writes its own richer
-    ``record_event(Feature.AGENT_AUTONOMOUS, ...)`` below. Without the skip
-    we'd get TWO rows per Anthropic call (one Feature.OTHER from the wrapper
-    fallback, one AGENT_AUTONOMOUS here) — the 2× Sonnet over-count of
-    2026-05-21.
+def test_orchestrator_uses_one_feature_bearing_metering_context_per_round():
+    """Each round is metered once by the wrapper with autonomous attribution.
 
-    The call now goes through the shared ``one_call`` gateway, which builds
-    the ``metering`` kwarg from a ``MeteringContext`` rather than the
-    orchestrator hand-rolling ``client.messages.create(metering={...})``.
-    Pin the invariant at the behavioural layer: the context the orchestrator
-    hands ``one_call`` must serialise to ``{"skip": True}`` so the wrapper
-    stays out of the way."""
+    The AgentRun retains a raw-cost rollup for operational reporting, but the
+    orchestrator must not create a second UsageEvent itself.
+    """
     from app.llm import MeteringContext
+    from app.services.pricing_service import Feature
 
-    round_metering = MeteringContext.skipped(
-        metered_by="agent_runtime.orchestrator.run_cycle"
+    round_metering = MeteringContext(
+        feature=Feature.AGENT_AUTONOMOUS,
+        organization_id=12,
+        role_id=34,
+        entity_id="34",
+        metadata={"agent_run_id": 56, "round": 2},
     )
     serialised = round_metering.as_dict()
-    assert serialised.get("skip") is True, (
-        "orchestrator round metering must serialise to {'skip': True} or the "
-        "wrapper auto-records a duplicate UsageEvent as Feature.OTHER. "
-        f"Got: {serialised}"
-    )
+    assert serialised["feature"] == Feature.AGENT_AUTONOMOUS
+    assert serialised["organization_id"] == 12
+    assert serialised["metadata"] == {"agent_run_id": 56, "round": 2}
 
-    # And the orchestrator must actually use a skipped context for the
-    # per-round call (not a feature-bearing one that the wrapper would meter).
     from pathlib import Path
     src = Path(__file__).parents[1] / "app" / "agent_runtime" / "orchestrator.py"
     content = src.read_text()
-    assert "MeteringContext.skipped(" in content, (
-        "orchestrator must build a skipped MeteringContext for the per-round "
-        "agent call so the wrapper does not double-record"
-    )
+    assert "feature=Feature.AGENT_AUTONOMOUS" in content
     create_idx = content.find("response = one_call(")
     assert create_idx > -1, "could not find one_call call site in orchestrator"
     call_block = content[create_idx:create_idx + 400]
     assert "metering=round_metering" in call_block, (
-        "the per-round one_call must be passed the skipped round_metering "
+        "the per-round one_call must be passed the feature-bearing context "
         f"context. Got:\n{call_block}"
+    )
+    assert "record_event(" not in content, (
+        "orchestrator must not write a second UsageEvent after the metered wrapper"
     )
 
 

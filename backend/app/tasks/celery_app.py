@@ -231,9 +231,13 @@ celery_app.conf.update(
         # since the last cause='feedback_retune' revision and writes a
         # new (inactive by default) policy. Auto-apply is per-org via
         # workspace_settings.decision_policy_auto_apply.
+        "decision-policy-nightly-fit": {
+            "task": "app.tasks.decision_policy_tasks.nightly_policy_fit",
+            "schedule": crontab(hour=2, minute=30),
+        },
         "decision-policy-nightly-retune": {
             "task": "app.tasks.decision_policy_tasks.nightly_retune_sweep",
-            "schedule": 86400.0,
+            "schedule": crontab(hour=3, minute=0),
         },
         # Nightly role_fit threshold calibration: learn the advance/reject cut
         # on the OBJECTIVE score from recruiter terminal decisions (Youden's J),

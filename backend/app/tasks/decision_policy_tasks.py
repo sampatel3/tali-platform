@@ -9,11 +9,32 @@ review in the Hub (Phase 6).
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from .celery_app import celery_app
 
 
 logger = logging.getLogger("taali.tasks.decision_policy")
+
+
+@celery_app.task(name="app.tasks.decision_policy_tasks.nightly_policy_fit")
+def nightly_policy_fit(lookback_days: int = 90) -> dict:
+    """Fit statistical policy candidates before the governed retune sweep."""
+    from ..decision_policy.nightly_policy_fit import run_nightly_fit
+    from ..platform.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return run_nightly_fit(
+            db,
+            since=datetime.now(timezone.utc) - timedelta(days=int(lookback_days)),
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("nightly_policy_fit failed")
+        raise
+    finally:
+        db.close()
 
 
 @celery_app.task(name="app.tasks.decision_policy_tasks.nightly_retune_sweep")

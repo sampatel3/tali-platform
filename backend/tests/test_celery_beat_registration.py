@@ -73,3 +73,13 @@ def test_bullhorn_incremental_sweeps_are_scheduled_and_registered():
     ):
         assert task_name in celery_app.tasks, f"{task_name} not registered"
         assert task_name in scheduled, f"{task_name} not on the beat schedule"
+
+
+def test_statistical_policy_fit_precedes_nightly_retune():
+    scheduled = _scheduled_task_names()
+    assert scheduled["decision-policy-nightly-fit"] == (
+        "app.tasks.decision_policy_tasks.nightly_policy_fit"
+    )
+    assert scheduled["decision-policy-nightly-retune"] == (
+        "app.tasks.decision_policy_tasks.nightly_retune_sweep"
+    )

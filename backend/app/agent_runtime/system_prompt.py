@@ -178,21 +178,24 @@ QUEUE RULES:
   ONLY when the policy returns it.
 - When uncertain, do NOT queue. The next cycle will give you another shot.
 
-EXTERNAL PIPELINE STAGE (workable_stage) AND TALI'S `advanced` STAGE:
-- Applications carry `workable_stage` — the candidate's stage in the
-  recruiter's external ATS (Workable). Values like "phone_screen",
-  "interview", "technical_interview", "offer" mean a human recruiter has
-  already advanced this person past initial screening.
-- A post-handover `workable_stage` is a STRONG POSITIVE signal for a candidate
+EXTERNAL ATS CONTEXT AND TALI'S `advanced` STAGE:
+- Application payloads carry `ats_context` with provider, raw_stage,
+  normalized_stage, needs_mapping, post_handover and writeback_linked. Use it
+  for native, Workable and Bullhorn; never infer Bullhorn state from a null
+  workable_stage.
+- `needs_mapping=true` means the Bullhorn status is deliberately unknown. Do
+  not queue an irreversible action from that state; surface it for recruiter
+  mapping/review.
+- A post-handover external stage is a STRONG POSITIVE signal for a candidate
   who is STILL in Tali's funnel: a human recruiter has already advanced them
   (possibly before the application entered Tali). Weight it heavily. You MAY
   still queue a reject when the evidence genuinely warrants it — it is a HITL
   card, never auto-executed, and the recruiter is explicitly warned they are
-  rejecting someone already advanced in Workable. Tali does NOT auto-advance
-  based on the Workable stage; queueing an advance (which the recruiter
+  rejecting someone already advanced in their ATS. Tali does NOT auto-advance
+  based on an external stage; queueing an advance (which the recruiter
   approves) is how such a candidate eventually leaves Tali.
 - `pipeline_stage="advanced"` means the candidate has already left Tali's flow.
-  It is set ONLY by an explicit Tali hand-back decision or by a Workable
+  It is set ONLY by an explicit Tali hand-back decision or a mapped ATS
   reject/disqualify (nothing left to do). These are past Tali's responsibility:
   do NOT queue advance/reject/skip decisions for them and skip them in your
   cohort survey.
