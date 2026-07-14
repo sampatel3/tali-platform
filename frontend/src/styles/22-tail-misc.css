@@ -393,22 +393,38 @@
 
 /* ===========================================================================
    Candidate Notes & timeline tab — HANDOFF v2 §5.1 / canvas cand-notes
-   Single column (preview order): hiring-team notes → transcript →
-   questionnaire → Workable comments → audit timeline (full width, bottom).
+   Responsive workspace: hiring-team context and interview outcomes in the
+   main column, with a permanent activity rail on the right.
    =========================================================================== */
 
-/* Single-column notes flow, matching the preview order: hiring-team notes +
-   inputs → interview transcript → questionnaire → Workable comments → audit
-   timeline (full width, at the very bottom). Replaces the old cramped 2-col
-   grid that boxed the timeline into a narrow right rail. */
-.mc-notes-single {
-  display: flex;
-  flex-direction: column;
-}
-.mc-notes-single > .mc-kicker {
-  margin-bottom: 10px;
+.mc-notes-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.8fr);
+  gap: 24px;
+  align-items: start;
 }
 
+.mc-notes-workspace {
+  min-width: 0;
+}
+
+.mc-notes-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.mc-notes-section-copy,
+.mc-notes-timeline-copy {
+  margin: 4px 0 0;
+  color: var(--mute);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* Kept for compact error fallbacks elsewhere in the candidate report. */
 .mc-notes-empty {
   padding: 14px 16px;
   border-radius: 12px;
@@ -420,12 +436,37 @@
   margin-bottom: 8px;
 }
 
+.mc-notes-empty-card {
+  padding: 16px;
+  margin-bottom: 10px;
+}
+
+.mc-notes-empty-title {
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.mc-notes-empty-copy {
+  margin: 4px 0 0;
+  color: var(--mute);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.mc-notes-feed {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
 .mc-notes-card {
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
   padding: 14px 16px;
   margin-bottom: 8px;
+}
+
+.mc-notes-feed .mc-notes-card {
+  margin-bottom: 0;
 }
 
 .mc-notes-card-head {
@@ -457,36 +498,58 @@
   line-height: 1.55;
 }
 
-.mc-notes-input {
-  padding: 14px;
-  border-radius: 12px;
-  background: var(--bg-2);
-  border: 1px dashed var(--line);
+.mc-notes-rank {
+  margin-right: 6px;
+  color: var(--purple);
+  font-weight: 600;
+}
+
+.mc-notes-link {
+  color: var(--purple);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mc-notes-transcript-link {
+  display: inline-block;
   margin-top: 6px;
 }
 
-.mc-notes-input textarea {
-  width: 100%;
-  min-height: 60px;
-  border: 0;
-  background: transparent;
-  outline: none;
-  font: inherit;
-  font-size: 0.8125rem;
-  resize: vertical;
-  color: var(--ink);
+/* Canonical Taali Card + canonical Taali Textarea. The previous dashed shell
+   stripped the textarea's own border, hover and focus states, which made the
+   composer look like a drop zone instead of an input. */
+.mc-note-composer {
+  padding: 16px;
+  margin-top: 6px;
 }
 
-.mc-notes-input textarea:disabled {
-  cursor: not-allowed;
+.mc-note-composer-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.mc-note-composer-help {
+  margin: 0 0 10px;
   color: var(--mute);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.mc-note-composer-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
 }
 
 .mc-notes-agent-toggle {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin-top: 8px;
   font-size: 0.75rem;
   line-height: 1.4;
   color: var(--mute);
@@ -503,16 +566,89 @@
   cursor: not-allowed;
 }
 
+.mc-notes-agent-toggle > span {
+  display: grid;
+  gap: 2px;
+}
+
+.mc-notes-agent-toggle strong {
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.mc-notes-agent-toggle small {
+  color: var(--mute);
+  font-size: 0.71875rem;
+}
+
 .mc-notes-input-actions {
   display: flex;
   justify-content: flex-end;
   margin-top: 6px;
 }
 
+.mc-supporting-link-card {
+  padding: 14px;
+  margin-top: 12px;
+}
+
+.mc-supporting-link-fields {
+  display: grid;
+  gap: 8px;
+}
+
+.mc-supporting-link-fields .mc-note-composer-label:not(:first-child) {
+  margin-top: 2px;
+}
+
+.mc-field-optional {
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.mc-interview-feedback {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.mc-notes-timeline-rail {
+  min-width: 0;
+  padding: 18px;
+  align-self: start;
+}
+
+.mc-notes-timeline-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mc-notes-timeline-head .mc-kicker {
+  margin: 0;
+}
+
+.mc-notes-timeline-head .mc-audit-count {
+  flex: 0 0 auto;
+  padding-top: 1px;
+}
+
+.mc-notes-timeline-empty {
+  margin: 14px 0 0;
+  color: var(--mute);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
 .mc-audit-timeline {
   position: relative;
   padding-left: 18px;
   border-left: 2px solid var(--line);
+  margin: 16px 0 0 6px;
 }
 
 .mc-audit-row {
@@ -550,8 +686,17 @@
   line-height: 1.5;
 }
 
-/* Audit timeline collapsed by default (Notes tab) — a clickable kicker row with
-   an event count + Show/Hide, so the long log doesn't dominate the page. */
+.mc-notes-workable-activity {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.mc-notes-workable-activity > .mc-kicker {
+  margin: 0;
+}
+
+/* Compact disclosure used by the optional supporting-link form. */
 .mc-audit-collapse {
   margin-top: 22px;
   border-top: 1px solid var(--line);
@@ -587,6 +732,23 @@
   letter-spacing: 0.04em;
 }
 .mc-audit-collapse[data-open="true"] .mc-audit-summary::after { content: 'Hide'; }
+
+@media (max-width: 1180px) {
+  .mc-notes-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .mc-note-composer-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mc-note-composer-footer .taali-btn {
+    align-self: flex-end;
+  }
+}
 
 /* ===========================================================================
    Role detail Candidates tab toolbar — HANDOFF v2 §4 / canvas

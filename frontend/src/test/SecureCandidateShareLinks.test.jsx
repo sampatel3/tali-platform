@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../shared/api', () => ({
@@ -187,6 +187,18 @@ describe('SecureCandidateShareLinks', () => {
           application_events: [
             { id: 1, event_type: 'cv_scored', metadata: { role_fit_score: 81 }, created_at: '2026-01-10T10:05:00Z' },
           ],
+          interview_feedback: [
+            {
+              id: 31,
+              application_id: 12,
+              interview_round: 'technical',
+              interviewer_name: 'Dana Recruiter',
+              overall_recommendation: 'yes',
+              notes: 'Strong systems-design signal.',
+              probe_results: [],
+              created_at: '2026-01-11T09:30:00Z',
+            },
+          ],
         },
       },
     });
@@ -198,10 +210,18 @@ describe('SecureCandidateShareLinks', () => {
       expect(window.location.pathname).toBe('/share/shr_candidate_report_12');
     });
 
-    // Recruiter shares keep the internal Notes tab — recruiter
-    // notes + the audit timeline travel in the share payload since the
-    // unauth page can't call the auth-only endpoints.
-    expect(await screen.findByRole('tab', { name: 'Notes' })).toBeInTheDocument();
+    // Recruiter shares keep the combined Notes & timeline tab — recruiter
+    // notes, interview feedback, and activity travel in the share payload since
+    // the unauth page can't call the auth-only endpoints.
+    const notesTab = await screen.findByRole('tab', { name: 'Notes & timeline' });
+    const notesPane = document.getElementById(notesTab.getAttribute('aria-controls'));
+    const interviewTab = screen.getByRole('tab', { name: 'Interview' });
+    const interviewPane = document.getElementById(interviewTab.getAttribute('aria-controls'));
+
+    expect(notesPane).toBeInTheDocument();
+    expect(interviewPane).toBeInTheDocument();
+    expect(within(notesPane).getByText('INTERVIEW FEEDBACK')).toBeInTheDocument();
+    expect(within(interviewPane).queryByText('INTERVIEW FEEDBACK')).not.toBeInTheDocument();
   });
 
   it('switches to client-scrubbed view when the link mode is client', async () => {
@@ -230,7 +250,7 @@ describe('SecureCandidateShareLinks', () => {
       expect(screen.getByText(/Why we['’]re sharing this candidate/i)).toBeInTheDocument();
     });
 
-    // External client shares must never expose recruiter Notes.
-    expect(screen.queryByRole('tab', { name: 'Notes' })).not.toBeInTheDocument();
+    // External client shares must never expose recruiter Notes & timeline.
+    expect(screen.queryByRole('tab', { name: 'Notes & timeline' })).not.toBeInTheDocument();
   });
 });

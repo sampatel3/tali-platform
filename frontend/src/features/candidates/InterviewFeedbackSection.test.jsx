@@ -4,9 +4,9 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { InterviewFeedbackSection } from './InterviewFeedbackSection';
 
-// The "Interview feedback" section on the Interview tab lists recorded entries
-// newest-first with a recommendation badge and expandable detail, and the
-// "Record feedback" form POSTs via the roles API then refreshes the list.
+// The "Interview feedback" section on the Notes & timeline tab lists recorded
+// entries newest-first with a recommendation badge and expandable detail, and
+// the "Record feedback" form POSTs via the roles API then refreshes the list.
 
 const interviewKit = {
   priority_probes: [
@@ -63,6 +63,21 @@ describe('InterviewFeedbackSection', () => {
     expect(screen.getByText(/Dana Recruiter/)).toBeInTheDocument();
     // Recommendation badge label.
     expect(screen.getByText('Yes')).toBeInTheDocument();
+  });
+
+  it('exposes the expanded state and controlled detail region on its disclosure', () => {
+    renderSection({ initialFeedback: [existingEntry] });
+
+    const disclosure = screen.getByRole('button', { name: 'Show detail' });
+    const detailId = disclosure.getAttribute('aria-controls');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(detailId).toBeTruthy();
+    expect(document.getElementById(detailId)).not.toBeInTheDocument();
+
+    fireEvent.click(disclosure);
+
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(detailId)).toHaveTextContent('Strong on design.');
   });
 
   it('submits the form and calls createInterviewFeedback then refreshes', async () => {
