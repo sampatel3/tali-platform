@@ -425,6 +425,13 @@
   gap: 0;
 }
 
+/* Keep the first section divider clear of the description toggle. Padding the
+   disclosure (rather than the source row) means collapsed specs gain no extra
+   whitespace and the gap participates in the shared open/close motion. */
+.role-spec-source-row + .motion-disclosure > .role-sections {
+  padding-top: 16px;
+}
+
 .role-spec-document .role-sec:not(.req-spec) {
   padding: 22px 0 16px;
   border-top: 1px solid var(--line-2);
