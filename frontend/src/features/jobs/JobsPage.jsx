@@ -1015,6 +1015,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           </div>
                           <div className="role-meta">
                             {[
+                              role?.role_kind === 'sister' && role?.ats_owner_role_name
+                                ? `Coupled to ${role.ats_owner_role_name} in Workable`
+                                : null,
+                              role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
+                                ? `${role.sister_role_count} coupled sister role${role.sister_role_count === 1 ? '' : 's'}`
+                                : null,
                               roleDept || null,
                               roleLoc || null,
                               lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,

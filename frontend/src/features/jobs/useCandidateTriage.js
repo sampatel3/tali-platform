@@ -44,7 +44,7 @@ export function useCandidateTriage({
   // the drawer at ``review``; failures fall back to an empty list and
   // the picker shows a "no Workable stages found" placeholder.
   useEffect(() => {
-    const shortcode = role?.workable_job_id;
+    const shortcode = role?.effective_workable_job_id || role?.workable_job_id;
     if (!shortcode) {
       setWorkableStages([]);
       return undefined;
@@ -66,7 +66,7 @@ export function useCandidateTriage({
         setLoadingWorkableStages(false);
       });
     return () => { cancelled = true; };
-  }, [role?.workable_job_id]);
+  }, [role?.effective_workable_job_id, role?.workable_job_id]);
 
   const closeDrawer = useCallback(() => {
     setTriageApplicationId(null);

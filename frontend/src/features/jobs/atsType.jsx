@@ -14,6 +14,7 @@ import {
 //   - bullhorn  : source === 'bullhorn' OR it carries a bullhorn_job_order_id
 //   - full_ats  : anything else (native Taali requisition)
 export const roleAtsType = (role) => {
+  if (role?.role_kind === 'sister' || role?.ats_owner_role_id) return 'sister';
   const source = String(role?.source || '').toLowerCase();
   if (source === 'workable' || role?.workable_job_id) return 'workable';
   if (source === 'bullhorn' || role?.bullhorn_job_order_id) return 'bullhorn';
@@ -24,6 +25,7 @@ export const roleAtsType = (role) => {
 // ATS's stage for synced roles, or the native Taali pipeline for full-ATS roles.
 export const atsTypeColumnLabel = (role) => {
   switch (roleAtsType(role)) {
+    case 'sister': return 'Workable';
     case 'workable': return 'Workable';
     case 'bullhorn': return 'Bullhorn';
     default: return 'Pipeline';
@@ -33,6 +35,8 @@ export const atsTypeColumnLabel = (role) => {
 // The single badge every surface renders so a job is unmistakably one mode.
 export const AtsTypeTag = ({ role, size = 'md', className = '' }) => {
   switch (roleAtsType(role)) {
+    case 'sister':
+      return <FullAtsTag label="Sister · Workable" size={size} className={className} />;
     case 'workable':
       return <WorkableTag label="Workable" size={size} className={className} />;
     case 'bullhorn':

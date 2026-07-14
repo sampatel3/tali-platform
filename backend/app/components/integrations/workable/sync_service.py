@@ -2439,5 +2439,48 @@ class WorkableSyncService:
             # Preserve local source-of-truth stage for existing applications.
             app.status = sanitize_text_for_storage(app.status)
         db.flush()
+        # Sister roles share this canonical application roster. When a new CV
+        # arrives (or its text changes), create/refresh only the alternate
+        # evaluation rows; never clone ATS state. A short countdown lets the
+        # surrounding Workable sync transaction commit before workers read it.
+        if created_application or mode == "full":
+            try:
+                # ``role`` is reused across the whole candidate loop, so its
+                # relationship lazy-loads once rather than adding a sister-role
+                # lookup per candidate on large Workable imports.
+                live_sisters = [
+                    sister for sister in (role.sister_roles or [])
+                    if sister.deleted_at is None
+                ]
+                if live_sisters:
+                    from ....services.sister_role_service import (
+                        ensure_application_sister_evaluations,
+                    )
+                    from ....models.sister_role_evaluation import SISTER_EVAL_ERROR, SisterRoleEvaluation
+                    from ....tasks.sister_role_tasks import score_sister_evaluation
+
+                    sister_evaluation_ids = ensure_application_sister_evaluations(
+                        db, app, sister_roles=live_sisters,
+                    )
+                    for sister_evaluation_id in sister_evaluation_ids:
+                        try:
+                            score_sister_evaluation.apply_async(
+                                args=[sister_evaluation_id], queue="scoring", countdown=5,
+                            )
+                        except Exception:  # pragma: no cover - broker failure path
+                            logger.exception(
+                                "Failed to dispatch sister-role evaluation id=%s",
+                                sister_evaluation_id,
+                            )
+                            evaluation = db.get(SisterRoleEvaluation, sister_evaluation_id)
+                            if evaluation is not None:
+                                evaluation.status = SISTER_EVAL_ERROR
+                                evaluation.error_message = (
+                                    "Scoring worker unavailable; retry the roster"
+                                )
+            except Exception:  # pragma: no cover - sync must remain resilient
+                logger.exception(
+                    "Failed to queue sister-role evaluation application_id=%s", app.id
+                )
         counters["application_upserted"] += 1
         return counters

@@ -47,6 +47,10 @@ vi.mock('../../shared/api', () => ({
     syncCriteriaWithWorkspace: vi.fn(),
     resetCriteriaToWorkspace: vi.fn(),
     distribution: vi.fn(),
+    sisterScoringStatus: vi.fn(),
+    rescoreSister: vi.fn(),
+    previewSister: vi.fn(),
+    createSister: vi.fn(),
   },
   tasks: {
     list: vi.fn(),
@@ -151,6 +155,9 @@ describe('JobPipelinePage', () => {
     apiClient.roles.fetchCvsStatus.mockResolvedValue({ data: { status: 'idle', total: 0, fetched: 0, errors: 0 } });
     apiClient.roles.batchPreScreenStatus.mockResolvedValue({ data: { status: 'idle', total: 0, processed: 0, errors: 0 } });
     apiClient.roles.distribution.mockResolvedValue({ data: { published: false } });
+    apiClient.roles.sisterScoringStatus.mockResolvedValue({
+      data: { status: 'completed', progress_percent: 100, counts: { done: 2 } },
+    });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
@@ -187,6 +194,37 @@ describe('JobPipelinePage', () => {
     renderPipeline();
     // A native role's header states it runs on Taali's own full ATS.
     expect(await screen.findByText('Full ATS')).toBeInTheDocument();
+  });
+
+  it('shows a coupled sister role with separate sister and original fit scores', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer · Workable',
+        effective_workable_job_id: 'AI-ENG',
+      },
+    });
+    apiClient.roles.listApplications.mockResolvedValue({
+      data: [{ ...baseApplications[0], taali_score: 91, source_role_score: 72, score_status: 'done' }],
+    });
+
+    renderPipeline();
+
+    expect(await screen.findByText('Sister · Workable')).toBeInTheDocument();
+    expect(screen.getByText((_, element) => (
+      element?.tagName === 'SPAN'
+      && element.textContent.includes('This is a scoring view coupled to AI Engineer · Workable')
+    ))).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Original fit/i })).toBeInTheDocument();
+    const row = screen.getByText('Sam Patel').closest('tr');
+    expect(within(row).getByText('91')).toBeInTheDocument();
+    expect(within(row).getByText('72')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Open original role/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Not published/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Process \d+ candidate/i })).not.toBeInTheDocument();
   });
 
   it('surfaces the public job page from the header when the role is published', async () => {

@@ -28,6 +28,7 @@ from .scoring_tasks import (
     batch_score_role,
     score_application_job,
 )
+from .sister_role_tasks import score_sister_evaluation, score_sister_role
 # Eager-import corroboration_tasks so the worker registers the async
 # (shortlist-gated) graph + GitHub enrichment job — same unregistered-drop
 # trap as scoring_tasks if skipped.

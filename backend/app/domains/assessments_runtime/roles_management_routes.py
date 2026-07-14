@@ -153,7 +153,11 @@ def list_roles(
         # drops the criteria array entirely, so hydrating it would only transfer
         # rows we discard. selectin (not joined) keeps ``.limit()`` below
         # applying cleanly to roles rather than to a tasks cartesian product.
-        .options(selectinload(Role.tasks))
+        .options(
+            selectinload(Role.tasks),
+            joinedload(Role.ats_owner_role),
+            selectinload(Role.sister_roles),
+        )
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
@@ -177,12 +181,15 @@ def list_roles(
         return []
 
     role_ids = [role.id for role in roles]
+    operational_role_ids = list({
+        int(role.ats_owner_role_id or role.id) for role in roles
+    })
     app_counts_rows = (
         db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.role_id.in_(role_ids),
+            CandidateApplication.role_id.in_(operational_role_ids),
         )
         .group_by(CandidateApplication.role_id)
         .all()
@@ -199,7 +206,7 @@ def list_roles(
                 CandidateApplication.organization_id == current_user.organization_id,
                 CandidateApplication.deleted_at.is_(None),
                 CandidateApplication.application_outcome == "open",
-                CandidateApplication.role_id.in_(role_ids),
+                CandidateApplication.role_id.in_(operational_role_ids),
             )
             .group_by(CandidateApplication.role_id)
             .all()
@@ -220,7 +227,7 @@ def list_roles(
             .filter(
                 CandidateApplication.organization_id == current_user.organization_id,
                 CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.role_id.in_(role_ids),
+                CandidateApplication.role_id.in_(operational_role_ids),
             )
             .group_by(CandidateApplication.role_id)
             .all()
@@ -233,7 +240,7 @@ def list_roles(
         stage_counts_by_role = role_pipeline_counts_bulk(
             db,
             organization_id=current_user.organization_id,
-            role_ids=role_ids,
+            role_ids=operational_role_ids,
         )
 
     # Batched role -> client lookup (one query) for the Jobs list's Client column
@@ -268,10 +275,10 @@ def list_roles(
             role,
             summary=True,
             tasks_count=len(role.tasks or []),
-            applications_count=app_counts.get(role.id, 0),
-            stage_counts=stage_counts_by_role.get(role.id, {}),
-            active_candidates_count=active_counts.get(role.id, 0),
-            last_candidate_activity_at=last_activity_by_role.get(role.id),
+            applications_count=app_counts.get(int(role.ats_owner_role_id or role.id), 0),
+            stage_counts=stage_counts_by_role.get(int(role.ats_owner_role_id or role.id), {}),
+            active_candidates_count=active_counts.get(int(role.ats_owner_role_id or role.id), 0),
+            last_candidate_activity_at=last_activity_by_role.get(int(role.ats_owner_role_id or role.id)),
             client=clients_by_role.get(role.id),
             is_published=role.id in published_role_ids,
         )
@@ -283,11 +290,12 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     """The full role-detail payload: funnel counts + pending-decision chips + the
     linked requisition's structured spec. Shared by GET /roles/{id} and the
     job-status mutation so both stay in lock-step."""
+    operational_role_id = int(role.ats_owner_role_id or role.id)
     app_count = (
         db.query(func.count(CandidateApplication.id))
         .filter(
             CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == role.id,
+            CandidateApplication.role_id == operational_role_id,
             CandidateApplication.deleted_at.is_(None),
         )
         .scalar()
@@ -298,7 +306,7 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     # the role detail page can render the home-card funnel summary from the
     # single GET rather than deriving it from the (row-capped) applications list.
     stage_counts = role_pipeline_counts(
-        db, organization_id=organization_id, role_id=role.id
+        db, organization_id=organization_id, role_id=operational_role_id
     )
     # Pending agent decisions by type — feeds the role funnel's "awaiting your
     # decision" chips (uncapped, unlike the row-limited applications fetch).
@@ -334,7 +342,11 @@ def get_role_endpoint(
 ):
     role = (
         db.query(Role)
-        .options(joinedload(Role.tasks))
+        .options(
+            joinedload(Role.tasks),
+            joinedload(Role.ats_owner_role),
+            selectinload(Role.sister_roles),
+        )
         .filter(Role.id == role_id, Role.organization_id == current_user.organization_id)
         .first()
     )
@@ -448,6 +460,18 @@ def update_role(
 ):
     role = get_role(role_id, current_user.organization_id, db)
     updates = data.model_dump(exclude_unset=True)
+    if str(getattr(role, "role_kind", "") or "") == "sister":
+        unsafe_automation = {
+            key for key in (
+                "agentic_mode_enabled", "auto_reject", "auto_reject_pre_screen", "auto_promote"
+            )
+            if updates.get(key) is True
+        }
+        if unsafe_automation:
+            raise HTTPException(
+                status_code=409,
+                detail="Sister roles are score-only views. Automation remains on the original ATS role.",
+            )
     # A pre-screen threshold change (the per-role override or the
     # manual/auto mode) moves the deterministic reject verdict for every
     # candidate without touching any score. Snapshot the *effective*
@@ -1074,9 +1098,15 @@ def upload_role_job_spec(
     role.interview_focus = None
     role.interview_focus_generated_at = None
 
+    is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
     try:
         sync_derived_criteria(db, role)
-        mark_role_scores_stale(db, role.id)
+        if is_sister:
+            from ...services.sister_role_service import ensure_sister_evaluations
+
+            ensure_sister_evaluations(db, role, reset_existing=True)
+        else:
+            mark_role_scores_stale(db, role.id)
         db.commit()
         db.refresh(role)
     except Exception:
@@ -1086,7 +1116,34 @@ def upload_role_job_spec(
     # Auto-trigger interview-focus generation in the background. The
     # request returns immediately; the worker writes interview_focus +
     # pack templates back onto the role row when Claude responds.
-    on_role_jd_attached(role)
+    if is_sister:
+        from ...tasks.sister_role_tasks import score_sister_role
+
+        try:
+            score_sister_role.apply_async(args=[role.id], queue="scoring")
+        except Exception:  # pragma: no cover - persisted spec remains retryable
+            from ...models.sister_role_evaluation import (
+                SISTER_EVAL_ERROR,
+                SISTER_EVAL_PENDING,
+                SisterRoleEvaluation,
+            )
+
+            logger.exception("Failed to dispatch sister scoring role_id=%s", role.id)
+            db.query(SisterRoleEvaluation).filter(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
+            ).update(
+                {
+                    SisterRoleEvaluation.status: SISTER_EVAL_ERROR,
+                    SisterRoleEvaluation.error_message: (
+                        "Scoring worker unavailable; retry the roster"
+                    ),
+                },
+                synchronize_session=False,
+            )
+            db.commit()
+    else:
+        on_role_jd_attached(role)
 
     return {
         "success": True,

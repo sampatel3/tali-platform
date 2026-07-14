@@ -25,6 +25,10 @@ JOB_STATUSES = (
 # The "still being worked" subset, for the per-client "waiting to fill" rollup.
 JOB_STATUSES_OPEN = (JOB_STATUS_DRAFT, JOB_STATUS_OPEN)
 
+ROLE_KIND_STANDARD = "standard"
+ROLE_KIND_SISTER = "sister"
+ROLE_KINDS = (ROLE_KIND_STANDARD, ROLE_KIND_SISTER)
+
 role_tasks = Table(
     "role_tasks",
     Base.metadata,
@@ -46,6 +50,20 @@ class Role(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     source = Column(String, default="manual", nullable=False)
+    # A sister role is a Taali-only scoring view over another role's live ATS
+    # applications. It deliberately has no workable_job_id of its own: the
+    # owner role remains the single write-back authority and source of truth for
+    # stage/outcome state.
+    role_kind = Column(
+        String(length=16), nullable=False, default=ROLE_KIND_STANDARD,
+        server_default=ROLE_KIND_STANDARD, index=True,
+    )
+    ats_owner_role_id = Column(
+        Integer,
+        ForeignKey("roles.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     # Structured role attributes (migration 153). Promoted out of the
     # ``workable_job_data`` JSON blob into first-class columns for the native
     # careers/apply surface. All nullable; the public JobPage carries its own
@@ -220,6 +238,18 @@ class Role(Base):
 
     tasks = relationship("Task", secondary=role_tasks)
     applications = relationship("CandidateApplication", back_populates="role", cascade="all, delete-orphan")
+    ats_owner_role = relationship(
+        "Role",
+        remote_side=[id],
+        foreign_keys=[ats_owner_role_id],
+        back_populates="sister_roles",
+    )
+    sister_roles = relationship(
+        "Role",
+        foreign_keys=[ats_owner_role_id],
+        back_populates="ats_owner_role",
+        cascade="all, delete-orphan",
+    )
     assessments = relationship("Assessment", back_populates="role")
     criteria = relationship(
         "RoleCriterion",

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import asc, desc, func, or_
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 from typing import Any, Dict, Optional
 
@@ -32,6 +32,7 @@ from ...models.application_interview import ApplicationInterview
 from ...models.cv_score_job import CvScoreJob, SCORE_JOB_DONE, SCORE_JOB_ERROR, SCORE_JOB_PENDING, SCORE_JOB_RUNNING
 from ...models.organization import Organization
 from ...models.role import Role
+from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
@@ -101,6 +102,7 @@ from ...services.cv_score_orchestrator import (
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
 from ...services.taali_scoring import normalize_score_100
+from ...services.sister_role_service import project_sister_application
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     move_candidate_in_workable,
@@ -895,7 +897,9 @@ def list_role_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    get_role(role_id, current_user.organization_id, db)
+    role = get_role(role_id, current_user.organization_id, db)
+    is_sister = bool(getattr(role, "ats_owner_role_id", None))
+    applications_role_id = int(role.ats_owner_role_id or role.id)
     query = (
         db.query(CandidateApplication)
         .options(
@@ -921,10 +925,18 @@ def list_role_applications(
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role_id,
+            CandidateApplication.role_id == applications_role_id,
             CandidateApplication.deleted_at.is_(None),
         )
     )
+    if is_sister:
+        query = query.outerjoin(
+            SisterRoleEvaluation,
+            and_(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
+            ),
+        )
     if source:
         query = query.filter(CandidateApplication.source == source)
     if status and status.strip().lower() != "all":
@@ -936,7 +948,11 @@ def list_role_applications(
     if min_pre_screen_score is not None:
         threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
         if threshold is not None:
-            query = query.filter(CandidateApplication.pre_screen_score_100 >= threshold)
+            score_column = (
+                SisterRoleEvaluation.role_fit_score
+                if is_sister else CandidateApplication.pre_screen_score_100
+            )
+            query = query.filter(score_column >= threshold)
     if min_rank_score is not None:
         query = query.filter(CandidateApplication.rank_score >= min_rank_score)
     if min_workable_score is not None:
@@ -945,9 +961,19 @@ def list_role_applications(
         threshold = float(min_cv_match_score)
         if 0 <= threshold <= 10:
             threshold *= 10.0
-        query = query.filter(CandidateApplication.cv_match_score >= threshold)
+        score_column = (
+            SisterRoleEvaluation.role_fit_score
+            if is_sister else CandidateApplication.cv_match_score
+        )
+        query = query.filter(score_column >= threshold)
 
-    sort_col = _SORT_COLUMN_MAP.get(sort_by, CandidateApplication.created_at)
+    sort_col = (
+        SisterRoleEvaluation.role_fit_score
+        if is_sister and sort_by in {
+            "pre_screen_score", "rank_score", "cv_match_score", "taali_score"
+        }
+        else _SORT_COLUMN_MAP.get(sort_by, CandidateApplication.created_at)
+    )
     direction = desc if sort_order != "asc" else asc
     # NULLS LAST so unscored apps don't dominate the top of a desc sort.
     query = query.order_by(
@@ -963,6 +989,17 @@ def list_role_applications(
     # replaces eager-loading the whole score_jobs collection — the list only
     # needs each row's latest status, not its full job history.
     status_map = _latest_score_status_map(db, [app.id for app in apps])
+    evaluation_map: dict[int, SisterRoleEvaluation] = {}
+    owner_role = None
+    if is_sister:
+        owner_role = db.query(Role).filter(Role.id == applications_role_id).first()
+        evaluation_map = {
+            int(item.source_application_id): item
+            for item in db.query(SisterRoleEvaluation).filter(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id.in_([app.id for app in apps]),
+            ).all()
+        }
 
     # List context: use the cached-score payload to avoid per-row Anthropic
     # calls (interview-pack regeneration). Detail-only fields (cv_sections,
@@ -974,29 +1011,67 @@ def list_role_applications(
     # caps at 200 and left rows beyond the cap showing blank).
     decision_map = _pending_decision_map(db, [app.id for app in apps])
 
-    return [
-        ApplicationDetailResponse(
-            **application_list_payload(
-                app,
-                include_cv_text=include_cv_text,
-                score_status=status_map.get(app.id),
-                pending_decision=decision_map.get(app.id),
-            )
+    response: list[ApplicationDetailResponse] = []
+    for app in apps:
+        payload = application_list_payload(
+            app,
+            include_cv_text=include_cv_text,
+            score_status=status_map.get(app.id),
+            pending_decision=decision_map.get(app.id),
         )
-        for app in apps
-    ]
+        if is_sister and owner_role is not None:
+            payload = project_sister_application(
+                payload,
+                sister_role=role,
+                owner_role=owner_role,
+                evaluation=evaluation_map.get(int(app.id)),
+            )
+        response.append(ApplicationDetailResponse(**payload))
+    return response
 
 
 @router.get("/applications/{application_id}", response_model=ApplicationDetailResponse)
 def get_application_detail(
     application_id: int,
     include_cv_text: bool = Query(False, description="Include full CV extracted text for viewer"),
+    view_role_id: int | None = Query(
+        default=None,
+        ge=1,
+        description="Project a coupled sister-role score while retaining the source application id",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get a single application; optionally include full cv_text for CV viewer sidebar."""
     app = get_application(application_id, current_user.organization_id, db)
-    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+    payload = application_detail_payload(app, include_cv_text=include_cv_text)
+    if view_role_id is not None:
+        sister = (
+            db.query(Role)
+            .filter(
+                Role.id == view_role_id,
+                Role.organization_id == current_user.organization_id,
+                Role.ats_owner_role_id == app.role_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if sister is not None:
+            evaluation = (
+                db.query(SisterRoleEvaluation)
+                .filter(
+                    SisterRoleEvaluation.role_id == sister.id,
+                    SisterRoleEvaluation.source_application_id == app.id,
+                )
+                .first()
+            )
+            payload = project_sister_application(
+                payload,
+                sister_role=sister,
+                owner_role=app.role,
+                evaluation=evaluation,
+            )
+    return ApplicationDetailResponse(**payload)
 
 
 @router.post("/applications/{application_id}/interview-debrief")
@@ -1810,15 +1885,25 @@ def get_role_pipeline(
 ):
     started_at = perf_counter()
     role = get_role(role_id, current_user.organization_id, db)
+    is_sister = bool(getattr(role, "ats_owner_role_id", None))
+    applications_role_id = int(role.ats_owner_role_id or role.id)
     base_query = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
+            CandidateApplication.role_id == applications_role_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
     )
+    if is_sister:
+        base_query = base_query.outerjoin(
+            SisterRoleEvaluation,
+            and_(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
+            ),
+        )
     base_query = _apply_application_source_filter(base_query, source)
     if search:
         term = f"%{search.strip()}%"
@@ -1832,15 +1917,20 @@ def get_role_pipeline(
         )
     threshold = _normalize_taali_score_for_filter(min_taali_score)
     if threshold is not None:
-        base_query = base_query.filter(
-            CandidateApplication.taali_score_cache_100.is_not(None),
-            CandidateApplication.taali_score_cache_100 >= threshold,
+        score_column = (
+            SisterRoleEvaluation.role_fit_score
+            if is_sister else CandidateApplication.taali_score_cache_100
         )
+        base_query = base_query.filter(score_column.is_not(None), score_column >= threshold)
     pre_screen_threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
     if pre_screen_threshold is not None:
+        score_column = (
+            SisterRoleEvaluation.role_fit_score
+            if is_sister else CandidateApplication.pre_screen_score_100
+        )
         base_query = base_query.filter(
-            CandidateApplication.pre_screen_score_100.is_not(None),
-            CandidateApplication.pre_screen_score_100 >= pre_screen_threshold,
+            score_column.is_not(None),
+            score_column >= pre_screen_threshold,
         )
 
     stage_counts = _empty_stage_counts()
@@ -1872,11 +1962,19 @@ def get_role_pipeline(
         filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
 
     total = filtered_query.order_by(None).count()
+    order_columns = (
+        (
+            (asc if sort_order == "asc" else desc)(SisterRoleEvaluation.role_fit_score).nullslast(),
+            (asc if sort_order == "asc" else desc)(CandidateApplication.created_at).nullslast(),
+        )
+        if is_sister and sort_by in {"pre_screen_score", "taali_score", "cv_match_score"}
+        else _application_order_columns(sort_by, sort_order)
+    )
     page_ids = [
         int(row_id)
         for (row_id,) in (
             filtered_query.with_entities(CandidateApplication.id)
-            .order_by(*_application_order_columns(sort_by, sort_order))
+            .order_by(*order_columns)
             .offset(offset)
             .limit(limit)
             .all()
@@ -1903,10 +2001,28 @@ def get_role_pipeline(
         by_id = {int(item.id): item for item in fetched}
         rows = [by_id[row_id] for row_id in page_ids if row_id in by_id]
 
-    items = [
-        application_list_payload(app, include_cv_text=include_cv_text)
-        for app in rows
-    ]
+    evaluation_map: dict[int, SisterRoleEvaluation] = {}
+    owner_role = None
+    if is_sister:
+        owner_role = db.query(Role).filter(Role.id == applications_role_id).first()
+        evaluation_map = {
+            int(item.source_application_id): item
+            for item in db.query(SisterRoleEvaluation).filter(
+                SisterRoleEvaluation.role_id == role.id,
+                SisterRoleEvaluation.source_application_id.in_([app.id for app in rows]),
+            ).all()
+        }
+    items = []
+    for app in rows:
+        item = application_list_payload(app, include_cv_text=include_cv_text)
+        if is_sister and owner_role is not None:
+            item = project_sister_application(
+                item,
+                sister_role=role,
+                owner_role=owner_role,
+                evaluation=evaluation_map.get(int(app.id)),
+            )
+        items.append(item)
     active_candidates_count = (
         int(stage_counts.get("all", 0))
         if include_stage_counts
@@ -1924,7 +2040,7 @@ def get_role_pipeline(
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
+            CandidateApplication.role_id == applications_role_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
