@@ -1,17 +1,22 @@
 // InterviewFeedbackSection — the "Interview feedback" block on the candidate
-// standing report's "Interview prep" tab. Recruiters record what happened in
-// an interview: round, overall recommendation (a 5-chip selector), optional
-// 1–5 ratings on the 5-Ds axes, a probe checklist auto-populated from the
-// candidate interview kit, and free-text notes. Entries list newest-first
+// standing report's "Interview" tab. Recruiters record what happened in an
+// interview: round, overall recommendation, a probe checklist auto-populated
+// from the candidate interview kit, and free-text notes. Entries list newest-first
 // with expandable detail; each is editable/deletable.
 //
-// Styling reuses the standing-report design system (mc-* classes, purple
-// tokens). Recommendation badges use purple-scale intensity — never
-// red/amber/green — so the surface stays on-scheme.
+// Styling uses the shared Taali primitives plus the report's existing type and
+// spacing tokens, so controls behave consistently with the rest of the app.
 import React, { useEffect, useMemo, useState } from 'react';
 
-import { Select } from '../../shared/ui/TaaliPrimitives';
-import { FLUENCY_4D_AXES } from '../../shared/assessment/fluency4d';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Input,
+  Select,
+  Textarea,
+} from '../../shared/ui/TaaliPrimitives';
 
 const ROUND_OPTIONS = [
   { value: 'screening', label: 'Screening' },
@@ -20,14 +25,12 @@ const ROUND_OPTIONS = [
   { value: 'other', label: 'Other' },
 ];
 
-// Strongest-positive → strongest-negative for the chip row. `intensity` drives
-// a purple-scale mix so a stronger verdict reads darker (no traffic-light hues).
 const RECOMMENDATION_OPTIONS = [
-  { value: 'strong_yes', label: 'Strong yes', intensity: 100 },
-  { value: 'yes', label: 'Yes', intensity: 72 },
-  { value: 'neutral', label: 'Neutral', intensity: 44 },
-  { value: 'no', label: 'No', intensity: 72 },
-  { value: 'strong_no', label: 'Strong no', intensity: 100 },
+  { value: 'strong_yes', label: 'Strong yes' },
+  { value: 'yes', label: 'Yes' },
+  { value: 'neutral', label: 'Neutral' },
+  { value: 'no', label: 'No' },
+  { value: 'strong_no', label: 'Strong no' },
 ];
 
 const RECOMMENDATION_LABEL = Object.fromEntries(
@@ -56,20 +59,6 @@ const fmtRelative = (ts) => {
   return new Date(ts).toLocaleDateString();
 };
 
-const badgeStyle = (recommendation) => {
-  const opt = RECOMMENDATION_OPTIONS.find((o) => o.value === recommendation);
-  const intensity = opt ? opt.intensity : 44;
-  return {
-    background: `color-mix(in oklab, var(--purple) ${intensity}%, transparent)`,
-    color: intensity >= 60 ? 'var(--bg)' : 'var(--ink)',
-    borderRadius: 999,
-    padding: '2px 10px',
-    fontSize: 12,
-    fontWeight: 600,
-    whiteSpace: 'nowrap',
-  };
-};
-
 // Auto-populate the probe checklist from the interview kit — priority probes
 // first, then knockout checks. De-dupe by criterion_id/text so the same
 // requirement isn't listed twice.
@@ -96,7 +85,6 @@ const emptyForm = (kitProbes) => ({
   interview_round: 'screening',
   interviewer_name: '',
   overall_recommendation: '',
-  dimension_ratings: {},
   probe_results: kitProbes.map((p) => ({ ...p, result: 'not_probed' })),
   notes: '',
 });
@@ -104,15 +92,8 @@ const emptyForm = (kitProbes) => ({
 const FeedbackEntry = ({ entry, onEdit, onDelete, busy, readOnly }) => {
   const [open, setOpen] = useState(false);
   const probes = Array.isArray(entry.probe_results) ? entry.probe_results : [];
-  const ratings = entry.dimension_ratings && typeof entry.dimension_ratings === 'object'
-    ? entry.dimension_ratings
-    : {};
-  const ratingRows = FLUENCY_4D_AXES
-    .filter((axis) => ratings[axis.key] != null)
-    .map((axis) => ({ label: axis.label, score: ratings[axis.key] }));
-
   return (
-    <div className="mc-notes-card" data-kind="interview-feedback">
+    <Card className="p-4" data-kind="interview-feedback">
       <div className="mc-notes-card-head">
         <span className="mc-notes-card-who">
           {ROUND_LABEL[entry.interview_round] || entry.interview_round}
@@ -120,47 +101,34 @@ const FeedbackEntry = ({ entry, onEdit, onDelete, busy, readOnly }) => {
             <span className="mc-notes-card-role"> · {entry.interviewer_name}</span>
           ) : null}
         </span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={badgeStyle(entry.overall_recommendation)}>
+        <span className="flex items-center gap-2">
+          <Badge variant="purple">
             {RECOMMENDATION_LABEL[entry.overall_recommendation] || entry.overall_recommendation}
-          </span>
+          </Badge>
           <span className="mc-notes-card-time">{fmtRelative(entry.created_at)}</span>
         </span>
       </div>
-      {(entry.notes || probes.length || ratingRows.length) ? (
-        <button
-          type="button"
-          className="btn btn-outline btn-sm"
-          style={{ marginTop: 8 }}
+      {(entry.notes || probes.length) ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2"
           onClick={() => setOpen((v) => !v)}
         >
           {open ? 'Hide detail' : 'Show detail'}
-        </button>
+        </Button>
       ) : null}
       {open ? (
-        <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+        <div className="mt-3 grid gap-3">
           {entry.notes ? <div className="mc-notes-card-body">{entry.notes}</div> : null}
-          {ratingRows.length ? (
-            <div>
-              <div className="mc-kicker" style={{ marginBottom: 4 }}>5-DS RATINGS</div>
-              <div style={{ display: 'grid', gap: 4 }}>
-                {ratingRows.map((r) => (
-                  <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{r.label}</span>
-                    <span style={{ color: 'var(--purple)', fontWeight: 600 }}>{r.score}/5</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
           {probes.length ? (
             <div>
-              <div className="mc-kicker" style={{ marginBottom: 4 }}>PROBE RESULTS</div>
-              <div style={{ display: 'grid', gap: 4 }}>
+              <div className="mc-kicker mb-1">PROBE RESULTS</div>
+              <div className="grid gap-1.5">
                 {probes.map((p, i) => (
-                  <div key={`${p.criterion_id || p.criterion_text || i}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                  <div key={`${p.criterion_id || p.criterion_text || i}`} className="flex justify-between gap-3 text-sm">
                     <span>{p.criterion_text}</span>
-                    <span style={{ color: 'var(--mute)', whiteSpace: 'nowrap' }}>
+                    <span className="whitespace-nowrap text-[var(--taali-muted)]">
                       {PROBE_RESULTS.find((r) => r.value === p.result)?.label || p.result}
                     </span>
                   </div>
@@ -171,16 +139,16 @@ const FeedbackEntry = ({ entry, onEdit, onDelete, busy, readOnly }) => {
         </div>
       ) : null}
       {!readOnly ? (
-        <div className="mc-notes-input-actions" style={{ marginTop: 8, gap: 8, display: 'flex' }}>
-          <button type="button" className="btn btn-outline btn-sm" onClick={() => onEdit(entry)} disabled={busy}>
+        <div className="mt-3 flex gap-2">
+          <Button variant="secondary" size="sm" onClick={() => onEdit(entry)} disabled={busy}>
             Edit
-          </button>
-          <button type="button" className="btn btn-outline btn-sm" onClick={() => onDelete(entry)} disabled={busy}>
+          </Button>
+          <Button variant="danger" size="sm" onClick={() => onDelete(entry)} disabled={busy}>
             Delete
-          </button>
+          </Button>
         </div>
       ) : null}
-    </div>
+    </Card>
   );
 };
 
@@ -226,7 +194,6 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
       interview_round: entry.interview_round || 'screening',
       interviewer_name: entry.interviewer_name || '',
       overall_recommendation: entry.overall_recommendation || '',
-      dimension_ratings: entry.dimension_ratings || {},
       probe_results: Array.isArray(entry.probe_results) && entry.probe_results.length
         ? entry.probe_results.map((p) => ({
             criterion_id: p.criterion_id || null,
@@ -244,15 +211,6 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
     setFormOpen(false);
     setEditingId(null);
     setForm(emptyForm(kitProbes));
-  };
-
-  const setRating = (axisKey, value) => {
-    setForm((prev) => {
-      const next = { ...prev.dimension_ratings };
-      if (value === '') delete next[axisKey];
-      else next[axisKey] = Number(value);
-      return { ...prev, dimension_ratings: next };
-    });
   };
 
   const setProbeResult = (index, result) => {
@@ -273,7 +231,6 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
       interview_round: form.interview_round,
       interviewer_name: form.interviewer_name.trim() || null,
       overall_recommendation: form.overall_recommendation,
-      dimension_ratings: Object.keys(form.dimension_ratings).length ? form.dimension_ratings : null,
       probe_results: form.probe_results.length ? form.probe_results : null,
       notes: form.notes.trim() || null,
     };
@@ -308,14 +265,28 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
 
   return (
     <div className="mc-prep-stage" data-section="interview-feedback">
-      <div className="mc-kicker">INTERVIEW FEEDBACK</div>
-      <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="mc-kicker">INTERVIEW FEEDBACK</div>
+          <p className="mt-1 text-sm text-[var(--taali-muted)]">
+            Record the outcome and notes from each round. The assessment scorecard remains separate.
+          </p>
+        </div>
+        {!formOpen && canSubmit ? (
+          <Button variant="primary" size="sm" onClick={openCreate}>
+            Record feedback
+          </Button>
+        ) : null}
+      </div>
+      <div className="mt-3 grid gap-2.5">
         {entries.length === 0 ? (
-          <div className="mc-notes-empty">
-            {readOnly
-              ? 'No interview feedback recorded.'
-              : 'No interview feedback recorded yet. After an interview, record the round, recommendation, and how the probes landed — it feeds the score↔outcome calibration.'}
-          </div>
+          <EmptyState
+            title="No interview feedback yet"
+            description={readOnly
+              ? 'No feedback has been recorded for this candidate.'
+              : 'After an interview, capture the recommendation, notes, and probe results here.'}
+            className="py-7"
+          />
         ) : (
           entries.map((entry) => (
             <FeedbackEntry
@@ -331,22 +302,15 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
       </div>
 
       {error ? (
-        <div className="mc-notes-empty" style={{ color: 'var(--purple)', marginTop: 8 }}>{error}</div>
-      ) : null}
-
-      {!formOpen && canSubmit ? (
-        <div className="mc-notes-input-actions" style={{ marginTop: 12 }}>
-          <button type="button" className="btn btn-purple btn-sm" onClick={openCreate}>
-            Record feedback
-          </button>
-        </div>
+        <div className="mt-2 text-sm text-[var(--taali-danger)]" role="alert">{error}</div>
       ) : null}
 
       {formOpen ? (
-        <div className="mc-notes-input" style={{ marginTop: 12, display: 'grid', gap: 12 }}>
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div className="mc-kicker">ROUND</div>
+        <Card className="mt-3 grid gap-4 p-4">
+          <div className="grid gap-2">
+            <label className="text-xs font-semibold text-[var(--taali-muted)]" htmlFor="interview-feedback-round">Round</label>
             <Select
+              id="interview-feedback-round"
               bare
               triggerClassName="max-w-[200px]"
               value={form.interview_round}
@@ -359,70 +323,44 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
             </Select>
           </div>
 
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div className="mc-kicker">INTERVIEWER</div>
-            <input
+          <div className="grid gap-2">
+            <label className="text-xs font-semibold text-[var(--taali-muted)]" htmlFor="interview-feedback-interviewer">Interviewer</label>
+            <Input
+              id="interview-feedback-interviewer"
               type="text"
-              className="taali-input"
               value={form.interviewer_name}
               onChange={(e) => setForm((prev) => ({ ...prev, interviewer_name: e.target.value }))}
               placeholder="Interviewer name (optional)"
             />
           </div>
 
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div className="mc-kicker">OVERALL RECOMMENDATION</div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} role="group" aria-label="Overall recommendation">
+          <div className="grid gap-2">
+            <div className="text-xs font-semibold text-[var(--taali-muted)]">Overall recommendation</div>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Overall recommendation">
               {RECOMMENDATION_OPTIONS.map((o) => {
                 const selected = form.overall_recommendation === o.value;
                 return (
-                  <button
+                  <Button
                     key={o.value}
-                    type="button"
-                    className="btn btn-sm"
+                    variant={selected ? 'primary' : 'secondary'}
+                    size="sm"
                     aria-pressed={selected}
                     onClick={() => setForm((prev) => ({ ...prev, overall_recommendation: o.value }))}
-                    style={selected
-                      ? badgeStyle(o.value)
-                      : { border: '1px solid var(--line)', borderRadius: 999, padding: '2px 10px', background: 'var(--bg)' }}
                   >
                     {o.label}
-                  </button>
+                  </Button>
                 );
               })}
             </div>
           </div>
 
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div className="mc-kicker">5-DS RATINGS (OPTIONAL)</div>
-            <div style={{ display: 'grid', gap: 6 }}>
-              {FLUENCY_4D_AXES.map((axis) => (
-                <div key={axis.key} style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
-                  <span>{axis.label}</span>
-                  <Select
-                    bare
-                    triggerClassName="max-w-[110px]"
-                    value={form.dimension_ratings[axis.key] != null ? String(form.dimension_ratings[axis.key]) : ''}
-                    onChange={(e) => setRating(axis.key, e.target.value)}
-                    aria-label={`${axis.label} rating`}
-                  >
-                    <option value="">—</option>
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <option key={n} value={String(n)}>{n}/5</option>
-                    ))}
-                  </Select>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {form.probe_results.length ? (
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div className="mc-kicker">PROBE CHECKLIST</div>
-              <div style={{ display: 'grid', gap: 6 }}>
+            <div className="grid gap-2">
+              <div className="text-xs font-semibold text-[var(--taali-muted)]">Probe results</div>
+              <div className="grid gap-2">
                 {form.probe_results.map((p, i) => (
-                  <div key={`${p.criterion_id || p.criterion_text || i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
-                    <span style={{ flex: 1 }}>{p.criterion_text}</span>
+                  <div key={`${p.criterion_id || p.criterion_text || i}`} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 flex-1">{p.criterion_text}</span>
                     <Select
                       bare
                       triggerClassName="max-w-[150px]"
@@ -440,9 +378,10 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
             </div>
           ) : null}
 
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div className="mc-kicker">NOTES</div>
-            <textarea
+          <div className="grid gap-2">
+            <label className="text-xs font-semibold text-[var(--taali-muted)]" htmlFor="interview-feedback-notes">Notes</label>
+            <Textarea
+              id="interview-feedback-notes"
               value={form.notes}
               onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
               placeholder="What happened, what stood out, what to dig into next…"
@@ -450,20 +389,22 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
             />
           </div>
 
-          <div className="mc-notes-input-actions" style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              className="btn btn-purple btn-sm"
+          <div className="flex gap-2">
+            <Button
+              variant="primary"
+              size="sm"
               onClick={handleSubmit}
               disabled={saving || !form.overall_recommendation}
+              loading={saving}
+              loadingLabel="Saving…"
             >
-              {saving ? 'Saving…' : editingId != null ? 'Save changes' : 'Save feedback'}
-            </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={closeForm} disabled={saving}>
+              {editingId != null ? 'Save changes' : 'Save feedback'}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={closeForm} disabled={saving}>
               Cancel
-            </button>
+            </Button>
           </div>
-        </div>
+        </Card>
       ) : null}
     </div>
   );

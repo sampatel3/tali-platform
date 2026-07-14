@@ -81,6 +81,7 @@ export function Reveal({
 
 /** Staggers existing direct children without adding wrappers or changing semantics. */
 export function MotionStagger({
+  active = true,
   as = 'div',
   children,
   className,
@@ -101,6 +102,7 @@ export function MotionStagger({
   const controlsRef = useRef(new Set());
 
   useLayoutEffect(() => {
+    if (!active) return undefined;
     const nodes = Array.from(scope.current?.children || []);
     if (!nodes.length) return undefined;
     const targets = reduced
@@ -131,7 +133,7 @@ export function MotionStagger({
       () => controlsRef.current.delete(controls),
     );
     return undefined;
-  }, [animateChildren, childSignature, delay, distance, reduced, scope, step]);
+  }, [active, animateChildren, childSignature, delay, distance, reduced, scope, step]);
 
   useEffect(() => () => {
     controlsRef.current.forEach((controls) => controls.stop());

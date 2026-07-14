@@ -194,6 +194,7 @@ export const DecisionRail = ({
             <AgentLoop
               as="button"
               kind="flow"
+              active={!frozen}
               type="button"
               className="dr-rec-btn"
               onClick={() => onApprove?.(decision)}

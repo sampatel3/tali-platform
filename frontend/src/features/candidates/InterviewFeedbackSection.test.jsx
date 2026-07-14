@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { InterviewFeedbackSection } from './InterviewFeedbackSection';
 
-// The "Interview feedback" section on the prep tab lists recorded entries
+// The "Interview feedback" section on the Interview tab lists recorded entries
 // newest-first with a recommendation badge and expandable detail, and the
 // "Record feedback" form POSTs via the roles API then refreshes the list.
 
@@ -53,7 +53,7 @@ const renderSection = (props = {}) => render(
 describe('InterviewFeedbackSection', () => {
   it('renders an empty state when there is no feedback yet', () => {
     renderSection();
-    expect(screen.getByText(/No interview feedback recorded yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No interview feedback yet/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Record feedback/i })).toBeInTheDocument();
   });
 
@@ -85,9 +85,23 @@ describe('InterviewFeedbackSection', () => {
     // Round defaults to screening; probes auto-populate from the kit (de-duped to 2).
     expect(payload.interview_round).toBe('screening');
     expect(payload.probe_results).toHaveLength(2);
+    expect(payload).not.toHaveProperty('dimension_ratings');
 
     // The list is refreshed after a successful save.
     await waitFor(() => expect(api.listInterviewFeedback).toHaveBeenCalled());
+  });
+
+  it('preserves legacy dimension ratings when editing feedback', async () => {
+    const api = makeApi({ listInterviewFeedback: vi.fn().mockResolvedValue({ data: [existingEntry] }) });
+    renderSection({ initialFeedback: [existingEntry], rolesApi: api });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(api.updateInterviewFeedback).toHaveBeenCalledTimes(1));
+    const [appId, feedbackId, payload] = api.updateInterviewFeedback.mock.calls[0];
+    expect([appId, feedbackId]).toEqual([5, 11]);
+    expect(payload).not.toHaveProperty('dimension_ratings');
   });
 
   it('blocks submit until a recommendation is chosen', () => {

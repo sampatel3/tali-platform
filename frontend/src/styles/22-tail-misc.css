@@ -558,6 +558,13 @@
   padding-top: 14px;
 }
 .mc-audit-summary {
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
   list-style: none;
   cursor: pointer;
   display: flex;
@@ -579,7 +586,7 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.mc-audit-collapse[open] .mc-audit-summary::after { content: 'Hide'; }
+.mc-audit-collapse[data-open="true"] .mc-audit-summary::after { content: 'Hide'; }
 
 /* ===========================================================================
    Role detail Candidates tab toolbar — HANDOFF v2 §4 / canvas

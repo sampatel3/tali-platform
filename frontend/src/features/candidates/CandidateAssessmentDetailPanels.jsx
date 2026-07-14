@@ -8,7 +8,6 @@ import {
 } from './CandidateDetailSecondaryTabs';
 import { CandidateEvaluateTab } from './CandidateEvaluateTab';
 import { DecisionRecorder } from './DecisionRecorder';
-import { TranscriptPanel } from './CandidateInterviewStageViews';
 
 // Self-contained panels lifted out of the legacy assessment-detail page so
 // the canonical Standing Report can host the full assessment depth without
@@ -169,109 +168,6 @@ export const AssessmentEvidencePanels = ({ candidate = null }) => {
         <ActiveComponent candidate={candidate} />
       </div>
     </div>
-  );
-};
-
-// Stage-1/Stage-2 interview transcript capture (Fireflies link + manual
-// paste), migrated from the legacy /assessments page. Owns its own form
-// state + handlers; `onRefresh` reloads the parent report after a save so
-// the linked transcript shows immediately.
-export const InterviewTranscriptCapture = ({
-  application = null,
-  firefliesConnected = false,
-  rolesApi = null,
-  onRefresh = () => {},
-}) => {
-  const { showToast } = useToast();
-  const applicationId = application?.id || null;
-  const [firefliesLinkModel, setFirefliesLinkModel] = useState({ meetingId: '', providerUrl: '' });
-  const [linkingFireflies, setLinkingFireflies] = useState(false);
-  const [manualInterviewModel, setManualInterviewModel] = useState({
-    stage: 'screening',
-    transcriptText: '',
-    providerUrl: '',
-    meetingDate: '',
-    summary: '',
-  });
-  const [manualInterviewSaving, setManualInterviewSaving] = useState(false);
-
-  const handleLinkFireflies = async () => {
-    if (!applicationId || !rolesApi?.linkFirefliesInterview) return;
-    const meetingId = String(firefliesLinkModel.meetingId || '').trim();
-    if (!meetingId) {
-      showToast('Enter a Fireflies meeting ID to link the transcript.', 'error');
-      return;
-    }
-    setLinkingFireflies(true);
-    try {
-      await rolesApi.linkFirefliesInterview(applicationId, {
-        stage: 'screening',
-        fireflies_meeting_id: meetingId,
-        provider_url: String(firefliesLinkModel.providerUrl || '').trim() || undefined,
-      });
-      await onRefresh();
-      setFirefliesLinkModel({ meetingId: '', providerUrl: '' });
-      showToast('Fireflies transcript linked.', 'success');
-    } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to link Fireflies transcript.', 'error');
-    } finally {
-      setLinkingFireflies(false);
-    }
-  };
-
-  const handleSaveManualInterview = async () => {
-    if (!applicationId || !rolesApi?.createManualInterview) return;
-    const transcriptText = String(manualInterviewModel.transcriptText || '').trim();
-    if (!transcriptText) {
-      showToast('Paste the transcript text before saving.', 'error');
-      return;
-    }
-    let meetingDate;
-    const rawMeetingDate = String(manualInterviewModel.meetingDate || '').trim();
-    if (rawMeetingDate) {
-      const parsed = new Date(rawMeetingDate);
-      if (!Number.isNaN(parsed.getTime())) meetingDate = parsed.toISOString();
-    }
-    setManualInterviewSaving(true);
-    try {
-      await rolesApi.createManualInterview(applicationId, {
-        stage: manualInterviewModel.stage || 'screening',
-        transcript_text: transcriptText,
-        provider_url: String(manualInterviewModel.providerUrl || '').trim() || undefined,
-        meeting_date: meetingDate,
-        summary: String(manualInterviewModel.summary || '').trim() || undefined,
-      });
-      await onRefresh();
-      setManualInterviewModel({
-        stage: 'screening',
-        transcriptText: '',
-        providerUrl: '',
-        meetingDate: '',
-        summary: '',
-      });
-      showToast('Interview transcript saved.', 'success');
-    } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to save interview transcript.', 'error');
-    } finally {
-      setManualInterviewSaving(false);
-    }
-  };
-
-  return (
-    <TranscriptPanel
-      application={application}
-      firefliesConnected={firefliesConnected}
-      firefliesLinkSupported={Boolean(applicationId && rolesApi?.linkFirefliesInterview)}
-      firefliesLinkModel={firefliesLinkModel}
-      onFirefliesLinkChange={(patch) => setFirefliesLinkModel((prev) => ({ ...prev, ...patch }))}
-      onLinkFireflies={handleLinkFireflies}
-      linkingFireflies={linkingFireflies}
-      manualInterviewSupported={Boolean(applicationId && rolesApi?.createManualInterview)}
-      manualInterviewModel={manualInterviewModel}
-      onManualInterviewChange={(patch) => setManualInterviewModel((prev) => ({ ...prev, ...patch }))}
-      onSaveManualInterview={handleSaveManualInterview}
-      manualInterviewSaving={manualInterviewSaving}
-    />
   );
 };
 
