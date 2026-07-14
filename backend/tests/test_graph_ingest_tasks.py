@@ -29,16 +29,28 @@ def test_sync_candidate_passes_billing_when_gate_open():
     cand.id = 7
     cand.organization_id = 42
     captured: dict = {}
+
+    # Keep the fake's keyword signature aligned with the real sync function so
+    # this test catches callers that invent unsupported kwargs. The previous
+    # **kwargs fake masked a production TypeError from ``bill_candidate_id``.
+    def _fake_sync(candidate, *, db=None, bill_organization_id=None):
+        captured.update(
+            candidate=candidate,
+            db=db,
+            bill_organization_id=bill_organization_id,
+        )
+
     with patch.object(git, "SessionLocal", return_value=_fake_session(cand)), patch(
         "app.candidate_graph.sync.should_sync_candidate_to_graph", return_value=True
     ), patch(
         "app.candidate_graph.sync.sync_candidate",
-        side_effect=lambda c, **k: captured.update(k),
+        side_effect=_fake_sync,
     ):
         res = _run(git.sync_candidate_to_graph, 7)
     assert res["status"] == "ok"
+    assert captured["candidate"] is cand
+    assert captured["db"] is not None
     assert captured["bill_organization_id"] == 42
-    assert captured["bill_candidate_id"] == 7
 
 
 def test_sync_candidate_skips_below_cost_gate():

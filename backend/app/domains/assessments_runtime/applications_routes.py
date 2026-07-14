@@ -1589,7 +1589,10 @@ def list_applications_global(
     search: str | None = Query(default=None),
     nl_query: str | None = Query(default=None, max_length=500),
     view: str = Query(default="list", pattern="^(list|graph)$"),
-    rerank: bool = Query(default=True),
+    rerank: bool = Query(
+        default=False,
+        description="Opt in to bounded deep verification of qualitative criteria.",
+    ),
     sort_by: str = Query(
         default="pre_screen_score",
         pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score|cv_match_score|cv_match_scored_at)$",
@@ -1616,6 +1619,7 @@ def list_applications_global(
     nl_warnings: list[dict] = []
     nl_subgraph_payload = None
     nl_rerank_applied = False
+    nl_coverage_payload = None
     if nl_query_clean:
         from ...candidate_search import rate_limit as nl_rate_limit
         from ...candidate_search.runner import run_search
@@ -1644,6 +1648,17 @@ def list_applications_global(
         parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
         nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
         nl_rerank_applied = nl_result.rerank_applied
+        nl_coverage_payload = {
+            "database_matches": (
+                nl_result.database_matches
+                if nl_result.database_matches is not None
+                else len(nl_result.application_ids)
+            ),
+            "deep_checked": nl_result.deep_checked,
+            "qualified": nl_result.qualified,
+            "capped": nl_result.capped,
+            "exhaustive": nl_result.exhaustive,
+        }
         nl_subgraph_payload = (
             nl_result.subgraph.model_dump(mode="json")
             if nl_result.subgraph is not None
@@ -1787,17 +1802,31 @@ def list_applications_global(
                 .exists()
             )
 
-    total = filtered_query.order_by(None).count()
-    page_ids = [
-        int(row_id)
-        for (row_id,) in (
-            filtered_query.with_entities(CandidateApplication.id)
-            .order_by(*_application_order_columns(sort_by, sort_order))
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-    ]
+    if nl_query_clean:
+        # Preserve the full-text/structural relevance order produced by the
+        # search runner after applying the standard pipeline filters. This is
+        # also person-deduplicated; do not re-sort it by a stale role-fit score.
+        eligible_ids = {
+            int(row_id)
+            for (row_id,) in filtered_query.with_entities(CandidateApplication.id).all()
+        }
+        ordered_ids = [app_id for app_id in nl_ids if app_id in eligible_ids]
+        total = len(ordered_ids)
+        page_ids = ordered_ids[offset : offset + limit]
+        if nl_coverage_payload is not None:
+            nl_coverage_payload["filtered_matches"] = total
+    else:
+        total = filtered_query.order_by(None).count()
+        page_ids = [
+            int(row_id)
+            for (row_id,) in (
+                filtered_query.with_entities(CandidateApplication.id)
+                .order_by(*_application_order_columns(sort_by, sort_order))
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+        ]
     rows: list[CandidateApplication] = []
     if page_ids:
         fetched = (
@@ -1857,6 +1886,7 @@ def list_applications_global(
         response_payload["parsed_filter"] = parsed_filter_payload
         response_payload["nl_warnings"] = nl_warnings
         response_payload["nl_rerank_applied"] = nl_rerank_applied
+        response_payload["nl_coverage"] = nl_coverage_payload
         if view == "graph" and nl_subgraph_payload is not None:
             response_payload["subgraph"] = nl_subgraph_payload
     return response_payload

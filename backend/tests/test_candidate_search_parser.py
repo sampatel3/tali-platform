@@ -193,4 +193,23 @@ def test_no_api_key_falls_back():
         parsed = parse_nl_query("AWS Glue", client=None)
     finally:
         parser_module._resolve_anthropic_client = original
-    assert parsed.keywords == ["AWS Glue"]
+    # Common skills take the deterministic zero-model path even without a key.
+    assert parsed.skills_all == ["AWS Glue"]
+    assert parsed.keywords == []
+
+
+def test_common_title_query_uses_zero_model_parser():
+    parsed = parse_nl_query("all candidates with project manager")
+    assert parsed.titles_all == ["project manager"]
+    assert parsed.skills_all == []
+
+
+def test_common_skill_set_uses_zero_model_parser():
+    parsed = parse_nl_query("all candidates with Python, AWS and Kubernetes")
+    assert parsed.skills_all == ["Python", "AWS", "Kubernetes"]
+
+
+def test_deterministic_country_keeps_canonical_case():
+    parsed = parse_nl_query("candidates with Python based in united arab emirates")
+    assert parsed.skills_all == ["Python"]
+    assert parsed.locations_country == ["United Arab Emirates"]

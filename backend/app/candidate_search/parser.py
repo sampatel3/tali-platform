@@ -53,6 +53,8 @@ def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
     # Trim whitespace on every list element.
     skills_all = [s.strip() for s in filter_obj.skills_all if s and s.strip()]
     skills_any = [s.strip() for s in filter_obj.skills_any if s and s.strip()]
+    titles_all = [s.strip() for s in filter_obj.titles_all if s and s.strip()]
+    titles_any = [s.strip() for s in filter_obj.titles_any if s and s.strip()]
     soft = [s.strip() for s in filter_obj.soft_criteria if s and s.strip()]
     keywords = [s.strip() for s in filter_obj.keywords if s and s.strip()]
 
@@ -62,6 +64,8 @@ def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
             "locations_region": regions,
             "skills_all": skills_all,
             "skills_any": skills_any,
+            "titles_all": titles_all,
+            "titles_any": titles_any,
             "soft_criteria": soft,
             "keywords": keywords,
             "free_text": (filter_obj.free_text or query).strip(),
@@ -99,6 +103,14 @@ def parse_nl_query(
     cleaned_query = (query or "").strip()
     if not cleaned_query:
         return ParsedFilter(free_text="")
+
+    # Common structured searches are deterministic and free. Be conservative:
+    # ambiguous prose returns None and continues to the model parser below.
+    from .deterministic_parser import parse_common_query
+
+    deterministic = parse_common_query(cleaned_query)
+    if deterministic is not None:
+        return deterministic
 
     system_prompt, user_prompt = build_parser_prompt(cleaned_query)
 

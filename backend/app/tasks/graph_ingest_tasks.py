@@ -73,7 +73,6 @@ def sync_candidate_to_graph(self, candidate_id: int) -> dict:
             db=db,
             bill_organization_id=int(candidate.organization_id)
             if candidate.organization_id is not None else None,
-            bill_candidate_id=int(candidate.id),
         )
         return {"status": "ok", "id": candidate_id}
     finally:

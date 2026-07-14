@@ -50,8 +50,14 @@ def _fake_app(app_id, *, taali=None, name="Cand", cv_text=None):
     )
 
 
-def _run_search(parsed):
-    return lambda **kw: SearchOutput(application_ids=[], parsed_filter=parsed, warnings=[])
+def _run_search(parsed, *, ids=None, database_matches=None):
+    application_ids = [1, 2] if ids is None else list(ids)
+    return lambda **kw: SearchOutput(
+        application_ids=application_ids,
+        parsed_filter=parsed,
+        warnings=[],
+        database_matches=database_matches,
+    )
 
 
 def _no_grounding_client(monkeypatch):
@@ -92,7 +98,7 @@ def test_screen_ranks_by_new_requirement_fit_not_stale_score(monkeypatch):
     a = _fake_app(1, taali=40, name="A", cv_text="HITAB led the core banking platform migration")
     b = _fake_app(2, taali=95, name="B", cv_text="nothing relevant here")
     monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
-    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a, b])
+    monkeypatch.setattr(tc, "_load_candidates_by_ids", lambda bq, ids: [a, b])
 
     client = _verdict_client({
         "HITAB": [
@@ -103,7 +109,7 @@ def test_screen_ranks_by_new_requirement_fit_not_stale_score(monkeypatch):
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="banking domain",
-        base_query=MagicMock(), evidence_client=client,
+        base_query=MagicMock(), evidence_client=client, deep_verify=True,
     )
 
     assert out["mode"] == "rediscovery"
@@ -118,13 +124,15 @@ def test_screen_caps_window_and_says_so(monkeypatch):
     from app.candidate_search import runner as runner_mod
 
     monkeypatch.setattr(
-        runner_mod, "run_search", _run_search(ParsedFilter(soft_criteria=["banking domain"]))
+        runner_mod,
+        "run_search",
+        _run_search(ParsedFilter(soft_criteria=["banking domain"]), database_matches=5000),
     )
     monkeypatch.setattr(tc, "_notes_text", lambda app: None)
 
     a = _fake_app(1, taali=80, name="A", cv_text="banking platform work")
     monkeypatch.setattr(tc, "_pool_count", lambda bq: 5000)  # huge scored pool
-    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a])
+    monkeypatch.setattr(tc, "_load_candidates_by_ids", lambda bq, ids: [a])
 
     client = _verdict_client({"banking": [
         _text_block("[[C1]] MET — banking"),
@@ -132,7 +140,7 @@ def test_screen_caps_window_and_says_so(monkeypatch):
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="banking domain",
-        base_query=MagicMock(), evidence_client=client,
+        base_query=MagicMock(), evidence_client=client, deep_verify=True,
     )
     assert out["capped"] is True
     assert out["screened"] == 1
@@ -153,7 +161,7 @@ def test_screen_hides_failed_hard_constraint(monkeypatch):
     a = _fake_app(1, taali=80, name="A", cv_text="ok under cap")
     b = _fake_app(2, taali=95, name="B", cv_text="OVERCAP salary 40k")
     monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
-    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a, b])
+    monkeypatch.setattr(tc, "_load_candidates_by_ids", lambda bq, ids: [a, b])
 
     client = _verdict_client({
         "OVERCAP": [
@@ -166,7 +174,7 @@ def test_screen_hides_failed_hard_constraint(monkeypatch):
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="salary under 30k AED",
-        base_query=MagicMock(), evidence_client=client,
+        base_query=MagicMock(), evidence_client=client, deep_verify=True,
     )
     ids = [c["application_id"] for c in out["candidates"]]
     assert ids == [1]  # B (over cap) hidden
@@ -186,12 +194,13 @@ def test_screen_grounding_unavailable_degrades(monkeypatch):
     a = _fake_app(1, taali=60, name="A")
     b = _fake_app(2, taali=90, name="B")
     monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
-    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a, b])
+    monkeypatch.setattr(tc, "_load_candidates_by_ids", lambda bq, ids: [a, b])
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="kafka streaming", base_query=MagicMock(),
+        deep_verify=True,
     )
-    assert [c["application_id"] for c in out["candidates"]] == [2, 1]  # by score
+    assert [c["application_id"] for c in out["candidates"]] == [1, 2]  # retrieval relevance order
     assert out["evidence_model"] is None
     assert out["screened"] == 0
     assert any(w["code"] == "rerank_skipped" for w in out["warnings"])
@@ -210,12 +219,13 @@ def test_screen_no_criteria_ranks_by_recall(monkeypatch):
     a = _fake_app(1, taali=50, name="A")
     b = _fake_app(2, taali=90, name="B")
     monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
-    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a, b])
+    monkeypatch.setattr(tc, "_load_candidates_by_ids", lambda bq, ids: [a, b])
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="python", base_query=MagicMock(),
+        deep_verify=True,
     )
-    assert [c["application_id"] for c in out["candidates"]] == [2, 1]
+    assert [c["application_id"] for c in out["candidates"]] == [1, 2]
     assert any(w["code"] == "no_criteria" for w in out["warnings"])
 
 

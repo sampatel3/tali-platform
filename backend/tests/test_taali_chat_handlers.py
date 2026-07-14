@@ -99,7 +99,11 @@ def test_nl_search_candidates_passes_through_run_search(db):
     kwargs = runner.call_args.kwargs
     assert kwargs["organization_id"] == org.id
     assert kwargs["nl_query"] == "aws engineers with 5 years"
+    assert kwargs["rerank_enabled"] is False
+    assert kwargs["include_subgraph"] is False
     assert out["total_matched"] == 2
+    assert out["database_matches"] == 2
+    assert out["returned"] == 2
     assert out["rerank_applied"] is True
     # Order from run_search must be preserved.
     assert [a["application_id"] for a in out["applications"]] == [app2.id, app1.id]
@@ -126,6 +130,33 @@ def test_nl_search_candidates_caps_limit(db):
         out = handlers.nl_search_candidates(db, user, query="any", limit=2)
     assert len(out["applications"]) == 2
     assert out["total_matched"] == 5  # raw match count is unaffected
+
+
+def test_nl_search_candidates_supports_person_result_pagination(db):
+    user, org = _make_user_and_org(db)
+    role = Role(organization_id=org.id, name="X", source="manual")
+    db.add(role)
+    db.commit()
+    apps = [
+        _make_app(db, org_id=org.id, role=role, candidate_name=f"P{i}",
+                  email=f"p{i}@x.test", taali=float(i))
+        for i in range(4)
+    ]
+    fake = SearchOutput(
+        application_ids=[a.id for a in apps],
+        parsed_filter=ParsedFilter(skills_all=["Python"]),
+        database_matches=4,
+    )
+    with patch("app.candidate_search.runner.run_search", return_value=fake):
+        out = handlers.nl_search_candidates(
+            db, user, query="Python", limit=2, offset=2
+        )
+    assert [row["application_id"] for row in out["applications"]] == [
+        apps[2].id,
+        apps[3].id,
+    ]
+    assert out["offset"] == 2
+    assert out["database_matches"] == 4
 
 
 def test_nl_search_candidates_rejects_empty_query(db):

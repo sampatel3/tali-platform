@@ -57,6 +57,16 @@ COUNTRY_ALIASES: dict[str, str] = {
     "ksa": "Saudi Arabia",
 }
 
+_CANONICAL_COUNTRY_BY_LOWER = {
+    country.lower(): country
+    for countries in REGION_ALIASES.values()
+    for country in countries
+}
+_CANONICAL_COUNTRY_BY_LOWER.update(
+    {country.lower(): country for country in COUNTRY_ALIASES.values()}
+)
+CANONICAL_COUNTRIES = frozenset(_CANONICAL_COUNTRY_BY_LOWER.values())
+
 
 SYSTEM_PROMPT = """You are a query parser for a recruiter's candidate-search box.
 
@@ -68,6 +78,8 @@ SCHEMA (every field optional, omit if empty):
 {
   "skills_all":          [str],   // skills the candidate MUST have (AND)
   "skills_any":          [str],   // skills where ANY match is enough (OR)
+  "titles_all":          [str],   // current or historical job titles required (AND)
+  "titles_any":          [str],   // current or historical job titles where ANY is enough (OR)
   "locations_country":   [str],   // canonical country names (see normalisation)
   "locations_region":    [str],   // region keys: europe | emea | north america | apac | middle east
   "min_years_experience": int,    // null if unspecified
@@ -87,6 +99,7 @@ NORMALISATION RULES:
 - CANDIDATE LOCATION vs COMPANY ORIGIN — a place goes in locations_country / locations_region ONLY when it is the CANDIDATE'S OWN location: "based in Dubai", "candidates in the UAE", "located in London", "UK-based candidates", "living in Europe". When a place instead describes an EMPLOYER / COMPANY — "a Western company", "a US company", "European employer", "worked at a UK firm", "experience at a Western (Europe/UK/US) company" — it is NOT a candidate location: keep it as ONE qualitative soft_criteria phrase about the company's origin and put NOTHING in locations. A parenthetical or list attached to "company"/"employer" (e.g. "Western (Europe, UK, US) company") qualifies the COMPANY, never the candidate — never extract those countries into locations.
 - IGNORE the requested count: a leading "top N" / "best N" / "first N" / "show me N candidates" only says how many to return — it is NOT a filter. Never put "top 5", a bare number, or "candidates" into keywords or soft_criteria; omit it entirely.
 - Skills: keep technology names verbatim (case as given). Do not split multi-word skills ("AWS Glue", "Kubernetes Operators").
+- Job titles / occupations: put role names such as "project manager", "scrum master", "data engineer" and "solutions architect" in titles_all/titles_any, NEVER in skills or soft_criteria. Use titles_all for "and" and titles_any for "or".
 - Years: "5 years" / "5+ years" / "five years" → min_years_experience: 5. "senior" alone is NOT a years number — route to soft_criteria.
 - Company-size phrases ("large enterprise", "Fortune 500", "FAANG", "startup", "scale-up") → soft_criteria.
 - Industry phrases ("fintech", "healthcare", "logistics") → soft_criteria unless a specific employer is named.
@@ -99,6 +112,9 @@ EXAMPLES
 
 Query: "candidates with AWS Glue experience"
 {"skills_all":["AWS Glue"],"free_text":"candidates with AWS Glue experience"}
+
+Query: "project managers or scrum masters"
+{"titles_any":["project manager","scrum master"],"free_text":"project managers or scrum masters"}
 
 Query: "candidates who have worked in the UK"
 {"locations_country":["United Kingdom"],"free_text":"candidates who have worked in the UK"}
@@ -113,13 +129,13 @@ Query: "senior engineers from FAANG based in London or Dublin"
 {"locations_country":["United Kingdom","Ireland"],"soft_criteria":["senior","FAANG"],"keywords":["London","Dublin"],"free_text":"senior engineers from FAANG based in London or Dublin"}
 
 Query: "data engineers asking for less than 30000 AED in salary"
-{"soft_criteria":["data engineer","salary expectation <= 30000 AED"],"free_text":"data engineers asking for less than 30000 AED in salary"}
+{"titles_all":["data engineer"],"soft_criteria":["salary expectation <= 30000 AED"],"free_text":"data engineers asking for less than 30000 AED in salary"}
 
 Query: "top 5 candidates with experience at a Western (Europe, UK, US) company"
 {"soft_criteria":["experience at a Western (Europe/UK/US) company"],"free_text":"top 5 candidates with experience at a Western (Europe, UK, US) company"}
 
 Query: "best 3 data engineers based in the UAE"
-{"locations_country":["United Arab Emirates"],"soft_criteria":["data engineer"],"free_text":"best 3 data engineers based in the UAE"}
+{"titles_all":["data engineer"],"locations_country":["United Arab Emirates"],"free_text":"best 3 data engineers based in the UAE"}
 """
 
 
@@ -139,4 +155,8 @@ def normalise_country(name: str) -> str:
     if not name:
         return name
     cleaned = name.strip()
-    return COUNTRY_ALIASES.get(cleaned.lower(), cleaned)
+    lowered = cleaned.lower()
+    return COUNTRY_ALIASES.get(
+        lowered,
+        _CANONICAL_COUNTRY_BY_LOWER.get(lowered, cleaned),
+    )

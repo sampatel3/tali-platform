@@ -78,11 +78,12 @@ def test_nl_query_routes_through_runner_and_echoes_parsed_filter(client):
     assert data["nl_warnings"][0]["code"] == "neo4j_unavailable"
     # subgraph absent in list view.
     assert "subgraph" not in data
-    # Runner was called with our query and rerank=True default.
+    assert data["nl_coverage"]["database_matches"] == 0
+    # Deep verification is opt-in; the default search is Postgres-only.
     mocked.assert_called_once()
     kwargs = mocked.call_args.kwargs
     assert kwargs["nl_query"] == "candidates with AWS Glue experience"
-    assert kwargs["rerank_enabled"] is True
+    assert kwargs["rerank_enabled"] is False
     assert kwargs["include_subgraph"] is False
 
 

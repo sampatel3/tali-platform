@@ -262,25 +262,34 @@ def compare_applications(
     description=(
         "Semantic / natural-language candidate search. Parses the query "
         "(skills, locations, years of experience, soft criteria, graph "
-        "predicates), runs JSONB + CV-text filters, optionally re-ranks "
-        "the top results with an LLM, and returns application summaries. "
+        "predicates), runs normalized Postgres + CV full-text filters, and "
+        "returns person-deduplicated application summaries. "
         "This is the tool to use for questions like 'AWS Glue engineer "
         "with 5+ years' or 'senior backend devs in EMEA who've worked at "
         "fintechs'. Set ``role_id`` to scope to a specific role's pool. "
-        "``rerank=False`` skips the rerank pass for speed (still returns "
-        "good results, just not LLM-judged for soft criteria)."
+        "``deep_verify=True`` opts into a bounded LLM evidence pass. Graph "
+        "retrieval is also opt-in via ``include_graph=True``."
     ),
 )
 def nl_search_candidates(
     ctx: Context,
     query: str,
     role_id: Optional[int] = None,
-    rerank: bool = True,
+    deep_verify: bool = False,
+    include_graph: bool = False,
     limit: int = 25,
+    offset: int = 0,
 ) -> dict[str, Any]:
     with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.nl_search_candidates(
-            db, user, query=query, role_id=role_id, rerank=rerank, limit=limit
+            db,
+            user,
+            query=query,
+            role_id=role_id,
+            deep_verify=deep_verify,
+            include_graph=include_graph,
+            limit=limit,
+            offset=offset,
         )
 
 

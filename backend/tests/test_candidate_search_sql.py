@@ -58,6 +58,21 @@ def test_skills_any_uses_or(db):
     assert " OR " in sql.upper()
 
 
+def test_skill_terms_also_search_current_and_historical_titles(db):
+    parsed = ParsedFilter(skills_any=["project manager", "scrum master"])
+    sql = _compile(apply_parsed_filter(_base_query(db), parsed))
+
+    # Occupations parsed into skills_any must not depend on an exact skills
+    # array entry: current title, headline, and every historical title are
+    # searched with bound, case-insensitive phrases too.
+    assert "candidates.position ILIKE" in sql
+    assert "candidates.headline ILIKE" in sql
+    assert "jsonb_array_elements" in sql
+    assert "e->>'title'" in sql
+    assert "%project manager%" in sql
+    assert "%scrum master%" in sql
+
+
 def test_country_clause_combines_current_and_history(db):
     parsed = ParsedFilter(locations_country=["UK"])
     sql = _compile(apply_parsed_filter(_base_query(db), parsed))
@@ -87,10 +102,13 @@ def test_min_years_clause_uses_substring_extraction(db):
     assert ">= 5" in sql
 
 
-def test_keywords_emits_ilike_or(db):
+def test_keywords_use_indexed_full_text_plus_profile_fallback(db):
     parsed = ParsedFilter(keywords=["production", "kubernetes"])
     sql = _compile(apply_parsed_filter(_base_query(db), parsed))
-    assert sql.lower().count("ilike") == 2
+    assert "to_tsvector" in sql
+    assert "plainto_tsquery" in sql
+    assert "@@" in sql
+    assert "candidates.position ILIKE" in sql
 
 
 def test_empty_filter_does_not_join_or_filter(db):
@@ -105,8 +123,19 @@ def test_soft_criteria_routed_to_keywords_when_no_rerank(db):
     sql = _compile(
         apply_parsed_filter(_base_query(db), parsed, soft_criteria_as_keywords=True)
     )
-    assert "ILIKE" in sql or "ilike" in sql
+    assert "plainto_tsquery" in sql
     assert "large enterprise" in sql
+
+
+def test_multiple_soft_requirements_are_anded(db):
+    parsed = ParsedFilter(soft_criteria=["Treasury experience", "Data experience"])
+    sql = _compile(
+        apply_parsed_filter(_base_query(db), parsed, soft_criteria_as_keywords=True)
+    )
+    where = sql.split("WHERE", 1)[1].upper()
+    assert "TREASURY EXPERIENCE" in where
+    assert "DATA EXPERIENCE" in where
+    assert " AND " in where
 
 
 def test_soft_criteria_skipped_when_rerank_will_handle(db):
@@ -139,6 +168,22 @@ def test_needs_candidate_join_for_skills_only():
     assert needs_candidate_join(ParsedFilter(min_years_experience=3))
     assert not needs_candidate_join(ParsedFilter(keywords=["foo"]))
     assert not needs_candidate_join(ParsedFilter())
+
+
+def test_dedicated_title_filter_searches_current_and_history(db):
+    parsed = ParsedFilter(titles_any=["project manager", "scrum master"])
+    sql = _compile(apply_parsed_filter(_base_query(db), parsed))
+    assert "candidates.position ILIKE" in sql
+    assert "candidates.headline ILIKE" in sql
+    assert "jsonb_array_elements" in sql
+
+
+def test_skill_filter_is_case_insensitive_and_alias_aware(db):
+    parsed = ParsedFilter(skills_all=["AWS"])
+    sql = _compile(apply_parsed_filter(_base_query(db), parsed))
+    assert "lower(coalesce" in sql.lower()
+    assert "%aws%" in sql.lower()
+    assert "%amazon web services%" in sql.lower()
 
 
 def test_string_with_double_quote_is_safely_passed(db):

@@ -6,8 +6,8 @@ Steps:
 3. Apply hard SQL filters to a base query already scoped to the org.
 4. Execute graph predicates against Neo4j (when configured) and AND-narrow
    the SQL result set by candidate id.
-5. Optional rerank: for ``soft_criteria``, ask Claude to assess the top N
-   candidates with their graph-neighbourhood as context.
+5. Optional deep verification: for ``soft_criteria``, ask Claude to assess a
+   relevance-ordered, explicitly bounded candidate window.
 6. (When view=graph) fetch the subgraph for the matched candidate set.
 
 Returns ``SearchOutput`` with the final application ids, parsed filter,
@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from . import cache as cache_module
 from .parser import parse_nl_query
-from .query_builder_sql import apply_parsed_filter
+from .query_builder_sql import apply_parsed_filter, apply_relevance_order
 from .schemas import (
     GraphPayload,
     ParsedFilter,
@@ -36,6 +36,20 @@ logger = logging.getLogger("taali.candidate_search.runner")
 
 # How many candidates to rerank with Claude in the soft-criteria pass.
 RERANK_TOP_N = 50
+
+
+def _dedupe_person_rows(rows) -> list[int]:
+    """Choose the first relevance-ordered application for each person."""
+    seen: set[int] = set()
+    out: list[int] = []
+    for row in rows:
+        app_id = int(row[0])
+        candidate_id = int(row[1]) if len(row) > 1 and row[1] is not None else -app_id
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        out.append(app_id)
+    return out
 
 
 def _candidate_ids_for_application_ids(
@@ -59,7 +73,7 @@ def run_search(
     organization_id: int,
     nl_query: str,
     base_query,
-    rerank_enabled: bool = True,
+    rerank_enabled: bool = False,
     include_subgraph: bool = False,
     parser_client=None,
     rerank_client=None,
@@ -133,33 +147,60 @@ def run_search(
                 warnings=warnings,
                 rerank_applied=False,
                 subgraph=None,
+                database_matches=0,
+                qualified=0,
             )
         sql_query = sql_query.filter(
             CandidateApplication.candidate_id.in_(cypher_candidate_ids)
         )
 
-    # Fetch matching application ids. Caller will paginate / sort downstream.
-    application_ids = [
-        int(row_id)
-        for (row_id,) in sql_query.with_entities(CandidateApplication.id).all()
-    ]
+    # Rank the COMPLETE deterministic retrieval set before selecting a bounded
+    # verification window, then collapse multiple role applications belonging
+    # to the same person. "All candidates" now means people, not application
+    # rows, and the first 50 are relevant/stable rather than DB-natural.
+    sql_query = apply_relevance_order(sql_query, parsed)
+    rows = sql_query.with_entities(
+        CandidateApplication.id,
+        CandidateApplication.candidate_id,
+    ).all()
+    application_ids = _dedupe_person_rows(rows)
+    database_matches = len(application_ids)
 
     rerank_applied = False
+    deep_checked = 0
+    qualified = database_matches
+    capped = False
     if rerank_enabled and parsed.soft_criteria and application_ids:
         try:
             from . import rerank as rerank_module
 
+            checked_ids = application_ids[:RERANK_TOP_N]
             kept = rerank_module.rerank_application_ids(
                 db=db,
                 organization_id=organization_id,
-                application_ids=application_ids[:RERANK_TOP_N],
+                application_ids=checked_ids,
                 soft_criteria=parsed.soft_criteria,
                 client=rerank_client,
             )
-            # Preserve original order; drop those rerank rejected.
-            kept_set = set(kept)
-            application_ids = [aid for aid in application_ids if aid in kept_set]
+            # Deep verification is an explicit qualified subset. Candidates
+            # outside the checked window are not silently called failures and
+            # remain represented by database_matches/capped in the response.
+            application_ids = list(kept)
             rerank_applied = True
+            deep_checked = len(checked_ids)
+            qualified = len(application_ids)
+            capped = database_matches > deep_checked
+            if capped:
+                warnings.append(
+                    SearchWarning(
+                        code="verification_capped",
+                        message=(
+                            f"Deep-checked {deep_checked} of {database_matches} "
+                            "database matches; unchecked candidates were not "
+                            "classified as failures."
+                        ),
+                    )
+                )
         except Exception as exc:
             logger.warning("Rerank failed; passing through SQL results: %s", exc)
             warnings.append(
@@ -205,6 +246,11 @@ def run_search(
         warnings=warnings,
         rerank_applied=rerank_applied,
         subgraph=subgraph,
+        database_matches=database_matches,
+        deep_checked=deep_checked,
+        qualified=qualified,
+        capped=capped,
+        exhaustive=not capped,
     )
 
 

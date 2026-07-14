@@ -355,8 +355,11 @@ def nl_search_candidates(
     *,
     query: str,
     role_id: int | None = None,
-    rerank: bool = True,
+    rerank: bool | None = None,
+    deep_verify: bool = False,
+    include_graph: bool = False,
     limit: int = 25,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Natural-language search over CV text, skills, experience, and graph.
 
@@ -381,28 +384,42 @@ def nl_search_candidates(
     if role_id is not None:
         base = base.filter(CandidateApplication.role_id == int(role_id))
 
+    verify = bool(deep_verify if rerank is None else rerank)
     result = run_search(
         db=db,
         organization_id=int(user.organization_id),
         nl_query=text,
         base_query=base,
-        rerank_enabled=bool(rerank),
-        # Always pull the matched candidates' Graphiti subgraph so the
-        # chat UI can render an inline graph alongside the candidate
-        # grid — the user expects "search this person" to surface their
-        # graph, not just their card.
-        include_subgraph=True,
+        rerank_enabled=verify,
+        # Graph retrieval is an explicit relationship/visualisation request.
+        # Ordinary skills search stays entirely in Postgres.
+        include_subgraph=bool(include_graph),
     )
 
-    capped_ids = result.application_ids[: max(1, min(int(limit), 100))]
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+    capped_ids = result.application_ids[safe_offset : safe_offset + safe_limit]
     apps = _applications_for_ids(
         db, organization_id=user.organization_id, application_ids=capped_ids
     )
     by_id = {a.id: a for a in apps}
     ordered = [by_id[aid] for aid in capped_ids if aid in by_id]
+    database_matches = (
+        int(result.database_matches)
+        if result.database_matches is not None
+        else len(result.application_ids)
+    )
     return {
         "applications": [application_summary(a) for a in ordered],
-        "total_matched": len(result.application_ids),
+        # Backward-compatible name plus the explicit coverage vocabulary.
+        "total_matched": database_matches,
+        "database_matches": database_matches,
+        "deep_checked": int(result.deep_checked),
+        "qualified": result.qualified,
+        "returned": len(ordered),
+        "offset": safe_offset,
+        "capped": bool(result.capped),
+        "exhaustive": bool(result.exhaustive),
         "rerank_applied": bool(result.rerank_applied),
         "parsed_filter": result.parsed_filter.model_dump(mode="json"),
         "warnings": [w.model_dump(mode="json") for w in result.warnings],
@@ -505,6 +522,8 @@ def screen_pool_against_requirement(
     requirement_text: str,
     limit: int = 20,
     role_id: int | None = None,
+    deep_verify: bool = False,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Rediscovery: screen the WHOLE already-scored candidate pool against a NEW
     free-text requirement.
@@ -556,13 +575,18 @@ def screen_pool_against_requirement(
     if role_id is not None:
         base = base.filter(CandidateApplication.role_id == int(role_id))
 
-    return _engine(
+    engine_kwargs = dict(
         db=db,
         organization_id=int(user.organization_id),
         requirement=text,
         base_query=base,
         limit=int(limit),
     )
+    if deep_verify:
+        engine_kwargs["deep_verify"] = True
+    if offset:
+        engine_kwargs["offset"] = max(0, int(offset))
+    return _engine(**engine_kwargs)
 
 
 def graph_search_candidates(

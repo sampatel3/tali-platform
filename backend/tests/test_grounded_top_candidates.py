@@ -642,6 +642,47 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     assert out["candidates"][0]["criteria"] == []
 
 
+def test_find_top_candidates_does_not_pad_zero_structural_matches(monkeypatch):
+    """A failed role/skill prefilter must not turn into unrelated top scorers."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **kw: SearchOutput(
+            application_ids=[],
+            parsed_filter=ParsedFilter(
+                skills_any=["project manager", "scrum master"],
+                soft_criteria=["Treasury experience", "Data experience"],
+            ),
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 1_461)
+
+    def _must_not_load(*_args, **_kwargs):
+        raise AssertionError("unrelated candidates must not be loaded")
+
+    monkeypatch.setattr(tc, "_load_candidates", _must_not_load)
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="project manager or scrum master with Treasury and Data",
+        base_query=MagicMock(),
+        limit=10,
+        evidence_client=MagicMock(),
+    )
+
+    assert out["total_matched"] == 0
+    assert out["pool_size"] == 1_461
+    assert out["structural_matches"] == 0
+    assert out["evaluated"] == 0
+    assert out["shown"] == 0
+    assert out["candidates"] == []
+    assert out["warnings"][-1]["code"] == "no_structural_matches"
+
+
 def test_find_top_candidates_hides_not_met(monkeypatch):
     """A candidate who clearly FAILS a requirement (salary over cap → not_met)
     is hidden, not shown with a 'not met' label — the recruiter asked for a
@@ -880,10 +921,9 @@ def test_find_top_candidates_keeps_failed_preference(monkeypatch):
     assert out["excluded"]["not_met_total"] == 0
 
 
-def test_structural_match_biases_but_does_not_exclude(monkeypatch):
-    """The anti-collapse guarantee: a narrow/wrong structural filter (here only
-    app 3 matched) must NOT empty the result — non-matchers are still grounded
-    and shown. total_matched reflects the whole pool, not the 1 structural hit."""
+def test_structural_match_is_a_strict_population_filter(monkeypatch):
+    """A requested skill/title is a hard population constraint; unrelated
+    high scorers must never pad the result."""
     from app.candidate_search import runner as runner_mod
 
     monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
@@ -896,7 +936,7 @@ def test_structural_match_biases_but_does_not_exclude(monkeypatch):
     a1 = _fake_app(1, taali=90, name="A"); a1.cv_text = "fintech platform work"
     a2 = _fake_app(2, taali=85, name="B"); a2.cv_text = "fintech and banking"
     a3 = _fake_app(3, taali=40, name="C"); a3.cv_text = "fintech startup"
-    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a1, a2, a3])
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a3])
 
     class _FakeClient:
         class _M:
@@ -911,8 +951,9 @@ def test_structural_match_biases_but_does_not_exclude(monkeypatch):
         db=MagicMock(), organization_id=1, query="top react engineers in fintech",
         base_query=MagicMock(), limit=3, evidence_client=_FakeClient())
     ids = {c["application_id"] for c in out["candidates"]}
-    assert ids == {1, 2, 3}            # nobody excluded by the narrow structural filter
-    assert out["total_matched"] == 3   # the whole pool, not just the 1 structural match
+    assert ids == {3}
+    assert out["total_matched"] == 1
+    assert out["pool_size"] == 3
     assert out["structural_matches"] == 1
 
 

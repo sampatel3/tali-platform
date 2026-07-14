@@ -46,6 +46,8 @@ class ParsedFilter(BaseModel):
 
     skills_all: list[str] = Field(default_factory=list)
     skills_any: list[str] = Field(default_factory=list)
+    titles_all: list[str] = Field(default_factory=list)
+    titles_any: list[str] = Field(default_factory=list)
     locations_country: list[str] = Field(default_factory=list)
     locations_region: list[str] = Field(default_factory=list)
     min_years_experience: Optional[int] = Field(default=None, ge=0, le=60)
@@ -59,6 +61,8 @@ class ParsedFilter(BaseModel):
         return not (
             self.skills_all
             or self.skills_any
+            or self.titles_all
+            or self.titles_any
             or self.locations_country
             or self.locations_region
             or self.min_years_experience
@@ -77,6 +81,7 @@ class SearchWarning(BaseModel):
         "rerank_skipped",
         "rerank_partial",
         "graph_predicate_dropped",
+        "verification_capped",
     ]
     message: str
 
@@ -108,3 +113,10 @@ class SearchOutput(BaseModel):
     warnings: list[SearchWarning] = Field(default_factory=list)
     rerank_applied: bool = False
     subgraph: Optional[GraphPayload] = None
+    # Person-level counts. ``database_matches`` is the complete deterministic
+    # retrieval set before an optional bounded deep-verification pass.
+    database_matches: Optional[int] = None
+    deep_checked: int = 0
+    qualified: Optional[int] = None
+    capped: bool = False
+    exhaustive: bool = True

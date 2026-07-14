@@ -105,6 +105,12 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
                     "default": "desc",
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Page through the complete ordered match set.",
+                },
             },
             "required": [],
         },
@@ -192,23 +198,25 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "screen_pool_against_requirement",
         "description": (
-            "REDISCOVERY across the WHOLE scored history. Use when the recruiter "
+            "REDISCOVERY across the WHOLE scored history. The default is a "
+            "zero-per-candidate-model-call, person-deduplicated Postgres search. "
+            "Use when the recruiter "
             "has a NEW requirement or role and wants to find who — among ALL "
             "candidates ever scored, INCLUDING ones scored for OTHER roles whose "
             "existing score says nothing about this requirement — fits it. "
             "Unlike find_top_candidates (a top-N shortlist of the current "
             "pipeline ranked by existing score), this (1) reuses each "
-            "candidate's stored per-criterion evidence for FREE where the new "
-            "requirement overlaps what they were already assessed on, (2) "
-            "grounds the most promising with verbatim CV citations, and (3) "
-            "ranks by fit to THIS requirement, not the stale score. Returns "
-            "grounded `candidates` (each with `criteria[].status` + "
-            "`evidence[].quote`), how many were `screened` (and whether the "
+            "candidate's stored fields and CV full-text index, and when "
+            "deep_verify=true (2) grounds a bounded promising set with verbatim "
+            "CV citations. Returns database coverage fields and candidates; "
+            "when deep verification is requested those candidates also carry "
+            "`criteria[].status` + `evidence[].quote`, plus how many were "
+            "`screened` (and whether the "
             "pool was `capped`), and `rescore_candidate_ids` (those a full "
             "re-score would clarify). Choose THIS over find_top_candidates / "
             "nl_search_candidates whenever the ask is 'who in my existing/"
-            "already-scored candidates fits this NEW requirement'. Cite quotes; "
-            "never add a fact that isn't in the evidence."
+            "already-scored candidates fits this NEW requirement'. Only cite "
+            "quotes or claim verified fit when deep_verify=true."
         ),
         "input_schema": {
             "type": "object",
@@ -218,9 +226,20 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
                     "description": "The new requirement / mini job-spec to screen against.",
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Page through exhaustive database matches when deep_verify is false.",
+                },
                 "role_id": {
                     "type": ["integer", "null"],
                     "description": "Restrict the scored history to one role; omit for org-wide.",
+                },
+                "deep_verify": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Opt in to bounded per-candidate CV evidence checks.",
                 },
             },
             "required": ["requirement_text"],
@@ -229,10 +248,11 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "nl_search_candidates",
         "description": (
-            "Semantic / natural-language candidate search. Parses the query "
-            "(skills, locations, years of experience, soft criteria, graph "
-            "predicates), runs JSONB + CV-text filters, optionally re-ranks "
-            "the top results with an LLM, and returns application summaries. "
+            "Exhaustive, person-deduplicated natural-language candidate search "
+            "over normalized skills/taxonomy aliases, current and historical "
+            "titles, locations, years and indexed CV text. Common structured "
+            "queries require no model call. deep_verify optionally checks a "
+            "bounded relevance-ranked subset; include_graph is opt-in. "
             "Use this for questions like 'AWS Glue engineer with 5+ years' or "
             "'senior backend devs in EMEA who've worked at fintechs'."
         ),
@@ -241,7 +261,8 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "query": {"type": "string"},
                 "role_id": {"type": ["integer", "null"]},
-                "rerank": {"type": "boolean", "default": True},
+                "deep_verify": {"type": "boolean", "default": False},
+                "include_graph": {"type": "boolean", "default": False},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
             },
             "required": ["query"],
