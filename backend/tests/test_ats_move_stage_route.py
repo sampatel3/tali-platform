@@ -10,6 +10,7 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
 from app.platform.config import settings
+from app.services.workable_op_runner import AtsJobRunPersistenceError
 from tests.conftest import TestingSessionLocal, auth_headers
 
 
@@ -175,6 +176,58 @@ def test_manual_bullhorn_outcome_fails_closed_when_integration_is_off(
     db.expire_all()
     persisted = db.query(CandidateApplication).filter_by(id=app.id).one()
     assert persisted.application_outcome == "open"
+
+
+def test_manual_bullhorn_outcome_reports_failed_when_tracking_is_unavailable(
+    client, db, monkeypatch
+):
+    headers, org, role, app = _application(client, db)
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-tracking-failure"
+    app.source = "bullhorn"
+    app.bullhorn_job_submission_id = "submission-tracking-failure"
+    db.commit()
+
+    with patch("app.services.background_job_runs.create_run", return_value=None):
+        response = client.patch(
+            f"/api/v1/applications/{app.id}/outcome",
+            headers=headers,
+            json={"application_outcome": "rejected", "reason": "Not a match"},
+        )
+
+    assert response.status_code == 503, response.text
+    db.expire_all()
+    persisted = db.get(CandidateApplication, int(app.id))
+    assert persisted.application_outcome == "rejected"
+    receipt = persisted.integration_sync_state["outcome_writeback"]
+    assert receipt["provider"] == "bullhorn"
+    assert receipt["status"] == "failed"
+    assert receipt["target_outcome"] == "rejected"
+
+
+def test_move_stage_returns_503_when_tracking_is_unavailable(client, db):
+    headers, _org, _role, app = _application(client, db)
+    app.workable_candidate_id = "workable-candidate-tracking-failure"
+    db.commit()
+
+    with patch(
+        "app.services.workable_op_runner.enqueue_workable_op",
+        side_effect=AtsJobRunPersistenceError("move_stage"),
+    ):
+        response = client.post(
+            f"/api/v1/applications/{app.id}/workable/move-stage",
+            headers=headers,
+            json={"target_stage": "interview"},
+        )
+
+    assert response.status_code == 503, response.text
+    assert "No provider update was sent" in response.json()["detail"]
 
 
 def test_manual_workable_reject_persists_confirmed_provider_receipt(client, db):

@@ -39,6 +39,16 @@ from .workable_actions_service import (
 logger = logging.getLogger("taali.workable_op_runner")
 
 
+class AtsJobRunPersistenceError(RuntimeError):
+    """Raised when an ATS operation cannot be durably tracked before publish."""
+
+    def __init__(self, op_type: str):
+        self.op_type = str(op_type or "unknown")
+        super().__init__(
+            f"could not persist BackgroundJobRun for ATS operation {self.op_type!r}"
+        )
+
+
 # Op type constants — also the dispatch keys.
 OP_APPROVE_DECISIONS = "approve_decisions"
 OP_OVERRIDE_DECISION = "override_decision"
@@ -643,12 +653,14 @@ def enqueue_workable_op(
     scope_id: int | None = None,
     job_kind: str | None = None,
     counters: dict | None = None,
-) -> int | None:
+) -> int:
     """Record a BackgroundJobRun and enqueue the serialized runner task.
 
-    Returns the job_run_id (None if bookkeeping failed — the task is still
-    enqueued so the write isn't lost). The caller has already done any
-    optimistic local flip (e.g. decision → processing) and committed.
+    Returns the durable job_run_id. No ATS task is published unless that row was
+    persisted first, so every accepted operation has a meter and poll handle.
+    The caller has already done any optimistic local flip (e.g. decision →
+    processing) and committed, and must compensate it if this raises
+    :class:`AtsJobRunPersistenceError`.
     """
     import json
 
@@ -681,6 +693,15 @@ def enqueue_workable_op(
         counters=run_counters,
         status="dispatching" if replay_safe else "queued",
     )
+    if (
+        isinstance(job_run_id, bool)
+        or not isinstance(job_run_id, int)
+        or job_run_id <= 0
+    ):
+        # ``create_run`` is intentionally best-effort for ordinary background
+        # bookkeeping, but ATS writes require durable tracking. Fail before the
+        # broker publish so a provider side effect can never run unmetered.
+        raise AtsJobRunPersistenceError(op_type)
     from ..tasks.assessment_tasks import mark_workable_op_pending
     from ..tasks.workable_tasks import run_workable_op_task
 

@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
-import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
@@ -70,6 +69,7 @@ import {
 } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
+import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -96,35 +96,6 @@ const matchesPipelineStage = (application, stageKey) => {
     ? bucket === 'invited' || bucket === 'completed'
     : bucket === stageKey;
 };
-
-// Hover-intent CV prefetch. A recruiter sweeping the cursor down a long table
-// would otherwise fire a presigned-S3 PDF download per row crossed — a burst
-// of parallel multi-MB requests they never asked for, competing with the
-// page's own traffic on the UAE link. Gate it: only prefetch when the pointer
-// rests on a row for HOVER_INTENT_MS, and cap concurrent hover prefetches so a
-// held-down scroll can't queue dozens at once.
-const HOVER_INTENT_MS = 200;
-const HOVER_PREFETCH_MAX = 3;
-let hoverPrefetchActive = 0;
-const makeHoverPrefetch = () => {
-  let timer = null;
-  const start = (applicationId) => {
-    if (timer) window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      timer = null;
-      if (hoverPrefetchActive >= HOVER_PREFETCH_MAX) return;
-      hoverPrefetchActive += 1;
-      Promise.resolve(prefetchDocumentBlob({ applicationId, docType: 'cv' }))
-        .catch(() => {})
-        .finally(() => { hoverPrefetchActive = Math.max(0, hoverPrefetchActive - 1); });
-    }, HOVER_INTENT_MS);
-  };
-  const cancel = () => {
-    if (timer) { window.clearTimeout(timer); timer = null; }
-  };
-  return { start, cancel };
-};
-
 const normalizeThreshold = (value) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '';
@@ -525,7 +496,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // One hover-intent controller for the whole page (rows + kanban cards share
   // it, so moving between them cancels the prior pending prefetch).
   const hoverPrefetchRef = useRef(null);
-  if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeHoverPrefetch();
+  if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeCandidateCvHoverPrefetch();
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;

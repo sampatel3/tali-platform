@@ -104,6 +104,7 @@ from ...services.interview_support_service import refresh_application_interview_
 from ...services.pre_screening_service import refresh_pre_screening_fields
 from ...services.taali_scoring import normalize_score_100
 from ...services.sister_role_service import project_sister_application
+from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     move_candidate_in_workable,
@@ -2356,6 +2357,16 @@ def update_application_outcome(
     except HTTPException:
         db.rollback()
         raise
+    except AtsJobRunPersistenceError:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ATS operation was not queued because durable tracking is "
+                "temporarily unavailable. The local decision is saved and "
+                "marked as failed for provider delivery; try again."
+            ),
+        )
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update application outcome")
@@ -2419,17 +2430,26 @@ def _queue_application_ats_move(
     # maps it through AtsStageMap; Workable receives its remote stage directly.
     from ...services.workable_op_runner import OP_MOVE_STAGE, enqueue_workable_op
 
-    job_run_id = enqueue_workable_op(
-        organization_id=current_user.organization_id,
-        op_type=OP_MOVE_STAGE,
-        payload={
-            "application_id": int(app.id),
-            "user_id": current_user.id,
-            "target_stage": target_stage,
-            "target_intent": target_stage if provider_name == "bullhorn" else None,
-            "reason": data.reason,
-        },
-    )
+    try:
+        job_run_id = enqueue_workable_op(
+            organization_id=current_user.organization_id,
+            op_type=OP_MOVE_STAGE,
+            payload={
+                "application_id": int(app.id),
+                "user_id": current_user.id,
+                "target_stage": target_stage,
+                "target_intent": target_stage if provider_name == "bullhorn" else None,
+                "reason": data.reason,
+            },
+        )
+    except AtsJobRunPersistenceError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ATS operation was not queued because durable tracking is "
+                "temporarily unavailable. No provider update was sent; try again."
+            ),
+        )
     db.refresh(app)
     response = application_to_response(app, use_cached_score_summary=True)
     response.ats_writeback_status = "queued"
@@ -2543,15 +2563,24 @@ def post_workable_candidate_note(
         )
     from ...services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
 
-    job_run_id = enqueue_workable_op(
-        organization_id=int(current_user.organization_id),
-        op_type=OP_POST_NOTE,
-        payload={
-            "application_id": int(app.id),
-            "user_id": current_user.id,
-            "body": data.body,
-        },
-    )
+    try:
+        job_run_id = enqueue_workable_op(
+            organization_id=int(current_user.organization_id),
+            op_type=OP_POST_NOTE,
+            payload={
+                "application_id": int(app.id),
+                "user_id": current_user.id,
+                "body": data.body,
+            },
+        )
+    except AtsJobRunPersistenceError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ATS operation was not queued because durable tracking is "
+                "temporarily unavailable. No provider update was sent; try again."
+            ),
+        )
     return {"status": "queued", "application_id": int(app.id), "job_run_id": job_run_id}
 
 

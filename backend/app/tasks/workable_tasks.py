@@ -182,6 +182,45 @@ def run_workable_op_task(
         mark_workable_op_pending,
     )
 
+    if (
+        isinstance(job_run_id, bool)
+        or not isinstance(job_run_id, int)
+        or job_run_id <= 0
+    ):
+        # Defense in depth: every production publisher must reserve a durable
+        # BackgroundJobRun first. If a legacy/direct caller bypasses that gate,
+        # surface the failure (including decision requeue / outcome receipt)
+        # without touching the ATS provider.
+        logger.error(
+            "run_workable_op refused unmetered ATS op organization_id=%s op_type=%s",
+            organization_id,
+            op_type,
+        )
+        db = SessionLocal()
+        try:
+            error = WorkableWritebackError(
+                action=op_type,
+                code="job_run_persistence_failed",
+                message="ATS operation had no durable background-job receipt",
+                retriable=False,
+            )
+            runner.surface_op_failure(
+                db,
+                organization_id=int(organization_id),
+                op_type=op_type,
+                payload=payload,
+                error=error,
+            )
+        except Exception:  # pragma: no cover - defensive surfacing only
+            logger.exception("failed to surface unmetered ATS op_type=%s", op_type)
+        finally:
+            db.close()
+        return {
+            "status": "failed",
+            "op_type": op_type,
+            "code": "job_run_persistence_failed",
+        }
+
     eager = bool(getattr(self.request, "is_eager", False))
     # Refresh the op-pending signal on every run — including each lock-wait
     # re-enqueue below — so the periodic syncs keep yielding the per-org mutex
@@ -300,7 +339,22 @@ def run_workable_op_task(
 
     db = SessionLocal()
     try:
-        if not background_job_runs.mark_running(job_run_id):
+        from ..models.background_job_run import (
+            JOB_KIND_DECISION_BATCH,
+            JOB_KIND_WORKABLE_OP,
+        )
+
+        expected_kind = (
+            JOB_KIND_DECISION_BATCH
+            if op_type == runner.OP_APPROVE_DECISIONS
+            else JOB_KIND_WORKABLE_OP
+        )
+        if not background_job_runs.claim_ats_run(
+            job_run_id,
+            organization_id=int(organization_id),
+            expected_kind=expected_kind,
+            op_type=op_type,
+        ):
             return {
                 "status": "already_terminal",
                 "op_type": op_type,

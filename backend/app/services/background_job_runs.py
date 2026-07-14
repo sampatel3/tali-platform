@@ -44,9 +44,14 @@ def create_run(
             counters=dict(counters or {}),
         )
         db.add(row)
+        # Capture the database-assigned primary key before commit. A refresh
+        # after commit creates a false-negative window: the insert can be
+        # durable while a follow-up SELECT fails, causing a strict ATS caller
+        # to report 503 even though Beat can see and replay the committed row.
+        db.flush()
+        run_id = int(row.id)
         db.commit()
-        db.refresh(row)
-        return int(row.id)
+        return run_id
     except Exception:
         logger.exception("background_job_runs: create failed")
         try:
@@ -178,11 +183,69 @@ def mark_running(run_id: int | None) -> bool:
         db.close()
 
 
+def claim_ats_run(
+    run_id: int | None,
+    *,
+    organization_id: int,
+    expected_kind: str,
+    op_type: str,
+) -> bool:
+    """Claim a provider operation only when its durable receipt matches.
+
+    Binding the broker payload to organization, job kind, and operation type
+    prevents a malformed/stale delivery from borrowing some other queued row
+    and performing an unmetered or cross-organization provider action.
+    """
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        return False
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.id == int(run_id),
+                BackgroundJobRun.organization_id == int(organization_id),
+                BackgroundJobRun.kind == str(expected_kind),
+                BackgroundJobRun.status.in_(("dispatching", "queued", "running")),
+                BackgroundJobRun.finished_at.is_(None),
+            )
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        counters = dict(row.counters or {})
+        if str(counters.get("op_type") or "") != str(op_type):
+            logger.error(
+                "background_job_runs: ATS claim op mismatch id=%s organization_id=%s",
+                run_id,
+                organization_id,
+            )
+            return False
+        counters["last_started_at"] = datetime.now(timezone.utc).isoformat()
+        counters["delivery_attempts"] = int(counters.get("delivery_attempts") or 0) + 1
+        row.counters = counters
+        row.status = "running"
+        db.commit()
+        return True
+    except Exception as exc:
+        logger.error(
+            "background_job_runs: ATS claim failed id=%s organization_id=%s error_type=%s",
+            run_id,
+            organization_id,
+            type(exc).__name__,
+        )
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
 __all__ = [
     "create_run",
     "update_run",
     "mark_dispatched",
     "mark_running",
+    "claim_ats_run",
     "SCOPE_KIND_ROLE",
     "SCOPE_KIND_ORG",
 ]
