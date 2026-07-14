@@ -107,11 +107,13 @@ celery_app.conf.update(
         },
         # Recover approve batches whose worker was SIGKILLed mid-run (deploy):
         # decisions stranded in 'processing' go back to the Hub queue and the
-        # stuck decision_batch BackgroundJobRun is marked failed. Mirrors
-        # agent_expire_stuck_runs; 5 min surfaces within ~one beat tick.
-        "expire-stuck-decision-batches-every-5-minutes": {
+        # stuck decision_batch BackgroundJobRun is marked failed. Runs every
+        # minute so a dead 'running' batch (short 3-min timeout) is reaped within
+        # ~3-4 min instead of lingering — recruiters bulk-rejecting around a
+        # deploy don't watch cards sit on "Processing…".
+        "expire-stuck-decision-batches-every-minute": {
             "task": "app.tasks.workable_tasks.expire_stuck_decision_batches",
-            "schedule": 300.0,
+            "schedule": 60.0,
         },
         # Message Batches API pipelines (cv_parse today). Submit sweeps
         # parse-pending applications into per-org batches every 15 min

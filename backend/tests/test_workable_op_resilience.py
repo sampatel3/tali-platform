@@ -28,6 +28,8 @@ from app.services.background_job_runs import SCOPE_KIND_ORG
 from app.tasks import assessment_tasks
 from app.tasks.workable_tasks import (
     _STUCK_DECISION_BATCH_TIMEOUT_MINUTES,
+    _STUCK_QUEUED_BATCH_TIMEOUT_MINUTES,
+    _STUCK_RUNNING_BATCH_TIMEOUT_MINUTES,
     expire_stuck_decision_batches,
 )
 
@@ -196,6 +198,66 @@ def test_watchdog_ignores_fresh_running_batch(db):
     assert out["failed_run_count"] == 0
     db.expire_all()
     assert db.query(AgentDecision).get(d1.id).status == "processing"
+
+
+def test_watchdog_reaps_running_batch_on_short_timeout(db):
+    """With the best-effort work deferred, a healthy 'running' batch drains in
+    seconds — so a much shorter running timeout reaps a SIGKILLed batch promptly
+    instead of leaving cards on 'Processing…' for 15 min. A run older than the
+    short running timeout (with no running_at, so it falls back to started_at)
+    is reaped."""
+    org, role = _seed(db)
+    d1 = _add_processing_decision(db, org, role)
+    run = _make_run(
+        db,
+        org,
+        kind=JOB_KIND_DECISION_BATCH,
+        status="running",
+        age_minutes=_STUCK_RUNNING_BATCH_TIMEOUT_MINUTES + 1,
+        decision_ids=[int(d1.id)],
+    )
+    db.commit()
+
+    out = expire_stuck_decision_batches()
+
+    assert out["failed_run_count"] == 1
+    assert out["requeued_decision_count"] == 1
+    db.expire_all()
+    assert db.query(AgentDecision).get(d1.id).status == "pending"
+    reaped = db.query(BackgroundJobRun).get(run.id)
+    assert reaped.status == "failed"
+    assert f">{_STUCK_RUNNING_BATCH_TIMEOUT_MINUTES}m" in (reaped.error or "")
+
+
+def test_watchdog_measures_running_from_running_at_not_enqueue(db):
+    """A batch can sit 'queued' in the lock-wait loop for many minutes, THEN
+    start running. started_at (enqueue) is old, but running_at is fresh — the
+    watchdog must measure the running timeout off running_at so it doesn't
+    false-fail a batch that only just started draining."""
+    org, role = _seed(db)
+    d1 = _add_processing_decision(db, org, role)
+    run = _make_run(
+        db,
+        org,
+        kind=JOB_KIND_DECISION_BATCH,
+        status="running",
+        # Enqueued well beyond even the (longer) queued timeout ago...
+        age_minutes=_STUCK_QUEUED_BATCH_TIMEOUT_MINUTES + 5,
+        decision_ids=[int(d1.id)],
+    )
+    # ...but only just transitioned to running after a long lock-wait.
+    run.counters = {
+        **run.counters,
+        "running_at": (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(),
+    }
+    db.commit()
+
+    out = expire_stuck_decision_batches()
+
+    assert out["failed_run_count"] == 0, "a freshly-running batch must not be reaped"
+    db.expire_all()
+    assert db.query(AgentDecision).get(d1.id).status == "processing"
+    assert db.query(BackgroundJobRun).get(run.id).status == "running"
 
 
 def test_watchdog_idempotent_skips_already_resolved_decision(db):
