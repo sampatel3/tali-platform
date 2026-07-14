@@ -589,6 +589,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const selectedClientName = useMemo(() => (
     clientOptions.find((c) => c.id === clientFilter)?.name || null
   ), [clientOptions, clientFilter]);
+  const jobBoardHref = useMemo(() => {
+    const slug = String(orgData?.slug || '').trim();
+    return slug ? `/careers/${encodeURIComponent(slug)}` : null;
+  }, [orgData?.slug]);
 
   const handleToggleStar = useCallback(async (role) => {
     if (!role || isShowcase) return;
@@ -684,6 +688,29 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <Filter size={13} />
               Filter
             </button>
+            {!isShowcase && jobBoardHref ? (
+              <a
+                className="btn btn-outline"
+                href={jobBoardHref}
+                target="_blank"
+                rel="noreferrer"
+                title="View your public job board"
+              >
+                <Globe size={13} />
+                Job board
+              </a>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-outline"
+                disabled
+                aria-disabled="true"
+                title={isShowcase ? 'Job board is unavailable in the showcase' : 'Job board URL is unavailable'}
+              >
+                <Globe size={13} />
+                Job board
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-purple"

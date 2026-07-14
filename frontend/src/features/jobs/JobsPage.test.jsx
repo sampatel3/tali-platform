@@ -66,6 +66,7 @@ const baseRoles = [
 const baseOrg = {
   id: 1,
   name: 'Deeplight AI',
+  slug: 'deeplight-ai',
   workable_connected: true,
   workable_subdomain: 'deeplight',
   workable_config: { sync_interval_minutes: 30 },
@@ -194,6 +195,26 @@ describe('JobsPage Workable sync states', () => {
     fireEvent.click(await screen.findByRole('button', { name: '+ Create job' }));
 
     expect(onNavigate).toHaveBeenCalledWith('requisitions');
+  });
+
+  it('links to the organization job board beside Create job', async () => {
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: {
+        run_id: null,
+        sync_in_progress: false,
+        workable_last_sync_at: '2026-04-25T13:00:00Z',
+        workable_last_sync_status: 'success',
+        workable_last_sync_summary: {},
+      },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const jobBoardLink = await screen.findByRole('link', { name: 'Job board' });
+    expect(jobBoardLink).toHaveAttribute('href', '/careers/deeplight-ai');
+    expect(jobBoardLink).toHaveAttribute('target', '_blank');
+    expect(jobBoardLink).toHaveAttribute('rel', 'noreferrer');
+    expect(screen.getByRole('button', { name: '+ Create job' })).toBeInTheDocument();
   });
 
   it('shows AGENT PAUSED (not AGENT ON) for an enabled-but-paused role', async () => {

@@ -142,7 +142,13 @@ export const JobsNavMenu = ({ active, orgSlug }) => {
               <span><strong>Create a job</strong><small>Build the brief with Taali</small></span>
             </PageLink>
             {orgSlug ? (
-              <PageLink to={`/careers/${encodeURIComponent(orgSlug)}`} role="menuitem" onClick={() => setOpen(false)}>
+              <PageLink
+                to={`/careers/${encodeURIComponent(orgSlug)}`}
+                target="_blank"
+                rel="noreferrer"
+                role="menuitem"
+                onClick={() => setOpen(false)}
+              >
                 <ExternalLink size={15} />
                 <span><strong>Job board</strong><small>View your public openings</small></span>
               </PageLink>
@@ -291,7 +297,16 @@ const MobileNavDrawer = ({
                 {id === 'jobs' ? (
                   <div className="mc-drawer-job-links">
                     <PageLink page="requisitions" onClick={onClose}>Create a job</PageLink>
-                    {orgSlug ? <PageLink to={`/careers/${encodeURIComponent(orgSlug)}`} onClick={onClose}>Job board</PageLink> : null}
+                    {orgSlug ? (
+                      <PageLink
+                        to={`/careers/${encodeURIComponent(orgSlug)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={onClose}
+                      >
+                        Job board
+                      </PageLink>
+                    ) : null}
                   </div>
                 ) : null}
               </React.Fragment>
