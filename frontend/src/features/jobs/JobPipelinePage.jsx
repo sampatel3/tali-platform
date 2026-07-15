@@ -102,6 +102,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Live status is polled every 30s and pauses when the tab is hidden.
   const {
     status: agentStatus,
+    phase: agentStatusPhase,
     setStatus: setAgentStatus,
     refetch: refetchAgentStatus,
     mutateStatus: mutateAgentStatus,
@@ -1205,7 +1206,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const canControlRoleAgent = agentStatus != null
     && agentStatus.can_control_agent !== false;
   const roleAgentControlDisabledReason = agentStatus == null
-    ? 'Checking your role agent permissions…'
+    ? (agentStatusPhase === 'error'
+      ? 'Agent controls are temporarily unavailable because the current status could not be loaded.'
+      : 'Checking your role agent permissions…')
     : canControlRoleAgent
       ? null
       : 'Only workspace owners, hiring managers, and recruiters assigned to this role can change its agent controls.';
@@ -1234,26 +1237,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const roleAgent = useMemo(() => {
     const enabled = Boolean(role?.agentic_mode_enabled);
     if (!agentStatus) {
-      const locallyPaused = enabled && Boolean(role?.agent_paused_at);
       return {
-        on: enabled && !locallyPaused,
-        paused: locallyPaused,
-        pending: 0,
-        spentCents: 0,
-        budgetCents: Number(role?.monthly_usd_budget_cents || 0) || 5000,
-        tick: enabled ? 'Loading workspace status…' : null,
-        inFlight: false,
-        pausedAt: role?.agent_paused_at || null,
-        pausedReason: role?.agent_paused_reason || null,
-        rolePaused: locallyPaused,
-        rolePausedAt: role?.agent_paused_at || null,
-        rolePausedReason: role?.agent_paused_reason || null,
+        loading: agentStatusPhase !== 'error',
+        unavailable: agentStatusPhase === 'error',
+        on: false,
+        paused: false,
+        tick: agentStatusPhase === 'error'
+          ? 'Could not load current controls.'
+          : 'Checking role and workspace controls…',
+        controlScope: 'role',
         controlAction: roleAgentControlAction,
       };
     }
     const built = buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
     return built ? { ...built, controlAction: roleAgentControlAction } : built;
-  }, [agentStatus, role, roleAgentControlAction]);
+  }, [agentStatus, agentStatusPhase, role, roleAgentControlAction]);
   const rolePendingReviewTitle = (() => {
     const total = Number(roleAgent?.pending || 0);
     const decisions = roleAgent?.pendingBreakdown?.decisions;

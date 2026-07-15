@@ -209,6 +209,81 @@ describe('AgentBar — org rollup', () => {
     });
   });
 
+  it('never exposes the previous role status while the next role is loading', async () => {
+    let resolveNextRole;
+    agent.status
+      .mockResolvedValueOnce({ data: {
+        paused: false,
+        paused_at: null,
+        pending_decisions: 7,
+      } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveNextRole = resolve;
+      }));
+
+    const { result, rerender } = renderHook(
+      ({ roleId }) => useAgentStatus(roleId),
+      { initialProps: { roleId: 44 } },
+    );
+
+    expect(result.current.phase).toBe('loading');
+    await waitFor(() => expect(result.current.phase).toBe('ready'));
+    expect(result.current.status).toMatchObject({ paused: false, pending_decisions: 7 });
+
+    rerender({ roleId: 45 });
+
+    expect(result.current.phase).toBe('loading');
+    expect(result.current.status).toBeNull();
+    await waitFor(() => expect(agent.status).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveNextRole({ data: {
+        paused: true,
+        paused_at: '2026-07-15T18:00:00Z',
+        pending_decisions: 2,
+      } });
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'));
+    expect(result.current.status).toMatchObject({ paused: true, pending_decisions: 2 });
+  });
+
+  it('treats an empty role response as unavailable instead of loading forever', async () => {
+    agent.status.mockResolvedValueOnce({ data: null });
+
+    const { result } = renderHook(() => useAgentStatus(46));
+
+    await waitFor(() => expect(result.current.phase).toBe('error'));
+    expect(result.current.status).toBeNull();
+    expect(result.current.error).toHaveProperty(
+      'message',
+      'Agent status response did not include a payload.',
+    );
+  });
+
+  it('does not render the legacy role bar until its status is authoritative', async () => {
+    let resolveStatus;
+    agent.status.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStatus = resolve;
+    }));
+
+    const { container } = render(<AgentBar roleId={47} />);
+
+    expect(container.firstChild).toBeNull();
+
+    await act(async () => {
+      resolveStatus({ data: {
+        paused: false,
+        pending_decisions: 2,
+        monthly_spent_cents: 100,
+        monthly_budget_cents: 5000,
+      } });
+    });
+
+    expect(await screen.findByText('Agent mode is ON')).toBeInTheDocument();
+    expect(screen.getByText('2 awaiting your review')).toBeInTheDocument();
+  });
+
   it('does not issue an opposite role mutation while the first control is saving', async () => {
     agent.status
       .mockResolvedValueOnce({ data: { paused: false, paused_at: null } })

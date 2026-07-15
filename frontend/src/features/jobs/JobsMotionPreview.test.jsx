@@ -65,7 +65,7 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     expect(screen.getAllByText('18').length).toBeGreaterThan(0);
   });
 
-  it('exposes the dense paused-header state for responsive browser QA', () => {
+  it('exposes the dense workspace-paused role state for responsive browser QA', () => {
     window.history.replaceState({}, '', '/jobs-preview?agent=paused');
     setReducedMotion(true);
     render(<JobsMotionPreview />);
@@ -75,9 +75,23 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
       'title',
       expect.stringMatching(/only member present at the time/i),
     );
+    expect(screen.getByText('This role remains on and will resume automatically.')).toBeInTheDocument();
     expect(screen.getByText('AI spend')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /turn off agent/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /configure agent/i })).toBeInTheDocument();
+  });
+
+  it('exposes the neutral loading state without fabricated metrics or controls', () => {
+    window.history.replaceState({}, '', '/jobs-preview?agent=loading');
+    setReducedMotion(true);
+    const { container } = render(<JobsMotionPreview />);
+
+    expect(screen.getByLabelText('Agent status')).toBeInTheDocument();
+    expect(screen.getByText('Checking role and workspace controls…')).toBeInTheDocument();
+    expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
+    expect(screen.queryByText('AI spend')).not.toBeInTheDocument();
+    expect(container.querySelector('.abar')).toHaveClass('abar-loading');
+    expect(container.querySelector('.abar .ab-actions')).toBeNull();
   });
 });

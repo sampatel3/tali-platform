@@ -39,8 +39,8 @@ const formatTick = (status) => {
 // can read the same payload AgentBar consumes — `monthly_spent_cents`,
 // `monthly_budget_cents`, `pending_decisions`, `last_activity`, etc.
 export const useAgentStatus = (roleId) => {
-  const [status, setStatusState] = useState(null);
-  const [error, setError] = useState(null);
+  const [statusSnapshot, setStatusSnapshot] = useState({ roleId: null, data: null });
+  const [errorSnapshot, setErrorSnapshot] = useState({ roleId: null, error: null });
   const cancelledRef = useRef(false);
   const requestGenerationRef = useRef(0);
   const mutationGenerationRef = useRef(0);
@@ -57,22 +57,28 @@ export const useAgentStatus = (roleId) => {
     const requestGeneration = ++requestGenerationRef.current;
     try {
       const res = await agentApi.status(roleId);
+      const nextStatus = res?.data || null;
       if (
         !cancelledRef.current
         && requestGeneration === requestGenerationRef.current
         && activeMutationRef.current === null
       ) {
-        setStatusState(res?.data || null);
-        setError(null);
+        setStatusSnapshot({ roleId, data: nextStatus });
+        setErrorSnapshot({
+          roleId,
+          error: nextStatus == null
+            ? new Error('Agent status response did not include a payload.')
+            : null,
+        });
       }
-      return res?.data || null;
+      return nextStatus;
     } catch (err) {
       if (
         !cancelledRef.current
         && requestGeneration === requestGenerationRef.current
         && activeMutationRef.current === null
       ) {
-        setError(err);
+        setErrorSnapshot({ roleId, error: err });
       }
       return null;
     }
@@ -90,7 +96,12 @@ export const useAgentStatus = (roleId) => {
     const mutationGeneration = ++mutationGenerationRef.current;
     activeMutationRef.current = mutationGeneration;
     requestGenerationRef.current += 1;
-    if (typeof optimistic === 'function') setStatusState(optimistic);
+    if (typeof optimistic === 'function') {
+      setStatusSnapshot((current) => ({
+        roleId,
+        data: optimistic(current.roleId === roleId ? current.data : null),
+      }));
+    }
     try {
       return await request();
     } finally {
@@ -105,15 +116,22 @@ export const useAgentStatus = (roleId) => {
   // but invalidate a request that began before the local patch.
   const setStatus = useCallback((updater) => {
     requestGenerationRef.current += 1;
-    setStatusState(updater);
-  }, []);
+    setStatusSnapshot((current) => {
+      const currentData = current.roleId === roleId ? current.data : null;
+      return {
+        roleId,
+        data: typeof updater === 'function' ? updater(currentData) : updater,
+      };
+    });
+  }, [roleId]);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
     mutationGenerationRef.current += 1;
     activeMutationRef.current = null;
     if (!roleId) {
-      setStatusState(null);
+      setStatusSnapshot({ roleId: null, data: null });
+      setErrorSnapshot({ roleId: null, error: null });
       return undefined;
     }
     cancelledRef.current = false;
@@ -144,7 +162,14 @@ export const useAgentStatus = (roleId) => {
   // payload (e.g. clear `paused_at` the instant the user clicks Resume) — the
   // strip derives on/paused from `paused_at`, so without this the box stays
   // PAUSED until the next poll even though the PATCH already fired.
-  return { status, error, setStatus, refetch, mutateStatus };
+  // A response for the previous role must never be presented as the next
+  // role's state. Filtering the snapshots during render also closes the
+  // single-frame gap before the role-change effect has run.
+  const status = statusSnapshot.roleId === roleId ? statusSnapshot.data : null;
+  const error = errorSnapshot.roleId === roleId ? errorSnapshot.error : null;
+  const phase = !roleId ? 'idle' : status != null ? 'ready' : error ? 'error' : 'loading';
+
+  return { status, error, phase, setStatus, refetch, mutateStatus };
 };
 
 // Org rollup for the global header strip. Reads the single purpose-built
@@ -371,6 +396,9 @@ export const AgentBar = ({
   const roleResult = useAgentStatus(roleId);
   const orgResult = useAgentStatusOrg(shouldPollOrg);
   const status = useOrgScope ? orgResult.status : roleResult.status;
+  const roleStatusUnresolved = !useOrgScope
+    && roleId != null
+    && roleResult.phase !== 'ready';
 
   const paused = status?.paused ?? pausedProp;
   const pending = status?.pending_decisions ?? pendingProp ?? 0;
@@ -392,6 +420,7 @@ export const AgentBar = ({
     if (status == null) return null;
     if (!status.active_role_count) return null;
   }
+  if (roleStatusUnresolved) return null;
 
   const amber = pct >= AMBER_THRESHOLD_PCT;
   const spentLabel = formatDollars(spentCents);

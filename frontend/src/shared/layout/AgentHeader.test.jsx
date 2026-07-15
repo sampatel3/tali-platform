@@ -21,6 +21,36 @@ const runningAgent = {
 };
 
 describe('AgentHeader — Pause/Resume panel', () => {
+  it('uses a neutral, non-actionable strip while the current status is loading', () => {
+    const { container } = render(
+      <AgentHeader
+        title="Jobs"
+        agent={{
+          loading: true,
+          on: false,
+          tick: 'Checking role and workspace controls…',
+        }}
+        onActivateAgent={() => {}}
+        onPauseAgent={() => {}}
+        onResumeAgent={() => {}}
+        onTurnOffAgent={() => {}}
+        onAgentSettings={() => {}}
+      />,
+    );
+
+    const bar = container.querySelector('.abar');
+    expect(bar).toHaveClass('abar-loading');
+    expect(bar).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByLabelText('Agent status')).toBeInTheDocument();
+    expect(screen.getByText('Checking role and workspace controls…')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Agent on')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Agent off')).not.toBeInTheDocument();
+    expect(screen.queryByText('AI spend')).not.toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(bar.querySelector('.ab-actions')).toBeNull();
+    expect(within(bar).getByRole('status')).toHaveAccessibleName('Agent status');
+  });
+
   it('renders the Pause button and fires onPauseAgent when running', () => {
     const onPause = vi.fn();
     const { container } = render(<AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={onPause} />);

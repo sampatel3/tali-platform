@@ -216,6 +216,8 @@ const AgentStrip = ({
     hasMounted.current = true;
   }, []);
   const {
+    loading = false,
+    unavailable = false,
     on = true,
     paused = false,
     pending = 0,
@@ -241,13 +243,21 @@ const AgentStrip = ({
   } = agent || {};
   const controlsBusy = Boolean(controlAction);
   const controlsRestricted = Boolean(controlsDisabledReason);
-  const status = !on ? (paused ? 'paused' : 'off') : 'on';
+  const status = loading
+    ? 'loading'
+    : unavailable
+      ? 'unavailable'
+      : !on
+        ? (paused ? 'paused' : 'off')
+        : 'on';
   const isWorkspaceControl = controlScope === 'workspace';
   const workspaceControlReady = !isWorkspaceControl
     || (workspaceControlVersion != null
       && Number.isInteger(Number(workspaceControlVersion))
       && Number(workspaceControlVersion) >= 1);
-  const isWorkspaceOverride = !isWorkspaceControl && Boolean(workspacePaused) && status !== 'off';
+  const isWorkspaceOverride = !isWorkspaceControl
+    && Boolean(workspacePaused)
+    && (status === 'on' || status === 'paused');
   const pauseCopy = getAgentPauseCopy(pausedReason);
   const isManualPause = pauseCopy.kind === 'manual';
   const resolvedPauseLabel = pauseLabel || (isWorkspaceControl ? 'Pause workspace' : 'Pause');
@@ -263,7 +273,11 @@ const AgentStrip = ({
   const spentLabel = formatUsd(spentCents);
   const budgetLabel = formatUsd(budgetCents);
 
-  const label = isWorkspaceOverride
+  const label = status === 'loading'
+    ? 'Agent status'
+    : status === 'unavailable'
+      ? 'Agent status unavailable'
+      : isWorkspaceOverride
     ? 'Workspace paused'
     : status === 'on'
       ? (bootstrapStatus === 'starting'
@@ -279,7 +293,11 @@ const AgentStrip = ({
   // (PAUSED), or the activation hint (OFF, no activator).
   let message = null;
   let messageTitle = null;
-  if (status === 'on') {
+  if (status === 'loading') {
+    message = tick || 'Checking current controls…';
+  } else if (status === 'unavailable') {
+    message = tick || 'Refresh to try again.';
+  } else if (status === 'on') {
     message = isWorkspaceControl && Number(localPausedRoleCount) > 0
       ? `${Number(runningRoleCount) || 0} running · ${Number(localPausedRoleCount)} role-paused`
       : tick;
@@ -330,7 +348,7 @@ const AgentStrip = ({
 
   const showBudget = (status === 'on' || status === 'paused') && budgetCents > 0 && !isMixed;
   const pendingCount = nonNegativeCount(pending) || 0;
-  const pendingLabel = pendingCount > 0
+  const pendingLabel = status !== 'loading' && status !== 'unavailable' && pendingCount > 0
     ? pendingSummary(pendingCount, pendingBreakdown)
     : null;
   const layoutMotion = reduced ? false : 'position';
@@ -348,6 +366,7 @@ const AgentStrip = ({
       kind="glow"
       active={status === 'on'}
       className={`abar abar-${status}`}
+      aria-busy={status === 'loading' ? 'true' : undefined}
       layout={layoutMotion}
       transition={{ layout: reduced ? motionTransition.instant : motionTransition.layout }}
     >
@@ -368,7 +387,13 @@ const AgentStrip = ({
           {inFlight && on && !paused ? <AgentLoop kind="ring" className="ab-pulse" /> : null}
         </m.span>
         <span className="ab-state-copy">
-          <span className="ab-label" aria-label={label}>
+          <span
+            className="ab-label"
+            aria-label={label}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <m.span
               key={label}
               aria-hidden="true"
@@ -443,7 +468,7 @@ const AgentStrip = ({
         </span>
       ) : null}
 
-      {status === 'off' && onActivate ? (
+      {status === 'loading' || status === 'unavailable' ? null : status === 'off' && onActivate ? (
         <span className="ab-actions" title={controlsDisabledReason || undefined}>
           {onSettings ? (
             <Button

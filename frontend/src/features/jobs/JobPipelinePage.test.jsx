@@ -223,7 +223,9 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     expect(await screen.findByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading candidates…');
+    expect(screen.getAllByRole('status').some((node) => (
+      node.textContent?.includes('Loading candidates…')
+    ))).toBe(true);
   });
 
   it('paints the job shell while the aggregate role detail is still loading', async () => {
@@ -236,6 +238,96 @@ describe('JobPipelinePage', () => {
       node.textContent?.includes('Loading pipeline summary…')
     ))).toBe(true);
     expect(apiClient.roles.getShell).toHaveBeenCalledWith(101);
+  });
+
+  it('does not present the role agent as on before workspace status has loaded', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const now = new Date().toISOString();
+    let resolveStatus;
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockImplementation(() => new Promise((resolve) => {
+      resolveStatus = resolve;
+    }));
+
+    const { container } = renderPipeline();
+
+    expect(await screen.findByLabelText('Agent status')).toBeInTheDocument();
+    const bar = container.querySelector('.abar');
+    expect(bar).toHaveClass('abar-loading');
+    expect(bar).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('Checking role and workspace controls…')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Agent on')).not.toBeInTheDocument();
+    expect(within(bar).queryByText('AI spend')).not.toBeInTheDocument();
+    expect(within(bar).queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(bar.querySelector('.ab-actions')).toBeNull();
+
+    await act(async () => {
+      resolveStatus({ data: {
+        enabled: true,
+        paused: true,
+        pause_scope: 'workspace',
+        paused_at: now,
+        paused_reason: 'workspace paused by recruiter',
+        paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        workspace_paused: true,
+        workspace_control_version: 4,
+        workspace_paused_at: now,
+        workspace_paused_reason: 'workspace paused by recruiter',
+        workspace_paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        monthly_spent_cents: 1605,
+        monthly_budget_cents: 50000,
+        pending_decisions: 31,
+      } });
+    });
+
+    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(screen.getByText('AI spend')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
+  });
+
+  it('keeps controls unavailable after a failed status read and restores them on retry', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const now = new Date().toISOString();
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status
+      .mockRejectedValueOnce(new Error('status unavailable'))
+      .mockResolvedValueOnce({ data: {
+        enabled: true,
+        paused: true,
+        pause_scope: 'workspace',
+        paused_at: now,
+        paused_reason: 'workspace paused by recruiter',
+        paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        workspace_paused: true,
+        workspace_control_version: 4,
+        workspace_paused_at: now,
+        workspace_paused_reason: 'workspace paused by recruiter',
+        workspace_paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        monthly_spent_cents: 1605,
+        monthly_budget_cents: 50000,
+        pending_decisions: 31,
+      } });
+
+    const { container } = renderPipeline();
+
+    expect(await screen.findByLabelText('Agent status unavailable')).toBeInTheDocument();
+    const bar = container.querySelector('.abar');
+    expect(bar).toHaveClass('abar-unavailable');
+    expect(bar).not.toHaveAttribute('aria-busy');
+    expect(within(bar).getByRole('status')).toHaveAccessibleName('Agent status unavailable');
+    expect(within(bar).queryByText('AI spend')).not.toBeInTheDocument();
+    expect(bar.querySelector('.ab-actions')).toBeNull();
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(2));
+    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(within(bar).getByRole('status')).toHaveAccessibleName('Workspace paused');
+    expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
   });
 
   it('renders the reject-threshold slider on the Agent settings tab without a spinbutton', async () => {

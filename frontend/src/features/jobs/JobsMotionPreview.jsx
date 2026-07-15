@@ -245,6 +245,8 @@ export const JobsMotionPreview = () => {
     typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('agent') === 'paused'
   ));
+  const headerLoading = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('agent') === 'loading';
 
   const sourceCounts = useMemo(() => PREVIEW_ROLES.reduce((acc, role) => {
     acc.all += 1;
@@ -263,7 +265,13 @@ export const JobsMotionPreview = () => {
   const workableRolesCount = sourceCounts.workable;
 
   // Org-aggregate agent strip — mirrors JobsPage's showcase header agent.
-  const headerAgent = headerPaused
+  const headerAgent = headerLoading
+    ? {
+        loading: true,
+        on: false,
+        tick: 'Checking role and workspace controls…',
+      }
+    : headerPaused
     ? {
         on: false,
         paused: true,
@@ -272,6 +280,8 @@ export const JobsMotionPreview = () => {
         budgetCents: 5000,
         pausedAt: '2026-06-01T15:21:42Z',
         pausedReason: 'paused by recruiter',
+        workspacePaused: true,
+        rolePaused: false,
         pausedBy: {
           user_id: 1,
           name: 'Sam Patel',
