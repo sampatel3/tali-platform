@@ -15,8 +15,8 @@ describe('agent pause copy', () => {
   });
 
   it('uses product language for manual, review-limit, and credit pauses', () => {
-    expect(formatAgentPauseStatus('paused_by_recruiter')).toBe('Paused by you');
-    expect(formatAgentPauseStatus('paused by you')).toBe('Paused by you');
+    expect(formatAgentPauseStatus('paused_by_recruiter')).toBe('Paused manually');
+    expect(formatAgentPauseStatus('paused by you')).toBe('Paused manually');
     expect(formatAgentPauseStatus('per-cycle token budget exhausted (12000)'))
       .toBe('Paused · Review limit reached');
     expect(formatAgentPauseStatus('insufficient organization credits: 5 < 20'))

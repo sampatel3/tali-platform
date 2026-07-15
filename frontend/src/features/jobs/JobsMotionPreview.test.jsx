@@ -37,7 +37,9 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     expect(screen.getByText('Senior Data Engineer')).toBeInTheDocument();
     // Real agent-status pill vocabulary (ON with spend) + the pending count.
     expect(screen.getByText('ON · $18/$50')).toBeInTheDocument();
-    expect(screen.getByText(/3 awaiting you/)).toBeInTheDocument();
+    // Both the global agent strip and the matching role card surface the same
+    // actionable count; the header now labels it instead of showing a bare 3.
+    expect(screen.getAllByText(/3 awaiting you/)).toHaveLength(2);
     const runningCard = screen.getByText('AI Engineer').closest('.job-card');
     const pausedCard = screen.getByText('Senior Data Engineer').closest('.job-card');
     const offCard = screen.getByText('Frontend Engineer').closest('.job-card');

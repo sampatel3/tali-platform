@@ -276,6 +276,139 @@ describe('JobPipelinePage', () => {
     }));
   });
 
+  it('uses the committed role version for the next automatic-action save', async () => {
+    const versionEight = {
+      ...baseRole,
+      version: 8,
+      auto_promote: false,
+      auto_send_assessment: false,
+      auto_resend_assessment: true,
+      auto_advance: true,
+      agent_effective_policy: {
+        auto_send_assessment: false,
+        auto_resend_assessment: true,
+        auto_advance: true,
+      },
+    };
+    apiClient.roles.update
+      .mockResolvedValueOnce({ data: versionEight })
+      .mockResolvedValueOnce({
+        data: {
+          ...versionEight,
+          version: 9,
+          auto_advance: false,
+          agent_effective_policy: {
+            ...versionEight.agent_effective_policy,
+            auto_advance: false,
+          },
+        },
+      });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    const send = await screen.findByRole('button', { name: 'Auto-send assessments' });
+    fireEvent.click(send);
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(send).toHaveAttribute('aria-pressed', 'false');
+      expect(send).not.toBeDisabled();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledTimes(2));
+    expect(apiClient.roles.update.mock.calls[1]).toEqual([
+      101,
+      expect.objectContaining({
+        auto_advance: false,
+        expected_version: 8,
+      }),
+    ]);
+  });
+
+  it('refetches the authoritative role once after a switch conflict and does not auto-retry', async () => {
+    const openedRole = {
+      ...baseRole,
+      auto_promote: true,
+      auto_send_assessment: true,
+      auto_resend_assessment: true,
+      auto_advance: true,
+      agent_effective_policy: {
+        auto_send_assessment: true,
+        auto_resend_assessment: true,
+        auto_advance: true,
+      },
+    };
+    const authoritativeRole = {
+      ...openedRole,
+      version: 8,
+      auto_send_assessment: true,
+    };
+    apiClient.roles.get
+      .mockResolvedValueOnce({ data: openedRole })
+      .mockResolvedValueOnce({ data: authoritativeRole });
+    apiClient.roles.update
+      .mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: {
+            detail: {
+              code: 'ROLE_VERSION_CONFLICT',
+              message: 'This job changed after you opened it.',
+              current_role: {
+                id: 101,
+                version: 8,
+                // Deliberately differs from the authoritative GET. The switch
+                // must never hydrate from this partial conflict summary.
+                auto_send_assessment: false,
+              },
+              current_version: 8,
+              changed_by: { name: 'Aisha Khan' },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          ...authoritativeRole,
+          version: 9,
+          auto_send_assessment: false,
+          agent_effective_policy: {
+            ...authoritativeRole.agent_effective_policy,
+            auto_send_assessment: false,
+          },
+        },
+      });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    const send = await screen.findByRole('button', { name: 'Auto-send assessments' });
+    fireEvent.click(send);
+
+    await waitFor(() => expect(apiClient.roles.get).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(send).toHaveAttribute('aria-pressed', 'true');
+      expect(send).not.toBeDisabled();
+    });
+    expect(apiClient.roles.update).toHaveBeenCalledTimes(1);
+    expect(apiClient.roles.update).toHaveBeenNthCalledWith(1, 101, expect.objectContaining({
+      expected_version: 7,
+    }));
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('Aisha Khan saved a newer version'),
+      'error',
+    );
+
+    // A retry remains an explicit user action and starts from the fresh GET's
+    // revision; the failed request was never replayed automatically.
+    fireEvent.click(send);
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledTimes(2));
+    expect(apiClient.roles.update).toHaveBeenNthCalledWith(2, 101, expect.objectContaining({
+      auto_send_assessment: false,
+      expected_version: 8,
+    }));
+  });
+
   it('marks the pipeline header with the role ATS mode', async () => {
     apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, source: 'manual' } });
     renderPipeline();
@@ -1255,6 +1388,9 @@ Banking transformation experience
     apiClient.agent.status.mockResolvedValue({
       data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 0 },
     });
+    // Hold the request open so both the paused state and its viewer attribution
+    // are proven to paint before the status poll returns.
+    apiClient.agent.pause.mockReturnValue(new Promise(() => {}));
 
     renderPipeline();
 
@@ -1266,8 +1402,34 @@ Banking transformation experience
     // Optimistic flip to PAUSED; calls the soft-pause endpoint, never a role
     // PATCH (which would disable the agent and risk the queue).
     expect(await screen.findByText('Paused')).toBeInTheDocument();
+    expect(screen.getByText('By you')).toBeInTheDocument();
     expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
     expect(apiClient.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('explains the combined review count in the bar and Home action', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        paused_at: null,
+        monthly_spent_cents: 5441,
+        monthly_budget_cents: 5000,
+        pending_decisions: 176,
+        pending_breakdown: { total: 176, decisions: 175, questions: 1 },
+      },
+    });
+
+    renderPipeline();
+
+    const barCount = await screen.findByText('176 awaiting you');
+    expect(barCount).toHaveAttribute(
+      'aria-label',
+      '176 awaiting you: 175 candidate decisions and 1 agent question',
+    );
+    const reviewAction = screen.getByRole('button', {
+      name: /176 awaiting you: 175 candidate decisions and 1 agent question.*Home review queue/i,
+    });
+    expect(reviewAction).toHaveTextContent('Review 176 items');
   });
 
   it('Turn off confirms, then disables the agent and KEEPS decisions by default', async () => {

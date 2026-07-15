@@ -117,9 +117,27 @@ const RoleAgentSettingsTab = ({
   const externalProviderLabel = atsProviderLabel(externalProvider);
   const externalJobLive = roleExternalJobLive(role);
   const externalJobState = roleExternalJobState(role);
-  const handleAutonomyToggle = (key, value) => {
-    if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
+  // A switch save is one shared-role mutation. Keep exactly one in flight so
+  // impatient/rapid clicks cannot dispatch the same rendered role version
+  // twice (the second request would truthfully conflict with the first). The
+  // local pending value paints immediately; the parent replaces it with the
+  // authoritative response, or the freshly-refetched role after a real 409.
+  const autonomySaveInFlightRef = React.useRef(false);
+  const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
+  const handleAutonomyToggle = async (key, value) => {
+    if (autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    autonomySaveInFlightRef.current = true;
+    setPendingAutonomy({ key, value: Boolean(value) });
+    try {
+      await onAutonomyChange(key, Boolean(value));
+    } finally {
+      autonomySaveInFlightRef.current = false;
+      setPendingAutonomy(null);
+    }
   };
+  const visibleAutonomyValue = (key, savedValue) => (
+    pendingAutonomy?.key === key ? pendingAutonomy.value : savedValue
+  );
 
   // Assessment tasks live with the rest of the agent configuration. A role may
   // have none, one, or an A/B set; the parent persists the complete ID array so
@@ -530,7 +548,9 @@ const RoleAgentSettingsTab = ({
                 Choose what the agent can do without asking you.
               </p>
             </div>
-            <span className="mc-kicker is-mute">SAVES INSTANTLY</span>
+            <span className="mc-kicker is-mute" role="status" aria-live="polite">
+              {pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
+            </span>
           </div>
           {externalProvider && externalJobLive === false && (
             <div className="mc-agent-warn" role="alert">
@@ -561,25 +581,25 @@ const RoleAgentSettingsTab = ({
           {[
             {
               key: 'deterministic_pre_screen_reject',
-              value: deterministicReject,
+              value: visibleAutonomyValue('deterministic_pre_screen_reject', deterministicReject),
               title: 'Auto-reject pre-screen failures',
               sub: 'Reject candidates who fail a required screening question or fall below the pre-screen threshold. Full CV-score and assessment rejections still need approval.',
             },
             {
               key: 'auto_send_assessment',
-              value: autoSendAssessment,
+              value: visibleAutonomyValue('auto_send_assessment', autoSendAssessment),
               title: 'Auto-send assessments',
               sub: 'Send the approved assessment when a candidate passes pre-screen.',
             },
             {
               key: 'auto_resend_assessment',
-              value: autoResendAssessment,
+              value: visibleAutonomyValue('auto_resend_assessment', autoResendAssessment),
               title: 'Auto-retry assessment invites',
               sub: 'Retry an assessment invite when the delivery policy allows it.',
             },
             {
               key: 'auto_skip_assessment',
-              value: autoSkipAssessment,
+              value: visibleAutonomyValue('auto_skip_assessment', autoSkipAssessment),
               title: 'Skip assessment for strong candidates',
               disabled: Boolean(
                 role?.agentic_mode_enabled
@@ -596,19 +616,23 @@ const RoleAgentSettingsTab = ({
             },
             {
               key: 'auto_advance',
-              value: autoAdvance,
+              value: visibleAutonomyValue('auto_advance', autoAdvance),
               title: 'Auto-advance qualified candidates',
               sub: 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
           ].map((rule, idx) => (
-            <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
+            <label
+              key={rule.key}
+              className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}
+              aria-busy={pendingAutonomy?.key === rule.key ? 'true' : undefined}
+            >
               <button
                 type="button"
                 className={`mc-switch ${rule.value ? 'on' : ''}`}
                 onClick={() => {
                   if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
                 }}
-                disabled={Boolean(rule.disabled)}
+                disabled={Boolean(rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
               />

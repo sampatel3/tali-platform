@@ -71,6 +71,7 @@ import {
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
+import { useRoleAutonomyChange } from './useRoleAutonomyChange';
 import {
   EMPTY_FETCH_PROGRESS,
   EMPTY_PRE_SCREEN_PROGRESS,
@@ -226,6 +227,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     (error) => reconcileRoleVersionConflict(error, setRole, showToast),
     [showToast],
   );
+  const handleAutonomyChange = useRoleAutonomyChange({
+    numericRoleId,
+    role,
+    rolesApi,
+    setRole,
+    showToast,
+  });
 
   useEffect(() => {
     if (role?.role_kind !== 'sister' || !rolesApi?.sisterScoringStatus) {
@@ -1189,6 +1197,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
     return buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
   }, [agentStatus, role]);
+  const rolePendingReviewTitle = (() => {
+    const total = Number(roleAgent?.pending || 0);
+    const decisions = roleAgent?.pendingBreakdown?.decisions;
+    const questions = roleAgent?.pendingBreakdown?.questions;
+    const parts = [];
+    if (Number.isFinite(decisions)) {
+      parts.push(`${decisions} candidate decision${decisions === 1 ? '' : 's'}`);
+    }
+    if (Number.isFinite(questions)) {
+      parts.push(`${questions} agent question${questions === 1 ? '' : 's'}`);
+    }
+    return parts.length
+      ? `${total} awaiting you: ${parts.join(' and ')}`
+      : `${total} item${total === 1 ? '' : 's'} awaiting you`;
+  })();
 
   // Agent state remains explicit in decision/candidate detail surfaces. Routine
   // processing and ATS sync controls are intentionally absent from this page:
@@ -1420,7 +1443,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     if (setAgentStatus) {
       setAgentStatus((cur) => (cur
-        ? { ...cur, paused: true, paused_at: new Date().toISOString(), paused_reason: 'paused by recruiter' }
+        ? {
+            ...cur,
+            paused: true,
+            paused_at: new Date().toISOString(),
+            paused_reason: 'paused by recruiter',
+            // This optimistic pause was initiated by the signed-in viewer. The
+            // status refetch replaces it with the audit-backed actor record.
+            paused_by: { is_current_user: true },
+          }
         : cur));
     }
     apiClient.agent
@@ -1443,7 +1474,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     if (setAgentStatus) {
       setAgentStatus((cur) => (cur
-        ? { ...cur, paused: false, paused_at: null, paused_reason: null }
+        ? { ...cur, paused: false, paused_at: null, paused_reason: null, paused_by: null }
         : cur));
     }
     apiClient.agent
@@ -1525,14 +1556,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
         actions={(
           <>
-            {/* Reverse deep-link to the Hub: when this role has pending
-                agent decisions, surface a one-click jump to the Home
-                review queue filtered to this role. Hidden when zero. */}
+            {/* Reverse deep-link to the Hub: the total includes candidate
+                decisions and open agent questions, so call them review items
+                rather than implying every item is a decision. */}
             {(roleAgent?.pending || 0) > 0 ? (
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
-                title={`${roleAgent.pending} pending agent decisions for this role`}
+                title={rolePendingReviewTitle}
+                aria-label={`${rolePendingReviewTitle}. Open the Home review queue.`}
                 onClick={() => {
                   // SPA nav — a full document reload here re-downloads the JS
                   // bundle and re-runs the auth/bootstrap chain (several extra
@@ -1544,7 +1576,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   navigate(`/home?${params.toString()}`);
                 }}
               >
-                {roleAgent.pending} pending → Home
+                Review {roleAgent.pending} {roleAgent.pending === 1 ? 'item' : 'items'} →
               </button>
             ) : null}
             {role?.role_kind === 'sister' ? (
@@ -1860,101 +1892,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 throw error;
               }
             }}
-            onAutonomyChange={async (key, value) => {
-              if (!Number.isFinite(numericRoleId)) return;
-              const labels = {
-                auto_send_assessment: 'Assessment sending',
-                auto_resend_assessment: 'Assessment resending',
-                auto_advance: 'Candidate advancement',
-                deterministic_pre_screen_reject: 'Pre-screen auto-reject',
-                auto_skip_assessment: 'Assessment skipping',
-              };
-              if (!labels[key]) return;
-              // The UI exposes one precise rejection grant. Keep both legacy
-              // flags aligned until every deployed backend has migrated, so a
-              // stale auto_reject=true can never re-broaden the visible rule.
-              const isGranularAutomation = GRANULAR_AUTOMATION_KEYS.includes(key);
-              let payload;
-              if (key === 'deterministic_pre_screen_reject') {
-                payload = { auto_reject: value, auto_reject_pre_screen: value };
-              } else if (isGranularAutomation) {
-                // An untouched role intentionally previews all reversible
-                // actions as ON even though its persisted granular values are
-                // still null. Materialize the entire visible policy when the
-                // recruiter changes one switch; persisting only that switch
-                // would make the remaining nulls inherit legacy
-                // auto_promote=false and silently flip them OFF.
-                const granularPolicy = Object.fromEntries(
-                  GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
-                    automationKey,
-                    automationKey === key
-                      ? Boolean(value)
-                      : resolvedRoleAutomation(role, automationKey),
-                  ]),
-                );
-                payload = {
-                  ...granularPolicy,
-                  auto_promote: GRANULAR_AUTOMATION_KEYS.every(
-                    (automationKey) => granularPolicy[automationKey],
-                  ),
-                };
-              } else {
-                payload = { [key]: value };
-              }
-              try {
-                const response = await rolesApi.update(
-                  numericRoleId,
-                  versionedRolePayload(role, payload),
-                );
-                setRole((cur) => {
-                  if (!cur) return response?.data || cur;
-                  const effectivePatch = key === 'deterministic_pre_screen_reject'
-                    ? { auto_reject_pre_screen: value }
-                    : (isGranularAutomation
-                      ? Object.fromEntries(
-                        GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
-                          automationKey,
-                          payload[automationKey],
-                        ]),
-                      )
-                      : { [key]: value });
-                  return {
-                    ...cur,
-                    ...payload,
-                    ...(response?.data || {}),
-                    agent_effective_policy: {
-                      ...(cur.agent_effective_policy || {}),
-                      ...effectivePatch,
-                      ...(response?.data?.agent_effective_policy || {}),
-                    },
-                  };
-                });
-                const enabledMessages = {
-                  auto_send_assessment: 'Assessment sending on — approved on-policy invites send automatically.',
-                  auto_resend_assessment: 'Assessment resending on — policy-approved retries run automatically.',
-                  auto_advance: 'Candidate advancement on — qualified candidates move to recruiter handoff automatically.',
-                  deterministic_pre_screen_reject: 'Pre-screen auto-reject on — failed pre-screens reject automatically; later-stage rejections still need approval.',
-                };
-                const disabledMessages = {
-                  auto_send_assessment: 'Assessment sending off — each initial invite waits in the Decision Hub.',
-                  auto_resend_assessment: 'Assessment resending off — each retry waits for approval.',
-                  auto_advance: 'Candidate advancement off — each advance waits in the Decision Hub.',
-                  deterministic_pre_screen_reject: 'Pre-screen auto-reject off — failed pre-screens wait in the Decision Hub.',
-                };
-                showToast(
-                  key === 'auto_skip_assessment'
-                    ? (value
-                      ? 'Assessment skip on — strong candidates bypass assessment.'
-                      : 'Assessment skip off — assessment invites resume for this role.')
-                    : (value ? enabledMessages[key] : disabledMessages[key]),
-                  'success',
-                );
-              } catch (error) {
-                if (!handleRoleVersionConflict(error)) {
-                  showToast(getErrorMessage(error, 'Failed to update autonomy setting.'), 'error');
-                }
-              }
-            }}
+            onAutonomyChange={handleAutonomyChange}
             thresholdMode={role?.auto_reject_threshold_mode || 'manual'}
             suggestedThreshold={suggestedThreshold}
             savingThresholdMode={savingThresholdMode}

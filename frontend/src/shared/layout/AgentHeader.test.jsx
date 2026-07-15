@@ -38,13 +38,19 @@ describe('AgentHeader — Pause/Resume panel', () => {
     const { container } = render(
       <AgentHeader
         title="Jobs"
-        agent={{ ...runningAgent, on: false, paused: true, pausedReason: 'paused by recruiter' }}
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          pausedReason: 'paused by recruiter',
+          pausedBy: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        }}
         onResumeAgent={onResume}
       />,
     );
     expect(screen.getByText('Paused')).toBeInTheDocument();
     expect(screen.queryByText('Auto-paused')).not.toBeInTheDocument();
-    expect(screen.getByText(/paused by you/i)).toBeInTheDocument();
+    expect(screen.getByText('By you')).toBeInTheDocument();
     expect(container.querySelector('.abar')).toHaveAttribute('data-motion-state', 'rest');
     expect(container.querySelector('.abar-flow-layer')).toHaveAttribute('data-motion-state', 'rest');
 
@@ -54,16 +60,75 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(onResume).toHaveBeenCalledTimes(1);
   });
 
+  it('names the teammate who manually paused the role', () => {
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          pausedReason: 'paused by recruiter',
+          pausedBy: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        }}
+        onResumeAgent={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('By Aisha Khan')).toBeInTheDocument();
+    expect(screen.queryByText(/by you/i)).not.toBeInTheDocument();
+  });
+
+  it('uses an honest manual fallback when historical pause actor data is unavailable', () => {
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={{ ...runningAgent, on: false, paused: true, pausedReason: 'paused by recruiter' }}
+        onResumeAgent={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Paused manually')).toBeInTheDocument();
+    expect(screen.queryByText(/by you/i)).not.toBeInTheDocument();
+  });
+
+  it('labels the actionable total and exposes its decision/question breakdown', () => {
+    const agent = buildAgentPropFromStatus({
+      enabled: true,
+      pending_decisions: 999,
+      pending_breakdown: { total: 176, decisions: 175, questions: 1 },
+      monthly_spent_cents: 5441,
+      monthly_budget_cents: 5000,
+    });
+
+    render(<AgentHeader title="Jobs" agent={agent} onPauseAgent={() => {}} />);
+
+    const pending = screen.getByText('176 awaiting you');
+    expect(pending).toHaveAttribute(
+      'aria-label',
+      '176 awaiting you: 175 candidate decisions and 1 agent question',
+    );
+    expect(agent.pending).toBe(176);
+    expect(agent.pendingBreakdown).toEqual({ total: 176, decisions: 175, questions: 1 });
+  });
+
   it('keeps Auto-paused wording for a budget-triggered pause', () => {
     render(
       <AgentHeader
         title="Jobs"
-        agent={{ ...runningAgent, on: false, paused: true, pausedReason: 'monthly usd cap reached: 5000c >= 5000c' }}
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          pausedReason: 'monthly usd cap reached: 5000c >= 5000c',
+          pausedBy: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        }}
         onResumeAgent={() => {}}
       />,
     );
     expect(screen.getByText('Auto-paused')).toBeInTheDocument();
     expect(screen.getByText(/monthly budget reached/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Aisha Khan/i)).not.toBeInTheDocument();
   });
 
   it('shows an honest starting state until the worker acknowledges activation', () => {

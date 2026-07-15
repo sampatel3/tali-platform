@@ -429,15 +429,22 @@ def latest_role_change_actor(
     session: Session,
     organization_id: int,
     role_id: int,
+    *,
+    action: str | None = None,
 ) -> dict[str, Any] | None:
     """Describe the actor on the latest tenant-scoped role change.
+
+    ``action`` narrows the lookup to one audit action when the caller needs
+    provenance for a specific piece of current state (for example, the human
+    who paused an agent).  Without this filter an unrelated later role edit
+    could be misreported as the actor responsible for that state transition.
 
     The outer join keeps the conflict response useful after an actor account is
     deleted: ``user_id``, ``name`` and ``email`` become null while
     ``changed_at`` still identifies when the conflicting change occurred.
     """
 
-    row = (
+    query = (
         session.query(RoleChangeEvent, User)
         .outerjoin(
             User,
@@ -450,9 +457,13 @@ def latest_role_change_actor(
             RoleChangeEvent.organization_id == int(organization_id),
             RoleChangeEvent.role_id == int(role_id),
         )
-        .order_by(RoleChangeEvent.id.desc())
-        .first()
     )
+    if action is not None:
+        normalized_action = str(action).strip()
+        if not normalized_action:
+            return None
+        query = query.filter(RoleChangeEvent.action == normalized_action)
+    row = query.order_by(RoleChangeEvent.id.desc()).first()
     if row is None:
         return None
     event, user = row

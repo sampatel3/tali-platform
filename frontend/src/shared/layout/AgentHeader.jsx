@@ -42,6 +42,33 @@ const formatUsd = (cents) => {
 
 const DEFAULT_BUDGET_USD = 50;
 
+const nonNegativeCount = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : null;
+};
+
+const pendingSummary = (pending, breakdown) => {
+  const total = nonNegativeCount(pending) || 0;
+  const decisions = nonNegativeCount(breakdown?.decisions);
+  const questions = nonNegativeCount(breakdown?.questions);
+  const parts = [];
+  if (decisions != null) {
+    parts.push(`${decisions} candidate decision${decisions === 1 ? '' : 's'}`);
+  }
+  if (questions != null) {
+    parts.push(`${questions} agent question${questions === 1 ? '' : 's'}`);
+  }
+  return parts.length > 0
+    ? `${total} awaiting you: ${parts.join(' and ')}`
+    : `${total} item${total === 1 ? '' : 's'} awaiting you`;
+};
+
+const manualPauseAttribution = (pausedBy) => {
+  if (pausedBy?.is_current_user === true) return 'By you';
+  const actorName = String(pausedBy?.name || '').trim();
+  return actorName ? `By ${actorName}` : 'Paused manually';
+};
+
 // Inline activator shown inside the OFF-state agent strip: a compact budget
 // input + Turn-on button, laid out horizontally. The parent owns asynchronous
 // activation; this activator remains mounted until authoritative role state
@@ -119,6 +146,8 @@ const AgentStrip = ({
     tick = null,
     inFlight = false,
     pausedReason = null,
+    pausedBy = null,
+    pendingBreakdown = null,
     bootstrapStatus = null,
   } = agent || {};
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
@@ -150,7 +179,9 @@ const AgentStrip = ({
     // Manual pauses wait for the recruiter. System holds are rechecked by the
     // recovery sweep, while Resume remains an optional immediate retry.
     if (isManualPause) {
-      message = pauseCopy.label;
+      // Persisted pause reasons deliberately remain generic. The append-only
+      // role audit is the source of truth for who acted in a shared workspace.
+      message = manualPauseAttribution(pausedBy);
     } else {
       const r = String(pausedReason || '').toLowerCase();
       if (r.includes('bootstrap failed')) {
@@ -171,6 +202,10 @@ const AgentStrip = ({
   }
 
   const showBudget = (status === 'on' || status === 'paused') && budgetCents > 0 && !isMixed;
+  const pendingCount = nonNegativeCount(pending) || 0;
+  const pendingLabel = pendingCount > 0
+    ? pendingSummary(pendingCount, pendingBreakdown)
+    : null;
 
   return (
     // ONE persistent box (no key/remount) — the abar-{status} class morphs it
@@ -183,10 +218,16 @@ const AgentStrip = ({
         {inFlight && on && !paused ? <AgentLoop kind="ring" className="ab-pulse" /> : null}
       </span>
       <span className="ab-label">{label}</span>
-      {pending > 0 ? (
-        <span className="ab-pending" title={`${pending} awaiting your review`}>{pending}</span>
-      ) : null}
-      {message ? <span className="ab-tick" title={typeof message === 'string' ? message : undefined}>{message}</span> : <span className="ab-tick" />}
+      <span className={`ab-context${status === 'paused' && isManualPause && !isMixed ? ' ab-context-manual' : ''}`}>
+        {pendingLabel ? (
+          <span className="ab-pending" title={pendingLabel} aria-label={pendingLabel}>
+            {pendingCount} awaiting you
+          </span>
+        ) : null}
+        {message ? (
+          <span className="ab-tick" title={typeof message === 'string' ? message : undefined}>{message}</span>
+        ) : <span className="ab-tick" />}
+      </span>
 
       {showBudget ? (
         <span className="ab-budget" title="AI usage only: model-backed pre-screening, scoring, semantic search, assessment grading, and agent reasoning. Sandbox, email, storage, and repository hosting are separate.">
@@ -412,13 +453,25 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
   const enabled = isEnabled != null
     ? Boolean(isEnabled)
     : Boolean(status.enabled);
+  const rawPendingBreakdown = status.pending_breakdown;
+  const pendingBreakdown = rawPendingBreakdown && typeof rawPendingBreakdown === 'object'
+    ? {
+        total: nonNegativeCount(rawPendingBreakdown.total),
+        decisions: nonNegativeCount(rawPendingBreakdown.decisions),
+        questions: nonNegativeCount(rawPendingBreakdown.questions),
+      }
+    : null;
+  const pendingTotal = pendingBreakdown?.total != null
+    ? pendingBreakdown.total
+    : (nonNegativeCount(status.pending_decisions) || 0);
   return {
     // ON visual only when agentic_mode_enabled AND not auto-paused.
     on: enabled && !isPaused,
-    // 'paused' here means *auto-paused* (paused_at set) while still enabled.
-    // A manual pause flips agentic_mode_enabled=false → on=false, paused=false.
+    // Both human and automatic soft pauses keep agent mode enabled and set
+    // paused_at; paused_reason distinguishes their treatment and copy.
     paused: enabled && isPaused,
-    pending: Number(status.pending_decisions || 0),
+    pending: pendingTotal,
+    pendingBreakdown,
     spentCents: Number(status.monthly_spent_cents || 0),
     budgetCents: Number(status.monthly_budget_cents || 0) || 5000,
     tick: formatTick(status) || fallbackTick,
@@ -427,6 +480,7 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     // budget exhausted" / "monthly USD cap reached" / etc. instead of a
     // hardcoded blanket message.
     pausedReason: status.paused_reason || null,
+    pausedBy: status.paused_by || null,
     bootstrapStatus: status.bootstrap_status || null,
     bootstrapError: status.bootstrap_error || null,
   };

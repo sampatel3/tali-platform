@@ -19,6 +19,7 @@ from unittest.mock import patch
 from sqlalchemy import event
 
 from app.models.agent_decision import AgentDecision
+from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -109,6 +110,26 @@ def _seed_pending_decision(org_id: int, role_id: int) -> int:
         sess.close()
 
 
+def _seed_open_question(org_id: int, role_id: int) -> int:
+    from tests.conftest import TestingSessionLocal
+
+    sess = TestingSessionLocal()
+    try:
+        question = AgentNeedsInput(
+            # SQLite does not auto-increment BIGINT primary keys.
+            id=(int(role_id) * 10_000) + 1,
+            organization_id=org_id,
+            role_id=role_id,
+            kind="intent_clarification",
+            prompt="Which platform constraint matters most?",
+        )
+        sess.add(question)
+        sess.commit()
+        return int(question.id)
+    finally:
+        sess.close()
+
+
 def _attach_user_to_org(email: str, organization_id: int) -> None:
     from app.models.user import User as _U
     from tests.conftest import TestingSessionLocal
@@ -141,6 +162,17 @@ def _role_version(role_id: int) -> int:
     try:
         role = sess.query(Role).filter(Role.id == role_id).one()
         return int(role.version)
+    finally:
+        sess.close()
+
+
+def _user_id(email: str) -> int:
+    from app.models.user import User as _U
+    from tests.conftest import TestingSessionLocal
+
+    sess = TestingSessionLocal()
+    try:
+        return int(sess.query(_U.id).filter(_U.email == email).scalar())
     finally:
         sess.close()
 
@@ -330,6 +362,126 @@ def test_pause_one_role_keeps_pending_decisions(client):
     assert reason == "paused by recruiter"
     assert enabled is True  # still enabled — that's what keeps the queue alive
     assert _decision_status(decision_id) == "pending"
+
+
+def test_agent_status_attributes_current_human_pause_not_latest_editor(client):
+    from tests.conftest import auth_headers
+
+    owner_headers, owner_email = auth_headers(
+        client,
+        full_name="Pause Owner",
+        organization_name="Pause Attribution Source Org",
+    )
+    seeded = _seed_org_with_agent_roles(
+        "Pause Attribution Org", role_names=["A"]
+    )
+    _attach_user_to_org(owner_email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    paused = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=owner_headers,
+    )
+    assert paused.status_code == 200, paused.text
+
+    mine = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=owner_headers
+    )
+    assert mine.status_code == 200, mine.text
+    paused_by = mine.json()["paused_by"]
+    assert set(paused_by) == {"user_id", "name", "is_current_user", "changed_at"}
+    assert paused_by["user_id"] == _user_id(owner_email)
+    assert paused_by["name"] == "Pause Owner"
+    assert paused_by["is_current_user"] is True
+    assert paused_by["changed_at"] is not None
+
+    viewer_headers, viewer_email = auth_headers(
+        client,
+        full_name="Status Viewer",
+        organization_name="Pause Attribution Viewer Org",
+    )
+    _attach_user_to_org(viewer_email, seeded["org_id"])
+    # A later unrelated edit by another user must not replace the actor who
+    # authored the still-current pause.
+    edited = client.patch(
+        f"/api/v1/roles/{role_id}",
+        json={"expected_version": paused.json()["version"], "score_threshold": 77},
+        headers=viewer_headers,
+    )
+    assert edited.status_code == 200, edited.text
+
+    viewed = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=viewer_headers
+    )
+    assert viewed.status_code == 200, viewed.text
+    assert viewed.json()["paused_by"]["user_id"] == _user_id(owner_email)
+    assert viewed.json()["paused_by"]["name"] == "Pause Owner"
+    assert viewed.json()["paused_by"]["is_current_user"] is False
+
+
+def test_agent_status_does_not_attribute_system_pause_to_older_human(client):
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles(
+        "System Pause Attribution Org", role_names=["A"]
+    )
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    paused = client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    )
+    assert paused.status_code == 200, paused.text
+    assert client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=headers
+    ).json()["paused_by"] is not None
+
+    # Simulate a later automatic hold while retaining the older human pause
+    # audit row. Status must describe the system reason without borrowing that
+    # older actor.
+    sess = TestingSessionLocal()
+    try:
+        role = sess.query(Role).filter(Role.id == role_id).one()
+        role.agent_paused_at = datetime.now(timezone.utc)
+        role.agent_paused_reason = "monthly USD cap reached: 5400c >= 5000c"
+        role.version = int(role.version or 1) + 1
+        sess.commit()
+    finally:
+        sess.close()
+
+    status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=headers
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["paused_reason"].startswith("monthly USD cap reached")
+    assert status.json()["paused_by"] is None
+
+
+def test_agent_status_breaks_pending_total_into_decisions_and_questions(client):
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles(
+        "Pending Breakdown Org", role_names=["A"]
+    )
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    _seed_pending_decision(seeded["org_id"], role_id)
+    _seed_open_question(seeded["org_id"], role_id)
+
+    status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=headers
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["pending_decisions"] == 2
+    assert status.json()["pending_breakdown"] == {
+        "total": 2,
+        "decisions": 1,
+        "questions": 1,
+    }
 
 
 def test_pause_one_role_is_idempotent(client):

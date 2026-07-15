@@ -269,17 +269,32 @@ class AgentStatusCurrentRun(BaseModel):
     tools_called: Optional[list[dict[str, Any]]] = None
 
 
+class AgentStatusPausedBy(BaseModel):
+    user_id: int
+    name: Optional[str] = None
+    is_current_user: bool
+    changed_at: Optional[datetime] = None
+
+
+class AgentStatusPendingBreakdown(BaseModel):
+    total: int
+    decisions: int
+    questions: int
+
+
 class AgentStatusPayload(BaseModel):
     role_id: int
     enabled: bool
     paused_at: Optional[datetime] = None
     paused_reason: Optional[str] = None
+    paused_by: Optional[AgentStatusPausedBy] = None
     last_run_at: Optional[datetime] = None
     bootstrap_status: Optional[str] = None
     bootstrap_error: Optional[str] = None
     bootstrap_started_at: Optional[datetime] = None
     bootstrap_completed_at: Optional[datetime] = None
     pending_decisions: int
+    pending_breakdown: AgentStatusPendingBreakdown
     monthly_budget_cents: Optional[int] = None
     monthly_spent_cents: int
     current_run: Optional[AgentStatusCurrentRun] = None
@@ -1576,17 +1591,47 @@ def agent_status(
 
     monthly_spent = budget_guard.month_to_date_spend_cents(db, role=role)
 
+    paused_by = None
+    if role.agent_paused_at is not None and budget_guard.is_manual_pause_reason(
+        role.agent_paused_reason
+    ):
+        pause_actor = latest_role_change_actor(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=role_id,
+            action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+        )
+        # A manual-looking legacy row without an auditable human must remain
+        # unattributed.  In particular, never fall back to the actor from an
+        # unrelated edit or an older pause after a system hold replaces it.
+        pause_actor_user_id = (
+            pause_actor.get("user_id") if pause_actor is not None else None
+        )
+        if pause_actor_user_id is not None:
+            paused_by = AgentStatusPausedBy(
+                user_id=int(pause_actor_user_id),
+                name=pause_actor.get("name"),
+                is_current_user=int(pause_actor_user_id) == int(current_user.id),
+                changed_at=pause_actor.get("changed_at"),
+            )
+
     return AgentStatusPayload(
         role_id=role_id,
         enabled=bool(role.agentic_mode_enabled),
         paused_at=role.agent_paused_at,
         paused_reason=role.agent_paused_reason,
+        paused_by=paused_by,
         last_run_at=role.agent_last_run_at,
         bootstrap_status=getattr(role, "agent_bootstrap_status", None),
         bootstrap_error=getattr(role, "agent_bootstrap_error", None),
         bootstrap_started_at=getattr(role, "agent_bootstrap_started_at", None),
         bootstrap_completed_at=getattr(role, "agent_bootstrap_completed_at", None),
         pending_decisions=pending,
+        pending_breakdown=AgentStatusPendingBreakdown(
+            total=pending,
+            decisions=int(pending_decisions_count),
+            questions=int(open_needs_input_count),
+        ),
         monthly_budget_cents=role.monthly_usd_budget_cents,
         monthly_spent_cents=monthly_spent,
         current_run=current_run,

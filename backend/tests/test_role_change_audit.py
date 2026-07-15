@@ -383,6 +383,7 @@ def test_latest_actor_is_tenant_scoped_and_json_safe(db) -> None:
         db,
         organization_id=role.organization_id,
         role_id=role.id,
+        action=ROLE_CHANGE_ACTION_AGENT_ENABLED,
     )
     assert actor is not None
     assert actor["user_id"] == user.id
@@ -390,6 +391,16 @@ def test_latest_actor_is_tenant_scoped_and_json_safe(db) -> None:
     assert actor["email"] == "auditor@example.test"
     assert actor["changed_at"] is not None
     json.dumps(actor, allow_nan=False)
+
+    assert (
+        latest_role_change_actor(
+            db,
+            organization_id=role.organization_id,
+            role_id=role.id,
+            action="agent_paused",
+        )
+        is None
+    )
 
     assert (
         latest_role_change_actor(
