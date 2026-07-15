@@ -65,7 +65,6 @@ def _make_role(
         organization_id=org.id,
         name=name,
         source="manual",
-        job_spec_text="Requirements\n- Backend engineering experience\n",
         agentic_mode_enabled=agentic,
         monthly_usd_budget_cents=5000,
         job_spec_text="Backend role\n\nRequirements\n- Python\n",

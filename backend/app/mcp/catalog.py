@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from ..models.api_key import (
     SCOPE_APPLICATIONS_READ,
@@ -47,6 +47,15 @@ NonEmptyString = Annotated[str, Field(min_length=1)]
 ScoreThreshold = Annotated[float, Field(ge=0, le=100)]
 ComparisonApplicationIds = Annotated[
     list[PositiveInt], Field(min_length=2, max_length=5)
+]
+RelatedRoleName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+RelatedRoleJobSpec = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=80, max_length=100_000)
+]
+ConfirmationToken = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
 ]
 
 
@@ -203,6 +212,23 @@ class ListAssessmentsInput(ToolInput):
     offset: NonNegativeInt = 0
 
 
+class PreviewRelatedRoleInput(ToolInput):
+    role_id: PositiveInt = Field(
+        description="The original ATS-linked role whose candidate roster will be shared."
+    )
+    name: RelatedRoleName = Field(description="Name for the new related role.")
+    job_spec_text: RelatedRoleJobSpec = Field(
+        description="The complete related job specification, not only its differences."
+    )
+
+
+class CreateRelatedRoleInput(PreviewRelatedRoleInput):
+    confirmation_token: ConfirmationToken | None = Field(
+        default=None,
+        description="Opaque token from the server preview, when available.",
+    )
+
+
 def _compact_schema(value: Any) -> Any:
     """Drop display-only JSON-schema titles to reduce prompt tokens."""
 
@@ -269,6 +295,7 @@ _ASSESSMENTS_READ = frozenset({SCOPE_ASSESSMENTS_READ})
 _RECRUITING_OVERVIEW_READ = frozenset(
     {SCOPE_ROLES_READ, SCOPE_APPLICATIONS_READ, SCOPE_ASSESSMENTS_READ}
 )
+_RELATED_ROLE_ACCESS = frozenset({SCOPE_ROLES_READ, SCOPE_APPLICATIONS_READ})
 
 
 TOOL_SPECS: tuple[ToolSpec, ...] = (
@@ -414,6 +441,28 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         _BOTH,
         _ASSESSMENTS_READ,
         renderer="assessment_queue",
+    ),
+    ToolSpec(
+        "preview_related_role",
+        "Preview a separate related Taali role over an original ATS-linked role's existing applicants using a complete alternate job specification. Returns the shared-roster size, scorable count, and estimated AI usage without creating anything. Show the preview and wait for a later explicit recruiter confirmation before creating it.",
+        PreviewRelatedRoleInput,
+        "preview_related_role",
+        _CHAT,
+        _RELATED_ROLE_ACCESS,
+        renderer="related_role_preview",
+    ),
+    ToolSpec(
+        "create_related_role",
+        "Create a previously previewed related role and queue fresh scores for its shared roster. Candidate stages and actions remain coupled to the original ATS role. The server requires explicit recruiter confirmation in a later message.",
+        CreateRelatedRoleInput,
+        "create_related_role",
+        _CHAT,
+        _RELATED_ROLE_ACCESS,
+        effect="internal_write",
+        cost="paid",
+        confirmation="explicit",
+        execution="queued",
+        renderer="related_role_created",
     ),
 )
 

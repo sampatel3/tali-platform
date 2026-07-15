@@ -134,6 +134,39 @@ def test_sensitive_source_tool_has_nonstandard_persistence_policy():
     assert get_tool_spec("nl_search_candidates").cost == "paid"
 
 
+def test_related_role_contracts_are_chat_only_and_describe_the_paid_mutation():
+    preview = get_tool_spec("preview_related_role")
+    create = get_tool_spec("create_related_role")
+
+    assert preview.exposures == frozenset({TAALI_CHAT})
+    assert preview.effect == "read"
+    assert preview.input_schema["properties"]["job_spec_text"]["minLength"] == 80
+    assert create.exposures == frozenset({TAALI_CHAT})
+    assert create.effect == "internal_write"
+    assert create.cost == "paid"
+    assert create.confirmation == "explicit"
+    assert create.execution == "queued"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"role_id": "1", "name": "Platform role", "job_spec_text": "x" * 80},
+        {"role_id": 1, "name": " ", "job_spec_text": "x" * 80},
+        {"role_id": 1, "name": "Platform role", "job_spec_text": "x" * 79},
+        {
+            "role_id": 1,
+            "name": "Platform role",
+            "job_spec_text": "x" * 80,
+            "surprise": True,
+        },
+    ],
+)
+def test_related_role_preview_uses_the_strict_canonical_contract(arguments):
+    with pytest.raises(ValueError, match="invalid arguments for preview_related_role"):
+        get_tool_spec("preview_related_role").validate(arguments)
+
+
 def test_catalog_declares_domain_specific_and_aggregate_read_scopes():
     assert get_tool_spec("list_assessments").required_scopes == frozenset(
         {SCOPE_ASSESSMENTS_READ}

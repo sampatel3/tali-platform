@@ -64,6 +64,7 @@ import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 import {
+  GRANULAR_AUTOMATION_KEYS,
   PIPELINE_STAGE_ORDER,
   activationAutonomyPayload,
   buildApplicationTitle,

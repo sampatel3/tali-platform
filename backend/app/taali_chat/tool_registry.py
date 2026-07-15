@@ -27,88 +27,9 @@ from .confirmations import require_later_turn_confirmation
 
 
 TAALI_CHAT_SPECS: tuple[ToolSpec, ...] = tuple(tools_for(TAALI_CHAT))
-_RELATED_ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "name": "preview_related_role",
-        "description": (
-            "Preview a NEW related Taali role over an original Workable role's "
-            "existing applicants using a complete cousin/alternate job spec. "
-            "Returns shared-roster size, scorable count, and estimated AI usage. "
-            "This preserves the original role; stages and candidate actions still "
-            "write back to Workable. Always preview, show the result, and wait for "
-            "a later explicit recruiter confirmation before create_related_role."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "role_id": {
-                    "type": "integer",
-                    "description": "The original Workable role. Defaults to the conversation's role when scoped.",
-                },
-                "name": {"type": "string"},
-                "job_spec_text": {
-                    "type": "string",
-                    "description": "The complete updated job specification, not only the differences.",
-                },
-            },
-            "required": ["role_id", "name", "job_spec_text"],
-        },
-    },
-    {
-        "name": "create_related_role",
-        "description": (
-            "Create a related role and queue fresh scores for its shared roster. "
-            "Only call after preview_related_role and an explicit confirmation in "
-            "a NEW recruiter message; the server enforces that receipt."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "role_id": {"type": "integer"},
-                "name": {"type": "string"},
-                "job_spec_text": {"type": "string"},
-                "confirmation_token": {"type": ["string", "null"]},
-            },
-            "required": ["role_id", "name", "job_spec_text"],
-        },
-    },
-]
-
-# The shared tools are generated from the canonical MCP catalogue.  These two
-# origin/main role-creation operations stay chat-only until they are promoted
-# into that catalogue.
 TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
     spec.anthropic_definition() for spec in TAALI_CHAT_SPECS
-] + _RELATED_ROLE_TOOL_DEFINITIONS
-
-
-def _resolve_handlers() -> dict[str, Callable[..., Any]]:
-    """Resolve every chat handler from its catalog name, failing on drift.
-
-    Implementations may live in either the shared recruiting handlers or the
-    compact operational views module.  A missing or ambiguous implementation
-    is an import-time configuration error instead of a runtime surprise after
-    the model has already selected a tool.
-    """
-
-    result: dict[str, Callable[..., Any]] = {}
-    modules = (handlers, operations)
-    for spec in TAALI_CHAT_SPECS:
-        matches = [
-            candidate
-            for module in modules
-            if callable(candidate := getattr(module, spec.handler_name, None))
-        ]
-        if len(matches) != 1:
-            raise RuntimeError(
-                f"Taali Chat tool {spec.name!r} must resolve exactly one handler "
-                f"named {spec.handler_name!r}; found {len(matches)}"
-            )
-        result[spec.name] = matches[0]
-    return result
-
-
-_HANDLER_BY_NAME = _resolve_handlers()
+]
 
 
 def _preview_with_receipt(
@@ -149,6 +70,98 @@ def _preview_with_receipt(
     )
 
 
+def _create_with_confirmation(
+    db: Session,
+    *,
+    user: User,
+    conversation: TaaliChatConversation | None,
+    role_id: int,
+    name: str,
+    job_spec_text: str,
+    confirmation_token: str | None = None,
+) -> dict[str, Any]:
+    if conversation is None:
+        return blocked_confirmation_result(
+            "create_related_role", "No persisted chat confirmation is available."
+        )
+    clean_name = name.strip()
+    clean_spec = job_spec_text.strip()
+    check = require_later_turn_confirmation(
+        db,
+        conversation=conversation,
+        operation="create_related_role",
+        token=confirmation_token,
+    )
+    if not check.ok:
+        return blocked_confirmation_result("create_related_role", check.reason)
+    current = _related_roles.preview_related_role(
+        db,
+        role_id=role_id,
+        organization_id=int(user.organization_id),
+    )
+    matches_preview = (
+        int(check.payload.get("role_id") or 0) == role_id
+        and str(check.payload.get("name") or "") == clean_name
+        and str(check.payload.get("spec_fingerprint") or "")
+        == text_fingerprint(clean_spec)
+        and int(current.get("candidates_total") or 0)
+        <= int(check.payload.get("max_total") or 0)
+        and int(current.get("candidates_with_cv") or 0)
+        <= int(check.payload.get("max_scorable") or 0)
+    )
+    if not matches_preview:
+        return _preview_with_receipt(
+            db,
+            user=user,
+            role_id=role_id,
+            name=clean_name,
+            job_spec_text=clean_spec,
+            message=(
+                "The name, specification, or roster changed since the preview. "
+                "Please confirm this refreshed scope."
+            ),
+        )
+    related, evaluation_counts = _related_roles.create_related_role(
+        db,
+        role_id=role_id,
+        organization_id=int(user.organization_id),
+        name=clean_name,
+        job_spec_text=clean_spec,
+    )
+    result = _related_roles.related_role_created_payload(related, evaluation_counts)
+    return mark_confirmation_consumed(result, check=check)
+
+
+def _resolve_handlers() -> dict[str, Callable[..., Any]]:
+    """Resolve every chat catalog entry to exactly one callable handler."""
+
+    special_handlers: dict[str, Callable[..., Any]] = {
+        "preview_related_role": _preview_with_receipt,
+        "create_related_role": _create_with_confirmation,
+    }
+    result: dict[str, Callable[..., Any]] = {}
+    modules = (handlers, operations)
+    for spec in TAALI_CHAT_SPECS:
+        matches = [
+            candidate
+            for module in modules
+            if callable(candidate := getattr(module, spec.handler_name, None))
+        ]
+        special = special_handlers.get(spec.name)
+        if special is not None:
+            matches.append(special)
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Taali Chat tool {spec.name!r} must resolve exactly one handler "
+                f"named {spec.handler_name!r}; found {len(matches)}"
+            )
+        result[spec.name] = matches[0]
+    return result
+
+
+_HANDLER_BY_NAME = _resolve_handlers()
+
+
 def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
@@ -163,77 +176,18 @@ def dispatch_tool(
     are validated against the same strict contract exposed to MCP clients, so
     extra fields and invalid enum values cannot leak into domain handlers.
     """
-    safe_args = arguments or {}
-    if name == "preview_related_role":
-        return _preview_with_receipt(
-            db,
-            user=user,
-            role_id=int(safe_args["role_id"]),
-            name=str(safe_args.get("name") or ""),
-            job_spec_text=str(safe_args.get("job_spec_text") or ""),
-        )
-    if name == "create_related_role":
-        if conversation is None:
-            return blocked_confirmation_result(
-                "create_related_role", "No persisted chat confirmation is available."
-            )
-        role_id = int(safe_args["role_id"])
-        clean_name = str(safe_args.get("name") or "").strip()
-        clean_spec = str(safe_args.get("job_spec_text") or "").strip()
-        check = require_later_turn_confirmation(
-            db,
-            conversation=conversation,
-            operation="create_related_role",
-            token=str(safe_args.get("confirmation_token") or "") or None,
-        )
-        if not check.ok:
-            return blocked_confirmation_result("create_related_role", check.reason)
-        current = _related_roles.preview_related_role(
-            db,
-            role_id=role_id,
-            organization_id=int(user.organization_id),
-        )
-        matches_preview = (
-            int(check.payload.get("role_id") or 0) == role_id
-            and str(check.payload.get("name") or "") == clean_name
-            and str(check.payload.get("spec_fingerprint") or "")
-            == text_fingerprint(clean_spec)
-            and int(current.get("candidates_total") or 0)
-            <= int(check.payload.get("max_total") or 0)
-            and int(current.get("candidates_with_cv") or 0)
-            <= int(check.payload.get("max_scorable") or 0)
-        )
-        if not matches_preview:
-            return _preview_with_receipt(
-                db,
-                user=user,
-                role_id=role_id,
-                name=clean_name,
-                job_spec_text=clean_spec,
-                message=(
-                    "The name, specification, or roster changed since the preview. "
-                    "Please confirm this refreshed scope."
-                ),
-            )
-        related, evaluation_counts = _related_roles.create_related_role(
-            db,
-            role_id=role_id,
-            organization_id=int(user.organization_id),
-            name=clean_name,
-            job_spec_text=clean_spec,
-        )
-        result = _related_roles.related_role_created_payload(
-            related, evaluation_counts
-        )
-        return mark_confirmation_consumed(result, check=check)
-
     spec = get_tool_spec(name)
     if TAALI_CHAT not in spec.exposures:
         raise KeyError(f"unknown Taali Chat tool: {name}")
     handler = _HANDLER_BY_NAME.get(name)
     if handler is None:
         raise KeyError(f"no Taali Chat handler registered for: {name}")
-    return handler(db, user, **spec.validate(safe_args))
+    safe_args = spec.validate(arguments)
+    if name == "preview_related_role":
+        return handler(db, user=user, **safe_args)
+    if name == "create_related_role":
+        return handler(db, user=user, conversation=conversation, **safe_args)
+    return handler(db, user, **safe_args)
 
 
 def persistence_policy_for(name: str) -> str:

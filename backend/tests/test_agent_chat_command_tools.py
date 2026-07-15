@@ -86,7 +86,9 @@ def _persist_confirmation(db, *, conversation, user):
 
 def test_registry_exposes_every_new_command_once():
     names = [tool["name"] for tool in AGENT_CHAT_TOOLS]
-    assert len(names) == len(set(names)) == 34
+    # The two related-role tools were added upstream while this command suite
+    # was being built; keep the exact count aligned with the merged registry.
+    assert len(names) == len(set(names)) == 36
     assert {
         "list_pending_decisions",
         "approve_decision",
