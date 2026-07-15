@@ -18,29 +18,12 @@ depends_on = None
 
 def upgrade() -> None:
     op.create_index(
-        "ix_candidate_applications_org_role_outcome_deleted",
-        "candidate_applications",
-        ["organization_id", "role_id", "deleted_at", "application_outcome"],
-        unique=False,
-    )
-    op.create_index(
         "ix_agent_decisions_application_status",
         "agent_decisions",
         ["application_id", "status"],
         unique=False,
     )
-    op.create_index(
-        "ix_agent_decisions_role_status",
-        "agent_decisions",
-        ["role_id", "status"],
-        unique=False,
-    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_agent_decisions_role_status", table_name="agent_decisions")
     op.drop_index("ix_agent_decisions_application_status", table_name="agent_decisions")
-    op.drop_index(
-        "ix_candidate_applications_org_role_outcome_deleted",
-        table_name="candidate_applications",
-    )
