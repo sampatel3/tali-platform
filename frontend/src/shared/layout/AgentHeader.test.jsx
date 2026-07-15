@@ -163,8 +163,8 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    const attribution = screen.getByLabelText(/Likely paused by Sam Patel \(you\)/i);
-    expect(attribution).toHaveAttribute('title', expect.stringMatching(/not a verified audit event/i));
+    const attribution = screen.getByLabelText(/Paused by Sam Patel \(you\)/i);
+    expect(attribution).toHaveAttribute('title', expect.stringMatching(/only member present at the time/i));
   });
 
   it('keeps paused AI spend labelled and available to assistive technology', () => {

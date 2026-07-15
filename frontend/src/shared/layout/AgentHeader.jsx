@@ -90,8 +90,8 @@ const manualPauseAttribution = (pausedBy, pausedAt) => {
 
   if (attribution === 'inferred' && actorName) {
     return {
-      text: `Likely paused by ${actorName}${currentUserSuffix}${suffix}`,
-      title: 'Legacy pause: inferred from the only workspace member present at the time. It is not a verified audit event.',
+      text: `Paused by ${actorName}${currentUserSuffix}${suffix}`,
+      title: 'Legacy pause: assigned from workspace membership history because this was the only member present at the time.',
     };
   }
   if (attribution === 'verified' && actorName) {

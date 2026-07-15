@@ -71,9 +71,9 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     render(<JobsMotionPreview />);
 
     expect(screen.getByLabelText('148 items awaiting review')).toHaveTextContent('148 to review');
-    expect(screen.getByLabelText(/Likely paused by Sam Patel \(you\)/i)).toHaveAttribute(
+    expect(screen.getByLabelText(/Paused by Sam Patel \(you\)/i)).toHaveAttribute(
       'title',
-      expect.stringMatching(/not a verified audit event/i),
+      expect.stringMatching(/only member present at the time/i),
     );
     expect(screen.getByText('AI spend')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument();
