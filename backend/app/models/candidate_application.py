@@ -27,6 +27,13 @@ class CandidateApplication(Base):
             "role_id",
             "status",
         ),
+        Index(
+            "ix_candidate_applications_org_role_outcome_deleted",
+            "organization_id",
+            "role_id",
+            "deleted_at",
+            "application_outcome",
+        ),
         Index("ix_candidate_applications_cv_uploaded_at", "cv_uploaded_at"),
         Index("ix_candidate_applications_deleted_at", "deleted_at"),
     )

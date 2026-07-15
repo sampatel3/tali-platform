@@ -26,6 +26,7 @@ vi.mock('../../shared/api/httpClient', () => ({
 vi.mock('../../shared/api', () => ({
   roles: {
     get: vi.fn(),
+    getShell: vi.fn(),
     getApplication: vi.fn(),
     listTasks: vi.fn(),
     listApplications: vi.fn(),
@@ -169,6 +170,7 @@ describe('JobPipelinePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClient.roles.get.mockResolvedValue({ data: baseRole });
+    apiClient.roles.getShell.mockResolvedValue({ data: baseRole });
     apiClient.roles.update.mockResolvedValue({ data: baseRole });
     apiClient.roles.updateJobSpec.mockResolvedValue({
       data: {
@@ -212,6 +214,27 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByRole('heading', { name: /Turn on this role’s agent/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
   };
+
+  it('paints the job shell before a large candidate roster finishes loading', async () => {
+    apiClient.roles.listApplications.mockReturnValue(new Promise(() => {}));
+
+    renderPipeline();
+
+    expect(await screen.findByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading candidates…');
+  });
+
+  it('paints the job shell while the aggregate role detail is still loading', async () => {
+    apiClient.roles.get.mockReturnValue(new Promise(() => {}));
+
+    renderPipeline();
+
+    expect(await screen.findByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('status').some((node) => (
+      node.textContent?.includes('Loading pipeline summary…')
+    ))).toBe(true);
+    expect(apiClient.roles.getShell).toHaveBeenCalledWith(101);
+  });
 
   it('renders the reject-threshold slider on the Agent settings tab without a spinbutton', async () => {
     renderPipeline();
@@ -1204,7 +1227,9 @@ Banking transformation experience
   });
 
   it('Pause soft-pauses via the agent endpoint (keeps the role enabled, no PATCH)', async () => {
-    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
     apiClient.agent.status.mockResolvedValue({
       data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 0 },
     });
@@ -1224,7 +1249,15 @@ Banking transformation experience
   });
 
   it('Turn off confirms, then disables the agent and KEEPS decisions by default', async () => {
-    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    const funnelCounts = {
+      sourced: 3, applied: 65, scored: 19, invited: 4, advanced: 1, rejected: 42,
+    };
+    apiClient.roles.get.mockResolvedValue({
+      data: { ...baseRole, stage_counts: funnelCounts, agentic_mode_enabled: true },
+    });
+    apiClient.roles.getShell.mockResolvedValue({
+      data: { ...baseRole, agentic_mode_enabled: true },
+    });
     apiClient.agent.status.mockResolvedValue({
       data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 4 },
     });
@@ -1241,10 +1274,19 @@ Banking transformation experience
     expect(screen.queryByText(/Pause has the same intake hold/i)).not.toBeInTheDocument();
 
     // Confirm WITHOUT ticking discard → disable only, queue preserved.
+    const beforeApplicationCalls = apiClient.roles.listApplications.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
     expect(apiClient.agent.discardPending).not.toHaveBeenCalled();
+    // Agent state is independent of pipeline state: no expensive workspace
+    // reload and no false count-to-zero animation while decisions are kept.
+    expect(apiClient.roles.listApplications.mock.calls.length).toBe(beforeApplicationCalls);
+    const funnel = document.querySelector('.funnel-board');
+    expect(funnel).toBeInTheDocument();
+    Object.values(funnelCounts).forEach((count) => {
+      expect(within(funnel).getByLabelText(String(count))).toBeInTheDocument();
+    });
   });
 
   it('New CVs tile counts only auto-scorable candidates, breaking out held-back ones', async () => {

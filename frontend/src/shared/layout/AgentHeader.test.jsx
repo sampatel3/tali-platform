@@ -33,6 +33,21 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByRole('button', { name: /^pause$/i })).toBeDisabled();
   });
 
+  it('acknowledges a pending pause immediately and prevents duplicate actions', () => {
+    const { container } = render(
+      <AgentHeader
+        title="Jobs"
+        agent={{ ...runningAgent, controlAction: 'pause' }}
+        onPauseAgent={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Pausing…' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(container.querySelector('.abar')).toHaveAttribute('aria-busy', 'true');
+  });
+
   it('shows Paused (not Auto-paused) and the Resume button after a manual pause', () => {
     const onResume = vi.fn();
     const { container } = render(
@@ -195,6 +210,22 @@ describe('AgentHeader — Pause/Resume panel', () => {
       fireEvent.click(screen.getByRole('button', { name: /^resume$/i }));
       expect(onPause).toHaveBeenCalledTimes(1);
       expect(onResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('greys both bulk controls while resume is pending', () => {
+      render(
+        <AgentHeader
+          title="Jobs"
+          agent={{ ...runningAgent, controlAction: 'resume' }}
+          onPauseAgent={() => {}}
+          onResumeAgent={() => {}}
+          pauseAllCount={1}
+          resumeAllCount={10}
+        />,
+      );
+
+      expect(screen.getByRole('button', { name: /^pause$/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled();
     });
 
     it('shows only Pause when nothing is paused', () => {

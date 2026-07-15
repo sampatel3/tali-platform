@@ -35,14 +35,7 @@ import {
   motionSafeScrollBehavior,
   motionTransition,
 } from '../../shared/motion';
-// AgentRail (the legacy left "cockpit rail") was retired with the v3
-// role detail layout — top AgentBar replaces it. Component file stays
-// in the tree until any other surface that may import it is also
-// migrated; remove that import here to avoid unused-import warnings.
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
-// CandidatesDirectoryPage is no longer embedded on the role detail —
-// the Candidates tab now renders a canvas-spec inline ctable directly.
-// Standalone /candidates route still uses the directory.
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
@@ -70,138 +63,26 @@ import {
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
+import {
+  PIPELINE_STAGE_ORDER,
+  activationAutonomyPayload,
+  buildApplicationTitle,
+  formatDecisionLabel,
+  formatRelativeShort,
+  formatStageLabel,
+  matchesPipelineStage,
+  normalizeThreshold,
+  resolveOptionalPercent,
+  resolvedDeterministicReject,
+  resolvedRoleAutomation,
+} from './jobPipelinePageUtils';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
 const EMPTY_PRE_SCREEN_PROGRESS = { status: 'idle', total: 0, processed: 0, errors: 0, refresh: false };
 
-// Mirror of backend settings.PRE_SCREEN_THRESHOLD (config.py). The agent's
-// auto-scoring pass (_auto_enqueue_scoring) skips unscored candidates whose
-// pre-screen score sits below this cutoff — they were screened OUT, and
-// re-scoring them just reproduces the same verdict.
+// Mirror of backend settings.PRE_SCREEN_THRESHOLD.
 const PRE_SCREEN_FILTER_THRESHOLD = 30;
-// Kanban columns + segmented stage filters — keys are the shared funnel
-// buckets (applicationFunnelBucket) so they read identically to the funnel.
-const PIPELINE_STAGE_ORDER = [
-  { key: 'sourced', label: 'Sourced' },
-  { key: 'applied', label: 'Applied' },
-  { key: 'scored', label: 'Scored' },
-  // Completed assessments stay inside Invited, matching the canonical funnel.
-  { key: 'invited', label: 'Invited' },
-  { key: 'advanced', label: 'Advanced' },
-];
-const matchesPipelineStage = (application, stageKey) => {
-  const bucket = applicationFunnelBucket(application);
-  return stageKey === 'invited'
-    ? bucket === 'invited' || bucket === 'completed'
-    : bucket === stageKey;
-};
-const normalizeThreshold = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '';
-  return String(Math.max(0, Math.min(100, Math.round(numeric))));
-};
-
-const formatRelativeShort = (value) => {
-  if (!value) return '—';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '—';
-  const diffMs = Date.now() - parsed.getTime();
-  const minutes = Math.round(diffMs / 60000);
-  if (minutes < 60) return `${Math.max(1, minutes)}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-};
-
-const buildApplicationTitle = (application) => (
-  application?.candidate_name
-  || application?.candidate_email
-  || `Candidate #${application?.candidate_id || application?.id || '—'}`
-);
-
-const resolveOptionalPercent = (value) => {
-  if (value === null || value === undefined || value === '') return null;
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return null;
-  return Math.max(0, Math.min(100, Math.round(numeric)));
-};
-
-// Raw pipeline_stage → a clean, consistently-cased label. PIPELINE_STAGE_ORDER is
-// keyed by FUNNEL buckets (scored/completed), so it can't label the raw stages
-// in_assessment/review — this does, and never leaves a value lower-cased.
-const PIPELINE_STAGE_LABELS = {
-  sourced: 'Sourced',
-  applied: 'Applied',
-  invited: 'Invited',
-  in_assessment: 'In assessment',
-  review: 'Review',
-  advanced: 'Advanced',
-};
-const formatStageLabel = (stage) => (
-  PIPELINE_STAGE_LABELS[stage]
-  || (stage ? stage.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : '—')
-);
-
-const GRANULAR_AUTOMATION_KEYS = Object.freeze([
-  'auto_send_assessment',
-  'auto_resend_assessment',
-  'auto_advance',
-]);
-
-const hasConfiguredGranularAutomation = (role) => GRANULAR_AUTOMATION_KEYS
-  .some((key) => role?.[key] != null);
-
-const resolvedRoleAutomation = (role, key) => {
-  // A brand-new role has null granular fields and the historical DB default
-  // auto_promote=false. That value is not an opt-out: first Turn on defaults
-  // to the complete reversible automation policy. Intentional legacy opt-outs
-  // are fanned into concrete granular false fields by the role PATCH API.
-  if (!hasConfiguredGranularAutomation(role)) return true;
-  const effective = role?.agent_effective_policy || {};
-  if (effective[key] != null) return Boolean(effective[key]);
-  if (role?.[key] != null) return Boolean(role[key]);
-  return Boolean(role?.auto_promote);
-};
-
-const resolvedDeterministicReject = (role) => Boolean(
-  role?.agent_effective_policy?.auto_reject_pre_screen
-  ?? role?.auto_reject_pre_screen
-) || Boolean(role?.auto_reject);
-
-const activationAutonomyPayload = (role) => {
-  // Do not send the DB-default legacy false for a truly unconfigured role: the
-  // backend treats an omitted policy as the first-Turn-on fully autonomous
-  // default. Explicit choices always have concrete granular fields.
-  if (!hasConfiguredGranularAutomation(role)) return {};
-  const payload = {};
-  for (const key of GRANULAR_AUTOMATION_KEYS) {
-    if (role?.[key] != null) payload[key] = Boolean(role[key]);
-  }
-  payload.auto_promote = GRANULAR_AUTOMATION_KEYS.every((key) => (
-    role?.[key] != null ? Boolean(role[key]) : Boolean(role?.auto_promote)
-  ));
-  return payload;
-};
-
-// Humanize a REAL agent decision's recommendation enum. Only ever called with an
-// actual AgentDecision.recommendation — the UI must NEVER fabricate one from a
-// score band (that reads as a real, actionable decision when it isn't).
-const DECISION_LABELS = {
-  advance_to_interview: 'Advance to interview',
-  send_assessment: 'Send assessment',
-  resend_assessment_invite: 'Resend invite',
-  reject: 'Reject',
-  skip_assessment_reject: 'Reject',
-  escalate_low_confidence: 'Needs your review',
-};
-const formatDecisionLabel = (recommendation) => {
-  const key = String(recommendation || '').toLowerCase();
-  if (!key) return null;
-  return DECISION_LABELS[key] || key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
-};
-
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
   const navigate = useNavigate();
@@ -307,10 +188,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
-  // Workspace chips loaded once per role-workspace load. Used by the
-  // role page chip editor for the "Show hidden" suppressed-chips view
-  // (we need the workspace text/bucket for chips the recruiter has
-  // hidden from this role).
+  // Workspace chips also power the role editor's suppressed-chip view.
   const [workspaceCriteria, setWorkspaceCriteria] = useState([]);
   const [criteriaBusy, setCriteriaBusy] = useState(false);
   const [criteriaSyncing, setCriteriaSyncing] = useState(false);
@@ -318,6 +196,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [roleApplications, setRoleApplications] = useState([]);
+  const [applicationsLoading, setApplicationsLoading] = useState(false);
+  const [applicationsLoadError, setApplicationsLoadError] = useState('');
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
@@ -326,6 +206,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
+  // The lightweight role shell paints the page immediately; aggregate funnel
+  // counts and the full job specification arrive on a second request.
+  const [roleDetailLoading, setRoleDetailLoading] = useState(true);
+  const [roleDetailLoadError, setRoleDetailLoadError] = useState('');
   // Set only on a cold-load failure with nothing cached to paint — drives the
   // in-page error state (with Retry) instead of stranding an empty shell.
   const [loadError, setLoadError] = useState('');
@@ -509,6 +393,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
     const cached = isColdForRole ? readCache(cacheKey) : null;
     setLoadError('');
+    setApplicationsLoadError('');
+    setRoleDetailLoadError('');
     if (cached?.data) {
       const c = cached.data;
       setRole(c.role || null);
@@ -516,40 +402,93 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setRoleApplications(Array.isArray(c.roleApplications) ? c.roleApplications : []);
       setWorkspaceCriteria(Array.isArray(c.workspaceCriteria) ? c.workspaceCriteria : []);
       setLoading(false);
+      setRoleDetailLoading(false);
       // Painted data for this role — later revalidates are warm (no repaint).
       loadedRoleIdRef.current = numericRoleId;
     } else if (isColdForRole) {
       setLoading(true);
+      setRoleDetailLoading(true);
     }
+    setApplicationsLoading(true);
+    let rolePainted = Boolean(cached?.data);
     try {
       // Two separate fetches (open + rejected) at the backend's 2000-row
       // ceiling — splits the budget so a long reject history can't crowd
       // open candidates out, and avoids the 500-row default that would
-      // silently truncate thousand-applicant roles.
+      // silently truncate thousand-applicant roles. They deliberately run
+      // SEQUENTIALLY: two large ORM/serialization queries at once saturated
+      // the API on large roles and made the whole page hit the 60s timeout.
       const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
-      const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
-        rolesApi.get(numericRoleId),
-        rolesApi.listTasks(numericRoleId),
-        rolesApi.listApplications(numericRoleId, appsQuery('open')),
-        rolesApi.listApplications(numericRoleId, appsQuery('rejected')),
-        rolesApi.batchScoreStatus(numericRoleId),
-        rolesApi.fetchCvsStatus(numericRoleId),
-        rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
-        // Workspace chips for the suppressed-chips ("hidden from this
-        // role") view in the chip editor. Defensive: optional-chained
-        // call + .catch so a missing API client or transient failure
-        // doesn't blow up the whole role workspace load.
-        Promise.resolve(apiClient.organizations?.listCriteria?.() ?? { data: [] })
-          .catch(() => ({ data: [] })),
-      ]);
+      // Paint from a bounded, single-query shell endpoint. The ordinary role
+      // detail endpoint computes funnel and decision aggregates and can be
+      // slow on large roles; none of that should block the first useful paint.
+      const shellRes = rolesApi.getShell
+        ? await rolesApi.getShell(numericRoleId)
+        : await rolesApi.get(numericRoleId);
       // A newer load started while we were in flight — drop this stale result.
       if (seq !== loadSeqRef.current) return;
       loadedRoleIdRef.current = numericRoleId;
-      const nextRole = roleRes?.data || null;
-      let applicationPayloads = [
-        ...(openAppsRes?.data || []),
-        ...(rejectedAppsRes?.data || []),
-      ];
+      let nextRole = shellRes?.data || null;
+      setRole(nextRole);
+      rolePainted = Boolean(nextRole);
+      setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
+      setLoading(false);
+
+      // Hydrate the authoritative job detail after first paint. A failure here
+      // leaves the navigable shell intact and is surfaced inline instead of
+      // returning the user to a blank error screen.
+      try {
+        const roleRes = await rolesApi.get(numericRoleId);
+        if (seq !== loadSeqRef.current) return;
+        nextRole = roleRes?.data || nextRole;
+        setRole(nextRole);
+        setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
+      } catch (error) {
+        if (seq !== loadSeqRef.current) return;
+        setRoleDetailLoadError(getErrorMessage(error, 'Pipeline summary could not be loaded.'));
+      } finally {
+        if (seq === loadSeqRef.current) setRoleDetailLoading(false);
+      }
+
+      // Cheap supporting requests can run together after first paint. Each is
+      // independently optional so a transient status/criteria failure cannot
+      // prevent the candidate roster from loading.
+      const [tasksRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
+        rolesApi.listTasks(numericRoleId).catch(() => ({ data: [] })),
+        rolesApi.batchScoreStatus(numericRoleId).catch(() => ({ data: null })),
+        rolesApi.fetchCvsStatus(numericRoleId).catch(() => ({ data: EMPTY_FETCH_PROGRESS })),
+        rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
+        Promise.resolve(apiClient.organizations?.listCriteria?.() ?? { data: [] })
+          .catch(() => ({ data: [] })),
+      ]);
+      if (seq !== loadSeqRef.current) return;
+      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
+      const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
+      setRoleTasks(nextTasks);
+      setWorkspaceCriteria(nextCriteria);
+      setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
+      setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
+
+      let applicationPayloads = [];
+      let applicationError = null;
+      try {
+        const openAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('open'));
+        if (seq !== loadSeqRef.current) return;
+        applicationPayloads = [...(openAppsRes?.data || [])];
+        // Paint the useful, active roster before loading the potentially much
+        // larger reject history.
+        setRoleApplications(applicationPayloads);
+      } catch (error) {
+        applicationError = error;
+      }
+      try {
+        const rejectedAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('rejected'));
+        if (seq !== loadSeqRef.current) return;
+        applicationPayloads = [...applicationPayloads, ...(rejectedAppsRes?.data || [])];
+        setRoleApplications(applicationPayloads);
+      } catch (error) {
+        applicationError ||= error;
+      }
       // Sister roles evaluate the complete source cohort, including prior
       // hires/withdrawals. The standard page keeps its two-query hot path;
       // only the uncommon sister view pays this extra terminal-outcome fetch.
@@ -564,10 +503,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           ...(hiredAppsRes?.data || []),
           ...(withdrawnAppsRes?.data || []),
         ];
+        setRoleApplications(applicationPayloads);
       }
-      setRole(nextRole);
-      setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
-      setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
+      if (applicationError) {
+        setApplicationsLoadError(getErrorMessage(applicationError, 'Some candidates could not be loaded.'));
+      }
       // Fetch the agent's threshold recommendation when the role is
       // in auto mode so the panel shows it without waiting for click.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
@@ -575,8 +515,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           .then((res) => setSuggestedThreshold(res?.data || null))
           .catch(() => setSuggestedThreshold(null));
       } else setSuggestedThreshold(null);
-      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
-      setRoleTasks(nextTasks);
       // Dedupe by id — defensive against any backend overlap.
       const byId = new Map();
       for (const a of applicationPayloads) {
@@ -584,7 +522,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       }
       const nextApps = [...byId.values()];
       setRoleApplications(nextApps);
-      const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
       // Refresh the SWR cache so the next visit paints instantly.
       writeCache(cacheKey, {
         role: nextRole,
@@ -599,21 +536,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
         trackRole?.(numericRoleId);
       }
-      setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
-      setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
     } catch (error) {
       // Don't wipe a cached paint if a background revalidate fails — only
       // surface a hard failure when there was nothing to show in the first
       // place (cold load with no cache).
-      if (isColdForRole && !cached?.data) {
+      if (!rolePainted && isColdForRole && !cached?.data) {
         setRole(null);
         setRoleTasks([]);
         setRoleApplications([]);
         setLoadError(getErrorMessage(error, 'Failed to load this job.'));
         showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
+      } else if (rolePainted) {
+        setApplicationsLoadError(getErrorMessage(error, 'Some job data could not be loaded.'));
       }
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+        setRoleDetailLoading(false);
+        setApplicationsLoading(false);
+      }
     }
   }, [numericRoleId, rolesApi, showToast, trackRole]);
 
@@ -1479,7 +1420,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
     apiClient.agent
       .pause(numericRoleId)
-      .then(() => { void refetchAgentStatus?.(); })
+      // Keep the acknowledged optimistic state. An immediate read can hit a
+      // replica before the write is visible and visibly flip the strip back to
+      // ON; the normal status poll will reconcile it shortly.
       .catch((error) => {
         void refetchAgentStatus?.();
         showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
@@ -1497,7 +1440,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
     apiClient.agent
       .resume(numericRoleId)
-      .then(() => { void refetchAgentStatus?.(); void loadRoleWorkspace(); })
+      .then(() => { void loadRoleWorkspace(); })
       .catch((error) => {
         void refetchAgentStatus?.();
         void loadRoleWorkspace();
@@ -1516,6 +1459,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const confirmTurnOffAgent = () => {
     if (!Number.isFinite(numericRoleId)) return;
     const alsoDiscard = turnOffDiscard && (roleAgent?.pending || 0) > 0;
+    const wasEnabled = Boolean(role?.agentic_mode_enabled);
     setTurnOffOpen(false);
     // Optimistic: roleAgent.on is driven by role.agentic_mode_enabled, so flip
     // that in one frame; zero the pending count too when discarding.
@@ -1526,10 +1470,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     rolesApi
       .update(numericRoleId, { agentic_mode_enabled: false })
       .then(() => (alsoDiscard ? apiClient.agent.discardPending(numericRoleId) : null))
-      .then(() => { void refetchAgentStatus?.(); void loadRoleWorkspace(); })
-      .catch((error) => {
+      .then(() => {
         void refetchAgentStatus?.();
-        void loadRoleWorkspace();
+        // Turning off changes no candidate stage or outcome, and keeping the
+        // queue changes no decisions either. A full workspace reload here used
+        // to re-download up to 4,000 rows and could transiently replace the
+        // role's stage_counts with an empty aggregate, animating the funnel to
+        // zero. Only the opt-in discard path needs fresh decision aggregates.
+        if (alsoDiscard) {
+          void fetchPendingDecisions();
+          void rolesApi.get(numericRoleId)
+            .then((response) => {
+              const fresh = response?.data;
+              if (!fresh) return;
+              setRole((cur) => (cur ? {
+                ...cur,
+                pending_decisions_by_type: fresh.pending_decisions_by_type
+                  ?? cur.pending_decisions_by_type,
+                stage_counts: fresh.stage_counts ?? cur.stage_counts,
+              } : cur));
+            })
+            .catch(() => {});
+        }
+      })
+      .catch((error) => {
+        setRole((cur) => (cur ? { ...cur, agentic_mode_enabled: wasEnabled } : cur));
+        void refetchAgentStatus?.();
         showToast(getErrorMessage(error, 'Failed to turn off agent.'), 'error');
       });
   };
@@ -1703,7 +1669,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             stacks value + label + the agent's pending-decision chips inline, with
             the terminal Rejected cell set apart. The home hub uses the same
             variant — one funnel look across surfaces. */}
-        <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
+        {roleDetailLoading ? (
+          <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-text-muted)]" role="status">
+            <Spinner size={18} />
+            <span className="ml-2">Loading pipeline summary…</span>
+          </div>
+        ) : (
+          <>
+            {roleDetailLoadError ? (
+              <div className="mc-agent-warn mb-3" role="alert">
+                <div>
+                  <div className="mc-agent-warn-title">Pipeline summary unavailable</div>
+                  <div className="mc-agent-warn-body">{roleDetailLoadError}</div>
+                </div>
+                <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>Retry</button>
+              </div>
+            ) : null}
+            <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
+          </>
+        )}
 
         <RoleViewTabs activeView={activeView} onBeforeNavigate={handleRoleViewNavigate} />
 
@@ -2195,13 +2179,28 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 defaultOpen={focusCampaignId != null}
               />
             ) : null}
+            {applicationsLoadError ? (
+              <div className="mc-agent-warn" role="alert" style={{ marginBottom: '0.75rem' }}>
+                <div>
+                  <div className="mc-agent-warn-title">Candidate list partially loaded</div>
+                  <div className="mc-agent-warn-body">{applicationsLoadError}</div>
+                </div>
+                <Button type="button" variant="secondary" size="sm" onClick={() => { void loadRoleWorkspace(); }}>
+                  Retry
+                </Button>
+              </div>
+            ) : null}
             {(() => {
               const sorted = sortedTableApplications;
               if (sorted.length === 0) {
                 return (
                   <div className="ctable-wrap">
                     <div className="ctable-empty">
-                      No candidates match the current filter. Try widening the stage segment above.
+                      {applicationsLoading ? (
+                        <span className="inline-flex items-center gap-2" role="status">
+                          <Spinner size={14} /> Loading candidates…
+                        </span>
+                      ) : 'No candidates match the current filter. Try widening the stage segment above.'}
                     </div>
                   </div>
                 );
