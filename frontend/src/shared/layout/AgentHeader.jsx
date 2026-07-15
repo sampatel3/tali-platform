@@ -81,7 +81,7 @@ const formatRelative = (iso) => {
   return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(new Date(t));
 };
 
-const manualPauseAttribution = (pausedBy, pausedAt) => {
+const manualPauseAttribution = (pausedBy, pausedAt, controlScope = 'role') => {
   const actorName = String(pausedBy?.name || '').trim();
   const when = formatRelative(pausedBy?.changed_at || pausedAt);
   const suffix = when ? ` · ${when}` : '';
@@ -96,6 +96,14 @@ const manualPauseAttribution = (pausedBy, pausedAt) => {
   }
   if (attribution === 'verified' && actorName) {
     return { text: `Paused by ${actorName}${currentUserSuffix}${suffix}`, title: null };
+  }
+  if (attribution === 'unavailable' && pausedBy?.source === 'workspace_control') {
+    return {
+      text: actorName
+        ? `Paused by ${actorName} (former team member)${suffix}`
+        : `Paused by a former team member${suffix}`,
+      title: 'The workspace pause retains its actor snapshot, but that team member account is no longer available.',
+    };
   }
   if (
     (attribution === 'verified' && pausedBy?.user_id == null)
@@ -112,8 +120,10 @@ const manualPauseAttribution = (pausedBy, pausedAt) => {
     return { text: 'Paused by you · Saving…', title: null };
   }
   return {
-    text: `Pause owner not recorded${suffix}`,
-    title: 'This role was paused before actor tracking was available. New pause actions record the team member.',
+    text: `${controlScope === 'workspace' ? 'Workspace pause owner' : 'Pause owner'} not recorded${suffix}`,
+    title: controlScope === 'workspace'
+      ? 'The workspace pause did not include an actor record.'
+      : 'This role was paused before actor tracking was available. New pause actions record the team member.',
   };
 };
 
@@ -180,8 +190,8 @@ const AgentStrip = ({
   onTurnOff,
   onSettings,
   offStateMessage,
-  pauseLabel = 'Pause',
-  resumeLabel = 'Resume',
+  pauseLabel = null,
+  resumeLabel = null,
   pauseAllCount = null,
   resumeAllCount = null,
 }) => {
@@ -204,12 +214,29 @@ const AgentStrip = ({
     pendingBreakdown = null,
     bootstrapStatus = null,
     controlAction = null,
+    controlScope = 'role',
+    workspacePaused = false,
+    rolePaused = false,
+    rolePausedAt = null,
+    rolePausedReason = null,
+    rolePausedBy = null,
+    runningRoleCount = 0,
+    localPausedRoleCount = 0,
+    workspaceControlVersion = null,
   } = agent || {};
   const controlsBusy = Boolean(controlAction);
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
+  const isWorkspaceControl = controlScope === 'workspace';
+  const workspaceControlReady = !isWorkspaceControl
+    || (workspaceControlVersion != null
+      && Number.isInteger(Number(workspaceControlVersion))
+      && Number(workspaceControlVersion) >= 1);
+  const isWorkspaceOverride = !isWorkspaceControl && Boolean(workspacePaused) && status !== 'off';
   const pauseCopy = getAgentPauseCopy(pausedReason);
   const isManualPause = pauseCopy.kind === 'manual';
-  const hasBulkCounts = pauseAllCount != null || resumeAllCount != null;
+  const resolvedPauseLabel = pauseLabel || (isWorkspaceControl ? 'Pause workspace' : 'Pause');
+  const resolvedResumeLabel = resumeLabel || (isWorkspaceControl ? 'Resume workspace' : 'Resume');
+  const hasBulkCounts = !isWorkspaceControl && (pauseAllCount != null || resumeAllCount != null);
   // Mixed org — some roles running AND some paused. Pause and Resume are BOTH
   // live buttons. The split moves into the tick (so the buttons stay short),
   // and the budget bar yields its width so everything fits the fixed-size box.
@@ -220,25 +247,37 @@ const AgentStrip = ({
   const spentLabel = formatUsd(spentCents);
   const budgetLabel = formatUsd(budgetCents);
 
-  const label = status === 'on'
-    ? (bootstrapStatus === 'starting' ? 'Agent starting' : 'Agent on')
-    : status === 'paused'
-      ? (isManualPause ? 'Agent paused' : 'Auto-paused')
-      : 'Agent off';
+  const label = isWorkspaceOverride
+    ? 'Workspace paused'
+    : status === 'on'
+      ? (bootstrapStatus === 'starting'
+        ? (isWorkspaceControl ? 'Workspace agent starting' : 'Agent starting')
+        : (isWorkspaceControl ? 'Workspace agent on' : 'Agent on'))
+      : status === 'paused'
+        ? (isWorkspaceControl
+          ? 'Workspace agent paused'
+          : (isManualPause ? 'Agent paused' : 'Auto-paused'))
+        : (isWorkspaceControl ? 'Workspace agent off' : 'Agent off');
 
   // The middle "tick" line — live activity (ON), humanized pause reason
   // (PAUSED), or the activation hint (OFF, no activator).
   let message = null;
   let messageTitle = null;
   if (status === 'on') {
-    message = tick;
+    message = isWorkspaceControl && Number(localPausedRoleCount) > 0
+      ? `${Number(runningRoleCount) || 0} running · ${Number(localPausedRoleCount)} role-paused`
+      : tick;
   } else if (status === 'paused') {
     // Manual pauses wait for the recruiter. System holds are rechecked by the
     // recovery sweep, while Resume remains an optional immediate retry.
     if (isManualPause) {
       // Persisted pause reasons deliberately remain generic. The append-only
       // role audit is the source of truth for who acted in a shared workspace.
-      const attributionCopy = manualPauseAttribution(pausedBy, pausedAt);
+      const attributionCopy = manualPauseAttribution(
+        pausedBy,
+        pausedAt,
+        isWorkspaceControl || isWorkspaceOverride ? 'workspace' : 'role',
+      );
       message = attributionCopy.text;
       messageTitle = attributionCopy.title;
     } else {
@@ -259,6 +298,18 @@ const AgentStrip = ({
   if (isMixed) {
     message = `${pauseAllCount} running · ${resumeAllCount} paused`;
     messageTitle = null;
+  }
+  let workspaceRoleNote = null;
+  if (isWorkspaceOverride) {
+    if (!rolePaused) {
+      workspaceRoleNote = 'This role remains on and will resume automatically.';
+    } else {
+      const localPauseCopy = getAgentPauseCopy(rolePausedReason);
+      const localDetail = localPauseCopy.kind === 'manual'
+        ? manualPauseAttribution(rolePausedBy, rolePausedAt, 'role').text
+        : `${localPauseCopy.label}${formatRelative(rolePausedAt) ? ` · ${formatRelative(rolePausedAt)}` : ''}`;
+      workspaceRoleNote = `Will remain paused after workspace resumes · ${localDetail}`;
+    }
   }
 
   const showBudget = (status === 'on' || status === 'paused') && budgetCents > 0 && !isMixed;
@@ -329,6 +380,9 @@ const AgentStrip = ({
               </m.span>
             </span>
           ) : <span className="ab-tick" />}
+          {workspaceRoleNote ? (
+            <span className="ab-scope-note" title={workspaceRoleNote}>{workspaceRoleNote}</span>
+          ) : null}
         </span>
       </m.span>
 
@@ -404,21 +458,77 @@ const AgentStrip = ({
                   aria-busy={controlAction === 'pause'}
                 >
                   {controlAction === 'pause' ? <Spinner size={11} /> : <Pause size={11} strokeWidth={2} />}
-                  {controlAction === 'pause' ? 'Pausing…' : pauseLabel}
+                  {controlAction === 'pause' ? 'Pausing…' : resolvedPauseLabel}
                 </Button>
               ) : null}
               {Number(resumeAllCount) > 0 ? (
                 <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy} aria-busy={controlAction === 'resume'}>
                   {controlAction === 'resume' ? <Spinner size={11} /> : <Play size={11} strokeWidth={2} fill="currentColor" />}
-                  {controlAction === 'resume' ? 'Resuming…' : resumeLabel}
+                  {controlAction === 'resume' ? 'Resuming…' : resolvedResumeLabel}
+                </Button>
+              ) : null}
+            </>
+          ) : isWorkspaceOverride ? (
+            <>
+              {rolePaused ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="ab-btn"
+                  onClick={onResume}
+                  disabled={!onResume || controlsBusy}
+                  title="Clear this role's own pause. It will run after the workspace agent is resumed."
+                >
+                  <Play size={11} strokeWidth={2} />
+                  Resume role later
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="ab-btn"
+                  onClick={onPause}
+                  disabled={!onPause || controlsBusy}
+                  title="Keep this role paused after the workspace agent is resumed."
+                >
+                  <Pause size={11} strokeWidth={2} />
+                  Pause this role
+                </Button>
+              )}
+              {onTurnOff ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  iconOnly
+                  className="ab-btn ic"
+                  title="Turn off agent for this role"
+                  aria-label="Turn off agent"
+                  onClick={onTurnOff}
+                >
+                  <Power size={13} strokeWidth={2} />
                 </Button>
               ) : null}
             </>
           ) : status === 'on' ? (
             <>
-              <Button variant="inverse" size="sm" className="ab-btn" onClick={onPause} disabled={!onPause || controlsBusy} aria-busy={controlAction === 'pause'}>
+              <Button
+                variant="inverse"
+                size="sm"
+                className="ab-btn"
+                onClick={onPause}
+                disabled={!onPause || controlsBusy || !workspaceControlReady}
+                aria-busy={controlAction === 'pause'}
+                aria-description={isWorkspaceControl && !onPause
+                  ? 'Workspace owners can pause or resume all agents.'
+                  : undefined}
+                title={isWorkspaceControl && !workspaceControlReady
+                  ? 'Refreshing workspace controls…'
+                  : (isWorkspaceControl && !onPause
+                    ? 'Workspace owners can pause or resume all agents.'
+                    : undefined)}
+              >
                 <Pause size={11} strokeWidth={2} />
-                {pauseLabel}
+                {resolvedPauseLabel}
               </Button>
               {onTurnOff ? (
                 <Button
@@ -436,9 +546,24 @@ const AgentStrip = ({
             </>
           ) : status === 'paused' ? (
             <>
-              <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy} aria-busy={controlAction === 'resume'}>
+              <Button
+                variant="primary"
+                size="sm"
+                className="ab-btn primary"
+                onClick={onResume}
+                disabled={!onResume || controlsBusy || !workspaceControlReady}
+                aria-busy={controlAction === 'resume'}
+                aria-description={isWorkspaceControl && !onResume
+                  ? 'Workspace owners can pause or resume all agents.'
+                  : undefined}
+                title={isWorkspaceControl && !workspaceControlReady
+                  ? 'Refreshing workspace controls…'
+                  : (isWorkspaceControl && !onResume
+                    ? 'Workspace owners can pause or resume all agents.'
+                    : undefined)}
+              >
                 <Play size={11} strokeWidth={2} fill="currentColor" />
-                {resumeLabel}
+                {resolvedResumeLabel}
               </Button>
               {onTurnOff ? (
                 <Button
@@ -581,13 +706,18 @@ export const AgentHeader = ({
 // spentCents, budgetCents, tick, inFlight}` shape the panel renders.
 export const buildAgentPropFromStatus = (status, options = {}) => {
   if (!status) return null;
-  const { isEnabled = null, fallbackTick = 'Agent is monitoring.' } = options;
+  const {
+    isEnabled = null,
+    fallbackTick = 'Agent is monitoring.',
+    controlScope = 'role',
+  } = options;
+  const isWorkspaceControl = controlScope === 'workspace';
   // Backend returns `paused_at: datetime|null` (not a boolean). The org
   // aggregator (useAgentStatusOrg) also injects a derived `paused` boolean
   // for the org rollup — accept either.
-  const isPaused = status.paused != null
-    ? Boolean(status.paused)
-    : Boolean(status.paused_at);
+  const isPaused = isWorkspaceControl
+    ? Boolean(status.workspace_paused)
+    : (status.paused != null ? Boolean(status.paused) : Boolean(status.paused_at));
   const enabled = isEnabled != null
     ? Boolean(isEnabled)
     : Boolean(status.enabled);
@@ -602,24 +732,56 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
   const pendingTotal = pendingBreakdown?.total != null
     ? pendingBreakdown.total
     : (nonNegativeCount(status.pending_decisions) || 0);
+  const workspacePaused = Boolean(status.workspace_paused);
+  const hasLocalRoleState = Object.prototype.hasOwnProperty.call(status, 'role_paused_at');
+  const rolePaused = hasLocalRoleState
+    ? Boolean(status.role_paused_at)
+    : (!workspacePaused && isPaused);
+  const pausedAt = isWorkspaceControl
+    ? status.workspace_paused_at
+    : status.paused_at;
+  const pausedReason = isWorkspaceControl
+    ? status.workspace_paused_reason
+    : status.paused_reason;
+  const pausedBy = isWorkspaceControl
+    ? status.workspace_paused_by
+    : status.paused_by;
+  const rawBudgetCents = Number(
+    status.monthly_budget_cents ?? status.org_budget_cap_cents ?? 0,
+  );
   return {
     // ON visual only when agentic_mode_enabled AND not auto-paused.
     on: enabled && !isPaused,
     // Both human and automatic soft pauses keep agent mode enabled and set
     // paused_at; paused_reason distinguishes their treatment and copy.
-    paused: enabled && isPaused,
+    // A workspace hold is meaningful even when no roles are currently enabled:
+    // it remains an explicit control that an owner may need to clear before a
+    // newly enabled role can run. Role-local pauses still require an enabled role.
+    paused: isWorkspaceControl ? isPaused : (enabled && isPaused),
     pending: pendingTotal,
     pendingBreakdown,
-    spentCents: Number(status.monthly_spent_cents || 0),
-    budgetCents: Number(status.monthly_budget_cents || 0) || 5000,
+    spentCents: Number(status.monthly_spent_cents ?? status.org_budget_spent_cents ?? 0),
+    budgetCents: rawBudgetCents > 0 ? rawBudgetCents : (isWorkspaceControl ? 0 : 5000),
     tick: formatTick(status) || fallbackTick,
     inFlight: Boolean(status.current_run),
     // Actual reason the orchestrator set — surfaces "per-cycle token
     // budget exhausted" / "monthly USD cap reached" / etc. instead of a
     // hardcoded blanket message.
-    pausedAt: status.paused_at || null,
-    pausedReason: status.paused_reason || null,
-    pausedBy: status.paused_by || null,
+    pausedAt: pausedAt || null,
+    pausedReason: pausedReason || null,
+    pausedBy: pausedBy || null,
+    controlScope,
+    pauseScope: status.pause_scope || (isWorkspaceControl && workspacePaused ? 'workspace' : null),
+    workspacePaused,
+    workspacePausedAt: status.workspace_paused_at || null,
+    workspacePausedBy: status.workspace_paused_by || null,
+    workspaceControlVersion: status.workspace_control_version ?? null,
+    rolePaused,
+    rolePausedAt: status.role_paused_at || null,
+    rolePausedReason: status.role_paused_reason || null,
+    rolePausedBy: status.role_paused_by || null,
+    runningRoleCount: Number(status.running_role_count ?? status.active_role_count ?? 0),
+    localPausedRoleCount: Number(status.local_paused_role_count || 0),
     bootstrapStatus: status.bootstrap_status || null,
     bootstrapError: status.bootstrap_error || null,
   };

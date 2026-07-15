@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -34,6 +34,7 @@ vi.mock('../../contexts/JobStatusContext', () => ({
 }));
 
 import * as apiClient from '../../shared/api';
+import AuthContext from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { MotionSystemProvider } from '../../shared/motion';
 import { JobsPage } from './JobsPage';
@@ -82,6 +83,7 @@ describe('JobsPage Workable sync states', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     // Default to reduced motion so the per-stage count-up tickers render their
     // final values synchronously (jsdom has no rAF-driven layout). Motion-
     // specific tests below override this to exercise the entrance animations.
@@ -244,6 +246,221 @@ describe('JobsPage Workable sync states', () => {
     // not the dark-purple "ON" pill — for an enabled-but-paused role.
     expect(await screen.findByText('PAUSED')).toBeInTheDocument();
     expect(document.querySelector('.job-agent-pill.is-on')).toBeNull();
+  });
+
+  it('separates the workspace hold from each role saved state', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 701 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          id: 201,
+          name: 'Ready Role',
+          agentic_mode_enabled: true,
+          agent_paused_at: null,
+        },
+        {
+          ...baseRoles[0],
+          id: 202,
+          name: 'Locally Paused Role',
+          agentic_mode_enabled: true,
+          agent_paused_at: '2026-07-14T10:00:00Z',
+        },
+        {
+          ...baseRoles[0],
+          id: 203,
+          name: 'Off Role',
+          agentic_mode_enabled: false,
+          agent_paused_at: null,
+        },
+      ],
+    });
+    apiClient.agent.orgStatus.mockResolvedValue({
+      data: {
+        active_role_count: 0,
+        paused_role_count: 2,
+        local_paused_role_count: 1,
+        workspace_paused: true,
+        workspace_control_version: 12,
+        workspace_paused_at: new Date().toISOString(),
+        workspace_paused_reason: 'paused by recruiter',
+        workspace_paused_by: {
+          user_id: 7,
+          name: 'Sam Patel',
+          is_current_user: true,
+          attribution: 'verified',
+          source: 'workspace_control',
+        },
+        pending_decisions: 4,
+        org_budget_spent_cents: 100,
+        org_budget_cap_cents: 5000,
+      },
+    });
+    apiClient.agent.resumeAll.mockResolvedValue({ data: { affected: 1, enabled_count: 2 } });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    expect(await screen.findByLabelText('Workspace agent paused')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Paused by Sam Patel \(you\)/i)).toBeInTheDocument();
+    const readyCard = screen.getByText('Ready Role').closest('.job-card');
+    const locallyPausedCard = screen.getByText('Locally Paused Role').closest('.job-card');
+    const offCard = screen.getByText('Off Role').closest('.job-card');
+    expect(within(readyCard).getByText('ON · HELD')).toBeInTheDocument();
+    expect(within(locallyPausedCard).getByText('PAUSED')).toBeInTheDocument();
+    expect(within(offCard).getByText('OFF')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+    await waitFor(() => expect(apiClient.agent.resumeAll).toHaveBeenCalledWith(12));
+    expect(apiClient.agent.pauseAll).not.toHaveBeenCalled();
+  });
+
+  it('shows workspace status to members without exposing a mutation', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 8, organization_id: 702 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{ ...baseRoles[0], agentic_mode_enabled: true }],
+    });
+    apiClient.agent.orgStatus.mockResolvedValue({
+      data: {
+        active_role_count: 0,
+        paused_role_count: 1,
+        workspace_paused: true,
+        workspace_control_version: 3,
+        workspace_paused_at: new Date().toISOString(),
+        workspace_paused_reason: 'paused by recruiter',
+        workspace_paused_by: {
+          user_id: 7,
+          name: 'Sam Patel',
+          is_current_user: false,
+          attribution: 'verified',
+          source: 'workspace_control',
+        },
+      },
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 8, role: 'member' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    expect(await screen.findByLabelText('Workspace agent paused')).toBeInTheDocument();
+    const resume = screen.getByRole('button', { name: 'Resume workspace' });
+    expect(resume).toBeDisabled();
+    expect(resume).toHaveAttribute('title', 'Workspace owners can pause or resume all agents.');
+    expect(resume).toHaveAttribute('aria-description', 'Workspace owners can pause or resume all agents.');
+    expect(apiClient.agent.resumeAll).not.toHaveBeenCalled();
+  });
+
+  it('refetches and explains a stale workspace control version', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 703 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{ ...baseRoles[0], agentic_mode_enabled: true }],
+    });
+    const initial = {
+      active_role_count: 1,
+      paused_role_count: 0,
+      workspace_paused: false,
+      workspace_control_version: 4,
+    };
+    const latest = {
+      active_role_count: 0,
+      paused_role_count: 1,
+      workspace_paused: true,
+      workspace_control_version: 5,
+      workspace_paused_at: new Date().toISOString(),
+      workspace_paused_reason: 'paused by recruiter',
+      workspace_paused_by: {
+        user_id: 9,
+        name: 'Aisha Khan',
+        is_current_user: false,
+        attribution: 'verified',
+        source: 'workspace_control',
+      },
+    };
+    apiClient.agent.orgStatus
+      .mockResolvedValueOnce({ data: initial })
+      .mockResolvedValue({ data: latest });
+    apiClient.agent.pauseAll.mockRejectedValue({ response: { status: 409 } });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause workspace' }));
+    await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(4));
+    expect(await screen.findByText(/workspace agent changed while this page was open/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
+  });
+
+  it('does not reuse a pre-mutation workspace poll after Pause succeeds', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 704 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{ ...baseRoles[0], agentic_mode_enabled: true }],
+    });
+    const initial = {
+      active_role_count: 1,
+      paused_role_count: 0,
+      workspace_paused: false,
+      workspace_control_version: 10,
+    };
+    const latest = {
+      active_role_count: 0,
+      paused_role_count: 1,
+      workspace_paused: true,
+      workspace_control_version: 11,
+      workspace_paused_at: new Date().toISOString(),
+      workspace_paused_reason: 'paused by recruiter',
+      workspace_paused_by: {
+        user_id: 7,
+        name: 'Sam Patel',
+        is_current_user: true,
+        attribution: 'verified',
+        source: 'workspace_control',
+      },
+    };
+    let resolveOldPoll;
+    apiClient.agent.orgStatus
+      .mockReset()
+      .mockResolvedValueOnce({ data: initial })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldPoll = resolve;
+      }))
+      .mockResolvedValueOnce({ data: latest });
+    apiClient.agent.pauseAll.mockReset().mockResolvedValue({
+      data: { workspace_paused: true, workspace_control_version: 11 },
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    const pause = await screen.findByRole('button', { name: 'Pause workspace' });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(apiClient.agent.orgStatus).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(pause);
+    await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(10));
+    // Forced reconciliation bypasses the still-pending request that began
+    // before the mutation, instead of joining it and staying stale for 30s.
+    await waitFor(() => expect(apiClient.agent.orgStatus).toHaveBeenCalledTimes(3));
+    expect(await screen.findByLabelText(/Paused by Sam Patel \(you\)/i)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveOldPoll({ data: initial });
+    });
+    expect(screen.getByRole('button', { name: 'Resume workspace' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause workspace' })).not.toBeInTheDocument();
   });
 
   it('keeps durable Turn-on progress visible without presenting the agent as ON', async () => {

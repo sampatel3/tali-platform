@@ -267,7 +267,10 @@ def pause_role(db: Session, *, role: Role, reason: str) -> None:
 
 
 def resume_if_under_budget(
-    db: Session, *, role: Role, explicit: bool = False
+    db: Session,
+    *,
+    role: Role,
+    explicit: bool = False,
 ) -> bool:
     """Clear an agent hold once budget and runtime readiness are healthy.
 

@@ -9,6 +9,8 @@ same fixtures.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from tests.test_agent_activity_route import _attach_user_to_org, _seed_activity
 
 
@@ -44,6 +46,42 @@ def test_agent_panel_returns_aggregate(client):
     # Non-sensitive: no raw cost / model fields anywhere in the payload.
     assert "anthropic" not in resp.text.lower()
     assert "cost_usd" not in resp.text
+
+
+def test_agent_panel_cards_show_effective_workspace_pause(client):
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_activity(org_name="Panel Workspace Hold")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    sess = TestingSessionLocal()
+    try:
+        from app.models.organization import Organization
+
+        org = sess.query(Organization).filter(Organization.id == seeded["org_id"]).one()
+        org.agent_workspace_paused_at = datetime.now(timezone.utc)
+        org.agent_workspace_paused_reason = "workspace paused by recruiter"
+        sess.commit()
+    finally:
+        sess.close()
+
+    resp = client.get("/api/v1/agent/panel", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    card = next(a for a in body["agents"] if a["role_id"] == seeded["role_id"])
+
+    assert body["kpis"]["agents_running"] == 0
+    assert body["kpis"]["agents_paused"] >= 1
+    assert card["running"] is False
+    assert card["workspace_paused"] is True
+    assert card["role_paused"] is False
+    assert card["pause_scope"] == "workspace"
+    assert card["paused_reason"] == "workspace paused by recruiter"
+    assert card["activity"] == {
+        "label": "PAUSED",
+        "text": "workspace paused by recruiter",
+    }
 
 
 def test_org_activity_feed_labels_roles(client):

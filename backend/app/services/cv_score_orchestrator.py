@@ -338,6 +338,32 @@ def enqueue_score(
                     application.id,
                 )
                 return None
+        if bool(requires_active_agent):
+            # Global pause is an overlay on the autonomous authority.  Take the
+            # organization lock before the Role lock below so Pause/Resume and
+            # this paid enqueue have one deterministic order even when usage
+            # metering is disabled.
+            from .workspace_agent_control import workspace_agent_control_snapshot
+
+            if locked_org is not None:
+                workspace_paused = (
+                    locked_org.agent_workspace_paused_at is not None
+                )
+            else:
+                workspace_paused, _workspace_version = (
+                    workspace_agent_control_snapshot(
+                        db,
+                        organization_id=organization_id,
+                        lock=True,
+                    )
+                )
+            if workspace_paused:
+                logger.info(
+                    "autonomous score enqueue held application_id=%s: "
+                    "workspace agent is paused",
+                    application.id,
+                )
+                return None
         score_reservation = _meter_reserve(
             db,
             organization_id=organization_id,
@@ -399,19 +425,22 @@ def enqueue_score(
                     db.commit()
                 return existing
 
-        if bool(requires_active_agent) and (
-            not bool(locked_role.agentic_mode_enabled)
-            or locked_role.agent_paused_at is not None
-        ):
-            logger.info(
-                "autonomous score enqueue held application_id=%s role_id=%s "
-                "enabled=%s paused=%s",
-                application.id,
-                locked_role.id,
-                bool(locked_role.agentic_mode_enabled),
-                locked_role.agent_paused_at is not None,
+        if bool(requires_active_agent):
+            from .role_execution_guard import automatic_role_action_block_reason
+
+            authority_block = automatic_role_action_block_reason(
+                locked_role,
+                db=db,
             )
-            return None
+            if authority_block is not None:
+                logger.info(
+                    "autonomous score enqueue held application_id=%s role_id=%s "
+                    "detail=%s",
+                    application.id,
+                    locked_role.id,
+                    authority_block,
+                )
+                return None
 
         ensure_role_capacity(
             db,

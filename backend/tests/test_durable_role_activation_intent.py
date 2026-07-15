@@ -548,6 +548,32 @@ def test_sweep_broker_failure_leaves_role_off_and_intent_due(db):
     assert persisted.assessment_task_provisioning["activation_intent"]["status"] == "pending"
 
 
+def test_sweep_leaves_activation_intent_pending_under_workspace_pause(db):
+    role, _ = _role_with_passing_draft(db, suffix="workspace-held")
+    intent = request_role_activation_intent(
+        role, user_id=14, monthly_budget_cents=7000
+    )
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    with (
+        patch("app.tasks.assessment_tasks.settings.AUTO_GENERATE_ASSESSMENT_TASKS", True),
+        patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as activation,
+    ):
+        summary = sweep_assessment_task_provisioning.run(limit=50)
+
+    assert summary["activation_due"] == 0
+    activation.assert_not_called()
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    assert persisted.agentic_mode_enabled is False
+    held = persisted.assessment_task_provisioning["activation_intent"]
+    assert held["request_id"] == intent["request_id"]
+    assert held["status"] == "pending"
+
+
 def test_sweep_surfaces_repair_exhaustion_without_dispatching_activation(db):
     role, task = _role_with_passing_draft(db, suffix="repair-exhausted")
     extra = dict(task.extra_data or {})

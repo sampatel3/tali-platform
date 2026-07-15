@@ -140,6 +140,191 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.queryByText(/by you/i)).not.toBeInTheDocument();
   });
 
+  it('presents a workspace override as its own attributed control', () => {
+    const onResume = vi.fn();
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: true,
+      workspace_control_version: 4,
+      workspace_paused_at: new Date().toISOString(),
+      workspace_paused_reason: 'paused by recruiter',
+      workspace_paused_by: {
+        user_id: 7,
+        name: 'Sam Patel',
+        is_current_user: true,
+        attribution: 'verified',
+        source: 'workspace_control',
+      },
+      pending_decisions: 14,
+      org_budget_spent_cents: 52300,
+      org_budget_cap_cents: 300000,
+    }, { isEnabled: true, controlScope: 'workspace' });
+
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={agent}
+        onResumeAgent={onResume}
+      />,
+    );
+
+    expect(screen.getByLabelText('Workspace agent paused')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Paused by Sam Patel \(you\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Pause owner not recorded/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+    expect(onResume).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not confuse locally paused roles with the workspace override', () => {
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: false,
+      workspace_control_version: 5,
+      active_role_count: 2,
+      paused_role_count: 3,
+      local_paused_role_count: 3,
+      pending_decisions: 3,
+    }, { isEnabled: true, controlScope: 'workspace' });
+
+    render(<AgentHeader title="Jobs" agent={agent} onPauseAgent={() => {}} />);
+
+    expect(screen.getByLabelText('Workspace agent on')).toBeInTheDocument();
+    expect(screen.getByText('2 running · 3 role-paused')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause workspace' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a zero-role workspace hold visible without inventing a $50 budget', () => {
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: true,
+      workspace_control_version: 6,
+      workspace_paused_at: new Date().toISOString(),
+      workspace_paused_reason: 'workspace paused by recruiter',
+      workspace_paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+      active_role_count: 0,
+      paused_role_count: 0,
+      org_budget_cap_cents: 0,
+    }, { isEnabled: false, controlScope: 'workspace' });
+
+    render(<AgentHeader title="Jobs" agent={agent} onResumeAgent={() => {}} />);
+
+    expect(screen.getByLabelText('Workspace agent paused')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
+    expect(screen.queryByText('AI spend')).not.toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('shows the effective workspace hold while preserving an on role underneath', () => {
+    const onPauseRole = vi.fn();
+    const agent = buildAgentPropFromStatus({
+      enabled: true,
+      paused: true,
+      pause_scope: 'workspace',
+      paused_at: new Date().toISOString(),
+      paused_reason: 'paused by recruiter',
+      paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+      role_paused_at: null,
+      role_paused_reason: null,
+      role_paused_by: null,
+      workspace_paused: true,
+      workspace_control_version: 6,
+      workspace_paused_at: new Date().toISOString(),
+      workspace_paused_reason: 'paused by recruiter',
+      workspace_paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+    });
+
+    render(
+      <AgentHeader
+        title="Role"
+        agent={agent}
+        onPauseAgent={onPauseRole}
+        onResumeAgent={() => {}}
+      />,
+    );
+
+    expect(screen.getByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
+    expect(screen.getByText('This role remains on and will resume automatically.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause this role' }));
+    expect(onPauseRole).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels a locally paused role action beneath a workspace hold', () => {
+    const onResumeRole = vi.fn();
+    const now = new Date().toISOString();
+    const agent = buildAgentPropFromStatus({
+      enabled: true,
+      paused: true,
+      pause_scope: 'workspace',
+      paused_at: now,
+      paused_reason: 'paused by recruiter',
+      paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+      role_paused_at: now,
+      role_paused_reason: 'paused by recruiter',
+      role_paused_by: {
+        user_id: 11,
+        name: 'Jade Malik',
+        is_current_user: false,
+        changed_at: now,
+      },
+      workspace_paused: true,
+      workspace_paused_at: now,
+      workspace_paused_reason: 'paused by recruiter',
+      workspace_paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+    });
+
+    render(<AgentHeader title="Role" agent={agent} onResumeAgent={onResumeRole} />);
+
+    expect(screen.getByText(/Will remain paused after workspace resumes · Paused by Jade Malik/i))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume role later' }));
+    expect(onResumeRole).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps workspace controls visible but owner-gated for non-owners', () => {
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: true,
+      workspace_control_version: 2,
+      workspace_paused_reason: 'paused by recruiter',
+      workspace_paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+    }, { isEnabled: true, controlScope: 'workspace' });
+
+    render(<AgentHeader title="Jobs" agent={agent} />);
+
+    expect(screen.getByRole('button', { name: 'Resume workspace' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resume workspace' })).toHaveAttribute(
+      'title',
+      'Workspace owners can pause or resume all agents.',
+    );
+    expect(screen.getByRole('button', { name: 'Resume workspace' })).toHaveAttribute(
+      'aria-description',
+      'Workspace owners can pause or resume all agents.',
+    );
+  });
+
+  it('retains the named workspace actor after that team member is removed', () => {
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: true,
+      workspace_control_version: 7,
+      workspace_paused_at: new Date().toISOString(),
+      workspace_paused_reason: 'workspace paused by recruiter',
+      workspace_paused_by: {
+        user_id: null,
+        name: 'Jade Malik',
+        is_current_user: false,
+        attribution: 'unavailable',
+        source: 'workspace_control',
+      },
+    }, { isEnabled: true, controlScope: 'workspace' });
+
+    render(<AgentHeader title="Jobs" agent={agent} />);
+
+    expect(screen.getByLabelText(/Paused by Jade Malik \(former team member\)/i)).toHaveAttribute(
+      'title',
+      expect.stringMatching(/actor snapshot/i),
+    );
+    expect(screen.queryByText(/owner not recorded/i)).not.toBeInTheDocument();
+  });
+
   it('names a uniquely inferable legacy actor without presenting it as verified', () => {
     render(
       <AgentHeader

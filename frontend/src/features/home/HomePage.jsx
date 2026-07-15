@@ -9,7 +9,7 @@ import { MessageSquare } from 'lucide-react';
 
 import { agent as agentApi, agentChat } from '../../shared/api';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
-import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import { Reveal } from '../../shared/motion';
 import { useAuth } from '../../context/AuthContext';
@@ -88,6 +88,7 @@ const greetingFor = (user) => {
 
 export const HomePage = ({ onNavigate, NavComponent }) => {
   const { user } = useAuth() || {};
+  const canControlWorkspaceAgent = String(user?.role || '') === 'owner';
   const { showToast } = useToast() || { showToast: () => {} };
   const [searchParams, setSearchParams] = useSearchParams();
   const {
@@ -385,13 +386,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     await Promise.all([loadDecisions(), loadRoles(), refetchOrgStatus()]);
   }, [loadDecisions, loadRoles, refetchOrgStatus]);
 
-  // Org-wide soft pause / resume from the header's Agent strip. Home = "All
-  // roles", so this pauses (or resumes) EVERY agent-enabled role at once via
-  // the existing /agent/pause-all + /agent/resume-all endpoints — the same
-  // mechanism the Jobs header uses. Pause keeps each role's pending review
-  // items (it doesn't disable the agent); resume clears the pause for roles
-  // back under their monthly cap. A ref guard blocks double-fire; on success we
-  // re-poll org-status so the strip flips Pause⇄Resume immediately.
+  // Workspace pause / resume from the header's Agent strip. This gates every
+  // enabled role without changing the role's own saved ON/PAUSED/OFF state.
   const orgAgentBusyRef = useRef(false);
   const [orgAgentAction, setOrgAgentAction] = useState(null);
   const runOrgAgentBulk = useCallback(async (actionName, action) => {
@@ -403,22 +399,28 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       // Reconcile the header first. The decision list and role rail can refresh
       // in the background; keeping the mutation locked behind those slower
       // requests used to make a following Pause/Resume click get discarded.
-      await refetchOrgStatus();
+      await refetchOrgStatus({ force: true });
       void Promise.all([loadDecisions(), loadRoles()]);
-    } catch {
-      showToast?.('Could not update the agents — try again.', 'error');
+    } catch (error) {
+      await refetchOrgStatus({ force: true });
+      showToast?.(
+        Number(error?.response?.status) === 409
+          ? 'The workspace agent changed in another session. The latest state is shown — review it and try again.'
+          : 'Could not update the workspace agent — try again.',
+        'error',
+      );
     } finally {
       orgAgentBusyRef.current = false;
       setOrgAgentAction(null);
     }
   }, [loadDecisions, loadRoles, refetchOrgStatus, showToast]);
   const handlePauseAllAgents = useCallback(
-    () => runOrgAgentBulk('pause', () => agentApi.pauseAll()),
-    [runOrgAgentBulk],
+    () => runOrgAgentBulk('pause', () => agentApi.pauseAll(orgStatus?.workspace_control_version)),
+    [orgStatus?.workspace_control_version, runOrgAgentBulk],
   );
   const handleResumeAllAgents = useCallback(
-    () => runOrgAgentBulk('resume', () => agentApi.resumeAll()),
-    [runOrgAgentBulk],
+    () => runOrgAgentBulk('resume', () => agentApi.resumeAll(orgStatus?.workspace_control_version)),
+    [orgStatus?.workspace_control_version, runOrgAgentBulk],
   );
 
   // Poll the active-agents list for the left rail + notification badges.
@@ -605,11 +607,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     );
   }, [rolesBreakdown]);
 
-  // Org-level agent status for the header strip (Home = "All roles"). Built from
-  // the same /agent/org-status payload the KPIs read: active_role_count = roles
-  // running (enabled, not paused), paused_role_count = roles paused. The strip
-  // shows Pause when any are running, Resume when any are paused, and both in a
-  // mixed org — driving the org-wide pause-all / resume-all handlers above.
+  // Workspace control for the header strip. Effective role counts can all read
+  // paused while the overlay is active, but the explicit workspace fields are
+  // the source of truth for the control and its actor attribution.
   const agentRunningCount = Number(kpis.active_role_count || 0);
   const agentPausedCount = Number(kpis.paused_role_count || 0);
   const headerAgent = useMemo(() => {
@@ -626,28 +626,15 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           return `${Math.round(diff / 86_400_000)}d ago`;
         })()
       : null;
-    let tick;
-    if (running > 0) {
-      tick = ago
-        ? `Monitoring ${enabled} role${enabled === 1 ? '' : 's'} · last decision ${ago}`
-        : `Monitoring ${enabled} role${enabled === 1 ? '' : 's'}`;
-    } else if (paused > 0) {
-      tick = 'Paused by you';
-    } else {
-      tick = null;
-    }
-    return {
-      on: running > 0,
-      // Auto-paused visual only when EVERY enabled agent is paused.
-      paused: running === 0 && paused > 0,
-      pending: pendingDecisions,
-      spentCents: Number(kpis.org_budget_spent_cents || 0),
-      budgetCents: Number(kpis.org_budget_cap_cents || 0),
-      tick,
-      inFlight: false,
-      controlAction: orgAgentAction,
-      pausedReason: running === 0 && paused > 0 ? 'Paused by you' : null,
-    };
+    const fallbackTick = ago
+      ? `Monitoring ${enabled} role${enabled === 1 ? '' : 's'} · last decision ${ago}`
+      : `Monitoring ${enabled} role${enabled === 1 ? '' : 's'}`;
+    const built = buildAgentPropFromStatus(kpis, {
+      isEnabled: enabled > 0,
+      controlScope: 'workspace',
+      fallbackTick,
+    });
+    return built ? { ...built, controlAction: orgAgentAction, pending: pendingDecisions } : built;
   }, [
     agentRunningCount,
     agentPausedCount,
@@ -655,6 +642,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     kpis.org_budget_spent_cents,
     kpis.org_budget_cap_cents,
     kpis.last_decision_at,
+    kpis.workspace_paused,
+    kpis.workspace_paused_at,
+    kpis.workspace_paused_reason,
+    kpis.workspace_paused_by,
+    kpis.workspace_control_version,
     orgAgentAction,
   ]);
 
@@ -675,13 +667,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
           title={greetingFor(user)}
           subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
-          // All-roles agent strip: Home = every role, so Pause pauses ALL agents
-          // (and Resume resumes them) via /agent/pause-all + /agent/resume-all.
+          // Workspace control: the overlay gates every enabled role without
+          // rewriting the role's own saved ON/PAUSED/OFF state.
           agent={headerAgent}
-          onPauseAgent={handlePauseAllAgents}
-          onResumeAgent={handleResumeAllAgents}
-          pauseAllCount={agentRunningCount}
-          resumeAllCount={agentPausedCount}
+          onPauseAgent={canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
+          onResumeAgent={canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
+          pauseLabel="Pause workspace"
+          resumeLabel="Resume workspace"
           offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
         />
       </Reveal>

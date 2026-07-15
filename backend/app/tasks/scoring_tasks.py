@@ -267,9 +267,11 @@ def score_application_job(
     )
 
     def autonomous_hold(role: Role) -> tuple[str | None, str | None]:
-        detail = automatic_role_action_block_reason(role)
+        detail = automatic_role_action_block_reason(role, db=db)
         if detail is None:
             return None, None
+        if detail == "workspace agent is paused":
+            return "deferred_workspace_paused", detail
         if detail == "role agent is paused":
             return "deferred_agent_paused", detail
         if detail == "role agent is disabled":
@@ -306,6 +308,19 @@ def score_application_job(
         # same lock that claims the job. A recruiter-authorized score may run
         # while an active role's agent is paused. Autonomous work additionally
         # rechecks all current run-authority conditions before the paid call.
+        if bool(getattr(job, "requires_active_agent", True)):
+            # Workspace Pause/Resume owns the outer execution authority. Take
+            # its organization lock before the Role lock so this paid-work
+            # claim and a global control change have one deterministic order.
+            from ..services.workspace_agent_control import (
+                workspace_agent_control_snapshot,
+            )
+
+            workspace_agent_control_snapshot(
+                db,
+                organization_id=int(application.organization_id),
+                lock=True,
+            )
         scoring_role = (
             db.query(Role)
             .filter(
@@ -425,12 +440,23 @@ def score_application_job(
             role_reconfiguration_is_active,
         )
 
+        if bool(getattr(job, "requires_active_agent", True)):
+            from ..services.workspace_agent_control import (
+                workspace_agent_control_snapshot,
+            )
+
+            workspace_agent_control_snapshot(
+                db,
+                organization_id=int(application.organization_id),
+                lock=True,
+            )
         scoring_role = (
             db.query(Role)
             .filter(
                 Role.id == int(application.role_id),
                 Role.organization_id == int(application.organization_id),
             )
+            .with_for_update()
             .populate_existing()
             .one_or_none()
             if application.role_id is not None
@@ -491,6 +517,20 @@ def score_application_job(
             # commit, so the superseded branch below still rolls back every
             # old-intent score/cache/job write atomically.
             db.flush()
+            # A workspace Pause can land while the provider call is in flight.
+            # Re-acquire the outer control lock before the live Role fence and
+            # hold both until either the computed result is discarded or the
+            # worker commits it.
+            if bool(getattr(job, "requires_active_agent", True)):
+                from ..services.workspace_agent_control import (
+                    workspace_agent_control_snapshot,
+                )
+
+                workspace_agent_control_snapshot(
+                    db,
+                    organization_id=int(scoring_role.organization_id),
+                    lock=True,
+                )
             # The provider call may have overlapped a role re-publish. Reload
             # the live role and compare against the durable generation captured
             # above before any computed score is committed or can queue a
@@ -501,9 +541,31 @@ def score_application_job(
                     Role.id == int(scoring_role.id),
                     Role.organization_id == int(scoring_role.organization_id),
                 )
+                .with_for_update()
                 .populate_existing()
                 .one_or_none()
             )
+            if bool(getattr(job, "requires_active_agent", True)):
+                authority_reason, authority_detail = autonomous_hold(live_role)
+                if authority_reason is not None:
+                    db.rollback()  # discard every computed score/cache write
+                    terminal_job = (
+                        db.query(CvScoreJob)
+                        .filter(CvScoreJob.id == int(job.id))
+                        .with_for_update()
+                        .one_or_none()
+                    )
+                    if terminal_job is not None:
+                        terminal_job.status = SCORE_JOB_STALE
+                        terminal_job.error_message = authority_reason
+                        terminal_job.finished_at = datetime.now(timezone.utc)
+                    db.commit()
+                    return {
+                        "status": authority_reason,
+                        "application_id": application_id,
+                        "role_id": int(scoring_role.id),
+                        "detail": authority_detail,
+                    }
             live_fingerprint = (
                 role_intent_fingerprint(live_role, db=db)
                 if live_role is not None
@@ -926,6 +988,7 @@ def sweep_stale_scores(
 
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import CvScoreJob
+    from ..models.organization import Organization
     from ..models.role import Role
     from ..platform.database import SessionLocal
     from ..services.cv_score_orchestrator import enqueue_score
@@ -960,6 +1023,7 @@ def sweep_stale_scores(
                 & (CvScoreJob.queued_at == latest_job_subq.c.max_queued),
             )
             .join(Role, Role.id == CvScoreJob.role_id)
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 CvScoreJob.status == "stale",
                 Role.deleted_at.is_(None),
@@ -993,6 +1057,7 @@ def sweep_stale_scores(
                     and_(
                         Role.agentic_mode_enabled.is_(True),
                         Role.agent_paused_at.is_(None),
+                        Organization.agent_workspace_paused_at.is_(None),
                     ),
                 )
             )

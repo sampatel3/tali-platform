@@ -102,6 +102,34 @@ def test_activate_resumes_paused_role(kick, db):
 
 
 @patch.object(_controls, "_kick_cycle")
+def test_chat_resume_saves_local_intent_but_defers_under_workspace_pause(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True, budget=5000)
+    _active_task(db, org, role)
+    role.agent_paused_at = datetime.now(timezone.utc)
+    role.agent_paused_reason = "paused by recruiter"
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    res = _run(db, role, user, "set_agent_state", {"action": "resume"})
+
+    assert res["ok"] is True
+    assert res["action"] == "activation_deferred"
+    assert res["reason"] == "workspace_paused"
+    assert res["pause_scope"] == "workspace"
+    assert res["agent"]["paused"] is True
+    assert res["agent"]["effective_paused"] is True
+    assert res["agent"]["role_paused"] is False
+    assert res["agent"]["paused_reason"] == "workspace paused by recruiter"
+    assert role.agentic_mode_enabled is True
+    assert role.agent_paused_at is None
+    assert role.agent_paused_reason is None
+    kick.assert_not_called()
+
+
+@patch.object(_controls, "_kick_cycle")
 def test_activate_without_budget_asks_for_one(kick, db):
     org = _org(db)
     user = _user(db, org)
@@ -247,6 +275,38 @@ def test_chat_turn_on_fresh_requisition_persists_durable_activation(
         "requested_by_user_id"
     ] == user.id
     generation.assert_called_once_with(role.id, org.id)
+    kick.assert_not_called()
+
+
+@patch("app.tasks.assessment_tasks.generate_assessment_task_for_role.delay")
+@patch.object(_controls, "_kick_cycle")
+def test_chat_turn_on_persists_activation_without_dispatch_under_workspace_pause(
+    kick, generation, db
+):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=False, budget=6500)
+    role.source = "requisition"
+    role.job_status = JOB_STATUS_DRAFT
+    role.job_spec_text = (
+        "Own a production data platform, incident response, architecture, "
+        "reliability, and measurable delivery outcomes."
+    )
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    res = _run(db, role, user, "set_agent_state", {"action": "activate"})
+
+    assert res["ok"] is True
+    assert res["action"] == "activation_deferred"
+    assert res["reason"] == "workspace_paused"
+    assert res["activation_intent"]["status"] == "pending"
+    assert role.agentic_mode_enabled is False
+    assert role.assessment_task_provisioning["activation_intent"][
+        "requested_by_user_id"
+    ] == user.id
+    generation.assert_not_called()
     kick.assert_not_called()
 
 

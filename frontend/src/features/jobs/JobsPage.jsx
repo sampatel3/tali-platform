@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import AuthContext from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
   PIPELINE_FUNNEL_STAGES,
@@ -271,8 +272,9 @@ const getSyncSummaryValue = (summary, keys, fallback = 0) => {
 // Maps the org-aggregate /agent/status payload (or the showcase fixture) into
 // the shape AgentHeader's right-side panel expects. Activation on the Jobs
 // list is intentionally per-role (each role has its own budget cap), so the
-// OFF state on this page guides the user to open a role rather than firing
-// a single org-wide activate.
+// OFF state on this page guides the user to open a role. Pause/Resume here is
+// a workspace override: it gates every enabled role without rewriting any
+// role's own ON/PAUSED/OFF choice.
 const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
   const { status, refetch } = orgStatusResult;
   const agent = useMemo(() => {
@@ -285,6 +287,7 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
         budgetCents: 5000,
         tick: 'Scoring 14 new candidates · just now',
         inFlight: true,
+        controlScope: 'workspace',
       };
     }
     const anyEnabled = roles.some((role) => role?.agentic_mode_enabled);
@@ -298,14 +301,20 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
         budgetCents: anyEnabled ? 5000 : 0,
         tick: null,
         inFlight: false,
+        controlScope: 'workspace',
       };
     }
-    return buildAgentPropFromStatus(status, { isEnabled: status.active_role_count > 0 });
+    return buildAgentPropFromStatus(status, {
+      isEnabled: status.active_role_count > 0,
+      controlScope: 'workspace',
+    });
   }, [status, roles, isShowcase]);
   return { agent, refetch };
 };
 
 export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => {
+  const { user } = React.useContext(AuthContext) || {};
+  const canControlWorkspaceAgent = String(user?.role || '') === 'owner';
   const rolesApi = apiClient.roles;
   const orgApi = apiClient.organizations;
   const [searchParams] = useSearchParams();
@@ -327,6 +336,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
+  const [agentControlError, setAgentControlError] = useState('');
   // HANDOFF v2 §4 — Live agent spend across roles for the BUDGET USED tile.
   // Fan-out to /roles/{id}/agent/status for every agent-enabled role. Capped
   // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
@@ -673,56 +683,50 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     orgStatusResult,
   );
 
-  // Org-wide soft pause / resume driven from the header's Agent panel.
-  // Pause flips every agent-enabled role's pause flag (keeping its pending
-  // review items); resume clears it for roles back under their cap. A ref
-  // guard blocks double-fire while the request is in flight; on success we
-  // reload roles + re-poll the org-aggregate so the panel flips Pause⇄Resume
-  // immediately instead of waiting for the 30s poll.
+  // Workspace pause / resume driven from the header's Agent panel. This is an
+  // overlay, not a bulk role edit: each role retains its own desired state and
+  // resumes accordingly when the workspace hold is cleared.
   const agentBulkBusyRef = useRef(false);
   const [agentBulkAction, setAgentBulkAction] = useState(null);
   const runAgentBulk = useCallback(async (actionName, action, failMsg) => {
     if (isShowcase || agentBulkBusyRef.current) return;
     agentBulkBusyRef.current = true;
     setAgentBulkAction(actionName);
-    setError('');
+    setAgentControlError('');
     try {
       await action();
       // Release the mutation guard before the heavier jobs refresh. The org
       // status request is enough to reconcile the header immediately.
-      await refetchAgentStatus();
+      await refetchAgentStatus({ force: true });
       void loadJobsHub();
-    } catch {
-      setError(failMsg);
+    } catch (error) {
+      await refetchAgentStatus({ force: true });
+      if (Number(error?.response?.status) === 409) {
+        setAgentControlError('The workspace agent changed while this page was open. The latest state is shown — review it and try again.');
+      } else {
+        setAgentControlError(failMsg);
+      }
     } finally {
       agentBulkBusyRef.current = false;
       setAgentBulkAction(null);
     }
   }, [isShowcase, loadJobsHub, refetchAgentStatus]);
   const handlePauseAllAgents = useCallback(
-    () => runAgentBulk('pause', () => apiClient.agent.pauseAll(), 'Could not pause agents.'),
-    [runAgentBulk],
+    () => runAgentBulk(
+      'pause',
+      () => apiClient.agent.pauseAll(headerAgent?.workspaceControlVersion),
+      'Could not pause the workspace agent.',
+    ),
+    [headerAgent?.workspaceControlVersion, runAgentBulk],
   );
   const handleResumeAllAgents = useCallback(
-    () => runAgentBulk('resume', () => apiClient.agent.resumeAll(), 'Could not resume agents.'),
-    [runAgentBulk],
+    () => runAgentBulk(
+      'resume',
+      () => apiClient.agent.resumeAll(headerAgent?.workspaceControlVersion),
+      'Could not resume the workspace agent.',
+    ),
+    [headerAgent?.workspaceControlVersion, runAgentBulk],
   );
-  // Running vs paused split across agent-enabled roles. In a mixed org the
-  // panel shows BOTH "Pause" and "Resume" (and states the split in its tick);
-  // when every agent is on (or every one paused) only the relevant button
-  // shows. Derived from the same role list the cards use, so the badges and
-  // buttons agree.
-  const { agentRunningCount, agentPausedCount } = useMemo(() => {
-    let running = 0;
-    let pausedCount = 0;
-    roles.forEach((role) => {
-      if (!role?.agentic_mode_enabled) return;
-      if (role?.agent_paused_at) pausedCount += 1;
-      else running += 1;
-    });
-    return { agentRunningCount: running, agentPausedCount: pausedCount };
-  }, [roles]);
-
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
@@ -775,16 +779,29 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           </>
         )}
         agent={headerAgent ? { ...headerAgent, controlAction: agentBulkAction } : headerAgent}
-        onPauseAgent={isShowcase ? undefined : handlePauseAllAgents}
-        onResumeAgent={isShowcase ? undefined : handleResumeAllAgents}
-        pauseAllCount={isShowcase ? null : agentRunningCount}
-        resumeAllCount={isShowcase ? null : agentPausedCount}
+        onPauseAgent={!isShowcase && canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
+        onResumeAgent={!isShowcase && canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
+        pauseLabel="Pause workspace"
+        resumeLabel="Resume workspace"
         offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
       <div className="mc-page">
         {/* HANDOFF v2 §4 / canvas jobs-list — search lives in the global
             ⌘K palette in Shell. The local "Search jobs by name" input was
             redundant chrome and is gone per the canvas spec. */}
+
+        {agentControlError ? (
+          <div className="card flat mb-3 flex flex-wrap items-center justify-between gap-3 p-3 text-sm text-[var(--red)]" role="alert">
+            <span>{agentControlError}</span>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => setAgentControlError('')}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
 
         {activeAts ? (
           <Reveal className="wk-strip">
@@ -1008,11 +1025,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                     || (roleProvider === activeAts ? activeAtsLastSyncAt : null)
                     || null;
                   const agentEnabled = Boolean(role?.agentic_mode_enabled);
+                  const workspacePaused = Boolean(headerAgent?.workspacePaused);
                   // Soft pause keeps agentic_mode_enabled=true but stamps
                   // agent_paused_at, so an enabled-but-paused role must read
                   // "AGENT PAUSED", not "AGENT ON".
                   const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
-                  const agentActive = agentEnabled && !agentPaused;
+                  const agentHeld = agentEnabled && !agentPaused && workspacePaused;
+                  const agentActive = agentEnabled && !agentPaused && !workspacePaused;
                   const activationIntent = role?.assessment_task_provisioning?.activation_intent;
                   const activationStatus = String(activationIntent?.status || '');
                   const activationQueued = !agentEnabled
@@ -1152,6 +1171,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
                             <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
                             PAUSED
+                          </span>
+                        ) : agentHeld ? (
+                          <span
+                            className="job-agent-pill is-held"
+                            title="Workspace agent paused · this role remains on and will resume automatically"
+                          >
+                            <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+                            ON · HELD
                           </span>
                         ) : agentEnabled ? (
                           <AgentLoop

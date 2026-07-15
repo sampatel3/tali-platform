@@ -321,7 +321,7 @@ def dispatch_one(db: Session, *, outbox_id: int) -> dict:
         and app.deleted_at is None
         and not is_resolved(app)
         and (
-            role_allows_new_paid_ats_work(role)
+            role_allows_new_paid_ats_work(role, db=db)
             if row.requires_active_agent
             else role is not None and getattr(role, "deleted_at", None) is None
         )
@@ -372,7 +372,7 @@ def dispatch_one(db: Session, *, outbox_id: int) -> dict:
         and app.deleted_at is None
         and not is_resolved(app)
         and (
-            role_allows_new_paid_ats_work(role)
+            role_allows_new_paid_ats_work(role, db=db)
             if row.requires_active_agent
             else role is not None and getattr(role, "deleted_at", None) is None
         )

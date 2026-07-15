@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../api', () => ({
   agent: {
@@ -8,7 +8,7 @@ vi.mock('../api', () => ({
   },
 }));
 
-import { AgentBar } from './AgentBar';
+import { AgentBar, useAgentStatus, useAgentStatusOrg } from './AgentBar';
 import { agent } from '../api';
 
 describe('AgentBar — org rollup', () => {
@@ -101,6 +101,112 @@ describe('AgentBar — org rollup', () => {
 
     expect(await screen.findAllByText(/7 awaiting your review/)).toHaveLength(2);
     expect(agent.orgStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces a post-mutation org read past an older in-flight poll', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 31, organization_id: 931 }));
+    let resolveOldPoll;
+    agent.orgStatus
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldPoll = resolve;
+      }))
+      .mockResolvedValueOnce({ data: {
+        active_role_count: 0,
+        paused_role_count: 2,
+        pending_decisions: 9,
+        workspace_paused: true,
+        workspace_control_version: 6,
+      } });
+
+    const { result } = renderHook(() => useAgentStatusOrg(true));
+    await waitFor(() => expect(agent.orgStatus).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.refetch({ force: true });
+    });
+    expect(agent.orgStatus).toHaveBeenCalledTimes(2);
+    expect(result.current.status).toMatchObject({
+      workspace_paused: true,
+      workspace_control_version: 6,
+      pending_decisions: 9,
+    });
+
+    // The request that began before the workspace write can still resolve, but
+    // its generation is obsolete and must not replace the fresh snapshot.
+    await act(async () => {
+      resolveOldPoll({ data: {
+        active_role_count: 2,
+        paused_role_count: 0,
+        pending_decisions: 1,
+        workspace_paused: false,
+        workspace_control_version: 5,
+      } });
+    });
+    expect(result.current.status).toMatchObject({
+      workspace_paused: true,
+      workspace_control_version: 6,
+      pending_decisions: 9,
+    });
+  });
+
+  it('protects role optimism from an earlier poll and reconciles after the mutation', async () => {
+    let resolveOldPoll;
+    agent.status
+      .mockResolvedValueOnce({ data: { paused: false, paused_at: null, pending_decisions: 3 } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldPoll = resolve;
+      }))
+      .mockResolvedValueOnce({ data: {
+        paused: true,
+        paused_at: '2026-07-15T15:00:00Z',
+        paused_reason: 'paused by recruiter',
+        pending_decisions: 3,
+      } });
+    let resolveMutation;
+    const request = vi.fn(() => new Promise((resolve) => {
+      resolveMutation = resolve;
+    }));
+
+    const { result } = renderHook(() => useAgentStatus(44));
+    await waitFor(() => expect(result.current.status?.paused).toBe(false));
+
+    let oldPollPromise;
+    act(() => {
+      oldPollPromise = result.current.refetch();
+    });
+    await waitFor(() => expect(agent.status).toHaveBeenCalledTimes(2));
+
+    let mutationPromise;
+    act(() => {
+      mutationPromise = result.current.mutateStatus({
+        optimistic: (current) => ({
+          ...current,
+          paused: true,
+          paused_at: 'saving',
+          paused_reason: 'Saving…',
+        }),
+        request,
+      });
+    });
+    expect(result.current.status).toMatchObject({ paused: true, paused_at: 'saving' });
+
+    await act(async () => {
+      resolveOldPoll({ data: { paused: false, paused_at: null, pending_decisions: 3 } });
+      await oldPollPromise;
+    });
+    expect(result.current.status).toMatchObject({ paused: true, paused_at: 'saving' });
+
+    await act(async () => {
+      resolveMutation({ data: { version: 8 } });
+      await mutationPromise;
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(agent.status).toHaveBeenCalledTimes(3);
+    expect(result.current.status).toMatchObject({
+      paused: true,
+      paused_at: '2026-07-15T15:00:00Z',
+      paused_reason: 'paused by recruiter',
+    });
   });
 
   it('does not reveal a warm snapshot after the signed-in org changes', async () => {

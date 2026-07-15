@@ -65,6 +65,7 @@ import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 import { useRoleAutonomyChange } from './useRoleAutonomyChange';
+import { optimisticallyPauseRoleAgent, optimisticallyResumeRoleAgent } from './roleAgentStatusOptimism';
 import {
   EMPTY_FETCH_PROGRESS,
   EMPTY_PRE_SCREEN_PROGRESS,
@@ -99,7 +100,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const numericRoleId = Number(roleId);
   const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
   // Live status is polled every 30s and pauses when the tab is hidden.
-  const { status: agentStatus, setStatus: setAgentStatus, refetch: refetchAgentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
+  const {
+    status: agentStatus,
+    setStatus: setAgentStatus,
+    refetch: refetchAgentStatus,
+    mutateStatus: mutateAgentStatus,
+  } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
   // Per-feature spend breakdown for the role budget panel. Refetched
   // whenever the role's monthly spend ticks (a coarse proxy for "new
   // usage events landed"); cheap enough to call inline.
@@ -1460,26 +1466,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // morphs to amber without waiting for the 30s poll.
   const handlePauseAgent = () => {
     if (!Number.isFinite(numericRoleId)) return;
-    if (setAgentStatus) {
-      setAgentStatus((cur) => (cur
-        ? {
-            ...cur,
-            paused: true,
-            paused_at: new Date().toISOString(),
-            paused_reason: 'paused by recruiter',
-            // This optimistic pause was initiated by the signed-in viewer. The
-            // status refetch replaces it with the audit-backed actor record.
-            paused_by: { is_current_user: true },
-          }
-        : cur));
-    }
-    apiClient.agent
-      .pause(numericRoleId, roleExpectedVersion(role))
+    mutateAgentStatus({
+      optimistic: (current) => optimisticallyPauseRoleAgent(current),
+      request: () => apiClient.agent.pause(numericRoleId, roleExpectedVersion(role)),
+    })
       .then((response) => {
         if (response?.data) setRole((current) => (current ? { ...current, ...response.data } : response.data));
       })
       .catch((error) => {
-        void refetchAgentStatus?.();
         if (!handleRoleVersionConflict(error)) {
           showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
         }
@@ -1490,18 +1484,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // immediate cycle; clear it locally too for an instant flip.
   const handleResumeAgent = () => {
     if (!Number.isFinite(numericRoleId)) return;
-    if (setAgentStatus) {
-      setAgentStatus((cur) => (cur
-        ? { ...cur, paused: false, paused_at: null, paused_reason: null, paused_by: null }
-        : cur));
-    }
-    apiClient.agent
-      .resume(numericRoleId, roleExpectedVersion(role))
+    mutateAgentStatus({
+      optimistic: (current) => optimisticallyResumeRoleAgent(current),
+      request: () => apiClient.agent.resume(numericRoleId, roleExpectedVersion(role)),
+    })
       .then((response) => {
         if (response?.data) setRole((current) => (current ? { ...current, ...response.data } : response.data));
       })
       .catch((error) => {
-        void refetchAgentStatus?.();
         void loadRoleWorkspace();
         if (!handleRoleVersionConflict(error)) {
           showToast(getErrorMessage(error, 'Failed to resume agent.'), 'error');

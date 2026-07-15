@@ -225,7 +225,7 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
         )
         # This is deliberately immediately before the paid-call claim. Pause,
         # Turn off, role closure, or ATS closure therefore revokes queued work.
-        if not role_allows_new_paid_ats_work(source_role):
+        if not role_allows_new_paid_ats_work(source_role, db=db):
             _set_retry(
                 evaluation,
                 error_code="authority_blocked",

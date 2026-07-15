@@ -45,12 +45,41 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _state(role: Role) -> dict[str, Any]:
+def _state(
+    role: Role,
+    *,
+    workspace_pause: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    role_paused = role.agent_paused_at is not None
+    workspace_paused = bool(
+        workspace_pause is not None and workspace_pause.get("paused")
+    )
+    effective_paused = bool(role.agentic_mode_enabled) and (
+        workspace_paused or role_paused
+    )
+    pause_scope = (
+        "workspace"
+        if effective_paused and workspace_paused
+        else ("role" if effective_paused and role_paused else None)
+    )
     return {
         "version": int(role.version or 1),
         "enabled": bool(role.agentic_mode_enabled),
-        "paused": role.agent_paused_at is not None,
-        "paused_reason": role.agent_paused_reason,
+        # Legacy consumers read ``paused``/``paused_reason``. Keep those fields
+        # effective so they cannot render a locally runnable role as active
+        # under the workspace overlay; expose local desired state separately.
+        "paused": effective_paused,
+        "paused_reason": (
+            workspace_pause.get("reason")
+            if pause_scope == "workspace" and workspace_pause is not None
+            else (role.agent_paused_reason if pause_scope == "role" else None)
+        ),
+        "effective_paused": effective_paused,
+        "pause_scope": pause_scope,
+        "role_paused": role_paused,
+        "role_paused_at": role.agent_paused_at,
+        "role_paused_reason": role.agent_paused_reason,
+        "workspace_paused": workspace_paused,
         "monthly_budget_cents": role.monthly_usd_budget_cents,
         "auto_reject": bool(role.auto_reject),
         "auto_reject_pre_screen": bool(role.auto_reject_pre_screen),
@@ -241,6 +270,33 @@ def _queue_durable_activation(
             "agent": _state(role),
         }
 
+    from ..services.workspace_agent_control import workspace_agent_pause_state
+
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(role.organization_id),
+        current_user_id=int(user_id),
+    )
+    if bool(workspace_pause["paused"]):
+        return {
+            "type": "agent_state",
+            "ok": True,
+            "action": "activation_deferred",
+            "reason": "workspace_paused",
+            "deferred": True,
+            "pause_scope": "workspace",
+            "message": (
+                "Turn on is saved, but this workspace is paused. The role will "
+                "finish activation after the workspace agent is resumed; no "
+                "second approval click is needed."
+            ),
+            "activation_intent": {
+                "request_id": intent.get("request_id"),
+                "status": intent.get("status"),
+            },
+            "agent": _state(role, workspace_pause=workspace_pause),
+        }
+
     # These dispatches reduce latency only. A broker failure is deliberately not
     # returned as a failed command because the saved outbox is retried by Beat.
     try:
@@ -416,11 +472,22 @@ def set_agent_state(
             action=audit_action,
             actor_user_id=int(user_id),
         )
+        from ..services.workspace_agent_control import workspace_agent_pause_state
+
+        workspace_pause = workspace_agent_pause_state(
+            db,
+            organization_id=int(role.organization_id),
+            current_user_id=int(user_id),
+        )
+        workspace_held = bool(workspace_pause["paused"])
         # Immutable compare-and-compensate token for this exact dispatch. A
         # newer role revision must never be overwritten if the broker rejects
         # the handoff after this commit.
         dispatched_version = int(role.version or 1)
-        if (not was_enabled) or was_paused:         # activation OR resume → kick a cycle
+        if (
+            ((not was_enabled) or was_paused)
+            and not workspace_held
+        ):  # activation OR resume → kick a cycle unless the workspace holds it
             if not _kick_cycle(role, activation=not was_enabled):
                 # Match the HTTP toggle's fail-closed behavior. Do not tell the
                 # recruiter the agent is active when the worker queue refused
@@ -471,7 +538,27 @@ def set_agent_state(
                     "message": "The worker queue is unavailable; I left the agent off/paused. Try again.",
                     "agent": _state(role),
                 }
-        result = {"type": "agent_state", "ok": True, "action": "activated", "agent": _state(role)}
+        if workspace_held:
+            result = {
+                "type": "agent_state",
+                "ok": True,
+                "action": "activation_deferred",
+                "reason": "workspace_paused",
+                "deferred": True,
+                "pause_scope": "workspace",
+                "message": (
+                    "The role's agent setting is saved, but the workspace agent "
+                    "is paused. It will not run until the workspace is resumed."
+                ),
+                "agent": _state(role, workspace_pause=workspace_pause),
+            }
+        else:
+            result = {
+                "type": "agent_state",
+                "ok": True,
+                "action": "activated",
+                "agent": _state(role),
+            }
         # Heads-up on activation: if the role still carries OLD-engine scores,
         # surface the count so the agent OFFERS a (scoped, opt-in) re-score in
         # its reply — the recruiter steers what actually gets re-scored.

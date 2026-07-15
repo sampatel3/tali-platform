@@ -198,6 +198,7 @@ def agent_daily_review_sweep(self) -> dict:
     ``agent_daily_review_role`` per role, so we don't hold a long
     transaction or block other beat tasks.
     """
+    from ..models.organization import Organization
     from ..models.role import Role
     from ..platform.database import SessionLocal
 
@@ -207,9 +208,12 @@ def agent_daily_review_sweep(self) -> dict:
     try:
         roles = (
             db.query(Role.id)
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
                 Role.deleted_at.is_(None),
+                Role.agent_paused_at.is_(None),
+                Organization.agent_workspace_paused_at.is_(None),
             )
             .all()
         )
@@ -276,7 +280,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
             }
-        role_block = automatic_role_action_block_reason(role)
+        role_block = automatic_role_action_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",
@@ -321,6 +325,7 @@ def agent_cohort_tick_sweep(self) -> dict:
     what's worth doing this cycle. With agents off, this is a no-op
     sweep — paused / disabled roles fall through.
     """
+    from ..models.organization import Organization
     from ..models.role import Role
     from ..platform.database import SessionLocal
 
@@ -329,10 +334,12 @@ def agent_cohort_tick_sweep(self) -> dict:
     try:
         roles = (
             db.query(Role.id, Role.version)
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
                 Role.deleted_at.is_(None),
                 Role.agent_paused_at.is_(None),
+                Organization.agent_workspace_paused_at.is_(None),
             )
             .all()
         )
@@ -644,6 +651,7 @@ def agent_cohort_tick_role(
     activation: bool = False,
     activation_intent_id: str | None = None,
     dispatch_role_version: int | None = None,
+    dispatch_workspace_version: int | None = None,
 ) -> dict:
     """One cohort tick for ``role_id``.
 
@@ -666,6 +674,9 @@ def agent_cohort_tick_role(
     from ..platform.database import SessionLocal
     from ..services.role_execution_guard import (
         automatic_role_action_block_reason,
+    )
+    from ..services.workspace_agent_control import (
+        workspace_agent_control_snapshot,
     )
 
     db = SessionLocal()
@@ -700,7 +711,28 @@ def agent_cohort_tick_role(
         )
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
-        role_block = automatic_role_action_block_reason(role)
+        workspace_paused, workspace_version = workspace_agent_control_snapshot(
+            db,
+            organization_id=int(role.organization_id),
+        )
+        if workspace_paused:
+            return {
+                "status": "skipped",
+                "reason": "workspace_paused",
+                "role_id": role_id,
+            }
+        if (
+            dispatch_workspace_version is not None
+            and int(dispatch_workspace_version) != int(workspace_version)
+        ):
+            return {
+                "status": "skipped",
+                "reason": "stale_workspace_control",
+                "role_id": role_id,
+                "dispatch_workspace_version": int(dispatch_workspace_version),
+                "workspace_control_version": int(workspace_version),
+            }
+        role_block = automatic_role_action_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",
@@ -951,6 +983,21 @@ def agent_cohort_tick_role(
                 activation=bootstrap,
                 dispatch_role_version=int(dispatch_role_version),
             )
+        if str(run.status) == "aborted" and str(run.error or "") in {
+            "workspace_paused_before_cycle",
+            "workspace_paused_during_cycle",
+            "workspace_control_changed_during_cycle",
+        }:
+            # The workspace overlay is not a role bootstrap failure. Preserve
+            # the role's desired ON/local-pause state; Resume workspace will
+            # dispatch a fresh tick carrying the new workspace generation.
+            return {
+                "status": "skipped",
+                "reason": str(run.error),
+                "role_id": role_id,
+                "agent_run_id": int(run.id),
+                "auto_scored_enqueued": auto_scored,
+            }
         if str(run.status) in {"failed", "aborted"}:
             _retry_or_fail_cohort_bootstrap(
                 self,
@@ -1024,7 +1071,7 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
     bounded = max(0, int(limit))
     if bounded <= 0:
         return 0, set()
-    if automatic_role_action_block_reason(role) is not None:
+    if automatic_role_action_block_reason(role, db=db) is not None:
         return 0, set()
 
     latest_id = (
@@ -1046,6 +1093,7 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
             CvScoreJob.status == SCORE_JOB_STALE,
             CvScoreJob.error_message.in_(
                 (
+                    "deferred_workspace_paused",
                     "deferred_agent_paused",
                     "deferred_agent_off",
                     "deferred_role_not_runnable",
@@ -1136,7 +1184,7 @@ def _auto_enqueue_scoring(
         # This helper is also exercised directly by recovery and activation
         # code. Keep the authority at the paid-work boundary instead of relying
         # only on the outer cohort task having checked an earlier Role snapshot.
-        if automatic_role_action_block_reason(role) is not None:
+        if automatic_role_action_block_reason(role, db=db) is not None:
             return 0
 
         deferred_touched, deferred_app_ids = _requeue_deferred_agent_scores(
@@ -1505,6 +1553,7 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.role_execution_guard import automatic_role_action_block_reason
 
     db = SessionLocal()
     try:
@@ -1527,6 +1576,16 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
                 "reason": "agent_paused",
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
+            }
+        role_block = automatic_role_action_block_reason(role, db=db)
+        if role_block:
+            return {
+                "status": "skipped",
+                "reason": "workspace_paused"
+                if role_block == "workspace agent is paused"
+                else "role_not_runnable",
+                "detail": role_block,
+                "role_id": role_id,
             }
         try:
             run = run_cycle(

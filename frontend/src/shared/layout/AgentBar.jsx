@@ -39,31 +39,77 @@ const formatTick = (status) => {
 // can read the same payload AgentBar consumes — `monthly_spent_cents`,
 // `monthly_budget_cents`, `pending_decisions`, `last_activity`, etc.
 export const useAgentStatus = (roleId) => {
-  const [status, setStatus] = useState(null);
+  const [status, setStatusState] = useState(null);
   const [error, setError] = useState(null);
   const cancelledRef = useRef(false);
+  const requestGenerationRef = useRef(0);
+  const mutationGenerationRef = useRef(0);
+  const activeMutationRef = useRef(null);
 
   // Imperative refetch so callers can reconcile right after a mutation
   // (pause/resume/activate) instead of waiting up to POLL_INTERVAL_MS for the
-  // next poll. Stable per roleId.
-  const refetch = useCallback(async () => {
-    if (!roleId) return;
+  // next poll. Every request receives a generation, so a slower earlier poll
+  // can never overwrite a newer response. Ordinary polls wait behind an
+  // optimistic mutation; the mutation's forced reconciliation is authoritative.
+  const refetch = useCallback(async ({ force = false } = {}) => {
+    if (!roleId) return null;
+    if (activeMutationRef.current !== null && !force) return null;
+    const requestGeneration = ++requestGenerationRef.current;
     try {
       const res = await agentApi.status(roleId);
-      if (!cancelledRef.current) {
-        setStatus(res?.data || null);
+      if (
+        !cancelledRef.current
+        && requestGeneration === requestGenerationRef.current
+        && activeMutationRef.current === null
+      ) {
+        setStatusState(res?.data || null);
         setError(null);
       }
+      return res?.data || null;
     } catch (err) {
-      if (!cancelledRef.current) {
+      if (
+        !cancelledRef.current
+        && requestGeneration === requestGenerationRef.current
+        && activeMutationRef.current === null
+      ) {
         setError(err);
       }
+      return null;
     }
   }, [roleId]);
 
+  // Status-changing controls use one transaction boundary: invalidate any
+  // pre-click poll, keep routine polls from erasing the optimistic state while
+  // the write is pending, then force one fresh status read before settling.
+  const mutateStatus = useCallback(async ({ optimistic, request }) => {
+    if (typeof request !== 'function') return null;
+    const mutationGeneration = ++mutationGenerationRef.current;
+    activeMutationRef.current = mutationGeneration;
+    requestGenerationRef.current += 1;
+    if (typeof optimistic === 'function') setStatusState(optimistic);
+    try {
+      return await request();
+    } finally {
+      if (activeMutationRef.current === mutationGeneration) {
+        activeMutationRef.current = null;
+        await refetch({ force: true });
+      }
+    }
+  }, [refetch]);
+
+  // Preserve the small imperative patch API used for budget and queue updates,
+  // but invalidate a request that began before the local patch.
+  const setStatus = useCallback((updater) => {
+    requestGenerationRef.current += 1;
+    setStatusState(updater);
+  }, []);
+
   useEffect(() => {
+    requestGenerationRef.current += 1;
+    mutationGenerationRef.current += 1;
+    activeMutationRef.current = null;
     if (!roleId) {
-      setStatus(null);
+      setStatusState(null);
       return undefined;
     }
     cancelledRef.current = false;
@@ -81,6 +127,9 @@ export const useAgentStatus = (roleId) => {
 
     return () => {
       cancelledRef.current = true;
+      requestGenerationRef.current += 1;
+      mutationGenerationRef.current += 1;
+      activeMutationRef.current = null;
       clearInterval(timer);
       timer = null;
       document.removeEventListener('visibilitychange', onVisibility);
@@ -91,7 +140,7 @@ export const useAgentStatus = (roleId) => {
   // payload (e.g. clear `paused_at` the instant the user clicks Resume) — the
   // strip derives on/paused from `paused_at`, so without this the box stays
   // PAUSED until the next poll even though the PATCH already fired.
-  return { status, error, setStatus, refetch };
+  return { status, error, setStatus, refetch, mutateStatus };
 };
 
 // Org rollup for the global header strip. Reads the single purpose-built
@@ -156,21 +205,45 @@ const normalizeOrgStatus = (data = {}) => {
   const running = Number(data.active_role_count || 0);
   const pausedRoles = Number(data.paused_role_count || 0);
   const enabledTotal = running + pausedRoles;
+  const workspacePaused = Boolean(data.workspace_paused);
   return {
-    paused: enabledTotal > 0 && running === 0,
+    // `paused` remains the effective fleet state for legacy consumers such as
+    // the nav chip. Workspace-aware headers read the explicit overlay fields
+    // below so "all roles happen to be locally paused" is never mistaken for
+    // a workspace control action.
+    paused: workspacePaused || (enabledTotal > 0 && running === 0),
     any_paused: pausedRoles > 0,
     paused_reason: data.paused_reason || null,
+    workspace_paused: workspacePaused,
+    workspace_paused_at: data.workspace_paused_at || null,
+    workspace_paused_reason: data.workspace_paused_reason || null,
+    workspace_paused_by: data.workspace_paused_by || null,
+    workspace_control_version: data.workspace_control_version == null
+      ? null
+      : Number(data.workspace_control_version),
+    local_paused_role_count: Number(data.local_paused_role_count || 0),
     pending_decisions: Number(data.pending_decisions || 0),
     monthly_spent_cents: Number(data.org_budget_spent_cents || 0),
     monthly_budget_cents: Number(data.org_budget_cap_cents || 0),
     current_run: data.current_run || null,
     last_activity: data.last_activity || null,
+    // Keep the historical normalized meaning: total enabled roles. The raw
+    // effective running/paused split remains available on `payload`.
     active_role_count: enabledTotal,
+    running_role_count: running,
+    paused_role_count: pausedRoles,
   };
 };
 
-const fetchOrgStatus = async () => {
+const fetchOrgStatus = async ({ force = false } = {}) => {
   ensureOrgScope();
+  // A post-mutation read must not join a request that began before the write.
+  // Advance the generation so that old response cannot publish, then start a
+  // genuinely fresh request. Routine polling still deduplicates as before.
+  if (force) {
+    orgGeneration += 1;
+    orgRequest = null;
+  }
   if (orgRequest) return orgRequest;
   const requestGeneration = orgGeneration;
   const request = agentApi.orgStatus()

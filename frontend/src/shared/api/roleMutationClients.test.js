@@ -38,6 +38,18 @@ describe('versioned role mutation clients', () => {
     expect(http.post).toHaveBeenCalledWith('/roles/26/agent/resume', { expected_version: 5 });
   });
 
+  it('sends the workspace control version in global pause and resume commands', () => {
+    agent.pauseAll(8);
+    agent.resumeAll(9);
+
+    expect(http.post).toHaveBeenCalledWith('/agent/pause-all', {
+      expected_control_version: 8,
+    });
+    expect(http.post).toHaveBeenCalledWith('/agent/resume-all', {
+      expected_control_version: 9,
+    });
+  });
+
   it('versions draft approval and structured revision commands', () => {
     agentChat.approveDraftTask(26, 81, 9);
     agentChat.reviseDraftTask(26, 81, {

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from app.models.organization import Organization
 from app.models.role import Role
 from app.models.role_change_event import RoleChangeEvent
 from app.models.user import User
@@ -177,6 +180,47 @@ def test_run_now_does_not_bypass_agent_off(client, db):
     )
     assert response.status_code == 409
     assert "not enabled" in response.text.lower()
+
+
+def test_run_now_reports_workspace_hold_without_queueing(client, db, monkeypatch):
+    from app.tasks import agent_tasks
+
+    headers, email = auth_headers(client)
+    org_id = _owner_org_id(db, email)
+    org = db.query(Organization).filter(Organization.id == org_id).one()
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    role = Role(
+        organization_id=org_id,
+        name="Workspace-held Agent",
+        source="manual",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.commit()
+
+    queued: list[dict] = []
+    monkeypatch.setattr(
+        agent_tasks.agent_manual_run,
+        "delay",
+        lambda **kwargs: queued.append(kwargs),
+    )
+
+    response = client.post(
+        f"/api/v1/roles/{role.id}/agent/run-now", json={}, headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "role_id": role.id,
+        "queued": False,
+        "task_id": None,
+        "detail": "agent run blocked while the workspace agent is paused",
+        "blocked": True,
+        "pause_scope": "workspace",
+    }
+    assert queued == []
 
 
 def test_permanent_delete_requires_the_latest_job_revision(client, db):

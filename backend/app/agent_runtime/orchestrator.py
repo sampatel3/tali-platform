@@ -343,6 +343,36 @@ def run_cycle(
     if org is None:
         raise ValueError(f"role {role.id} has no organization")
 
+    from ..services.workspace_agent_control import (
+        workspace_agent_control_snapshot,
+    )
+
+    workspace_paused, cycle_workspace_version = workspace_agent_control_snapshot(
+        db,
+        organization_id=int(role.organization_id),
+    )
+    if workspace_paused:
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="aborted",
+            error="workspace_paused_before_cycle",
+            model_version=settings.resolved_agent_autonomous_model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db,
+            run=run,
+            application_id=application_id,
+            reason="Agent cycle skipped — the workspace agent is paused.",
+        )
+        return run
+
     client = get_client_for_org(org)
     # Per-role override (Sonnet for borderline-judgment roles, etc.) wins; else
     # the autonomous-loop model (cheaper than the interactive agent by default —
@@ -438,6 +468,22 @@ def run_cycle(
     def _control_state_abort_reason(*, lock: bool = False) -> str | None:
         """Re-read, and optionally lock, the shared control-state boundary."""
 
+        # Workspace control is the outer execution authority and therefore the
+        # first lock.  A Pause that commits before this fence is observed; one
+        # that starts after it waits for this one tool transaction and wins
+        # before the next tool/provider round.
+        current_workspace_paused, current_workspace_version = (
+            workspace_agent_control_snapshot(
+                db,
+                organization_id=int(role.organization_id),
+                lock=lock,
+            )
+        )
+        if current_workspace_paused:
+            return "workspace_paused_during_cycle"
+        if int(current_workspace_version) != int(cycle_workspace_version):
+            return "workspace_control_changed_during_cycle"
+
         control_query = db.query(Role).filter(
             Role.id == int(role.id),
             Role.organization_id == int(role.organization_id),
@@ -451,11 +497,11 @@ def run_cycle(
         current_role = control_query.populate_existing().first()
         if current_role is None:
             return "role_unavailable_during_cycle"
-        if not bool(role.agentic_mode_enabled):
+        if not bool(current_role.agentic_mode_enabled):
             return "agent_disabled_during_cycle"
-        if role.agent_paused_at is not None:
+        if current_role.agent_paused_at is not None:
             return "agent_paused_during_cycle"
-        if int(getattr(role, "version", 1) or 1) != cycle_role_version:
+        if int(getattr(current_role, "version", 1) or 1) != cycle_role_version:
             return "role_configuration_changed_during_cycle"
         return None
 

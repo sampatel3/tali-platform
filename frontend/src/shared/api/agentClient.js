@@ -57,8 +57,12 @@ export const agent = {
   // agent-enabled role WITHOUT disabling it, so pending review items are
   // kept (unlike the per-role toggle-off). resumeAll clears the pause for
   // roles back under their monthly cap. Both are one round-trip.
-  pauseAll: () => api.post('/agent/pause-all', {}),
-  resumeAll: () => api.post('/agent/resume-all', {}),
+  pauseAll: (expectedControlVersion) => api.post('/agent/pause-all', {
+    expected_control_version: expectedControlVersion,
+  }),
+  resumeAll: (expectedControlVersion) => api.post('/agent/resume-all', {
+    expected_control_version: expectedControlVersion,
+  }),
 
   // Per-role soft pause / resume — the per-role twin of pauseAll/resumeAll.
   // pause sets agent_paused_at WITHOUT disabling the agent, so the role's

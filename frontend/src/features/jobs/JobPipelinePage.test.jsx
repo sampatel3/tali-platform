@@ -1432,6 +1432,122 @@ Banking transformation experience
     expect(apiClient.roles.update).not.toHaveBeenCalled();
   });
 
+  it('keeps Pause optimistic over a pre-click poll and reads authoritative status on success', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const authoritativePauseAt = '2026-07-15T15:00:00Z';
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    let resolveOldPoll;
+    apiClient.agent.status
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: {
+          paused: false,
+          paused_at: null,
+          monthly_spent_cents: 100,
+          monthly_budget_cents: 10000,
+          pending_decisions: 0,
+        },
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldPoll = resolve;
+      }))
+      .mockResolvedValueOnce({
+        data: {
+          paused: true,
+          pause_scope: 'role',
+          paused_at: authoritativePauseAt,
+          paused_reason: 'paused by recruiter',
+          paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+          role_paused_at: authoritativePauseAt,
+          role_paused_reason: 'paused by recruiter',
+          role_paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+          workspace_paused: false,
+          monthly_spent_cents: 100,
+          monthly_budget_cents: 10000,
+          pending_decisions: 0,
+        },
+      });
+    let resolvePause;
+    apiClient.agent.pause.mockReset().mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePause = resolve;
+    }));
+
+    renderPipeline();
+
+    const pauseBtn = await screen.findByRole('button', { name: /^pause$/i });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(pauseBtn);
+    expect(await screen.findByLabelText('Paused by you · Saving…')).toBeInTheDocument();
+
+    // This response began before Pause and still says ON. It must be ignored
+    // while the write is pending instead of making the control flicker back.
+    await act(async () => {
+      resolveOldPoll({
+        data: {
+          paused: false,
+          paused_at: null,
+          monthly_spent_cents: 100,
+          monthly_budget_cents: 10000,
+          pending_decisions: 0,
+        },
+      });
+    });
+    expect(screen.getByLabelText('Paused by you · Saving…')).toBeInTheDocument();
+
+    await act(async () => {
+      resolvePause({ data: { ...enabledRole, version: 8 } });
+    });
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(3));
+    expect(await screen.findByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
+  });
+
+  it('shows the workspace hold without losing this role\'s saved control', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const now = new Date().toISOString();
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        enabled: true,
+        paused: true,
+        pause_scope: 'workspace',
+        paused_at: now,
+        paused_reason: 'workspace paused by recruiter',
+        paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        role_paused_at: null,
+        role_paused_reason: null,
+        role_paused_by: null,
+        workspace_paused: true,
+        workspace_paused_at: now,
+        workspace_paused_reason: 'workspace paused by recruiter',
+        workspace_paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        monthly_spent_cents: 100,
+        monthly_budget_cents: 10000,
+        pending_decisions: 0,
+      },
+    });
+    apiClient.agent.pause.mockReturnValue(new Promise(() => {}));
+
+    renderPipeline();
+
+    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
+    expect(screen.getByText('This role remains on and will resume automatically.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pause this role' }));
+
+    expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
+    expect(await screen.findByText(/Will remain paused after workspace resumes · Paused by you/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume role later' })).toBeInTheDocument();
+  });
+
   it('explains the combined review count in the bar and Home action', async () => {
     apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
     apiClient.agent.status.mockResolvedValue({

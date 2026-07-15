@@ -2595,7 +2595,7 @@ class WorkableSyncService:
             # to spend.  Only a lifecycle-ready, enabled, unpaused role may
             # launch NEW paid parse/score work. Metadata continues to sync while
             # paused/off, and work queued before the hold is left untouched.
-            paid_work_allowed = role_allows_new_paid_ats_work(role)
+            paid_work_allowed = role_allows_new_paid_ats_work(role, db=db)
             auto_score = bool(created_application and paid_work_allowed)
             on_application_created(
                 app,

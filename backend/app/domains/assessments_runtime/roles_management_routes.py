@@ -468,7 +468,7 @@ def list_roles(
         for role in roles
         if int(role.id) in published_page_role_ids
         and settings.ATS_PUBLIC_APPLY_ENABLED
-        and role_accepts_native_applications(role)
+        and role_accepts_native_applications(role, db=db)
     }
 
     return [
@@ -526,7 +526,7 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     ).get(role.id)
     is_published = bool(
         settings.ATS_PUBLIC_APPLY_ENABLED
-        and role_accepts_native_applications(role)
+        and role_accepts_native_applications(role, db=db)
         and db.query(JobPage.id)
         .join(RoleBrief, RoleBrief.id == JobPage.brief_id)
         .filter(
@@ -1429,7 +1429,15 @@ def update_role(
     # A broker rejection fails closed: activation is compensated back to OFF
     # (or a resume is re-paused) and the API returns 503. Reporting "on" when
     # no bootstrap was even accepted is worse than asking the user to retry.
-    if agent_activated_now or agent_resumed_now:
+    from ...services.workspace_agent_control import workspace_agent_control_snapshot
+
+    workspace_agent_held, _workspace_control_version = (
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=int(current_user.organization_id),
+        )
+    )
+    if (agent_activated_now or agent_resumed_now) and not workspace_agent_held:
         dispatched_role_id = int(role.id)
         dispatched_role_version = int(dispatch_control_version)
         try:

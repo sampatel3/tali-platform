@@ -8,8 +8,8 @@
   POST   /api/v1/roles/{id}/agent/run-now         enqueue a manual agent cycle
   POST   /api/v1/roles/{id}/agent/pause           soft-pause one role (keeps pending decisions)
   POST   /api/v1/roles/{id}/agent/resume          resume one paused role (if back under cap)
-  POST   /api/v1/agent/pause-all                  soft-pause every agent-enabled role
-  POST   /api/v1/agent/resume-all                 resume every paused role back under cap
+  POST   /api/v1/agent/pause-all                  apply the workspace pause overlay
+  POST   /api/v1/agent/resume-all                 clear only the workspace pause overlay
 
 All endpoints are org-scoped via ``get_current_user``.
 """
@@ -57,14 +57,20 @@ from ...services.role_change_audit import (
     latest_role_change_actor,
 )
 from ...services.workable_op_runner import AtsJobRunPersistenceError
+from ...services.workspace_agent_control import (
+    WORKSPACE_MANUAL_PAUSE_REASON,
+    workspace_agent_pause_state,
+)
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.agent_run import AgentRun
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
+from ...models.organization import Organization
 from ...models.role import Role
 from ...models.user import User
+from ...models.workspace_agent_control_event import WorkspaceAgentControlEvent
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
 from ._activity_feed import (
@@ -280,6 +286,7 @@ class AgentStatusPausedBy(BaseModel):
         "role_change_event",
         "legacy_unique_member",
         "legacy_history",
+        "workspace_control",
     ]
 
 
@@ -292,9 +299,23 @@ class AgentStatusPendingBreakdown(BaseModel):
 class AgentStatusPayload(BaseModel):
     role_id: int
     enabled: bool
+    # Effective state follows workspace > role precedence. The legacy
+    # paused_at/reason/by fields remain the effective display contract so old
+    # clients stop immediately on a workspace hold; the explicit role_* fields
+    # preserve the local desired state underneath that overlay.
+    paused: bool = False
+    pause_scope: Optional[Literal["workspace", "role"]] = None
     paused_at: Optional[datetime] = None
     paused_reason: Optional[str] = None
     paused_by: Optional[AgentStatusPausedBy] = None
+    role_paused_at: Optional[datetime] = None
+    role_paused_reason: Optional[str] = None
+    role_paused_by: Optional[AgentStatusPausedBy] = None
+    workspace_paused: bool = False
+    workspace_paused_at: Optional[datetime] = None
+    workspace_paused_reason: Optional[str] = None
+    workspace_paused_by: Optional[AgentStatusPausedBy] = None
+    workspace_control_version: int = 1
     last_run_at: Optional[datetime] = None
     bootstrap_status: Optional[str] = None
     bootstrap_error: Optional[str] = None
@@ -1018,6 +1039,8 @@ class ReEvaluateResult(BaseModel):
     queued: bool
     task_id: Optional[str] = None
     detail: Optional[str] = None
+    blocked: bool = False
+    pause_scope: Optional[Literal["workspace", "role"]] = None
 
 
 @router.post("/agent-decisions/{decision_id}/re-evaluate", response_model=ReEvaluateResult)
@@ -1086,6 +1109,11 @@ def re_evaluate(
         )
         .first()
     )
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
 
     # Old-MODEL staleness re-SCORES rather than re-decides: a discard + agent
     # re-run would only re-run the SAME stale score. Enqueue a forced re-score
@@ -1138,7 +1166,12 @@ def re_evaluate(
     queued = False
     task_id: Optional[str] = None
     detail: Optional[str] = None
-    if role is not None and role.agent_paused_at is None and bool(role.agentic_mode_enabled):
+    if (
+        role is not None
+        and not bool(workspace_pause["paused"])
+        and role.agent_paused_at is None
+        and bool(role.agentic_mode_enabled)
+    ):
         from ...tasks.agent_tasks import agent_manual_run
 
         async_result = agent_manual_run.delay(
@@ -1147,6 +1180,11 @@ def re_evaluate(
         )
         queued = True
         task_id = str(async_result.id)
+    elif bool(workspace_pause["paused"]):
+        detail = (
+            "stale decision discarded; agent re-run blocked while the workspace "
+            "agent is paused"
+        )
     else:
         detail = "stale decision discarded; agent not re-run (role paused or agentic mode off)"
 
@@ -1158,6 +1196,16 @@ def re_evaluate(
         queued=queued,
         task_id=task_id,
         detail=detail,
+        blocked=not queued,
+        pause_scope=(
+            "workspace"
+            if bool(workspace_pause["paused"])
+            else (
+                "role"
+                if role is not None and role.agent_paused_at is not None
+                else None
+            )
+        ),
     )
 
 
@@ -1491,6 +1539,8 @@ class RunNowResult(BaseModel):
     queued: bool
     task_id: Optional[str] = None
     detail: Optional[str] = None
+    blocked: bool = False
+    pause_scope: Optional[Literal["workspace", "role"]] = None
 
 
 @router.get("/roles/{role_id}/agent/status", response_model=AgentStatusPayload)
@@ -1598,7 +1648,7 @@ def agent_status(
 
     monthly_spent = budget_guard.month_to_date_spend_cents(db, role=role)
 
-    paused_by = None
+    role_paused_by = None
     if role.agent_paused_at is not None and budget_guard.is_manual_pause_reason(
         role.agent_paused_reason
     ):
@@ -1613,7 +1663,7 @@ def agent_status(
             # can be unavailable after account deletion, but the event time is
             # still useful and must not be replaced with a different member.
             pause_actor_user_id = pause_actor.get("user_id")
-            paused_by = AgentStatusPausedBy(
+            role_paused_by = AgentStatusPausedBy(
                 user_id=(
                     int(pause_actor_user_id)
                     if pause_actor_user_id is not None
@@ -1643,7 +1693,7 @@ def agent_status(
             inferred_user_id = (
                 inferred_actor.get("user_id") if inferred_actor is not None else None
             )
-            paused_by = AgentStatusPausedBy(
+            role_paused_by = AgentStatusPausedBy(
                 user_id=(
                     int(inferred_user_id) if inferred_user_id is not None else None
                 ),
@@ -1665,12 +1715,52 @@ def agent_status(
                 ),
             )
 
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
+    workspace_paused_by = (
+        AgentStatusPausedBy(**workspace_pause["paused_by"])
+        if workspace_pause["paused_by"] is not None
+        else None
+    )
+    enabled = bool(role.agentic_mode_enabled)
+    if enabled and workspace_pause["paused"]:
+        effective_paused = True
+        pause_scope: Literal["workspace", "role"] | None = "workspace"
+        effective_paused_at = workspace_pause["paused_at"]
+        effective_paused_reason = workspace_pause["reason"]
+        effective_paused_by = workspace_paused_by
+    elif enabled and role.agent_paused_at is not None:
+        effective_paused = True
+        pause_scope = "role"
+        effective_paused_at = role.agent_paused_at
+        effective_paused_reason = role.agent_paused_reason
+        effective_paused_by = role_paused_by
+    else:
+        effective_paused = False
+        pause_scope = None
+        effective_paused_at = None
+        effective_paused_reason = None
+        effective_paused_by = None
+
     return AgentStatusPayload(
         role_id=role_id,
-        enabled=bool(role.agentic_mode_enabled),
-        paused_at=role.agent_paused_at,
-        paused_reason=role.agent_paused_reason,
-        paused_by=paused_by,
+        enabled=enabled,
+        paused=effective_paused,
+        pause_scope=pause_scope,
+        paused_at=effective_paused_at,
+        paused_reason=effective_paused_reason,
+        paused_by=effective_paused_by,
+        role_paused_at=role.agent_paused_at,
+        role_paused_reason=role.agent_paused_reason,
+        role_paused_by=role_paused_by,
+        workspace_paused=bool(workspace_pause["paused"]),
+        workspace_paused_at=workspace_pause["paused_at"],
+        workspace_paused_reason=workspace_pause["reason"],
+        workspace_paused_by=workspace_paused_by,
+        workspace_control_version=int(workspace_pause["version"]),
         last_run_at=role.agent_last_run_at,
         bootstrap_status=getattr(role, "agent_bootstrap_status", None),
         bootstrap_error=getattr(role, "agent_bootstrap_error", None),
@@ -1759,10 +1849,25 @@ def run_now(
             status_code=409,
             detail="agent is not enabled for this role",
         )
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
+    if bool(workspace_pause["paused"]):
+        return RunNowResult(
+            role_id=role_id,
+            queued=False,
+            blocked=True,
+            pause_scope="workspace",
+            detail="agent run blocked while the workspace agent is paused",
+        )
     if role.agent_paused_at is not None:
         return RunNowResult(
             role_id=role_id,
             queued=False,
+            blocked=True,
+            pause_scope="role",
             detail=f"agent is paused: {role.agent_paused_reason or 'unspecified'}",
         )
 
@@ -1830,140 +1935,280 @@ def _compensate_failed_agent_dispatch(
 
 
 class BulkAgentPauseResult(BaseModel):
-    """Outcome of an org-wide pause-all / resume-all sweep."""
+    """Outcome of a workspace pause-overlay transition."""
 
-    affected: int  # roles whose pause flag actually flipped this call
+    affected: int  # enabled roles whose effective state changed this call
     enabled_count: int  # agent-enabled roles considered
-    skipped: int = 0  # resume-all roles left paused (still over budget)
+    skipped: int = 0  # newly unblocked roles not immediately dispatched
+    workspace_paused: bool
+    workspace_control_version: int
+    paused_at: Optional[datetime] = None
+    paused_reason: Optional[str] = None
+    paused_by: Optional[AgentStatusPausedBy] = None
+
+
+class WorkspaceControlCommand(BaseModel):
+    expected_control_version: int = Field(ge=1)
+
+
+def _workspace_control_conflict(state: dict[str, Any]) -> HTTPException:
+    paused_at = state["paused_at"]
+    paused_by = state["paused_by"]
+    last_change = state.get("last_change")
+    return HTTPException(
+        status_code=409,
+        detail={
+            "message": (
+                "Workspace agent control changed after you opened this page. "
+                "The latest state is shown; review it and try again."
+            ),
+            "current": {
+                "workspace_paused": bool(state["paused"]),
+                "workspace_control_version": int(state["version"]),
+                "paused_at": (
+                    paused_at.isoformat()
+                    if isinstance(paused_at, datetime)
+                    else paused_at
+                ),
+                "paused_reason": state["reason"],
+                "paused_by": (
+                    AgentStatusPausedBy(**paused_by).model_dump(mode="json")
+                    if paused_by is not None
+                    else None
+                ),
+                "changed_by": (
+                    {
+                        **last_change,
+                        "changed_at": (
+                            last_change["changed_at"].isoformat()
+                            if isinstance(last_change.get("changed_at"), datetime)
+                            else last_change.get("changed_at")
+                        ),
+                    }
+                    if last_change is not None
+                    else None
+                ),
+            },
+        },
+    )
 
 
 @router.post("/agent/pause-all", response_model=BulkAgentPauseResult)
 def pause_all_agents(
+    body: WorkspaceControlCommand,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_org_owner),
 ):
-    """Soft-pause every agent-enabled role in the org in one shot.
+    """Apply the workspace pause overlay without rewriting role controls.
 
-    Sets the pause flag (``agent_paused_at``) the cohort sweeps already
-    honour — so agents stop scoring/spending on the next beat — *without*
-    disabling the agent. Crucially this preserves each role's pending
-    decisions (unlike the per-role toggle-off, which discards them), so the
-    recruiter's review queue survives the pause and ``resume-all`` brings
-    everything back. Already-paused roles (e.g. budget-paused) are left
-    untouched so resume-all can tell them apart by cap, not by who paused.
+    Role-level run/pause/off choices and review queues remain untouched. A
+    workspace resume therefore restores the exact per-role desired state that
+    existed underneath this hold instead of accidentally resuming roles that a
+    recruiter or runtime guard had paused independently.
     """
-    roles = (
-        db.query(Role)
+    organization = (
+        db.query(Organization)
         .filter(
-            Role.organization_id == current_user.organization_id,
+            Organization.id == int(current_user.organization_id),
+        )
+        .with_for_update(of=Organization)
+        .one()
+    )
+    current_state = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
+    # Same-target retries are idempotent even when their expected version is
+    # stale. Preserve the original actor/time instead of letting a retry claim
+    # someone else's already-current pause.
+    if (
+        not current_state["paused"]
+        and int(body.expected_control_version) != int(current_state["version"])
+    ):
+        raise _workspace_control_conflict(current_state)
+    enabled_count = (
+        db.query(Role.id)
+        .filter(
+            Role.organization_id == int(current_user.organization_id),
             Role.deleted_at.is_(None),
             Role.agentic_mode_enabled.is_(True),
         )
-        .order_by(Role.id)
-        .with_for_update(of=Role)
-        .all()
+        .count()
+    )
+    locally_running_count = (
+        db.query(Role.id)
+        .filter(
+            Role.organization_id == int(current_user.organization_id),
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+            Role.agent_paused_at.is_(None),
+        )
+        .count()
     )
     affected = 0
-    for role in roles:
-        if role.agent_paused_at is None:
-            audit_before = capture_role_change_snapshot(role)
-            audit_from = int(role.version or 1)
-            budget_guard.pause_role(db, role=role, reason=MANUAL_PAUSE_REASON)
-            audit_to = bump_role_version(role)
-            add_role_change_event(
-                db,
-                role=role,
-                before=audit_before,
-                action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+    if organization.agent_workspace_paused_at is None:
+        now = datetime.now(timezone.utc)
+        from_version = int(organization.agent_workspace_control_version or 1)
+        to_version = from_version + 1
+        organization.agent_workspace_paused_at = now
+        organization.agent_workspace_paused_reason = WORKSPACE_MANUAL_PAUSE_REASON
+        organization.agent_workspace_paused_by_user_id = int(current_user.id)
+        organization.agent_workspace_paused_by_name = str(
+            current_user.full_name or current_user.email
+        )[:200]
+        organization.agent_workspace_control_version = to_version
+        db.add(
+            WorkspaceAgentControlEvent(
+                organization_id=int(current_user.organization_id),
                 actor_user_id=int(current_user.id),
-                from_version=audit_from,
-                to_version=audit_to,
-                reason=MANUAL_PAUSE_REASON,
+                actor_name=str(current_user.full_name or current_user.email)[:200],
+                action="paused",
+                from_version=from_version,
+                to_version=to_version,
+                reason=WORKSPACE_MANUAL_PAUSE_REASON,
                 request_id=get_request_id(),
+                created_at=now,
             )
-            affected += 1
-    if affected:
+        )
+        affected = int(locally_running_count)
         db.commit()
-    return BulkAgentPauseResult(affected=affected, enabled_count=len(roles))
+    state = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
+    return BulkAgentPauseResult(
+        affected=affected,
+        enabled_count=int(enabled_count),
+        workspace_paused=bool(state["paused"]),
+        workspace_control_version=int(state["version"]),
+        paused_at=state["paused_at"],
+        paused_reason=state["reason"],
+        paused_by=(
+            AgentStatusPausedBy(**state["paused_by"])
+            if state["paused_by"] is not None
+            else None
+        ),
+    )
 
 
 @router.post("/agent/resume-all", response_model=BulkAgentPauseResult)
 def resume_all_agents(
+    body: WorkspaceControlCommand,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_org_owner),
 ):
-    """Resume every paused agent-enabled role that's back under its cap.
+    """Clear only the workspace overlay and wake locally runnable roles.
 
-    The inverse of ``pause-all``. Reuses ``budget_guard.resume_if_under_budget``
-    so a role that's genuinely over its monthly cap stays paused rather than
-    resuming only to re-pause on the next cycle — the same guard the
-    cap-raise auto-resume uses. Roles held back for that reason are reported
-    in ``skipped``. Every successful resume immediately queues the complete
-    cohort pipeline, matching the one-role and settings resume paths. If the
-    broker rejects a wake-up, that role is compensated back to a durable
-    failed/paused state and reported as skipped; the endpoint never claims a
-    role is running when no worker accepted it.
+    Local manual, budget and runtime pauses are deliberately not cleared. This
+    is the critical distinction between workspace Resume and a role Resume.
     """
+    organization = (
+        db.query(Organization)
+        .filter(Organization.id == int(current_user.organization_id))
+        .with_for_update(of=Organization)
+        .one()
+    )
+    current_state = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
+    # Resume retries after another caller already resumed are harmless. A stale
+    # command that would actually clear a newer pause must be rejected.
+    if (
+        current_state["paused"]
+        and int(body.expected_control_version) != int(current_state["version"])
+    ):
+        raise _workspace_control_conflict(current_state)
+    enabled_count = (
+        db.query(Role.id)
+        .filter(
+            Role.organization_id == int(current_user.organization_id),
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+        )
+        .count()
+    )
     roles = (
         db.query(Role)
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
             Role.agentic_mode_enabled.is_(True),
-            Role.agent_paused_at.isnot(None),
+            Role.agent_paused_at.is_(None),
         )
         .order_by(Role.id)
-        .with_for_update(of=Role)
         .all()
     )
-    resumed_roles: list[tuple[int, int]] = []
-    for role in roles:
-        audit_before = capture_role_change_snapshot(role)
-        audit_from = int(role.version or 1)
-        if budget_guard.resume_if_under_budget(db, role=role, explicit=True):
-            audit_to = bump_role_version(role)
-            add_role_change_event(
-                db,
-                role=role,
-                before=audit_before,
-                action=ROLE_CHANGE_ACTION_AGENT_RESUMED,
+    was_paused = organization.agent_workspace_paused_at is not None
+    workspace_resume_version = int(organization.agent_workspace_control_version or 1)
+    if was_paused:
+        now = datetime.now(timezone.utc)
+        from_version = int(organization.agent_workspace_control_version or 1)
+        to_version = from_version + 1
+        organization.agent_workspace_paused_at = None
+        organization.agent_workspace_paused_reason = None
+        organization.agent_workspace_paused_by_user_id = None
+        organization.agent_workspace_paused_by_name = None
+        organization.agent_workspace_control_version = to_version
+        workspace_resume_version = to_version
+        db.add(
+            WorkspaceAgentControlEvent(
+                organization_id=int(current_user.organization_id),
                 actor_user_id=int(current_user.id),
-                from_version=audit_from,
-                to_version=audit_to,
-                reason="bulk resume requested by recruiter",
+                actor_name=str(current_user.full_name or current_user.email)[:200],
+                action="resumed",
+                from_version=from_version,
+                to_version=to_version,
+                reason="workspace resumed by recruiter",
                 request_id=get_request_id(),
+                created_at=now,
             )
-            resumed_roles.append((int(role.id), int(audit_to)))
-    if resumed_roles:
+        )
         db.commit()
 
     dispatch_failed = 0
-    for role_id, dispatched_version in resumed_roles:
+    if was_paused:
+        from ...services.agent_activation_readiness import activation_readiness
+
+    for role in roles if was_paused else []:
+        if not budget_guard.check_monthly_usd(db, role=role).ok:
+            dispatch_failed += 1
+            continue
+        if not activation_readiness(role).get("ready"):
+            dispatch_failed += 1
+            continue
         try:
             from ...tasks.agent_tasks import agent_cohort_tick_role
 
             agent_cohort_tick_role.delay(
-                role_id,
+                int(role.id),
                 activation=False,
-                dispatch_role_version=dispatched_version,
+                dispatch_role_version=int(role.version or 1),
+                dispatch_workspace_version=workspace_resume_version,
             )
         except Exception:
             logger.exception(
-                "Failed to enqueue bulk-resume cycle for role_id=%s", role_id
-            )
-            _compensate_failed_agent_dispatch(
-                db,
-                role_id=role_id,
-                dispatched_version=dispatched_version,
-                current_user=current_user,
+                "Failed to enqueue workspace-resume cycle for role_id=%s", role.id
             )
             dispatch_failed += 1
 
-    affected = len(resumed_roles) - dispatch_failed
+    state = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
     return BulkAgentPauseResult(
-        affected=affected,
-        enabled_count=len(roles),
-        skipped=len(roles) - affected,
+        affected=(len(roles) if was_paused else 0),
+        enabled_count=int(enabled_count),
+        skipped=dispatch_failed,
+        workspace_paused=bool(state["paused"]),
+        workspace_control_version=int(state["version"]),
+        paused_at=state["paused_at"],
+        paused_reason=state["reason"],
+        paused_by=None,
     )
 
 
@@ -1973,6 +2218,7 @@ class RoleAgentPauseResult(BaseModel):
     role_id: int
     version: int
     paused: bool  # is the role paused after this call?
+    pause_scope: Optional[Literal["workspace", "role"]] = None
     resumed: bool = False  # did this call actually clear a pause?
     reason: Optional[str] = None
 
@@ -2051,11 +2297,28 @@ def pause_role_agent(
             request_id=get_request_id(),
         )
         db.commit()
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
     return RoleAgentPauseResult(
         role_id=role_id,
         version=int(role.version or 1),
-        paused=role.agent_paused_at is not None,
-        reason=role.agent_paused_reason,
+        paused=(
+            bool(role.agentic_mode_enabled)
+            and (bool(workspace_pause["paused"]) or role.agent_paused_at is not None)
+        ),
+        pause_scope=(
+            "workspace"
+            if workspace_pause["paused"]
+            else ("role" if role.agent_paused_at is not None else None)
+        ),
+        reason=(
+            workspace_pause["reason"]
+            if workspace_pause["paused"]
+            else role.agent_paused_reason
+        ),
     )
 
 
@@ -2136,7 +2399,11 @@ def resume_role_agent(
             )
     audit_before = capture_role_change_snapshot(role)
     audit_from = int(role.version or 1)
-    resumed = budget_guard.resume_if_under_budget(db, role=role, explicit=True)
+    resumed = budget_guard.resume_if_under_budget(
+        db,
+        role=role,
+        explicit=True,
+    )
     if resumed:
         audit_to = bump_role_version(role)
         add_role_change_event(
@@ -2151,35 +2418,63 @@ def resume_role_agent(
             request_id=get_request_id(),
         )
         db.commit()
-        try:
-            from ...tasks.agent_tasks import agent_cohort_tick_role
+        from ...services.workspace_agent_control import (
+            workspace_agent_control_snapshot,
+        )
 
-            agent_cohort_tick_role.delay(
-                int(role.id),
-                activation=False,
-                dispatch_role_version=int(audit_to),
-            )
-        except Exception:
-            logger.exception(
-                "Failed to enqueue resume cycle for role_id=%s", role.id
-            )
-            _compensate_failed_agent_dispatch(
+        workspace_held, _workspace_control_version = (
+            workspace_agent_control_snapshot(
                 db,
-                role_id=int(role.id),
-                dispatched_version=int(audit_to),
-                current_user=current_user,
+                organization_id=int(current_user.organization_id),
             )
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "The agent worker queue is unavailable. The role was left "
-                    "paused; retry Resume."
-                ),
-            )
+        )
+        if not workspace_held:
+            try:
+                from ...tasks.agent_tasks import agent_cohort_tick_role
+
+                agent_cohort_tick_role.delay(
+                    int(role.id),
+                    activation=False,
+                    dispatch_role_version=int(audit_to),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to enqueue resume cycle for role_id=%s", role.id
+                )
+                _compensate_failed_agent_dispatch(
+                    db,
+                    role_id=int(role.id),
+                    dispatched_version=int(audit_to),
+                    current_user=current_user,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "The agent worker queue is unavailable. The role was left "
+                        "paused; retry Resume."
+                    ),
+                )
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(current_user.organization_id),
+        current_user_id=int(current_user.id),
+    )
     return RoleAgentPauseResult(
         role_id=role_id,
         version=int(role.version or 1),
-        paused=role.agent_paused_at is not None,
+        paused=(
+            bool(role.agentic_mode_enabled)
+            and (bool(workspace_pause["paused"]) or role.agent_paused_at is not None)
+        ),
+        pause_scope=(
+            "workspace"
+            if workspace_pause["paused"]
+            else ("role" if role.agent_paused_at is not None else None)
+        ),
         resumed=resumed,
-        reason=role.agent_paused_reason,
+        reason=(
+            workspace_pause["reason"]
+            if workspace_pause["paused"]
+            else role.agent_paused_reason
+        ),
     )
