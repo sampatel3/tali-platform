@@ -171,11 +171,14 @@ def test_run_cycle_aborts_without_job_spec_and_never_calls_claude(db):
     org, role, app = _seed(db, job_spec="")  # no spec, no description
     fake_client = MagicMock()
 
-    with patch.object(orchestrator, "get_client_for_org", return_value=fake_client):
+    with patch.object(
+        orchestrator, "get_client_for_org", return_value=fake_client
+    ) as resolve_client:
         run = orchestrator.run_cycle(db, role=role, trigger="manual")
 
     assert run.status == "aborted"
     assert run.error == "missing_job_spec"
+    resolve_client.assert_not_called()
     # The Anthropic client was never invoked — $0 spent.
     fake_client.messages.create.assert_not_called()
     # A HITL item was raised for the recruiter.

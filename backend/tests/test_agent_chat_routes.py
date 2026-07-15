@@ -13,11 +13,13 @@ opening the thread clears the unread badge.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import event
 
+from app.models.agent_conversation import AgentConversation
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
@@ -147,6 +149,47 @@ def _last_agent_message(client, role_id, headers) -> dict:
     ]
     assert agent_msgs, "expected an agent reply in the timeline"
     return agent_msgs[-1]
+
+
+def test_timeline_survives_optional_helper_failure(client, db):
+    """A deterministic-helper bug cannot take down the core chat timeline.
+
+    The conversation is created lazily by this request, outside the helper's
+    savepoint, and must still be committed even when helper generation raises.
+    """
+
+    headers, email = auth_headers(client, organization_name="HelperFailureOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    role_id = int(role.id)
+    db.commit()
+
+    with patch(
+        "app.domains.agent_chat.routes.maybe_post_helper_briefing",
+        side_effect=RuntimeError("helper generation failed"),
+    ):
+        response = client.get(
+            f"/api/v1/agent-chat/conversations/{role_id}/timeline",
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["role_id"] == role_id
+    assert payload["role_name"] == role.name
+    assert payload["timeline"] == []
+    assert payload["agent_working"] is False
+
+    db.expire_all()
+    conversation = (
+        db.query(AgentConversation)
+        .filter(
+            AgentConversation.organization_id == org_id,
+            AgentConversation.role_id == role_id,
+        )
+        .one()
+    )
+    assert int(conversation.id) == int(payload["conversation_id"])
 
 
 def test_send_persists_user_message_and_reads_as_working(client, db):
@@ -467,6 +510,85 @@ def test_list_conversations_and_timeline_merge_decision(client, db):
     mine = next(a for a in agents if a["role_id"] == role.id)
     assert mine["agent_enabled"] is True
     assert mine["pending_decisions"] == 1
+
+
+def test_timeline_caps_decisions_to_newest_window_in_chronological_order(client, db):
+    headers, email = auth_headers(client, organization_name="TimelineWindowOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id, name="Busy Role")
+    app = _scored_app(db, org_id, role, score=75, name="Window Candidate")
+    base = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    for index in range(61):
+        db.add(
+            AgentDecision(
+                organization_id=org_id,
+                role_id=role.id,
+                application_id=app.id,
+                decision_type="advance_to_interview",
+                recommendation="advance",
+                status="pending",
+                reasoning=f"decision-{index}",
+                model_version="m",
+                prompt_version="p",
+                idempotency_key=f"timeline-window-{index}",
+                created_at=base + timedelta(minutes=index),
+            )
+        )
+    db.commit()
+
+    cards = [
+        item
+        for item in _timeline_json(client, role.id, headers)["timeline"]
+        if item["kind"] == "decision"
+    ]
+
+    assert len(cards) == 60
+    assert [card["reasoning"] for card in cards] == [
+        f"decision-{index}" for index in range(1, 61)
+    ]
+
+
+def test_timeline_excludes_pending_decision_while_snoozed(client, db):
+    headers, email = auth_headers(client, organization_name="TimelineSnoozeOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id, name="Snooze Role")
+    app = _scored_app(db, org_id, role, score=55, name="Snooze Candidate")
+    now = datetime.now(timezone.utc)
+
+    for label, snoozed_until in (
+        ("not-snoozed", None),
+        ("elapsed-snooze", now - timedelta(minutes=1)),
+        ("active-snooze", now + timedelta(hours=1)),
+    ):
+        db.add(
+            AgentDecision(
+                organization_id=org_id,
+                role_id=role.id,
+                application_id=app.id,
+                decision_type="skip_assessment_reject",
+                recommendation="reject",
+                status="pending",
+                reasoning=label,
+                model_version="m",
+                prompt_version="p",
+                idempotency_key=f"timeline-snooze-{label}",
+                snoozed_until=snoozed_until,
+                created_at=now,
+            )
+        )
+    db.commit()
+
+    cards = [
+        item
+        for item in _timeline_json(client, role.id, headers)["timeline"]
+        if item["kind"] == "decision"
+    ]
+
+    assert {card["reasoning"] for card in cards} == {
+        "not-snoozed",
+        "elapsed-snooze",
+    }
 
 
 def test_timeline_404_for_other_orgs_role(client, db):

@@ -73,6 +73,9 @@ _RANKING_LABELS = {
     "pre_screen": "pre-screen score",
     "rank": "pairwise rank",
     "cv_match": "CV-match score",
+    "workable": "Workable score",
+    "assessment": "assessment score",
+    "role_fit": "role-fit score",
 }
 
 # A criterion is a HARD CONSTRAINT (failing it HIDES the candidate) only when

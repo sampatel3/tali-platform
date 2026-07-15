@@ -227,6 +227,46 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
     assert captured["rank_by"] == "taali"
 
 
+def test_find_top_candidates_rejects_a_foreign_role_before_search(db):
+    user, _org = _make_user_and_org(db)
+    other_org = Organization(name="Foreign Org", slug=f"foreign-{id(db)}")
+    db.add(other_org)
+    db.flush()
+    foreign_role = Role(
+        organization_id=other_org.id,
+        name="Confidential Foreign Role",
+        source="manual",
+    )
+    db.add(foreign_role)
+    db.commit()
+
+    with patch(
+        "app.candidate_search.top_candidates.find_top_candidates"
+    ) as engine, pytest.raises(ValueError, match="not found"):
+        handlers.find_top_candidates(
+            db,
+            user,
+            query="top engineers",
+            role_id=foreign_role.id,
+        )
+    engine.assert_not_called()
+
+
+def test_find_top_candidates_is_read_only_and_does_not_mint_public_report(db):
+    from app.models.top_candidates_report import TopCandidatesReport
+
+    user, _org = _make_user_and_org(db)
+    with patch(
+        "app.candidate_search.top_candidates.find_top_candidates",
+        return_value={"candidates": [], "shown": 0, "total_matched": 0},
+    ):
+        result = handlers.find_top_candidates(db, user, query="top engineers")
+
+    assert "report_token" not in result
+    assert "report_url" not in result
+    assert db.query(TopCandidatesReport).count() == 0
+
+
 # ---------------------------------------------------------------------------
 # screen_pool_against_requirement (rediscovery)
 # ---------------------------------------------------------------------------

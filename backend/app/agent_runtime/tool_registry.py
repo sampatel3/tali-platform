@@ -307,7 +307,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 },
                 "pipeline_stage": {
                     "type": "string",
-                    "enum": ["applied", "invited", "in_assessment", "review", "advanced"],
+                    "enum": ["sourced", "applied", "invited", "in_assessment", "review", "advanced"],
                 },
                 "application_outcome": {
                     "type": "string",
@@ -322,12 +322,16 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                         "pre_screen_score",
                         "rank_score",
                         "cv_match_score",
+                        "workable_score",
+                        "assessment_score",
+                        "role_fit_score",
                         "created_at",
                     ],
                     "default": "taali_score",
                 },
                 "sort_order": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
             },
         },
     },
@@ -345,7 +349,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "application_ids": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "minItems": 1,
+                    "minItems": 2,
                     "maxItems": 5,
                 },
             },
@@ -630,6 +634,28 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "required": ["application_id", "reasoning", "confidence"],
         },
     },
+    {
+        "name": "queue_escalate_decision",
+        "description": (
+            "Queue a non-executable escalation for recruiter adjudication when "
+            "evaluate_policy returns decision_type='escalate_low_confidence'. "
+            "This creates a pending Decision Hub card; it never advances, rejects, "
+            "or contacts the candidate. Preserve the policy's low-confidence or "
+            "disagreement reasoning and cite the signals that conflicted. Use only "
+            "for the matching policy verdict, never as a substitute for your own "
+            "uncertainty."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": "integer"},
+                "reasoning": {"type": "string", "description": _QUEUE_REASONING_DESC},
+                "evidence": {"type": "object", "description": _QUEUE_EVIDENCE_DESC},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "required": ["application_id", "reasoning", "confidence"],
+        },
+    },
     # ------------------------------------------------------------------
     # POLICY — call BEFORE any queue_* tool.
     # ------------------------------------------------------------------
@@ -641,14 +667,17 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "manual recruiter actions, builds the policy inputs, and returns "
             "the verdict + reasoning trace + policy_revision_id. ALWAYS call "
             "this before queue_advance_decision / queue_reject_decision / "
-            "queue_skip_assessment_reject_decision so the human-readable "
+            "queue_skip_assessment_reject_decision / queue_escalate_decision "
+            "so the human-readable "
             "reasoning + audit trail are anchored to the policy.\n\n"
             "How to react to the returned ``decision_type``:\n"
             "- ``queue_advance_decision`` / ``queue_reject_decision`` / "
-            "``queue_skip_assessment_reject`` → call the matching queue tool "
+            "``queue_skip_assessment_reject_decision`` → call the matching queue tool "
             "with the same reasoning.\n"
             "- ``escalate_low_confidence`` → call ``queue_escalate_decision`` "
-            "with the verdict's reasoning so the recruiter adjudicates.\n"
+            "with the verdict's reasoning and confidence; build its evidence "
+            "from ``rule_path`` and the conflicting ``sub_agent_outputs`` so "
+            "the recruiter can adjudicate.\n"
             "- ``no_action`` / ``skip`` → this candidate is not actionable "
             "right now. Do NOT re-call evaluate_policy on the same candidate "
             "this cycle. Move on: either pick a different candidate from your "
@@ -802,6 +831,7 @@ def _tool_search_applications(db: Session, *, agent_run: AgentRun, role: Role, a
         sort_by=str(args.get("sort_by") or "taali_score"),
         sort_order=str(args.get("sort_order") or "desc"),
         limit=int(args.get("limit") or 25),
+        offset=max(0, int(args.get("offset") or 0)),
     )
 
 
@@ -2111,6 +2141,18 @@ def _tool_queue_skip_assessment_reject_decision(
     return _queue(db, agent_run=agent_run, role=role, args=args, decision_type="skip_assessment_reject")
 
 
+def _tool_queue_escalate_decision(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    return _queue(
+        db,
+        agent_run=agent_run,
+        role=role,
+        args=args,
+        decision_type="escalate_low_confidence",
+    )
+
+
 def _tool_evaluate_policy(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
 ) -> Any:
@@ -2193,9 +2235,10 @@ def _tool_evaluate_policy(
     # compared to ``{"advance_to_interview"}`` and EVERY on-policy advance reads as
     # off-policy and is wrongly withheld. The no-assessment-stage switch (send →
     # advance; no task OR auto_skip_assessment) is honoured via
-    # ``role_has_assessment_stage``. Non-queueable / escalated verdicts
-    # (escalate_low_confidence / skip / no_action) translate to ``None`` -> stored as
-    # None -> ``_is_on_policy`` fails SAFE (off-policy -> human review).
+    # ``role_has_assessment_stage``. ``escalate_low_confidence`` translates to
+    # its persisted noun so the matching escalation tool can queue it; truly
+    # non-queueable verdicts (skip / no_action) translate to ``None``. Either an
+    # escalation noun or None still fails an attempted auto-advance safely.
     persisted_decision_type = decision_translation.resolve_persisted_decision_type(
         str(verdict.decision_type),
         has_assessment_task=decision_translation.role_has_assessment_stage(role),
@@ -2419,6 +2462,7 @@ QUEUE_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
         "queue_advance_decision",
         "queue_reject_decision",
         "queue_skip_assessment_reject_decision",
+        "queue_escalate_decision",
         "send_assessment",
         "resend_assessment_invite",
     }
@@ -2445,14 +2489,19 @@ GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "queue_advance_decision",
         "queue_reject_decision",
         "queue_skip_assessment_reject_decision",
+        "queue_escalate_decision",
         "evaluate_policy",
         "ask_recruiter",
         "record_observation",
     }
 )
 
-DEFAULT_AGENT_ACTION_ALLOWLIST: frozenset[str] = GOVERNED_ACTION_TOOL_NAMES.difference(
+EXPLICIT_OPT_IN_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
     {"create_application", "post_workable_note", "refresh_candidate_graph"}
+)
+
+DEFAULT_AGENT_ACTION_ALLOWLIST: frozenset[str] = GOVERNED_ACTION_TOOL_NAMES.difference(
+    EXPLICIT_OPT_IN_ACTION_TOOL_NAMES
 )
 
 _HIGH_RISK_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
@@ -2562,6 +2611,7 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "queue_advance_decision": _tool_queue_advance_decision,
     "queue_reject_decision": _tool_queue_reject_decision,
     "queue_skip_assessment_reject_decision": _tool_queue_skip_assessment_reject_decision,
+    "queue_escalate_decision": _tool_queue_escalate_decision,
     "evaluate_policy": _tool_evaluate_policy,
     # Cohort survey + batch + ask-recruiter tools (Phase 7).
     "survey_role_state": _tool_survey_role_state,

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models.agent_conversation import (
@@ -22,13 +23,21 @@ from ..models.agent_conversation import (
     AgentConversationRead,
     MESSAGE_KIND_ACTION,
     MESSAGE_KIND_CHAT,
+    MESSAGE_KIND_EVENT,
+    MESSAGE_KIND_PROACTIVE,
 )
 from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.role import Role
 from ..models.user import User
 
-_VISIBLE_MESSAGE_KINDS = (MESSAGE_KIND_CHAT, MESSAGE_KIND_ACTION)
+_VISIBLE_MESSAGE_KINDS = (
+    MESSAGE_KIND_CHAT,
+    MESSAGE_KIND_ACTION,
+    MESSAGE_KIND_PROACTIVE,
+    MESSAGE_KIND_EVENT,
+)
+_INTERACTIVE_MESSAGE_KINDS = (MESSAGE_KIND_CHAT, MESSAGE_KIND_ACTION)
 
 
 def post_agent_message(
@@ -37,6 +46,8 @@ def post_agent_message(
     conversation: AgentConversation,
     text: str,
     actions: list[dict[str, Any]] | None = None,
+    kind: str | None = None,
+    stop_reason: str | None = None,
 ) -> AgentConversationMessage:
     """Append a plain agent (assistant) message to the conversation.
 
@@ -49,12 +60,16 @@ def post_agent_message(
         organization_id=conversation.organization_id,
         role_id=conversation.role_id,
         author_role=AUTHOR_ROLE_ASSISTANT,
-        kind=MESSAGE_KIND_ACTION if actions else MESSAGE_KIND_CHAT,
+        kind=kind or (MESSAGE_KIND_ACTION if actions else MESSAGE_KIND_CHAT),
         content=[{"type": "text", "text": text}],
         text=text,
         actions=actions or None,
+        stop_reason=stop_reason,
     )
     db.add(msg)
+    now = datetime.now(timezone.utc)
+    conversation.last_message_at = now
+    conversation.updated_at = now
     db.flush()
     return msg
 
@@ -90,9 +105,23 @@ def ensure_conversation(
         role_id=int(role.id),
         title=role.name,
     )
-    db.add(convo)
-    db.flush()
-    return convo
+    try:
+        # Concurrent background events can be the first thing to create a
+        # role thread. Contain a losing unique-key insert in a savepoint, then
+        # load the winner instead of poisoning the caller's domain transaction.
+        with db.begin_nested():
+            db.add(convo)
+            db.flush()
+        return convo
+    except IntegrityError:
+        return (
+            db.query(AgentConversation)
+            .filter(
+                AgentConversation.organization_id == int(organization_id),
+                AgentConversation.role_id == int(role.id),
+            )
+            .one()
+        )
 
 
 # A turn is "running" while the last visible message is the recruiter's and the
@@ -115,7 +144,9 @@ def conversation_agent_working(db: Session, conversation: AgentConversation) -> 
         db.query(AgentConversationMessage)
         .filter(
             AgentConversationMessage.conversation_id == conversation.id,
-            AgentConversationMessage.kind.in_(_VISIBLE_MESSAGE_KINDS),
+            # Ignore agent-initiated helper prompts here. Only an interactive
+            # assistant reply can close the latest recruiter turn.
+            AgentConversationMessage.kind.in_(_INTERACTIVE_MESSAGE_KINDS),
         )
         .order_by(
             AgentConversationMessage.created_at.desc(),

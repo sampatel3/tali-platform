@@ -222,9 +222,37 @@ def test_agent_tools_catalogue_contains_expected_names():
         "queue_advance_decision",
         "queue_reject_decision",
         "queue_skip_assessment_reject_decision",
+        "queue_escalate_decision",
         # terminal
         "agent_run_complete",
     }.issubset(names)
+
+    search_tool = next(
+        t for t in tool_registry.AGENT_TOOLS if t["name"] == "search_applications"
+    )
+    properties = search_tool["input_schema"]["properties"]
+    assert set(properties["score_type"]["enum"]) == {
+        "taali",
+        "pre_screen",
+        "rank",
+        "cv_match",
+        "workable",
+        "assessment",
+        "role_fit",
+    }
+    assert "sourced" in properties["pipeline_stage"]["enum"]
+    assert properties["offset"]["minimum"] == 0
+    compare_tool = next(
+        t for t in tool_registry.AGENT_TOOLS if t["name"] == "compare_applications"
+    )
+    assert compare_tool["input_schema"]["properties"]["application_ids"]["minItems"] == 2
+    advance_tool = next(
+        t for t in tool_registry.AGENT_TOOLS if t["name"] == "queue_advance_decision"
+    )
+    escalation_tool = next(
+        t for t in tool_registry.AGENT_TOOLS if t["name"] == "queue_escalate_decision"
+    )
+    assert escalation_tool["input_schema"] == advance_tool["input_schema"]
 
 
 def test_default_role_tools_hide_legacy_mutations(db):
@@ -808,6 +836,7 @@ def test_queue_decision_tool_names_covers_all_queue_tools():
     assert "queue_advance_decision" in tool_registry.QUEUE_DECISION_TOOL_NAMES
     assert "queue_reject_decision" in tool_registry.QUEUE_DECISION_TOOL_NAMES
     assert "queue_skip_assessment_reject_decision" in tool_registry.QUEUE_DECISION_TOOL_NAMES
+    assert "queue_escalate_decision" in tool_registry.QUEUE_DECISION_TOOL_NAMES
 
 
 def test_dispatch_unknown_tool_raises():
@@ -1054,6 +1083,92 @@ def test_queue_skip_assessment_reject_decision_creates_pending_row(db):
     assert result["decision_type"] == "skip_assessment_reject"
     decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
     assert decision.decision_type == "skip_assessment_reject"
+
+
+def test_evaluate_policy_then_queue_escalation_creates_pending_human_decision(db):
+    """An abstention is a real HITL decision, not a silently dropped verdict."""
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_decision_budget_per_cycle = 1
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Uncertain",
+        email="uncertain@x.test",
+        taali=61.0,
+        pipeline_stage="applied",
+    )
+    run = _make_agent_run(db, role)
+    verdict = PolicyDecision(
+        decision_type="escalate_low_confidence",
+        confidence=0.42,
+        reasoning="The CV and assessment signals disagree sharply.",
+        rule_path=["abstention_overlay:sharp_disagreement"],
+        decision_point="advance_to_interview",
+    )
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(verdict, {}),
+    ):
+        evaluated = tool_registry.dispatch(
+            "evaluate_policy",
+            {"application_id": app.id},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert evaluated["decision_type"] == "escalate_low_confidence"
+    assert run.__engine_verdicts__[int(app.id)] == "escalate_low_confidence"
+
+    result = tool_registry.dispatch(
+        "queue_escalate_decision",
+        {
+            "application_id": app.id,
+            "reasoning": evaluated["reasoning"],
+            "evidence": {"rule_path": evaluated["rule_path"]},
+            "confidence": evaluated["confidence"],
+        },
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+
+    assert result["status"] == "pending"
+    assert result["decision_type"] == "escalate_low_confidence"
+    assert run.decisions_emitted == 1
+    decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
+    assert decision.decision_type == "escalate_low_confidence"
+    assert decision.reasoning == verdict.reasoning
+    assert float(decision.confidence) == pytest.approx(0.42)
+    assert app.pipeline_stage == "applied"
+    assert app.application_outcome == "open"
+
+    second_app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Second",
+        email="second-uncertain@x.test",
+    )
+    blocked = tool_registry.dispatch(
+        "queue_escalate_decision",
+        {
+            "application_id": second_app.id,
+            "reasoning": "Another uncertain verdict.",
+            "evidence": {},
+            "confidence": 0.4,
+        },
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+    assert blocked["status"] == "blocked_by_governance"
+    assert "decision budget" in blocked["reason"]
 
 
 def test_queue_reject_idempotent_within_run(db):
@@ -1675,10 +1790,7 @@ def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
 
 
 def test_evaluate_policy_escalated_verdict_withholds_advance(db):
-    """When the engine escalates (low confidence), capture stores None (the
-    verdict is not a queueable noun), so a subsequent auto_promote advance is
-    withheld and routed to human review. Locks the fail-safe through the real
-    capture path — an escalated verdict must never auto-advance."""
+    """The escalation noun is captured, but never blesses an auto-advance."""
     from app.decision_policy.engine import PolicyDecision
 
     org = _make_org(db)
@@ -1705,8 +1817,8 @@ def test_evaluate_policy_escalated_verdict_withholds_advance(db):
             db=db, agent_run=run, role=role,
         )
 
-    assert run.__engine_verdicts__[int(app.id)] is None, (
-        "a non-queueable/escalated verdict must capture as None (no advance blessing)"
+    assert run.__engine_verdicts__[int(app.id)] == "escalate_low_confidence", (
+        "an escalation must remain queueable while withholding an advance blessing"
     )
 
     with patch.object(tool_registry.advance_stage, "run") as mock_advance:

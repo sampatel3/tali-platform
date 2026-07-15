@@ -19,6 +19,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from ..agent_chat.events import try_post_role_budget_pause_event
 from ..models.role import Role
 from ..agent_runtime.budget_guard import check_monthly_usd, pause_role
 
@@ -46,6 +47,11 @@ def can_spend_on_role(db: Session, *, role: Optional[Role]) -> bool:
         try:
             pause_role(db, role=role, reason=check.reason or "monthly USD cap reached")
             db.flush()
+            try_post_role_budget_pause_event(
+                db,
+                role=role,
+                reason=check.reason or "monthly USD cap reached",
+            )
         except Exception:
             logger.exception("auto-pause failed for role_id=%s", role.id)
     logger.info(

@@ -11,7 +11,7 @@ import { agent as agentApi, agentChat } from '../../shared/api';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
-import { Reveal } from '../../shared/motion';
+import { MotionAttentionBadge, Reveal } from '../../shared/motion';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
@@ -754,7 +754,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             aria-label="Show agent chat"
           >
             <MessageSquare size={18} />
-            {totalAttention > 0 && <span className="ac-badge-count">{totalAttention}</span>}
+            <MotionAttentionBadge
+              value={totalAttention}
+              className="ac-badge-count"
+              aria-label={`${totalAttention} agent update${totalAttention === 1 ? '' : 's'} awaiting you`}
+            />
           </button>
         ) : null}
       </div>
@@ -768,7 +772,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         onClick={() => onNavigate?.('chat-agents', { roleId: activeRoleId || undefined })}
       >
         <MessageSquare size={16} /> Chat with your agents
-        {totalAttention > 0 && <span className="ac-badge-count">{totalAttention}</span>}
+        <MotionAttentionBadge
+          value={totalAttention}
+          className="ac-badge-count"
+          aria-label={`${totalAttention} agent update${totalAttention === 1 ? '' : 's'} awaiting you`}
+        />
       </button>
     </div>
   );

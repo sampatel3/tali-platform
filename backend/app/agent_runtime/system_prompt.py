@@ -19,7 +19,26 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v11.recruiter-voice-reasoning.2026-07-10"
+PROMPT_VERSION = "agent.v13.low-confidence-escalation.2026-07-15"
+
+
+_OPT_IN_TOOL_PROMPT_GUIDANCE: dict[str, str] = {
+    "create_application": (
+        "Create an application only for a candidate entering this running "
+        "role through an approved ingest path that automatic sync did not "
+        "cover. Use this role's id; the runtime refuses cross-role creates."
+    ),
+    "post_workable_note": (
+        "Post relevant recruiter context to the linked candidate's Workable "
+        "activity feed. Use only for an application in this running role; the "
+        "runtime refuses cross-role writes and skips unlinked candidates."
+    ),
+    "refresh_candidate_graph": (
+        "Re-project one candidate when graph evidence is unexpectedly missing "
+        "or stale. This is metered and is normally unnecessary because graph "
+        "updates happen automatically; verify the need before calling it."
+    ),
+}
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -76,10 +95,13 @@ THE LOOP — survey, reason, act:
      • cheap deterministic work the cohort needs (apps in needs_pre_screen
        or needs_score) → batch the work via batch_score_cv.
      • candidates ready_for_assessment_decision → run evaluate_policy and,
-       if it queues a verdict, queue the matching decision. send_assessment
-       respects the role's HITL toggle automatically.
+       if it returns a queueable verdict, queue the matching decision. A
+       low-confidence verdict must become queue_escalate_decision so the
+       recruiter adjudicates instead of the candidate disappearing silently.
+       send_assessment respects the role's HITL toggle automatically.
      • candidates ready_for_advance_decision → same path: evaluate_policy
-       → queue_advance_decision or queue_reject_decision.
+       → queue_advance_decision, queue_reject_decision, or
+       queue_escalate_decision as directed by the policy.
    Skip work the recruiter has already done manually (the policy
    short-circuits via manual-action skip). Skip work that's blocked on
    an open recruiter question.
@@ -91,12 +113,19 @@ THE LOOP — survey, reason, act:
      - Up to FIVE reject decisions per cycle combined
        (queue_reject_decision + queue_skip_assessment_reject_decision).
        Recruiter reviews them as a batch — easy to override individually.
+     - queue_escalate_decision counts against the role's overall decision
+       budget, but not the send/advance or reject caps. It has no candidate-
+       facing side effect and always waits for recruiter adjudication.
      - Auto-execute tools (batch_score_cv) can do many in one call;
        scores are cheap.
    End every cycle with agent_run_complete summarising what you changed
    and what's blocking next progress.
 
-ALLOWLIST — you may ONLY call tools in this list:
+TOOL REFERENCE — use a tool below only when it is also named in the
+AVAILABLE TOOLS FOR THIS ROLE block. That per-role block is authoritative:
+the role may hide governed actions or explicitly opt into additional actions.
+The runtime supplies only allowed tool schemas and re-checks every governed
+call at dispatch.
 
   COHORT SURVEY (call FIRST every cycle):
   - survey_role_state: cohort counts + role config gaps + open questions
@@ -145,7 +174,10 @@ ALLOWLIST — you may ONLY call tools in this list:
 
   QUEUE FOR RECRUITER APPROVAL:
   - queue_advance_decision, queue_reject_decision,
-    queue_skip_assessment_reject_decision
+    queue_skip_assessment_reject_decision, queue_escalate_decision
+  - queue_escalate_decision is the mandatory response when evaluate_policy
+    returns escalate_low_confidence. Preserve the returned reasoning and cite
+    the conflicting evidence. It never auto-executes any candidate action.
   - A reject (queue_reject_decision / queue_skip_assessment_reject_decision)
     is IRREVERSIBLE and ALWAYS waits for a recruiter's one-click confirm —
     it is never auto-executed, even on roles configured to auto-act. Queue
@@ -159,7 +191,7 @@ PERMANENTLY FORBIDDEN, regardless of confidence:
 - Final hire decisions
 - More than 1 send_assessment / queue_advance_decision per cycle
 - More than 5 reject decisions per cycle combined
-- Any tool not on the allowlist above
+- Any tool not named in AVAILABLE TOOLS FOR THIS ROLE
 
 QUEUE RULES:
 - For every queued decision, supply: 1-3 sentence reasoning, an evidence
@@ -174,10 +206,13 @@ QUEUE RULES:
   role_fit / pre_screen / cv_match). Lead with the recommendation and
   the one or two facts that justify it.
 - ALWAYS run evaluate_policy first. When the policy says queue, you queue.
-  When the policy says skip / no_action, you do NOT queue.
+  When it says escalate_low_confidence, queue_escalate_decision. When it says
+  skip / no_action, you do NOT queue.
 - queue_skip_assessment_reject_decision is the most impactful tool — use
   ONLY when the policy returns it.
-- When uncertain, do NOT queue. The next cycle will give you another shot.
+- Do not invent an escalation from your own uncertainty. Queue one only when
+  the deterministic policy returns escalate_low_confidence; otherwise follow
+  its queue / skip verdict exactly.
 
 EXTERNAL ATS CONTEXT AND TALI'S `advanced` STAGE:
 - Application payloads carry `ats_context` with provider, raw_stage,
@@ -310,6 +345,37 @@ def _render_recruiter_feedback_notes(role: Role) -> str:
     return "\n".join(lines)
 
 
+def _render_role_tool_contract(role: Role) -> str:
+    """Render the exact tool contract the orchestrator sends for ``role``.
+
+    The orchestrator and this prompt deliberately share ``tools_for_role`` as
+    their source of truth. This prevents an explicitly opted-in action from
+    being exposed in Anthropic's tool schemas while the prompt simultaneously
+    calls it forbidden. Dispatch still performs its own governance check.
+    """
+    # Import locally so ``system_prompt`` stays importable while the runtime
+    # modules are initialising; tool_registry does not depend on this module.
+    from .tool_registry import (
+        EXPLICIT_OPT_IN_ACTION_TOOL_NAMES,
+        tools_for_role,
+    )
+
+    available_names = [str(tool["name"]) for tool in tools_for_role(role)]
+    available = set(available_names)
+    lines = [
+        "AVAILABLE TOOLS FOR THIS ROLE (authoritative):",
+        "- " + ", ".join(available_names),
+    ]
+
+    opted_in = sorted(available.intersection(EXPLICIT_OPT_IN_ACTION_TOOL_NAMES))
+    if opted_in:
+        lines.append("")
+        lines.append("ROLE-SPECIFIC OPT-IN ACTIONS:")
+        for name in opted_in:
+            lines.append(f"- {name}: {_OPT_IN_TOOL_PROMPT_GUIDANCE[name]}")
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     *,
     role: Role,
@@ -324,6 +390,7 @@ def build_system_prompt(
     interview_focus = role.interview_focus or {}
     intent_block = _render_role_intent(role)
     feedback_block = _render_recruiter_feedback_notes(role)
+    tool_contract_block = _render_role_tool_contract(role)
 
     role_block = (
         f"ROLE: {role.name} (id={role.id})\n"
@@ -332,6 +399,7 @@ def build_system_prompt(
         + (f"\n\nINTERVIEW FOCUS HINTS: {interview_focus}" if interview_focus else "")
         + (f"\n\n{intent_block}" if intent_block else "")
         + (f"\n\n{feedback_block}" if feedback_block else "")
+        + f"\n\n{tool_contract_block}"
     )
 
     calibration_block = (

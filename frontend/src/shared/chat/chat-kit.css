@@ -191,6 +191,66 @@
 .tk-empty.is-compact .tk-suggest-q { font-size: var(--fs-body); }
 
 /* ============ Messages ============ */
+/* MotionList adds one layout-aware wrapper per transcript row. Keeping that
+   wrapper as a full-width flex column preserves the message bubble's own
+   assistant-left / recruiter-right alignment. */
+.tk-motion-row {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+/* A transcript update that arrives while the reader is away from the bottom
+   should be discoverable without moving their reading position. Surfaces only
+   provide the bottom offset; the compact design and Motion behavior are shared. */
+.tk-new-update-anchor {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 8;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+}
+.tk-new-update-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--purple-2);
+  box-shadow: 0 8px 24px rgba(29, 23, 48, 0.14);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.tk-new-update-btn:hover { background: var(--purple-soft); }
+.tk-new-update-btn:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+.tk-new-update-status,
+.tk-composer-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* User message + its timestamp, right-aligned as a column so the time sits
    neatly under the ink pill. */
 .tk-msg-user-wrap {

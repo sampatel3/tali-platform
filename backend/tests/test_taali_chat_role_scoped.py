@@ -26,7 +26,7 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.user import User
-from app.taali_chat.service import _ensure_conversation
+from app.taali_chat.service import _arguments_with_role_scope, _ensure_conversation
 from app.taali_chat.system_prompt import build_system_blocks as _build_system_blocks
 
 
@@ -128,6 +128,37 @@ def test_ensure_conversation_unscoped_when_role_id_is_none(db):
     db.commit()
     db.refresh(convo)
     assert convo.role_id is None
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "search_applications",
+        "find_top_candidates",
+        "screen_pool_against_requirement",
+        "nl_search_candidates",
+        "list_recent_agent_decisions",
+        "list_recent_agent_runs",
+        "get_recruiting_overview",
+        "list_assessments",
+    ],
+)
+def test_role_scoped_chat_defaults_every_optional_role_tool(tool_name):
+    assert _arguments_with_role_scope(
+        tool_name, {}, conversation_role_id=42
+    )["role_id"] == 42
+
+
+def test_role_scoped_chat_preserves_an_explicit_cross_role_request():
+    assert _arguments_with_role_scope(
+        "search_applications", {"role_id": 99}, conversation_role_id=42
+    )["role_id"] == 99
+
+
+def test_unscoped_chat_does_not_add_role_id():
+    assert _arguments_with_role_scope(
+        "search_applications", {}, conversation_role_id=None
+    ) == {}
 
 
 # ---------------------------------------------------------------------------

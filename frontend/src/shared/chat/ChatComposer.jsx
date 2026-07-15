@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ArrowUp, Mic, Square } from 'lucide-react';
 
 import { MotionLoop } from '../motion';
@@ -23,7 +23,7 @@ const SpeechRecognitionImpl =
 //               'cmd'   → ⌘/Ctrl+Enter sends, Enter newline (candidate workspace)
 //   streaming: show a Stop button instead of Send (Search's streamed turns)
 //   busy:      a turn is running → disable the input
-export function ChatComposer({
+export const ChatComposer = forwardRef(function ChatComposer({
   value,
   onChange,
   onSubmit,
@@ -38,8 +38,9 @@ export function ChatComposer({
   // When true AND the browser supports the Web Speech API, a mic button appears
   // that dictates into the box — handy for hiring managers briefing on a phone.
   voice = false,
-}) {
+}, forwardedRef) {
   const ref = useRef(null);
+  useImperativeHandle(forwardedRef, () => ref.current);
   useEffect(() => autosize(ref.current), [value]);
 
   // ---- voice dictation ----
@@ -162,6 +163,6 @@ export function ChatComposer({
       </div>
     </form>
   );
-}
+});
 
 export default ChatComposer;

@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import event
 
+from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
 from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
@@ -64,6 +65,7 @@ def _make_role(
         organization_id=org.id,
         name=name,
         source="manual",
+        job_spec_text="Requirements\n- Backend engineering experience\n",
         agentic_mode_enabled=agentic,
         monthly_usd_budget_cents=5000,
         job_spec_text="Backend role\n\nRequirements\n- Python\n",
@@ -285,6 +287,9 @@ def test_initial_user_message_emits_proactive_sweep_variant_for_cron_trigger():
     assert "survey_role_state" in msg
     assert "batch_score_cv" in msg
     assert "agent_run_complete" in msg
+    # Abstention must create a recruiter-visible decision, never disappear.
+    assert "queue_escalate_decision" in msg
+    assert "skip / no_action / escalate_low_confidence" not in msg
     # Per-cycle decision caps split by risk: 1 send/advance, 5 rejects.
     assert "≤ 1 send_assessment" in msg or "1 send_assessment" in msg
     assert "≤ 5 reject" in msg or "5 reject" in msg
@@ -354,3 +359,66 @@ def test_agent_expire_stuck_runs_marks_long_runs_failed(db):
     assert stuck.finished_at is not None
     assert fresh.status == "running"  # not touched
     assert fresh.error is None
+    event_rows = (
+        db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.role_id == int(role.id),
+            AgentConversationMessage.kind == MESSAGE_KIND_EVENT,
+        )
+        .all()
+    )
+    assert len(event_rows) == 1
+    assert event_rows[0].actions[0]["source"]["id"] == int(stuck.id)
+
+
+def test_terminal_run_event_reconciler_backfills_once(db):
+    from datetime import datetime, timezone
+
+    from app.tasks import agent_tasks
+    from sqlalchemy.orm import sessionmaker
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    run = AgentRun(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        trigger="cron",
+        status="failed",
+        error="anthropic call failed: temporary provider outage",
+        model_version="m",
+        prompt_version="p",
+        finished_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.commit()
+
+    TestingSessionLocal = sessionmaker(
+        bind=db.bind, autocommit=False, autoflush=False, expire_on_commit=False
+    )
+    with patch("app.platform.database.SessionLocal", new=TestingSessionLocal):
+        first = agent_tasks.agent_publish_terminal_run_events.run()
+        second = agent_tasks.agent_publish_terminal_run_events.run()
+
+    assert first == {"status": "ok", "attempted": 1, "emitted": 1}
+    assert second == {"status": "ok", "attempted": 1, "emitted": 0}
+    rows = (
+        db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.role_id == int(role.id),
+            AgentConversationMessage.kind == MESSAGE_KIND_EVENT,
+        )
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].source_key
+
+
+def test_daily_review_uses_fixed_utc_schedule():
+    from celery.schedules import crontab
+
+    from app.tasks.celery_app import celery_app
+
+    schedule = celery_app.conf.beat_schedule["agent-daily-review-sweep"]["schedule"]
+    assert isinstance(schedule, crontab)
+    assert schedule.hour == {4}
+    assert schedule.minute == {30}

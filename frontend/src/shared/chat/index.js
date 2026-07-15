@@ -8,3 +8,5 @@ export { ChatMarkdown } from './ChatMarkdown';
 export { ChatMessage } from './ChatMessage';
 export { ChatEmptyState } from './ChatEmptyState';
 export { ThinkingDots } from './ThinkingDots';
+export { NewMessageNotice } from './NewMessageNotice';
+export { useAgentUpdateAwareness } from './useAgentUpdateAwareness';

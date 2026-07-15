@@ -1,0 +1,58 @@
+.agent-decision-timeline-card {
+  width: 100%;
+  min-width: 0;
+}
+
+.agent-decision-timeline-card .rq-hybrid-detail {
+  min-width: 0;
+}
+
+.agent-decision-timeline-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-3);
+  color: var(--mute);
+  font-size: var(--fs-caption);
+}
+
+.agent-decision-timeline-status.is-error {
+  border-color: var(--purple-lav);
+  background: var(--purple-tint);
+  color: var(--purple-2);
+}
+
+/* The Home dock is intentionally narrow. Keep the canonical card intact, but
+   let its links and action controls stack rather than overflow the 384px rail. */
+.ac-stream .agent-decision-timeline-card .rq-hybrid-detail {
+  padding: 14px;
+  border-radius: 12px;
+}
+
+.ac-stream .agent-decision-timeline-card .rq-detail-head2 {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.ac-stream .agent-decision-timeline-card .rq-detail-links,
+.ac-stream .agent-decision-timeline-card .rq-action-bar,
+.ac-stream .agent-decision-timeline-card .rq-action-l {
+  align-items: stretch;
+  flex-direction: column;
+  width: 100%;
+}
+
+.ac-stream .agent-decision-timeline-card .rq-detail-links .taali-btn,
+.ac-stream .agent-decision-timeline-card .rq-action-bar .taali-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.ac-stream .agent-decision-timeline-card .rq-req-nm {
+  width: 110px;
+}
