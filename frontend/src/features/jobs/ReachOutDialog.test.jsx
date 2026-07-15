@@ -34,7 +34,7 @@ describe('ReachOutDialog', () => {
     outreachApi.approveAndSend.mockImplementation((_id, confirm) =>
       confirm
         ? Promise.resolve({ data: { status: 'sending' } })
-        : Promise.resolve({ data: { sendable_count: 2, will_send: 2, suppressed_excluded: 0, rejected_excluded: 0, failed_excluded: 0 } }));
+        : Promise.resolve({ data: { sendable_count: 2, will_send: 2, suppressed_excluded: 0, rejected_excluded: 0, failed_excluded: 0, review_token: 'review-77' } }));
   });
 
   afterEach(() => vi.useRealTimers());
@@ -70,7 +70,7 @@ describe('ReachOutDialog', () => {
 
     // Confirm the send — this is the only auto-send trigger.
     await act(async () => { fireEvent.click(screen.getByText(/Send 2 messages/)); });
-    expect(outreachApi.approveAndSend).toHaveBeenCalledWith(77, true);
+    expect(outreachApi.approveAndSend).toHaveBeenCalledWith(77, true, 2, 'review-77');
     expect(screen.getByText('Outreach on its way')).toBeInTheDocument();
     expect(onCompleted).toHaveBeenCalledWith(77);
 

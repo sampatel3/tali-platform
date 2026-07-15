@@ -99,10 +99,9 @@
 
 .job-stats {
   display: grid;
-  /* Six stages (Sourced · Applied · Scored · Invited · Advanced · Rejected).
-     minmax(0,1fr) lets wide counts (e.g. 1,055) shrink to fit rather than
-     overflow and push a tile onto a second row. */
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  /* Sourced is conditional until the role has sourced prospects. The card
+     sets the visible stage count; minmax keeps wide values from overflowing. */
+  grid-template-columns: repeat(var(--job-stage-count, 6), minmax(0, 1fr));
   margin-top: 16px;
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -1311,8 +1310,8 @@
   color: var(--bg);
 }
 
-/* "Source candidates" panel — copy-paste LinkedIn X-ray/boolean + a
-   paste-a-profile outreach draft. Collapsible, purple-tinted like req-spec. */
+/* Shared shell for the explicit manual-distribution fallback. The historical
+   src-* class prefix stays internal; no sourcing panel uses it. */
 .role-sec.src-panel {
   background: var(--purple-soft);
   border: 1px solid color-mix(in oklab, var(--purple) 18%, transparent);
@@ -1366,8 +1365,7 @@
   text-transform: uppercase;
   color: var(--ink-2);
 }
-.src-string,
-.src-refined {
+.src-string {
   margin: 0 0 10px;
 }
 .src-string-head {
@@ -1406,24 +1404,6 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
-.src-synonyms {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: var(--fs-body);
-  color: var(--ink-2);
-  margin: 0 0 10px;
-}
-.src-refined {
-  border-top: 1px dashed color-mix(in oklab, var(--purple) 22%, transparent);
-  padding-top: 10px;
-}
-.src-refined-label {
-  font-size: var(--fs-body);
-  font-weight: 600;
-  color: var(--ink);
-  margin: 0 0 6px;
-}
 .src-warn {
   font-size: var(--fs-body);
   color: var(--ink-2);
@@ -1437,41 +1417,7 @@
   resize: vertical;
   margin: 0 0 10px;
 }
-.src-draft-controls {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.src-select {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: var(--fs-caption);
-  color: var(--mute);
-}
-.src-draft {
-  margin-top: 12px;
-}
-.src-draft-subject {
-  font-size: var(--fs-body);
-  color: var(--ink-2);
-  margin: 0 0 8px;
-}
-.src-draft-body {
-  font-family: inherit;
-  font-size: var(--fs-body);
-  line-height: 1.6;
-  color: var(--ink);
-  background: var(--surface, #fff);
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  padding: 10px 12px;
-  white-space: pre-wrap;
-  margin: 0 0 8px;
-}
-
-/* Distribute-this-role panel — reuses the .src-panel shell above. */
+/* Manual distribution panel — reuses the .src-panel shell above. */
 .dist-post {
   font-size: 0.84375rem;
   line-height: 1.5;

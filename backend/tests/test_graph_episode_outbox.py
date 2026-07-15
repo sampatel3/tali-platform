@@ -103,8 +103,8 @@ def _seed_advance(db):
 def _enqueue_pending(db):
     """Record an advance outcome → one pending outbox row. Commits."""
     org, role, app, decision = _seed_advance(db)
-    outcome_learning.record_advance_outcome_on_stage(
-        db, application=app, new_stage="advanced"
+    outcome_learning.record_interview_outcome_on_recruiter_stage(
+        db, application=app, new_stage="interviewing"
     )
     db.commit()
     return org, role, app, decision
@@ -124,8 +124,8 @@ def test_outcome_lands_in_outbox_when_graph_unconfigured_and_raising(db):
     ), patch.object(
         episode_module, "dispatch", side_effect=RuntimeError("graph down")
     ):
-        outcome_learning.record_advance_outcome_on_stage(
-            db, application=app, new_stage="advanced"
+        outcome_learning.record_interview_outcome_on_recruiter_stage(
+            db, application=app, new_stage="interviewing"
         )
         db.commit()
 
@@ -152,11 +152,11 @@ def test_enqueue_is_idempotent_on_dedup_key(db):
     """Re-firing the same transition must not create a duplicate outbox row."""
     org, role, app, decision = _seed_advance(db)
 
-    outcome_learning.record_advance_outcome_on_stage(
-        db, application=app, new_stage="advanced"
+    outcome_learning.record_interview_outcome_on_recruiter_stage(
+        db, application=app, new_stage="interviewing"
     )
-    outcome_learning.record_advance_outcome_on_stage(
-        db, application=app, new_stage="advanced"
+    outcome_learning.record_interview_outcome_on_recruiter_stage(
+        db, application=app, new_stage="interviewing"
     )
     db.commit()
 

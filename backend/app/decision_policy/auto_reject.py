@@ -62,8 +62,9 @@ def evaluate_auto_reject_decision(
     # auto-disqualify write-back (still opt-in), via either:
     #   1. the legacy org-level Workable switch (``config['enabled']``), OR
     #   2. role-level ``agentic_mode_enabled`` (agent-managed roles).
-    # The caller additionally requires ``role.auto_reject``; when neither path
-    # is eligible the reject is carded for manual review instead of written back.
+    # The caller additionally requires either ``role.auto_reject`` or the
+    # narrower ``role.auto_reject_pre_screen`` opt-in; when neither path is
+    # eligible the reject is carded for manual review instead of written back.
     role_paused = bool(
         role is not None and getattr(role, "agent_paused_at", None) is not None
     )

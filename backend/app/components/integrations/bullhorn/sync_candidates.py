@@ -13,9 +13,9 @@ Keys / dedup, consistent with the existing candidate dedup:
 needs-mapping: a JobSubmission status with no :class:`AtsStageMap` row is NEVER
 guessed. We store the raw status on ``bullhorn_status`` (so it's visible + shows
 up in the needs-mapping list) and leave the application at the funnel top
-(``applied``). A mapped status sets the Taali ``pipeline_stage`` (and, when the
-mapping is a reject, the ``rejected`` outcome) via the shared pipeline
-transitions.
+(``applied``). Pre-handoff mappings still update Tali's evaluation stage; the
+historically overloaded ``advanced`` mapping now updates the provider-neutral
+``recruiter_stage`` instead (and reject mappings update the outcome).
 
 Cost safety (hard rule): a freshly-created application enqueues scoring via the
 SAME shared path Workable import uses (``on_application_created``), only while
@@ -56,6 +56,10 @@ from ....services.document_service import (
     sanitize_text_for_storage,
 )
 from ....services.pre_screening_service import refresh_pre_screening_fields
+from ....services.recruiter_stage_service import (
+    mark_external_stage_mapping_resolved,
+    sync_from_external,
+)
 from ....services.job_page_lifecycle import role_allows_new_paid_ats_work
 from ....services.s3_service import generate_s3_key, upload_bytes_to_s3
 from . import stage_map as stage_map_mod
@@ -181,14 +185,14 @@ def _apply_stage_mapping(
     created: bool,
     now: datetime,
 ) -> None:
-    """Set Taali pipeline stage/outcome from the mapped status; needs-mapping → funnel top.
+    """Sync downstream hiring stage/outcome; needs-mapping stays fail-closed.
 
     Always records the raw ``bullhorn_status`` so an unmapped status stays
-    visible. A mapped status drives a shared pipeline transition (idempotent —
-    no-ops when already at the target). We never *demote* a resolved application
-    or overwrite a locally-advanced stage from a remote wobble: the transition
-    helpers guard their own no-op cases, and we skip mapping entirely for an
-    already-resolved row (its decision snapshot is frozen).
+    visible. A mapped status drives the provider-neutral recruiter-stage and
+    outcome services. Pre-handoff mappings remain compatible, but ``advanced``
+    is Tali's explicit evaluation handoff, not a synonym for a Bullhorn
+    interview, placement, or rejection. Resolved rows still receive downstream
+    status and outcome corrections while their Tali decision snapshot is frozen.
     """
     app.bullhorn_status = sanitize_text_for_storage(remote_status) if remote_status else None
     app.external_stage_raw = sanitize_text_for_storage(remote_status) if remote_status else None
@@ -198,20 +202,43 @@ def _apply_stage_mapping(
     # raw-without-normalized as needs_mapping and fail closed for automation.
     app.external_stage_normalized = None
 
+    config = org.bullhorn_config if isinstance(org.bullhorn_config, dict) else {}
+
+    def _configured_status(key: str) -> str:
+        return str(config.get(key) or "").strip()
+
+    def _matches_configured(key: str) -> bool:
+        configured = _configured_status(key)
+        return bool(configured and configured.casefold() == remote_status.strip().casefold())
+
+    is_configured_interview = _matches_configured("interviewScheduledJobResponseStatus")
+    is_confirmed_placement = _matches_configured("confirmedJobResponseStatus")
+    is_configured_reject = _matches_configured("rejectedJobResponseStatus")
     mapping = stage_map_mod.resolve_stage(db, org, remote_status)
+    explicitly_categorized = (
+        is_configured_interview or is_confirmed_placement or is_configured_reject
+    )
     if mapping is not None:
         app.external_stage_normalized = normalize_pipeline_key(mapping.taali_stage)
+    elif is_configured_interview or is_confirmed_placement:
+        # Both categorization settings are post-evaluation milestones. Keep the
+        # external normalized value compatible with the seeded stage-map row,
+        # but never turn it into Tali's explicit evaluation handoff.
+        app.external_stage_normalized = "advanced"
+    elif is_configured_reject:
+        app.external_stage_normalized = "rejected"
 
-    if is_resolved(app):
-        # Frozen: keep the remote status current for the trail, but do not move
-        # the Taali stage or re-open a decision. The normalized read context is
-        # still refreshed above so agents do not call a known status unmapped.
-        return
-
-    if mapping is None:
+    if mapping is None and not explicitly_categorized:
         # needs-mapping: do NOT guess. A freshly-created row already sits at the
-        # funnel top from the create defaults; an existing row is left where the
-        # recruiter/agent put it. The raw status above surfaces it for mapping.
+        # funnel top from the create defaults. Clear any previously synchronized
+        # recruiter stage so the application cannot silently display stale truth;
+        # the durable sync exception drives the mapping support surface.
+        sync_from_external(
+            db,
+            app=app,
+            raw_stage=remote_status,
+            provider="bullhorn",
+        )
         if created:
             logger.info(
                 "Bullhorn status needs mapping org_id=%s app_id=%s status=%r — left at funnel top",
@@ -222,16 +249,70 @@ def _apply_stage_mapping(
         return
 
     try:
-        transition_stage(
-            db,
-            app=app,
-            to_stage=mapping.taali_stage,
-            source="sync",
-            actor_type="sync",
-            reason=f"Bullhorn status mapped: {remote_status}",
-            metadata={"bullhorn_status": remote_status, "is_reject": mapping.is_reject},
+        # Bullhorn's configured interview/confirmed statuses are authoritative
+        # semantic categories even when their tenant labels are arbitrary.
+        mapped_pipeline_stage = (
+            normalize_pipeline_key(mapping.taali_stage)
+            if mapping is not None
+            else "advanced"
         )
-        if mapping.is_reject and (app.application_outcome or "open").lower() != "rejected":
+        is_reject = bool((mapping and mapping.is_reject) or is_configured_reject)
+
+        if (
+            mapping is not None
+            and mapped_pipeline_stage != "advanced"
+            and not is_reject
+            and not is_configured_interview
+            and not is_confirmed_placement
+            and not is_resolved(app)
+        ):
+            # Preserve configured pre-handoff evaluation mappings. Only the
+            # overloaded ``advanced`` target moved to the hiring-stage axis.
+            transition_stage(
+                db,
+                app=app,
+                to_stage=mapped_pipeline_stage,
+                source="sync",
+                actor_type="sync",
+                reason=f"Bullhorn status mapped: {remote_status}",
+                metadata={"bullhorn_status": remote_status, "is_reject": False},
+            )
+
+        if is_confirmed_placement:
+            sync_from_external(
+                db,
+                app=app,
+                raw_stage=remote_status,
+                provider="bullhorn",
+                force_stage="hired",
+            )
+        elif is_configured_interview or mapped_pipeline_stage == "advanced":
+            sync_from_external(
+                db,
+                app=app,
+                raw_stage=remote_status,
+                provider="bullhorn",
+                force_stage="interviewing",
+            )
+        elif not is_reject:
+            # A non-terminal AtsStageMap row is an explicit provider mapping.
+            # Its Tali evaluation transition remains separate; the downstream
+            # hiring axis truthfully stays in screening until handoff.
+            sync_from_external(
+                db,
+                app=app,
+                raw_stage=remote_status,
+                provider="bullhorn",
+                force_stage="screening",
+            )
+        else:
+            mark_external_stage_mapping_resolved(
+                app,
+                provider="bullhorn",
+                raw_stage=remote_status,
+            )
+
+        if is_reject and (app.application_outcome or "open").lower() != "rejected":
             transition_outcome(
                 db,
                 app=app,
@@ -446,6 +527,18 @@ def sync_submission(
         db.add(app)
         created_application = True
 
+    # A sourced lead is deliberately pre-application and therefore unscored.
+    # The first JobSubmission id is the durable signal that the person has now
+    # applied in Bullhorn. Reuse the sourced row (the candidate/role uniqueness
+    # constraint requires it), but move it through the audited engagement edge
+    # before the normal intake-event tail below. The external id + stage event
+    # are committed by the caller in the same transaction.
+    sourced_application_engaged = bool(
+        not created_application
+        and not (app.bullhorn_job_submission_id or "").strip()
+        and (app.pipeline_stage or "").strip().lower() == "sourced"
+    )
+
     app.deleted_at = None
     app.source = "bullhorn"
     app.bullhorn_job_submission_id = sanitize_text_for_storage(submission_id)
@@ -461,6 +554,20 @@ def sync_submission(
     if created_application:
         initialize_pipeline_event_if_missing(
             db, app=app, actor_type="sync", reason="Imported from Bullhorn"
+        )
+    elif sourced_application_engaged:
+        transition_stage(
+            db,
+            app=app,
+            to_stage="applied",
+            source="system",
+            actor_type="sync",
+            reason="Sourced prospect engaged — application linked from Bullhorn",
+            metadata={
+                "provider": "bullhorn",
+                "bullhorn_job_submission_id": submission_id,
+            },
+            idempotency_key=f"sourced_engaged:bullhorn:{submission_id}",
         )
 
     app.external_refs = sanitize_json_for_storage(
@@ -484,7 +591,8 @@ def sync_submission(
     )
     app.last_synced_at = now
 
-    # Map the remote status → Taali stage (needs-mapping stays at funnel top).
+    # Map the remote status onto the downstream hiring axis. The Tali evaluation
+    # stage is intentionally untouched (needs-mapping stays fail-closed).
     _apply_stage_mapping(
         db, org, app=app, remote_status=remote_status, created=created_application, now=now
     )
@@ -513,7 +621,9 @@ def sync_submission(
     # or first-score work. Re-syncs never re-score, and existing queued work is
     # deliberately not cancelled by this ingest-time gate.
     paid_work_allowed = role_allows_new_paid_ats_work(role)
-    auto_score = bool(created_application and paid_work_allowed)
+    auto_score = bool(
+        (created_application or sourced_application_engaged) and paid_work_allowed
+    )
     on_application_created(
         app,
         score=auto_score,

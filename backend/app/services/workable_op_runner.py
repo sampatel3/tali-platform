@@ -137,6 +137,13 @@ def _route_bullhorn_op(
         .first()
     )
     if app is None:
+        if payload.get("auto_advance_decision_id") is not None:
+            raise WorkableWritebackError(
+                action="auto_advance",
+                code="not_linked",
+                message="Application no longer exists for ATS auto-advance",
+                retriable=False,
+            )
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
     provider = resolve_application_ats_provider(org, db, app)
     if not isinstance(provider, BullhornProvider):
@@ -169,7 +176,14 @@ def _route_bullhorn_op(
 # ---------------------------------------------------------------------------
 
 
-def _requeue_decision(db: Session, decision_id: int, organization_id: int, *, note: str) -> None:
+def _requeue_decision(
+    db: Session,
+    decision_id: int,
+    organization_id: int,
+    *,
+    note: str,
+    hold: dict[str, Any] | None = None,
+) -> None:
     """Return a processing decision to the Hub queue (status → pending)."""
     decision = (
         db.query(AgentDecision)
@@ -183,6 +197,18 @@ def _requeue_decision(db: Session, decision_id: int, organization_id: int, *, no
         return
     decision.status = "pending"
     decision.resolution_note = (note or "")[:500] or None
+    if hold:
+        evidence = dict(decision.evidence or {})
+        evidence["auto_execute_hold"] = dict(hold)
+        dispatch = dict(evidence.get("auto_advance_dispatch") or {})
+        dispatch.update(
+            {
+                "status": "failed",
+                "code": str(hold.get("code") or hold.get("status") or "ats_writeback_failed"),
+            }
+        )
+        evidence["auto_advance_dispatch"] = dispatch
+        decision.evidence = evidence
     db.commit()
 
 
@@ -484,17 +510,67 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
         )
         .first()
     )
-    if app is None or not app.workable_candidate_id:
+    auto_decision_id = payload.get("auto_advance_decision_id")
+    if app is None:
+        if auto_decision_id is not None:
+            raise WorkableWritebackError(
+                action="auto_advance",
+                code="not_linked",
+                message="Application no longer exists for ATS auto-advance",
+                retriable=False,
+            )
+        return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
+    if not app.workable_candidate_id:
+        if auto_decision_id is not None:
+            raise WorkableWritebackError(
+                action="auto_advance",
+                code="not_linked",
+                message="Application is no longer linked to Workable",
+                retriable=False,
+            )
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
     org = db.query(Organization).filter(Organization.id == organization_id).first()
     role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
 
+    auto_context = None
+    if auto_decision_id is not None:
+        from ..actions import auto_advance_decision
+
+        auto_context = auto_advance_decision.preflight(
+            db,
+            organization_id=int(organization_id),
+            decision_id=int(auto_decision_id),
+            application=app,
+        )
+        if auto_context is None:
+            return {
+                "status": "skipped",
+                "reason": "decision_not_processing",
+                "application_id": application_id,
+            }
+        if not target_stage:
+            raise WorkableWritebackError(
+                action="auto_advance",
+                code="missing_target_stage",
+                message=str(payload.get("target_stage_error") or "Workable interview stage is not configured"),
+                retriable=False,
+            )
+
     with strict_workable_writes():
-        move_candidate_in_workable(
+        move_result = move_candidate_in_workable(
             org=org,
             candidate_id=str(app.workable_candidate_id),
             target_stage=target_stage,
             role=role,
+        )
+    if auto_context is not None and not move_result.get("success"):
+        # Read-only mode deliberately returns a skipped result even under strict
+        # mode. Autonomous external handoff cannot treat that as confirmation.
+        raise WorkableWritebackError(
+            action="auto_advance",
+            code=str(move_result.get("code") or "no_write"),
+            message=str(move_result.get("message") or "Workable move was not written"),
+            retriable=False,
         )
     app.workable_stage = target_stage
     # Local-write-wins: stamp so the candidate sync won't revert this fresh move.
@@ -503,13 +579,21 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
         db,
         app=app,
         event_type="workable_moved",
-        actor_type="recruiter",
-        actor_id=user_id,
-        reason=reason or "Recruiter handed candidate back to Workable",
+        actor_type=str(payload.get("actor_type") or "recruiter"),
+        actor_id=payload.get("actor_id", user_id),
+        reason=reason or "Candidate handed back to Workable",
         metadata={"target_stage": target_stage, "workable_candidate_id": app.workable_candidate_id},
     )
     mapped_stage, _ = map_legacy_status_to_pipeline(target_stage)
-    if mapped_stage == "advanced" and is_post_handover_workable_stage(target_stage):
+    if auto_context is not None:
+        from ..actions import auto_advance_decision
+
+        auto_advance_decision.complete(
+            db,
+            context=auto_context,
+            reason=reason,
+        )
+    elif mapped_stage == "advanced" and is_post_handover_workable_stage(target_stage):
         transition_stage(
             db,
             app=app,
@@ -798,6 +882,20 @@ def surface_op_failure(
             for d_id in (payload.get("decision_ids") or []):
                 _requeue_decision(db, int(d_id), int(organization_id), note=note)
             return
+        auto_decision_id = payload.get("auto_advance_decision_id")
+        if op_type == OP_MOVE_STAGE and auto_decision_id is not None:
+            _requeue_decision(
+                db,
+                int(auto_decision_id),
+                int(organization_id),
+                note=note,
+                hold={
+                    "status": "ats_writeback_failed",
+                    "code": error.code,
+                    "detail": note,
+                    "provider": provider_slug,
+                },
+            )
         application_id = payload.get("application_id")
         if application_id is None:
             return

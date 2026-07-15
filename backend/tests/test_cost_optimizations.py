@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -191,16 +192,48 @@ def test_auto_enqueue_scoring_skips_backoff_blocked_apps(db):
 # P2b — cohort tick early-exit
 # ---------------------------------------------------------------------------
 
-def test_cycle_would_be_noop_when_survey_empty(db):
-    """If the survey shows no decision-eligible candidates, no open
-    questions, and no intent gaps, the cycle would just call Claude
-    for a 'nothing to do' summary. Skip it."""
+def _seed_recent_sourcing_run(db, *, org, role, run_id: int) -> None:
+    db.add(
+        AgentRun(
+            id=run_id,
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            trigger="cron",
+            status="succeeded",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            tools_called=[{"name": "rediscover_candidates", "count": 1}],
+        )
+    )
+    db.flush()
+
+
+def test_cycle_runs_once_to_autonomously_source_when_survey_empty(db):
+    """An empty funnel is sourcing work, not a reason to wait for a human."""
     from app.tasks.agent_tasks import _cycle_would_be_noop
 
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.flush()
     role = Role(organization_id=org.id, name="R", source="manual", agentic_mode_enabled=True, monthly_usd_budget_cents=5000, job_spec_text="hire")
     db.add(role); db.flush()
+
+    fake_survey = {
+        "counts": {"ready_for_assessment_decision": 0, "ready_for_advance_decision": 0, "needs_pre_screen": 0, "needs_score": 0},
+        "open_recruiter_questions": [],
+        "intent_gaps": [],
+    }
+    with patch("app.agent_runtime.cohort_tools.survey_role_state", return_value=fake_survey):
+        assert _cycle_would_be_noop(db, role=role) is False
+
+
+def test_cycle_would_be_noop_after_recent_empty_source_search(db):
+    """After a source search yields nothing, wait a day before paying again."""
+    from app.tasks.agent_tasks import _cycle_would_be_noop
+
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", agentic_mode_enabled=True, monthly_usd_budget_cents=5000, job_spec_text="hire")
+    db.add(role); db.flush()
+    _seed_recent_sourcing_run(db, org=org, role=role, run_id=900001)
 
     fake_survey = {
         "counts": {"ready_for_assessment_decision": 0, "ready_for_advance_decision": 0, "needs_pre_screen": 0, "needs_score": 0},
@@ -229,14 +262,15 @@ def test_cycle_runs_when_actionable_candidates_exist(db):
         assert _cycle_would_be_noop(db, role=role) is False
 
 
-def test_cycle_runs_when_open_recruiter_questions(db):
-    """Open recruiter inputs need the agent to acknowledge/use them."""
+def test_cycle_skips_when_only_open_setup_question_exists(db):
+    """An unanswered setup card must not wake a paid model cycle."""
     from app.tasks.agent_tasks import _cycle_would_be_noop
 
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.flush()
     role = Role(organization_id=org.id, name="R", source="manual", agentic_mode_enabled=True, monthly_usd_budget_cents=5000, job_spec_text="hire")
     db.add(role); db.flush()
+    _seed_recent_sourcing_run(db, org=org, role=role, run_id=900002)
 
     fake_survey = {
         "counts": {"ready_for_assessment_decision": 0, "ready_for_advance_decision": 0},
@@ -244,7 +278,7 @@ def test_cycle_runs_when_open_recruiter_questions(db):
         "intent_gaps": [],
     }
     with patch("app.agent_runtime.cohort_tools.survey_role_state", return_value=fake_survey):
-        assert _cycle_would_be_noop(db, role=role) is False
+        assert _cycle_would_be_noop(db, role=role) is True
 
 
 # ---------------------------------------------------------------------------

@@ -937,3 +937,19 @@
     flex-direction: column;
   }
 }
+.hiring-stage-stack {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+
+.hiring-stage-stack > a {
+  color: var(--purple, #7c5cff);
+  font-size: 11px;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.hiring-stage-stack > a:hover {
+  text-decoration: underline;
+}

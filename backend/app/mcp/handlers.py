@@ -428,6 +428,118 @@ def nl_search_candidates(
     }
 
 
+def rediscover_candidates(
+    db: Session,
+    user: User,
+    *,
+    query: str,
+    target_role_id: int,
+    rerank: bool = True,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Search the organization's existing talent pool for a different role.
+
+    Unlike ``nl_search_candidates`` this deliberately searches ACROSS prior
+    applications, excludes people already attached to ``target_role_id``, and
+    charges any parse/rerank work to that target role's budget.  It is the
+    autonomous, consented-data sourcing provider available without an external
+    LinkedIn partnership.
+    """
+
+    from ..candidate_search.runner import run_search
+    from ..services.sourcing_capability_service import linkedin_sourcing_capability
+
+    text = (query or "").strip()
+    if not text:
+        raise ValueError("query must be non-empty")
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(target_role_id),
+            Role.organization_id == int(user.organization_id),
+        )
+        .first()
+    )
+    if role is None:
+        raise ValueError("target role not found")
+
+    already_on_role = (
+        db.query(CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.organization_id == int(user.organization_id),
+            CandidateApplication.role_id == int(target_role_id),
+        )
+        .scalar_subquery()
+    )
+    hired_people = (
+        db.query(CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.organization_id == int(user.organization_id),
+            CandidateApplication.application_outcome == "hired",
+        )
+        .scalar_subquery()
+    )
+    base = (
+        db.query(CandidateApplication)
+        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.organization_id == int(user.organization_id),
+            CandidateApplication.deleted_at.is_(None),
+            Candidate.deleted_at.is_(None),
+            Candidate.email.isnot(None),
+            Candidate.email != "",
+            ~CandidateApplication.candidate_id.in_(already_on_role),
+            ~CandidateApplication.candidate_id.in_(hired_people),
+        )
+    )
+    result = run_search(
+        db=db,
+        organization_id=int(user.organization_id),
+        # Search is workspace-wide; metering remains pinned to the role whose
+        # agent requested the rediscovery.
+        role_id=None,
+        metering_role_id=int(target_role_id),
+        nl_query=text,
+        base_query=base,
+        rerank_enabled=bool(rerank),
+        include_subgraph=False,
+    )
+    safe_limit = max(1, min(int(limit), 25))
+    # Search ranks applications, while sourcing targets people. Over-read a
+    # bounded slice and collapse prior-role duplicates so one candidate with
+    # several historical applications cannot consume the whole sourcing page.
+    capped_ids = result.application_ids[: safe_limit * 5]
+    apps = _applications_for_ids(
+        db,
+        organization_id=int(user.organization_id),
+        application_ids=capped_ids,
+    )
+    by_id = {int(app.id): app for app in apps}
+    ordered: list[CandidateApplication] = []
+    seen_candidate_ids: set[int] = set()
+    for application_id in capped_ids:
+        app = by_id.get(application_id)
+        if app is None or int(app.candidate_id) in seen_candidate_ids:
+            continue
+        seen_candidate_ids.add(int(app.candidate_id))
+        ordered.append(app)
+        if len(ordered) >= safe_limit:
+            break
+    return {
+        "provider": "internal_talent_pool",
+        "applications": [application_summary(app) for app in ordered],
+        "candidate_ids": [int(app.candidate_id) for app in ordered],
+        "returned": len(ordered),
+        "database_matches": int(result.database_matches or 0),
+        "parsed_filter": result.parsed_filter.model_dump(mode="json"),
+        "warnings": [w.model_dump(mode="json") for w in result.warnings],
+        # RSC avoids copy/paste, but One-Click Export is still a recruiter
+        # action. RSC+ can delegate sourcing to LinkedIn Hiring Assistant, not
+        # expose a people-search API to this Taali agent.
+        "external_sourcing": linkedin_sourcing_capability(),
+    }
+
+
 def find_top_candidates(
     db: Session,
     user: User,

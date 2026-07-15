@@ -1,8 +1,8 @@
 """Tests for the outcome-learning feedback loop.
 
 Covers:
-- ``transition_stage(to=advanced)`` records "interviewed"
-  outcome on a recently-approved advance decision
+- ``transition_stage(to=advanced)`` is only a handoff; the independent hiring
+  stage reaching ``interviewing`` records the realized interview outcome
 - ``transition_outcome(to=hired)`` records "hired" outcome on a
   recently-approved advance decision
 - ``transition_outcome(to=rejected)`` records "rejected_confirmed" on
@@ -38,6 +38,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
+from app.services.recruiter_stage_service import set_recruiter_stage
 
 
 # Standard SQLite BigInteger PK workaround.
@@ -120,11 +121,11 @@ def _approved_decision(
 
 
 # ---------------------------------------------------------------------------
-# Stage transitions → "interviewed" outcome
+# Hiring-stage transitions → "interviewed" outcome
 # ---------------------------------------------------------------------------
 
 
-def test_stage_transition_to_interview_records_interviewed_outcome(db):
+def test_handoff_then_interview_records_interviewed_outcome(db):
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_application(db, org=org, role=role, stage="review")
@@ -140,6 +141,16 @@ def test_stage_transition_to_interview_records_interviewed_outcome(db):
         actor_type="recruiter",
         actor_id=1,
     )
+    # Advanced is the evaluation handoff and initializes screening only.
+    assert (role.agent_calibration or {}).get("outcomes") in (None, [])
+    set_recruiter_stage(
+        db,
+        app=app,
+        to_stage="interviewing",
+        source="recruiter",
+        actor_type="recruiter",
+        actor_id=1,
+    )
     db.commit()
 
     db.refresh(role)
@@ -149,6 +160,37 @@ def test_stage_transition_to_interview_records_interviewed_outcome(db):
     assert entry["decision_type"] == "advance_to_interview"
     assert entry["outcome"] == "interviewed"
     assert entry["application_id"] == app.id
+
+
+def test_offer_jump_records_reached_interview_once(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, stage="advanced")
+    _approved_decision(
+        db, org=org, role=role, application=app, decision_type="advance_to_interview"
+    )
+
+    set_recruiter_stage(
+        db,
+        app=app,
+        to_stage="offer",
+        source="sync",
+        actor_type="sync",
+    )
+    # A provider can revisit/lower a stage; the same realized milestone must
+    # remain idempotent for the approved decision.
+    set_recruiter_stage(
+        db,
+        app=app,
+        to_stage="interviewing",
+        source="sync",
+        actor_type="sync",
+    )
+    db.commit()
+
+    db.refresh(role)
+    outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    assert [item["outcome"] for item in outcomes] == ["interviewed"]
 
 
 def test_stage_transition_to_other_stage_does_not_record(db):
@@ -351,7 +393,7 @@ def _pending_decision(
     return decision
 
 
-def test_approve_advance_records_interviewed_outcome(db):
+def test_approve_advance_waits_for_real_interview_outcome(db):
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_application(db, org=org, role=role, stage="review")
@@ -360,8 +402,7 @@ def test_approve_advance_records_interviewed_outcome(db):
     )
     actor = _recruiter(db, org)
 
-    # collect_side_effects skips the inline Workable/graph side effects — we
-    # only care that the realised outcome is recorded.
+    # Approval hands evaluation off, but does not claim an interview happened.
     approve_decision.run(
         db,
         actor,
@@ -375,9 +416,47 @@ def test_approve_advance_records_interviewed_outcome(db):
     db.refresh(role)
     assert decision.status == "approved"
     outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    assert outcomes == []
+
+    set_recruiter_stage(
+        db,
+        app=app,
+        to_stage="interviewing",
+        source="recruiter",
+        actor_type="recruiter",
+        actor_id=int(actor.user_id),
+    )
+    db.commit()
+    db.refresh(role)
+    outcomes = (role.agent_calibration or {}).get("outcomes") or []
     assert len(outcomes) == 1
     assert outcomes[0]["outcome"] == "interviewed"
     assert outcomes[0]["decision_id"] == int(decision.id)
+
+
+def test_approve_advance_reconciles_external_offer_observed_first(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, stage="review")
+    app.recruiter_stage = "offer"
+    app.recruiter_stage_source = "sync"
+    decision = _pending_decision(
+        db, org=org, role=role, application=app, decision_type="advance_to_interview"
+    )
+    actor = _recruiter(db, org)
+
+    approve_decision.run(
+        db,
+        actor,
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        collect_side_effects={},
+    )
+    db.commit()
+
+    db.refresh(role)
+    outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    assert [item["outcome"] for item in outcomes] == ["interviewed"]
 
 
 def test_approve_reject_records_rejected_confirmed_outcome(db):
@@ -460,6 +539,14 @@ def test_interviewed_outcome_is_projected_to_graph(db):
         db, app=app, to_stage="advanced", source="recruiter",
         actor_type="recruiter", actor_id=1,
     )
+    set_recruiter_stage(
+        db,
+        app=app,
+        to_stage="interviewing",
+        source="recruiter",
+        actor_type="recruiter",
+        actor_id=1,
+    )
     db.commit()
 
     rows = _outbox_outcome_rows(db)
@@ -501,6 +588,9 @@ def test_backfill_records_and_is_idempotent(db):
     org = _make_org(db)
     role = _make_role(db, org)
     adv_app = _make_application(db, org=org, role=role, stage="advanced")
+    adv_app.recruiter_stage = "interviewing"
+    adv_app.recruiter_stage_source = "recruiter"
+    adv_app.recruiter_stage_updated_at = datetime.now(timezone.utc)
     _approved_decision(
         db, org=org, role=role, application=adv_app, decision_type="advance_to_interview"
     )

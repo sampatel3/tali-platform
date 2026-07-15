@@ -43,6 +43,7 @@ def _compute_dedup_key(
     *,
     application_id: int,
     decision_type: str,
+    deduplication_scope: str | None = None,
 ) -> str | None:
     """C4: build the cross-cycle dedup key for this would-be decision.
 
@@ -52,7 +53,10 @@ def _compute_dedup_key(
     ``criteria_fingerprint`` (role criteria revision),
     ``cv_fingerprint`` (which CV),
     ``pre_screen_bucket`` (5-pt bucket of pre-screen score),
-    ``cv_match_bucket`` (5-pt bucket of cv-match score).
+    ``cv_match_bucket`` (5-pt bucket of cv-match score), and an optional
+    caller-owned incident scope.  The latter is used by durable delivery
+    recovery: two expiry windows for the same assessment are distinct
+    decisions even though the candidate CV and role criteria are unchanged.
 
     Bucketing the scores by 5 points means trivial re-scoring noise
     (e.g. prompt-seed jitter) doesn't break dedup; a 5-pt swing in
@@ -96,14 +100,17 @@ def _compute_dedup_key(
             except (TypeError, ValueError):
                 return ""
 
-        composite = "|".join([
+        parts = [
             str(application_id),
             decision_type,
             criteria_fp,
             cv_fp,
             _bucket(getattr(app, "pre_screen_score_100", None)),
             _bucket(getattr(app, "cv_match_score", None)),
-        ])
+        ]
+        if deduplication_scope is not None:
+            parts.append(f"scope:{deduplication_scope}")
+        composite = "|".join(parts)
         return hashlib.sha256(composite.encode("utf-8")).hexdigest()
     except Exception:
         import logging
@@ -317,6 +324,7 @@ def run(
     prompt_version: str,
     recommendation: Optional[str] = None,
     idempotency_key_suffix: Optional[str] = None,
+    deduplication_scope: Optional[str] = None,
     skip_episode: bool = False,
 ) -> AgentDecision:
     if actor.type != ACTOR_AGENT:
@@ -430,6 +438,7 @@ def run(
         db,
         application_id=application_id,
         decision_type=decision_type,
+        deduplication_scope=deduplication_scope,
     )
     if dedup_key:
         approved_window_floor = _dt.now(_tz.utc) - _td(days=7)

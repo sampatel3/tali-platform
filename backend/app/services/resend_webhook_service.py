@@ -270,6 +270,34 @@ def apply_resend_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     elif status == "bounced":
         asmt.invite_bounced_at = asmt.invite_bounced_at or now
 
+    # Persist the failed recipient alongside the delivery generation.  The
+    # resend action uses this evidence to allow a corrected email address while
+    # refusing to send the same hard-bounced/complained address again.  Resend
+    # retries webhooks, so append at most one event per provider message.
+    if status in ("bounced", "complained"):
+        recipient = _event_recipient(payload)
+        already_recorded = any(
+            isinstance(event, dict)
+            and event.get("event_type") == "assessment_invite_delivery_failed"
+            and event.get("provider_email_id") == email_id
+            and event.get("provider_status") == status
+            for event in list(asmt.timeline or [])
+        )
+        if not already_recorded:
+            from ..components.assessments.repository import (
+                append_assessment_timeline_event,
+            )
+
+            append_assessment_timeline_event(
+                asmt,
+                "assessment_invite_delivery_failed",
+                {
+                    "provider_email_id": email_id,
+                    "provider_status": status,
+                    "recipient": recipient,
+                },
+            )
+
     # Update the rolled-up status without downgrading progress; failures win.
     current = asmt.invite_email_status or ""
     if is_failure:
@@ -278,11 +306,39 @@ def apply_resend_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         asmt.invite_email_status = status
 
     db.commit()
+
+    recovery = None
+    if status in ("bounced", "complained"):
+        try:
+            from .assessment_invite_recovery import (
+                RECOVERY_TRIGGER_BOUNCE,
+                recover_assessment_invite,
+            )
+
+            recovery = recover_assessment_invite(
+                db,
+                assessment_id=int(asmt.id),
+                trigger=RECOVERY_TRIGGER_BOUNCE,
+                provider_email_id=email_id,
+                provider_status=status,
+            )
+        except Exception:
+            # Delivery truth and suppression were committed above.  Recovery is
+            # retried by the periodic assessment sweep; webhook acknowledgement
+            # must never be turned into a provider retry loop by a HITL failure.
+            db.rollback()
+            logger.exception(
+                "assessment invite recovery failed assessment_id=%s email_id=%s",
+                asmt.id,
+                email_id,
+            )
+
     return {
         "status": "applied",
         "event": event_type,
         "assessment_id": int(asmt.id),
         "invite_email_status": asmt.invite_email_status,
+        **({"recovery": recovery} if recovery is not None else {}),
     }
 
 

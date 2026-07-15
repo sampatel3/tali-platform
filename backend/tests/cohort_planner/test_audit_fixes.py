@@ -203,11 +203,14 @@ def test_role_intent_shape_counts_constraints_with_canonical_bucket(db):
 
 
 def test_unparseable_threshold_answer_keeps_gap_open(db):
-    """Codex #187: "around fifty" is not numeric. The gap should stay
-    open so the agent re-asks, instead of being suppressed while
-    effective_score_threshold stays None."""
+    """Codex #187: a manual threshold answer must parse as numeric.
+
+    Automatic threshold mode needs no recruiter question; manual mode keeps
+    the configuration gap open until it receives a usable value.
+    """
     org, role, _, _ = make_world(db)
     role.score_threshold = None
+    role.auto_reject_threshold_mode = "manual"
     db.flush()
     unparseable = AgentNeedsInput(
         organization_id=org.id,

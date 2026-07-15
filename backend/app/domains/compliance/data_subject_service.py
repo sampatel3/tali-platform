@@ -21,9 +21,9 @@ cascaded here:
     (frozen shortlists that embed candidate name/CV text at mint time).
   - Event / audit payloads — ``candidate_application_event`` reason/detail and
     the immutable audit trail (retained deliberately as compliance evidence).
-  - Outreach — ``prospects`` reference candidates via ``candidate_id`` and carry
-    their own name/email; ``outreach_campaign`` recipients likewise. Erasing the
-    candidate does NOT scrub a linked prospect row.
+  - Outreach — ``outreach_messages`` recipients carry denormalized name/email.
+    The retired, unmapped ``prospects`` table is retained for historical data;
+    neither surface is scrubbed by candidate erasure yet.
   - Assessments + assessment artifacts (candidate answers / uploaded CV).
   - Re-import: a still-connected ATS (Workable / Bullhorn) can re-sync an erased
     candidate. Suppressing re-import is a source-system concern, out of scope here.

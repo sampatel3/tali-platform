@@ -348,12 +348,21 @@ def run(
                     "evidence.assessment_id — cannot dispatch."
                 ),
             )
-        resend_assessment_invite.run(
+        resend_result = resend_assessment_invite.run(
             db,
             actor,
             organization_id=organization_id,
             assessment_id=int(assessment_id),
         )
+        resend_status = getattr(resend_result, "status", None)
+        if resend_status in {"blocked", "voided", "no_candidate"}:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Couldn't resend the assessment (status={resend_status!r}): "
+                    f"{getattr(resend_result, 'detail', None) or 'no invite was queued'}."
+                ),
+            )
     else:
         raise HTTPException(
             status_code=422,

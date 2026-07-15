@@ -58,10 +58,9 @@ PIPELINE_STAGE_SOURCES = ("system", "recruiter", "sync", "agent")
 # by the Bullhorn stage-map config to keep `sourced` off the selectable list.
 SYNC_MAPPABLE_STAGES = tuple(stage for stage in PIPELINE_STAGES if stage != "sourced")
 
-# Workable stages that mean "the candidate is past Tali's handover point" —
-# they're now in the recruiter's interview/offer flow. We collapse all of
-# these into Tali's single `advanced` bucket; the precise stage stays
-# visible via the workable_stage column on the row.
+# Workable stages that mean the external hiring owner has moved into its
+# screening/interview/offer flow. They are a strong provider signal and feed the
+# independent recruiter-stage axis; they never rewrite Tali's funnel display.
 POST_HANDOVER_WORKABLE_STAGES = frozenset({
     "phone_screen", "phone_interview",
     "first_stage",
@@ -72,21 +71,9 @@ POST_HANDOVER_WORKABLE_STAGES = frozenset({
     "hired",
 })
 
-# The subset of post-handover stages that are POSITIVE TERMINAL hand-offs — the
-# recruiter has effectively decided (an offer is out, or they're hired). Only
-# these freeze the candidate on Taali via the positive-advance path (transition
-# to the `advanced` stage, which trips the A6 freeze in role_support.is_resolved).
-# A mid-interview stage (phone / technical / final) is NOT terminal: the
-# candidate could still wash out, so Taali keeps them in-funnel and decidable
-# rather than freezing them. The broader POST_HANDOVER set still governs the
-# "don't auto-reject someone a human is interviewing" guard + the funnel display
-# bucketing.
-#
-# NB: distinct from ``workable/sync_service.py``'s ``TERMINAL_STAGES``, which is
-# the all-terminal set (NEGATIVE rejected/disqualified/withdrawn + positive
-# offer/hired) used to detect "candidate is done, skip enrichment / capture
-# outcome". Negatives never reach this advance gate — they land via
-# transition_outcome (outcome != 'open'), which the reconcile excludes upfront.
+# Legacy helper retained for the one-time repair script that identifies rows
+# previously auto-advanced by sync. Runtime sync no longer freezes Tali based
+# on these provider statuses.
 TERMINAL_WORKABLE_STAGES = frozenset({
     "offer", "offer_extended", "offer_accepted",
     "hired",
@@ -101,9 +88,7 @@ _RECRUITER_STAGE_TRANSITIONS = {
     ("sourced", "applied"),
     ("applied", "invited"),
     ("review", "invited"),
-    # Any earlier Tali stage may jump to "advanced" — used by the
-    # Workable hand-back flow when the recruiter moves the candidate
-    # directly to an interview/offer stage in the ATS.
+    # Any earlier Tali stage may jump to the explicit evaluation handoff.
     ("applied", "advanced"),
     ("invited", "advanced"),
     ("in_assessment", "advanced"),
@@ -161,11 +146,7 @@ def is_post_handover_workable_stage(value: str | None) -> bool:
 
 
 def is_terminal_workable_stage(value: str | None) -> bool:
-    """True when the Workable stage is a TERMINAL hand-off (offer / hired) —
-    the recruiter has effectively decided. Only these freeze the candidate on
-    Taali (advance to `advanced`). Mid-interview post-handover stages are NOT
-    terminal: they stay decidable. Always a subset of post-handover stages.
-    """
+    """Legacy repair predicate for provider offer/hire statuses."""
     return normalize_pipeline_key(value) in TERMINAL_WORKABLE_STAGES
 
 
@@ -183,23 +164,6 @@ def _not_post_handover_sql():
     return or_(
         CandidateApplication.workable_stage.is_(None),
         norm.notin_(tuple(POST_HANDOVER_WORKABLE_STAGES)),
-    )
-
-
-def _post_handover_sql():
-    """Boolean SQL form of ``is_post_handover_workable_stage(workable_stage)`` —
-    true when the recruiter has advanced the candidate into an interview/offer/
-    hired stage in Workable. Used to DISPLAY such candidates as 'advanced' in the
-    funnel (alignment with Workable) without touching pipeline_stage, so every
-    backend decision/calibration service keeps Tali's own decision-based
-    'advanced'. Mirrors normalize_pipeline_key (lower → '-'→'_' → ' '→'_')."""
-    norm = func.replace(
-        func.replace(func.lower(CandidateApplication.workable_stage), "-", "_"),
-        " ", "_",
-    )
-    return and_(
-        CandidateApplication.workable_stage.isnot(None),
-        norm.in_(tuple(POST_HANDOVER_WORKABLE_STAGES)),
     )
 
 
@@ -559,6 +523,7 @@ def append_application_event(
         application_id=app.id,
         idempotency_key=idempotency_key,
     )
+
     if existing_idempotent:
         return existing_idempotent
     return _append_event(
@@ -646,6 +611,20 @@ def transition_stage(
         idempotency_key=idempotency_key,
     )
 
+    if target == "advanced":
+        # ``advanced`` ends Tali evaluation, but downstream hiring continues on
+        # its own provider-neutral axis. Initialize that axis without treating
+        # an external interview/offer status as the evaluation decision itself.
+        from ...services.recruiter_stage_service import initialize_handoff_stage
+
+        initialize_handoff_stage(
+            db,
+            app=app,
+            source=source_key,
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
+
     # Best-effort outcome-learning hook. Imported here (not at module top)
     # so the pipeline_service has no hard dependency on agent_runtime
     # internals — keeps test setup that doesn't need the agent simple.
@@ -668,134 +647,27 @@ def transition_stage(
 def reconcile_post_handover_advanced(
     db: Session, *, app: CandidateApplication, role: "Role | None" = None
 ) -> bool:
-    """Reconcile a Workable-side advance onto Taali, with Taali's verdict.
+    """Compatibility hook for Workable post-handover synchronization.
 
-    When a recruiter moves a candidate forward in Workable directly (Phone
-    Screen / Technical / Final Interview / Offer … — a post-handover stage),
-    Taali gives its deterministic SECOND OPINION and reconciles, but it only
-    FREEZES the candidate (transition to ``advanced``, which trips the A6
-    freeze) for a TERMINAL hand-off:
-
-      * Taali would REJECT → surface it in the reject queue (don't advance) —
-        "you're interviewing someone I'd have passed on."
-      * Workable stage is TERMINAL (offer / hired) → reflect the hand-off as
-        ``advanced`` (Taali's job is done) and discard every now-moot pending
-        decision.
-      * Workable stage is MID-INTERVIEW (phone / technical / final) → do NOT
-        freeze. The candidate could still wash out, so Taali keeps them in
-        their current stage — decidable, agent still live — but discards any
-        stale pending REJECT card (a "reject" on someone in a live interview is
-        the dangerous case), while leaving legitimate advance/send cards alone.
-
-    LOCAL only — Workable already has them in that stage, so it writes NOTHING
-    back. Idempotent. Does NOT commit — the caller owns the transaction. Returns
-    True iff it advanced (froze) the candidate.
+    ``advanced`` is now exclusively Tali's explicit evaluation handoff.  A
+    provider-side interview, offer, or hire is recorded on the independent
+    ``recruiter_stage`` axis and must never rewrite the evaluation history.
+    The historic boolean return remains for callers, but is always ``False``
+    because this function no longer transitions ``pipeline_stage``.
     """
     if app is None:
         return False
-    if getattr(app, "application_outcome", None) != "open":
-        return False
     if not is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
         return False
+    from ...services.recruiter_stage_service import sync_from_external
 
-    # Taali's deterministic second opinion. A reject is surfaced in the reject
-    # queue by decide_post_handover (which also un-advances) — so we must NOT
-    # advance. Lazy import: bulk_decision_service imports this module.
-    role = role if role is not None else getattr(app, "role", None)
-    if role is not None:
-        try:
-            from ...services.bulk_decision_service import decide_post_handover
-
-            action = decide_post_handover(db, app=app, role=role)
-        except Exception:  # pragma: no cover — never block the sync
-            action = None
-        if action in ("reject", "skip_assessment_reject"):
-            return False  # surfaced in the reject queue; do NOT advance
-
-    terminal = is_terminal_workable_stage(getattr(app, "workable_stage", None))
-
-    # Lazy import: pre_screen_decision_emitter imports this module.
-    from ...services.pre_screen_decision_emitter import (
-        discard_pending_decisions_for_app,
-    )
-
-    if not terminal:
-        # Mid-interview: stay decidable (no freeze). A pending reject card on a
-        # candidate the recruiter is interviewing is KEPT — it is Taali's honest
-        # second opinion, surfaced as a HITL card whose approve surfaces warn
-        # the recruiter (advice, never auto-executed). Verdict-flip staleness is
-        # owned by the cohort tick's ``_reconcile_stale_pending``, not by the
-        # sync's stage reflection.
-        #
-        # Heal a candidate STRANDED in 'review' by an earlier agent reject
-        # second-opinion (the advanced→review pull-back, source='agent') whose
-        # card has since been resolved/discarded — they'd otherwise sit in
-        # 'review' looking like they await a Taali decision when in truth
-        # they're being interviewed in Workable. Reflect that honestly as
-        # 'advanced' (handed off). Never fires while a reject card is still
-        # pending (advancing under a live reject card would contradict it).
-        # Genuine assessment-completion review is source='system', untouched.
-        from ...models.agent_decision import AgentDecision
-
-        has_pending_reject = (
-            db.query(AgentDecision.id)
-            .filter(
-                AgentDecision.application_id == int(app.id),
-                AgentDecision.status.in_(("pending", "processing")),
-                AgentDecision.decision_type.in_(
-                    ("reject", "skip_assessment_reject")
-                ),
-            )
-            .first()
-            is not None
-        )
-        if (
-            not has_pending_reject
-            and normalize_pipeline_stage(app.pipeline_stage) == "review"
-            and normalize_pipeline_key(app.pipeline_stage_source) == "agent"
-        ):
-            transition_stage(
-                db,
-                app=app,
-                to_stage="advanced",
-                source="sync",
-                actor_type="sync",
-                reason=(
-                    f"Reflecting Workable interview hand-off ({app.workable_stage}); "
-                    "no live Taali reject second-opinion remains"
-                ),
-                idempotency_key=f"posthandover_heal_advanced:{app.id}",
-            )
-            return True
-        return False
-
-    if normalize_pipeline_stage(app.pipeline_stage) == "advanced":
-        return False
-
-    transition_stage(
+    sync_from_external(
         db,
         app=app,
-        to_stage="advanced",
-        source="sync",
-        actor_type="sync",
-        reason=f"Advanced in Workable ({app.workable_stage}) — reflecting the hand-off on Taali",
-        idempotency_key=f"workable_handover_advance:{app.id}",
+        raw_stage=getattr(app, "workable_stage", None),
+        provider="workable",
     )
-    # A terminal hand-off freezes the candidate, so every queued decision is moot
-    # — discard quietly so no stale reject/advance card lingers.
-    try:
-        discard_pending_decisions_for_app(
-            db,
-            application_id=int(app.id),
-            reason=f"superseded: advanced in Workable ({app.workable_stage})",
-        )
-    except Exception:  # pragma: no cover — never block the reconcile
-        import logging
-
-        logging.getLogger("taali.pipeline_service").exception(
-            "post-handover decision discard failed (application_id=%s)", app.id,
-        )
-    return True
+    return False
 
 
 def transition_outcome(
@@ -1105,15 +977,10 @@ def role_pipeline_counts(
             CandidateApplication.pre_screen_run_at.isnot(None),
         ),
     )
-    # A candidate the recruiter has advanced in Workable (interview/offer/hired)
-    # shows in the funnel as 'advanced' for alignment — the furthest stage wins —
-    # regardless of Tali's pipeline_stage (which stays 'applied' for the backend).
-    ph_expr = _post_handover_sql()
     rows = (
         db.query(
             CandidateApplication.pipeline_stage,
             scored_expr,
-            ph_expr,
             func.count(CandidateApplication.id),
         )
         .filter(
@@ -1122,7 +989,7 @@ def role_pipeline_counts(
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
-        .group_by(CandidateApplication.pipeline_stage, scored_expr, ph_expr)
+        .group_by(CandidateApplication.pipeline_stage, scored_expr)
         .all()
     )
     # `in_assessment` is a SUB-count of the `invited` bucket — assessments that
@@ -1132,10 +999,7 @@ def role_pipeline_counts(
     counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
     counts["in_assessment"] = 0
     kind_map = _org_stage_kind_map(db, organization_id)
-    for stage, is_scored, is_post_handover, total in rows:
-        if is_post_handover:
-            counts["advanced"] += int(total or 0)
-            continue
+    for stage, is_scored, total in rows:
         normalized = normalize_pipeline_key(stage)
         if normalized == "in_assessment":
             counts["in_assessment"] += int(total or 0)
@@ -1253,15 +1117,11 @@ def role_pipeline_counts_bulk(
             CandidateApplication.pre_screen_run_at.isnot(None),
         ),
     )
-    # Workable-advanced candidates display as 'advanced' (alignment) regardless of
-    # Tali's pipeline_stage — see role_pipeline_counts().
-    ph_expr = _post_handover_sql()
     open_rows = (
         db.query(
             CandidateApplication.role_id,
             CandidateApplication.pipeline_stage,
             scored_expr,
-            ph_expr,
             func.count(CandidateApplication.id),
         )
         .filter(
@@ -1274,17 +1134,13 @@ def role_pipeline_counts_bulk(
             CandidateApplication.role_id,
             CandidateApplication.pipeline_stage,
             scored_expr,
-            ph_expr,
         )
         .all()
     )
     kind_map = _org_stage_kind_map(db, organization_id)
-    for role_id, stage, is_scored, is_post_handover, total in open_rows:
+    for role_id, stage, is_scored, total in open_rows:
         bucket = counts.get(int(role_id))
         if bucket is None:
-            continue
-        if is_post_handover:
-            bucket["advanced"] += int(total or 0)
             continue
         normalized = normalize_pipeline_key(stage)
         if normalized == "in_assessment":

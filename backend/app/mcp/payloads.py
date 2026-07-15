@@ -106,6 +106,8 @@ def application_summary(
     candidate = app.candidate
     role = app.role
     ats_context = application_ats_context(app)
+    from ..services.recruiter_stage_service import recruiter_stage_context
+
     return {
         "application_id": app.id,
         "candidate_id": app.candidate_id,
@@ -116,6 +118,7 @@ def application_summary(
         "candidate_position": candidate.position if candidate else None,
         "candidate_location": _candidate_location(candidate),
         "pipeline_stage": app.pipeline_stage,
+        "hiring_stage": recruiter_stage_context(app),
         "application_outcome": app.application_outcome,
         "pipeline_stage_updated_at": _isoformat(app.pipeline_stage_updated_at),
         "workable_stage": app.workable_stage,

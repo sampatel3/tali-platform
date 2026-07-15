@@ -44,12 +44,18 @@ export const FunnelBoard = ({
 }) => {
   const decisionRow = funnelDecisionRow(stageCounts, decisionsByType);
   const awaiting = awaitingTotal != null ? Number(awaitingTotal) : awaitingHitlFromDecisions(decisionsByType);
+  // `sourced` remains canonical and selectable, but a zero-value acquisition
+  // step adds noise to every summary. Reveal it when prospects actually exist.
+  const visibleStages = PIPELINE_FUNNEL_STAGES.filter(
+    (stage) => stage.key !== 'sourced' || Number(stageCounts?.sourced || 0) > 0,
+  );
+  const stageGridStyle = { '--funnel-stage-count': visibleStages.length };
 
   if (variant === 'flat') {
     return (
-      <div className="funnel-board fb-flat">
+      <div className="funnel-board fb-flat" style={stageGridStyle}>
         <div className="fb-grid fb-stages">
-          {PIPELINE_FUNNEL_STAGES.map((stage) => {
+          {visibleStages.map((stage) => {
             // Invited is the whole Assess step: its value sums invited +
             // completed (assessment out + done), so `completed` counts here
             // instead of in its own tile.
@@ -122,14 +128,14 @@ export const FunnelBoard = ({
   }
 
   return (
-    <div className="funnel-board">
+    <div className="funnel-board" style={stageGridStyle}>
       <div className="fb-cap">
         <span>Pipeline · {scopeLabel}</span>
         {awaiting > 0 ? <span className="fb-cap-aw">{formatCount(awaiting)} awaiting you</span> : null}
       </div>
 
       <div className="fb-grid fb-stages">
-        {PIPELINE_FUNNEL_STAGES.map((stage) => {
+        {visibleStages.map((stage) => {
           const value = stage.key === 'invited'
             ? invitedStageValue(stageCounts)
             : Number(stageCounts?.[stage.key] || 0);
@@ -150,7 +156,7 @@ export const FunnelBoard = ({
 
       <div className="fb-drow-hdr">Awaiting your decision</div>
       <div className="fb-grid fb-drow">
-        {PIPELINE_FUNNEL_STAGES.map((stage) => {
+        {visibleStages.map((stage) => {
           const chips = stage.key === 'invited'
             ? [...(decisionRow.invited || []), ...(decisionRow.completed || [])]
             : (decisionRow[stage.key] || []);

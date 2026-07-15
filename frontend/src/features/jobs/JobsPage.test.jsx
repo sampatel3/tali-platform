@@ -628,6 +628,28 @@ describe('JobsPage entrance motion', () => {
     expect(within(rejectedCell).getByText('4')).toBeInTheDocument();
   });
 
+  it('shows the Sourced tile only on role cards with sourced prospects', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        { ...baseRoles[0], id: 101, name: 'Applied Only Role' },
+        {
+          ...baseRoles[0],
+          id: 102,
+          name: 'Sourcing Role',
+          stage_counts: { ...baseRoles[0].stage_counts, sourced: 2 },
+        },
+      ],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const appliedOnlyCard = (await screen.findByText('Applied Only Role')).closest('.job-card');
+    const sourcingCard = screen.getByText('Sourcing Role').closest('.job-card');
+    expect(within(appliedOnlyCard).queryByText('Sourced')).not.toBeInTheDocument();
+    const sourcedCell = within(sourcingCard).getByText('Sourced').closest('.js-cell');
+    expect(within(sourcedCell).getByText('2')).toBeInTheDocument();
+  });
+
   it('shows a "Live" badge only on roles with a live public job page', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [

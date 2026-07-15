@@ -145,7 +145,12 @@ export function ReachOutDialog({ open, roleId, roleTitle, applications = [], onC
     setBusy(true);
     setError('');
     try {
-      await outreachApi.approveAndSend(campaignId, true);
+      await outreachApi.approveAndSend(
+        campaignId,
+        true,
+        sendEstimate?.will_send ?? null,
+        sendEstimate?.review_token ?? null,
+      );
       setPhase('done');
       onCompleted?.(campaignId);
     } catch (err) {
@@ -153,7 +158,7 @@ export function ReachOutDialog({ open, roleId, roleTitle, applications = [], onC
     } finally {
       setBusy(false);
     }
-  }, [campaignId, onCompleted]);
+  }, [campaignId, onCompleted, sendEstimate]);
 
   const skippedSummary = summariseSkipped(audience?.skipped);
   const willSend = sendEstimate?.will_send ?? 0;

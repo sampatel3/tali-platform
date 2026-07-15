@@ -298,6 +298,136 @@ def test_bullhorn_resync_preserves_pending_outcome_writeback_receipt(db, monkeyp
         == "rejected"
     )
 
+def test_bullhorn_first_link_converts_sourced_application_and_runs_intake_once(
+    db, monkeypatch
+):
+    """A first JobSubmission engages a sourced row; re-sync cannot re-score it."""
+
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Platform Engineer",
+        source="bullhorn",
+        bullhorn_job_order_id="9001",
+        bullhorn_job_data={"id": 9001, "isOpen": True},
+        job_status=JOB_STATUS_OPEN,
+        job_spec_text="Hire a production platform engineer.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    candidate = _candidate(db, org, email="sourced-bullhorn@example.com")
+    db.add(role)
+    db.flush()
+    sourced = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="sourced",
+        pipeline_stage="sourced",
+        pipeline_stage_source="agent",
+        application_outcome="open",
+        source="sourced",
+        source_strategy="sourced",
+        version=1,
+    )
+    db.add(sourced)
+    db.commit()
+
+    intake_calls: list[dict] = []
+
+    def capture_intake(app, **kwargs):
+        intake_calls.append({"application_id": app.id, **kwargs})
+
+    monkeypatch.setattr(sync_candidates, "on_application_created", capture_intake)
+    submission = {
+        "id": "7001",
+        "candidate": {"id": "8001"},
+        "jobOrder": {"id": "9001"},
+        "status": "New Lead",
+    }
+    candidate_payload = {
+        "id": "8001",
+        "firstName": "Sourced",
+        "lastName": "Bullhorn",
+        "email": "sourced-bullhorn@example.com",
+    }
+    sync_kwargs = {
+        "db": db,
+        "org": org,
+        "role": role,
+        "submission": submission,
+        "candidate_payload": candidate_payload,
+        "client": _StubClient(),
+        "now": _now(),
+    }
+
+    sync_candidates.sync_submission(**sync_kwargs)
+    db.flush()
+
+    assert sourced.pipeline_stage == "applied"
+    assert sourced.bullhorn_job_submission_id == "7001"
+    assert sourced.source_strategy == "sourced"
+    assert [call["score"] for call in intake_calls] == [True]
+    event = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == sourced.id,
+            CandidateApplicationEvent.event_type == "pipeline_stage_changed",
+        )
+        .one()
+    )
+    assert (event.from_stage, event.to_stage) == ("sourced", "applied")
+    assert event.actor_type == "sync"
+    assert event.event_metadata["provider"] == "bullhorn"
+
+    # Same JobSubmission: existing-app metadata refresh remains free.
+    sync_candidates.sync_submission(**sync_kwargs)
+    db.flush()
+    sourced_calls = [
+        call for call in intake_calls if call["application_id"] == sourced.id
+    ]
+    assert [call["score"] for call in sourced_calls] == [True, False]
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == sourced.id,
+            CandidateApplicationEvent.event_type == "pipeline_stage_changed",
+        )
+        .count()
+        == 1
+    )
+
+    # A genuinely new submission still dispatches exactly once. The reused-row
+    # engagement branch must never add a second create-path scoring call.
+    fresh_submission = {
+        "id": "7002",
+        "candidate": {"id": "8002"},
+        "jobOrder": {"id": "9001"},
+        "status": "New Lead",
+    }
+    sync_candidates.sync_submission(
+        **{
+            **sync_kwargs,
+            "submission": fresh_submission,
+            "candidate_payload": {
+                "id": "8002",
+                "firstName": "Fresh",
+                "lastName": "Bullhorn",
+                "email": "fresh-bullhorn@example.com",
+            },
+        }
+    )
+    db.flush()
+    fresh = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.bullhorn_job_submission_id == "7002")
+        .one()
+    )
+    fresh_calls = [
+        call for call in intake_calls if call["application_id"] == fresh.id
+    ]
+    assert [call["score"] for call in fresh_calls] == [True]
+
 
 # --- stage_map --------------------------------------------------------------
 
@@ -372,6 +502,190 @@ class TestStageMap:
             )
         db.commit()
         assert sm.unmapped_statuses(db, org) == ["Weird Local Status"]
+
+
+def test_resolved_apps_still_capture_bullhorn_placed_and_rejected(db):
+    """A frozen Tali handoff still accepts realized Bullhorn hiring facts.
+
+    The old resolved-row guard returned before both placement and rejection,
+    dropping the outcomes we need downstream. The hiring stage/outcome may
+    change, but the explicit Tali ``advanced`` handoff remains untouched.
+    """
+
+    org = _org(db)
+    org.bullhorn_config = {"confirmedJobResponseStatus": "Placed"}
+    role = Role(organization_id=org.id, name="R", source="bullhorn")
+    db.add(role)
+    db.flush()
+    db.add_all(
+        [
+            AtsStageMap(
+                org_id=org.id,
+                ats="bullhorn",
+                remote_status="Placed",
+                taali_stage="advanced",
+                is_reject=False,
+            ),
+            AtsStageMap(
+                org_id=org.id,
+                ats="bullhorn",
+                remote_status="Client Rejected",
+                taali_stage="review",
+                is_reject=True,
+            ),
+        ]
+    )
+    placed_candidate = _candidate(db, org, email="placed@example.com")
+    rejected_candidate = _candidate(db, org, email="rejected@example.com")
+    placed = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=placed_candidate.id,
+        role_id=role.id,
+        pipeline_stage="advanced",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        version=1,
+    )
+    rejected = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=rejected_candidate.id,
+        role_id=role.id,
+        pipeline_stage="advanced",
+        pipeline_stage_source="recruiter",
+        recruiter_stage="interviewing",
+        recruiter_stage_source="sync",
+        application_outcome="open",
+        version=1,
+    )
+    db.add_all([placed, rejected])
+    db.flush()
+
+    sync_candidates._apply_stage_mapping(
+        db,
+        org,
+        app=placed,
+        remote_status="Placed",
+        created=False,
+        now=_now(),
+    )
+    sync_candidates._apply_stage_mapping(
+        db,
+        org,
+        app=rejected,
+        remote_status="Client Rejected",
+        created=False,
+        now=_now(),
+    )
+    db.flush()
+
+    assert placed.pipeline_stage == "advanced"
+    assert placed.recruiter_stage == "hired"
+    assert placed.application_outcome == "hired"
+    assert rejected.pipeline_stage == "advanced"
+    assert rejected.recruiter_stage == "interviewing"
+    assert rejected.application_outcome == "rejected"
+
+
+def test_configured_bullhorn_hiring_statuses_are_authoritative_without_label_guessing(db):
+    org = _org(db)
+    org.bullhorn_config = {
+        "interviewScheduledJobResponseStatus": "Meet the founders",
+        "confirmedJobResponseStatus": "Commercial placement complete",
+    }
+    role = Role(organization_id=org.id, name="Configured hiring truth", source="bullhorn")
+    db.add(role)
+    db.flush()
+    interview_candidate = _candidate(db, org, email="configured-interview@example.com")
+    hired_candidate = _candidate(db, org, email="configured-hired@example.com")
+    interview = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=interview_candidate.id,
+        role_id=role.id,
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        version=1,
+    )
+    hired = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=hired_candidate.id,
+        role_id=role.id,
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        version=1,
+    )
+    db.add_all([interview, hired])
+    db.flush()
+
+    # Categorization settings are themselves explicit provider mappings; a
+    # missing seed row must not make us fall back to the arbitrary label text.
+    sync_candidates._apply_stage_mapping(
+        db,
+        org,
+        app=interview,
+        remote_status="Meet the founders",
+        created=False,
+        now=_now(),
+    )
+    sync_candidates._apply_stage_mapping(
+        db,
+        org,
+        app=hired,
+        remote_status="Commercial placement complete",
+        created=False,
+        now=_now(),
+    )
+    db.flush()
+
+    assert interview.pipeline_stage == "review"
+    assert interview.recruiter_stage == "interviewing"
+    assert interview.application_outcome == "open"
+    assert interview.integration_sync_state["hiring_stage_sync"]["status"] == "mapped"
+    assert hired.pipeline_stage == "review"
+    assert hired.recruiter_stage == "hired"
+    assert hired.application_outcome == "hired"
+
+
+def test_unmapped_bullhorn_status_clears_stale_hiring_stage_and_surfaces_exception(db):
+    org = _org(db)
+    role = Role(organization_id=org.id, name="Needs mapping", source="bullhorn")
+    candidate = _candidate(db, org, email="bullhorn-needs-map@example.com")
+    db.add(role)
+    db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        pipeline_stage="advanced",
+        pipeline_stage_source="recruiter",
+        recruiter_stage="offer",
+        recruiter_stage_source="sync",
+        application_outcome="open",
+        integration_sync_state={"sync_status": "success", "source": "bullhorn"},
+        version=1,
+    )
+    db.add(app)
+    db.flush()
+
+    sync_candidates._apply_stage_mapping(
+        db,
+        org,
+        app=app,
+        remote_status="Client-specific downstream checkpoint",
+        created=False,
+        now=_now(),
+    )
+    db.flush()
+
+    assert app.pipeline_stage == "advanced"
+    assert app.recruiter_stage is None
+    assert app.external_stage_normalized is None
+    assert app.integration_sync_state["sync_status"] == "needs_mapping"
+    assert app.integration_sync_state["sync_exception"]["code"] == "needs_mapping"
+    assert app.integration_sync_state["hiring_stage_sync"]["raw_stage"] == (
+        "Client-specific downstream checkpoint"
+    )
 
 
 # --- sync_jobs --------------------------------------------------------------

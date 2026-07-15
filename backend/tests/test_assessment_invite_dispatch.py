@@ -826,6 +826,7 @@ def test_explicit_resend_queues_a_new_provider_generation(db):
     org = _make_org(db)
     assessment = _make_assessment(db, org=org)
     assessment.role.agentic_mode_enabled = True
+    assessment.role.auto_resend_assessment = True
     assessment.role.tasks.append(assessment.task)
     assessment.invite_email_id = "em-original"
     assessment.invite_delivered_at = datetime.now(timezone.utc)

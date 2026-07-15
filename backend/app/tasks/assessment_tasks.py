@@ -41,7 +41,7 @@ def post_results_to_workable(self, access_token: str, subdomain: str, candidate_
 
 @celery_app.task
 def cleanup_expired_assessments():
-    """Periodic hygiene: expire PENDING assessments whose invite window lapsed.
+    """Expire stale invites and invoke deterministic agent recovery.
 
     IN_PROGRESS assessments are deliberately NOT touched here. A candidate who
     starts then walks away is captured + SCORED by ``finalize_timed_out_assessments``
@@ -50,27 +50,96 @@ def cleanup_expired_assessments():
     candidate who coded for 72 minutes showed up to the recruiter as a blank
     "expired" with no result. E2B sandboxes auto-expire on their own, so there is
     nothing to reap here for IN_PROGRESS rows.
+
+    The same sweep is the durable fallback for a bounced/complained webhook
+    whose immediate recovery hook failed.  Recovery itself is incident-
+    idempotent: an explicitly-authorized role may auto-resend once, otherwise
+    exactly one ``AgentDecision`` remains available for genuine HITL review.
     """
     from datetime import datetime, timezone
+    from sqlalchemy import or_
     from sqlalchemy.orm import Session
     from ..platform.database import SessionLocal
     from ..models.assessment import Assessment, AssessmentStatus
+    from ..services.assessment_invite_recovery import (
+        RECOVERY_TRIGGER_BOUNCE,
+        RECOVERY_TRIGGER_EXPIRED,
+        recover_assessment_invite,
+    )
 
     logger.info("Running expired assessment cleanup")
     db: Session = SessionLocal()
     try:
+        # Provider delivery failures first.  If the absolute invite window also
+        # elapsed, this remains one bounce incident/card rather than a second
+        # independent expiry recommendation.
+        delivery_failures = (
+            db.query(Assessment)
+            .filter(
+                Assessment.status.in_(
+                    (AssessmentStatus.PENDING, AssessmentStatus.EXPIRED)
+                ),
+                Assessment.is_voided.is_(False),
+                Assessment.invite_email_status.in_(("bounced", "complained")),
+            )
+            .all()
+        )
+        recovery_counts: dict[str, int] = {}
+        for assessment in delivery_failures:
+            try:
+                result = recover_assessment_invite(
+                    db,
+                    assessment_id=int(assessment.id),
+                    trigger=RECOVERY_TRIGGER_BOUNCE,
+                    provider_email_id=assessment.invite_email_id,
+                    provider_status=assessment.invite_email_status,
+                )
+                status = str(result.get("status") or "unknown")
+                recovery_counts[status] = recovery_counts.get(status, 0) + 1
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Bounced assessment invite recovery failed assessment_id=%s",
+                    assessment.id,
+                )
+
         expired = db.query(Assessment).filter(
             Assessment.status == AssessmentStatus.PENDING,
             Assessment.expires_at < datetime.now(timezone.utc),
+            or_(
+                Assessment.invite_email_status.is_(None),
+                Assessment.invite_email_status.notin_(("bounced", "complained")),
+            ),
         ).all()
 
         count = 0
         for assessment in expired:
             assessment.status = AssessmentStatus.EXPIRED
+            # Make expiry truth durable even when recovery later fails.  The
+            # next 30-minute sweep will retry the idempotent recovery incident.
+            db.commit()
             count += 1
+            try:
+                result = recover_assessment_invite(
+                    db,
+                    assessment_id=int(assessment.id),
+                    trigger=RECOVERY_TRIGGER_EXPIRED,
+                )
+                status = str(result.get("status") or "unknown")
+                recovery_counts[status] = recovery_counts.get(status, 0) + 1
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Expired assessment invite recovery failed assessment_id=%s",
+                    assessment.id,
+                )
 
         db.commit()
-        logger.info(f"Cleaned up {count} expired pending assessments")
+        logger.info(
+            "Cleaned up %d expired pending assessments; invite recovery=%s",
+            count,
+            recovery_counts,
+        )
     except Exception as e:
         logger.error(f"Cleanup task failed: {e}")
         db.rollback()

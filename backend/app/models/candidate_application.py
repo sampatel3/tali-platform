@@ -39,6 +39,11 @@ class CandidateApplication(Base):
     pipeline_stage = Column(String, default="applied", nullable=False)
     pipeline_stage_updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     pipeline_stage_source = Column(String, default="system", nullable=False)
+    # Provider-neutral downstream hiring milestone. ``pipeline_stage`` remains
+    # the Tali evaluation axis; this continues after evaluation handoff.
+    recruiter_stage = Column(String, nullable=True, index=True)
+    recruiter_stage_source = Column(String, nullable=True)
+    recruiter_stage_updated_at = Column(DateTime(timezone=True), nullable=True)
     application_outcome = Column(String, default="open", nullable=False)
     application_outcome_updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     # Recruiter's manually recorded decision (advance/hold/reject + rationale,

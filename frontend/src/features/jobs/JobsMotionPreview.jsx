@@ -117,6 +117,9 @@ const filterRoleBySource = (role, sourceFilter) => {
 // stagger, the agent-status chip animates in, and the stage-count values tick.
 const RoleCard = ({ role, agentLive, reduced }) => {
   const stageCounts = role?.stage_counts || {};
+  const visibleStages = STAGES.filter(
+    (stage) => stage.key !== 'sourced' || Number(stageCounts?.sourced || 0) > 0,
+  );
   const workableRole = String(role?.source || '').toLowerCase() === 'workable';
   const roleLive = isRoleLive(role);
   const lifecycleDimmed = isRoleDimmed(role);
@@ -202,8 +205,11 @@ const RoleCard = ({ role, agentLive, reduced }) => {
         </m.span>
       </div>
 
-      <div className="job-stats">
-        {STAGES.map((stage) => {
+      <div
+        className="job-stats"
+        style={{ '--job-stage-count': visibleStages.length }}
+      >
+        {visibleStages.map((stage) => {
           const value = Number(stageCounts?.[stage.key] || 0);
           const tone = funnelStageTone(stage.key, value);
           return (

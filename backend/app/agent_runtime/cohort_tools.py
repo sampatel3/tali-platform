@@ -23,7 +23,9 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
+from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
+from ..models.outreach_campaign import OutreachCampaign, OutreachMessage
 from ..models.role import Role
 
 
@@ -33,6 +35,7 @@ logger = logging.getLogger("taali.agent_runtime.cohort_tools")
 # Names of the application "states" the orchestrator reasons about.
 # Each maps to a concrete query in ``find_apps_in_state``.
 COHORT_STATES = (
+    "sourced_uncontacted",              # sourced lead with email, no outreach row
     "needs_cv_fetch",                  # cv_text NULL but cv_file_url set
     "needs_pre_screen",                # cv_text present, pre_screen_score_100 NULL
     "needs_score",                     # pre_screen passed, cv_match_score NULL
@@ -130,6 +133,20 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
                     pass
 
     from ..services.agent_policy_settings import effective_agent_policy
+    from ..services.sourcing_capability_service import linkedin_sourcing_capability
+
+    campaign_rows = (
+        db.query(OutreachCampaign.status, func.count(OutreachCampaign.id))
+        .filter(
+            OutreachCampaign.organization_id == organization_id,
+            OutreachCampaign.role_id == role_id,
+            OutreachCampaign.origin == "agent",
+            OutreachCampaign.status.in_(("draft", "generating", "ready", "sending")),
+        )
+        .group_by(OutreachCampaign.status)
+        .all()
+    )
+    agent_campaigns = {str(status): int(total) for status, total in campaign_rows}
 
     return {
         "role_id": int(role.id),
@@ -155,12 +172,15 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         "effective_role_fit_threshold": effective_role_fit_threshold,
         "effective_monthly_budget_cents": effective_budget,
         "counts": counts,
+        "sourcing": {
+            "uncontacted_sourced": counts.get("sourced_uncontacted", 0),
+            "active_agent_campaigns": agent_campaigns,
+            "internal_talent_pool": {"status": "ready"},
+            "linkedin_rsc": linkedin_sourcing_capability(),
+        },
         "intent_gaps": intent_gaps,
-        # Shape of the recruiter's intent — lets the agent judge whether
-        # the captured intent is "rich enough" to triage well, beyond the
-        # blunt zero-must-haves rule that intent_gaps uses. The agent can
-        # open an intent_clarification question when it spots a thin
-        # dimension (e.g. must-haves listed but no seniority signal).
+        # Shape of role intent lets the agent qualify its reasoning without
+        # turning thin configuration into a routine clarification request.
         "role_intent_shape": _role_intent_shape(role),
         "open_recruiter_questions": [
             {
@@ -260,8 +280,7 @@ def _recent_resolved_answers(
 def _intent_gaps(
     role: Role, *, recent_answers: dict[str, Any] | None = None
 ) -> list[str]:
-    """Return human-readable list of role-config gaps the agent should
-    ask the recruiter about before running cycles in earnest.
+    """Return diagnostic role-config gaps for deterministic setup surfaces.
 
     Recruiter intent lives in ``role_criteria`` rows (bucketed
     must / preferred / constraints) since alembic 068 retired
@@ -269,10 +288,9 @@ def _intent_gaps(
     the role has zero non-derived criteria in the must bucket — the
     agent can't apply hard requirements without them.
 
-    A gap is considered closed if the recruiter has answered the
-    corresponding question, even when the role column itself is still
-    null — the answer is the working value for this cycle. Without this
-    the agent re-asks the same question forever.
+    A gap is considered closed if a previous setup card was answered, even
+    when the role column itself is still null, for compatibility with existing
+    role configuration records.
     """
     from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 
@@ -280,7 +298,11 @@ def _intent_gaps(
     gaps: list[str] = []
     if (role.monthly_usd_budget_cents is None or role.monthly_usd_budget_cents <= 0) and "monthly_budget_missing" not in answers:
         gaps.append("monthly_usd_budget_cents is unset")
-    if role.score_threshold is None and "threshold_ambiguous" not in answers:
+    if (
+        role.score_threshold is None
+        and (getattr(role, "auto_reject_threshold_mode", None) or "auto") == "manual"
+        and "threshold_ambiguous" not in answers
+    ):
         gaps.append("score_threshold is unset")
     if not (role.job_spec_text or "").strip() and not (role.description or "").strip():
         gaps.append("no job spec attached")
@@ -291,7 +313,12 @@ def _intent_gaps(
         and getattr(c, "bucket", None) == "must"
         and (c.text or "").strip()
     ]
-    if not must_chips:
+    # A real job spec is sufficient input for the agent to derive a sourcing
+    # query and reason over the role. Missing hand-authored chips is not, by
+    # itself, a reason to pull a person into an otherwise autonomous loop.
+    if not must_chips and not (
+        (role.job_spec_text or "").strip() or (role.description or "").strip()
+    ):
         gaps.append("no must-have requirements captured")
     return gaps
 
@@ -346,7 +373,7 @@ def find_apps_in_state(
                 AgentDecision.role_id == role_id,
                 AgentDecision.status == "pending",
             )
-            .subquery()
+            .scalar_subquery()
         )
         q = q.filter(~CandidateApplication.id.in_(pending_subq))
     if state == "ready_for_assessment_decision":
@@ -453,6 +480,25 @@ def _state_query(
         CandidateApplication.deleted_at.is_(None),
     )
 
+    if state == "sourced_uncontacted":
+        contacted_subq = (
+            db.query(OutreachMessage.source_application_id)
+            .filter(
+                OutreachMessage.organization_id == organization_id,
+                OutreachMessage.source_application_id.isnot(None),
+            )
+            .scalar_subquery()
+        )
+        return base.join(
+            Candidate, Candidate.id == CandidateApplication.candidate_id
+        ).filter(
+            CandidateApplication.pipeline_stage == "sourced",
+            CandidateApplication.application_outcome == "open",
+            Candidate.email.isnot(None),
+            Candidate.email != "",
+            ~CandidateApplication.id.in_(contacted_subq),
+        )
+
     # A6: explicit exclusion of pipeline_stage='advanced' from every
     # active-pipeline state. ``application_outcome == "open"`` doesn't
     # cover advanced (an advanced candidate can still be outcome=open
@@ -469,7 +515,7 @@ def _state_query(
             ),
             CandidateApplication.cv_file_url.isnot(None),
             CandidateApplication.application_outcome == "open",
-            CandidateApplication.pipeline_stage != "advanced",
+            CandidateApplication.pipeline_stage.notin_(["sourced", "advanced"]),
         )
     if state == "needs_pre_screen":
         return base.filter(
@@ -477,7 +523,7 @@ def _state_query(
             CandidateApplication.cv_text != "",
             CandidateApplication.pre_screen_score_100.is_(None),
             CandidateApplication.application_outcome == "open",
-            CandidateApplication.pipeline_stage != "advanced",
+            CandidateApplication.pipeline_stage.notin_(["sourced", "advanced"]),
         )
     if state == "needs_score":
         return base.filter(
@@ -485,7 +531,7 @@ def _state_query(
             CandidateApplication.pre_screen_score_100 >= 50,
             CandidateApplication.cv_match_score.is_(None),
             CandidateApplication.application_outcome == "open",
-            CandidateApplication.pipeline_stage != "advanced",
+            CandidateApplication.pipeline_stage.notin_(["sourced", "advanced"]),
         )
     if state == "ready_for_assessment_decision":
         return base.filter(

@@ -50,16 +50,16 @@ import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
 import { ReachOutDialog } from './ReachOutDialog';
 import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
+import { HiringStageCell, ProviderStageCell } from './HiringStageCell';
 import {
   agentIntakeLifecycleCopy,
-  applicationAtsStage,
   atsProviderLabel,
   AtsTypeTag,
   atsTypeColumnLabel,
   roleAtsProvider,
   roleAtsType,
 } from './atsType';
-import { getErrorMessage, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
   formatCount,
   budgetTile,
@@ -522,16 +522,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setLoading(true);
     }
     try {
-      // Two separate fetches (open + rejected) at the backend's 2000-row
-      // ceiling — splits the budget so a long reject history can't crowd
-      // open candidates out, and avoids the 500-row default that would
-      // silently truncate thousand-applicant roles.
+      // Fetch each outcome independently at the backend's 2000-row ceiling so
+      // a long terminal history cannot crowd active candidates out. Hired and
+      // withdrawn rows remain visible after the post-Advanced flow instead of
+      // disappearing exactly when the hiring axis reaches a terminal state.
       const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
-      const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
+      const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, hiredAppsRes, withdrawnAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
         rolesApi.listApplications(numericRoleId, appsQuery('open')),
         rolesApi.listApplications(numericRoleId, appsQuery('rejected')),
+        rolesApi.listApplications(numericRoleId, appsQuery('hired')),
+        rolesApi.listApplications(numericRoleId, appsQuery('withdrawn')),
         rolesApi.batchScoreStatus(numericRoleId),
         rolesApi.fetchCvsStatus(numericRoleId),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
@@ -549,22 +551,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       let applicationPayloads = [
         ...(openAppsRes?.data || []),
         ...(rejectedAppsRes?.data || []),
+        ...(hiredAppsRes?.data || []),
+        ...(withdrawnAppsRes?.data || []),
       ];
-      // Sister roles evaluate the complete source cohort, including prior
-      // hires/withdrawals. The standard page keeps its two-query hot path;
-      // only the uncommon sister view pays this extra terminal-outcome fetch.
-      if (nextRole?.role_kind === 'sister') {
-        const [hiredAppsRes, withdrawnAppsRes] = await Promise.all([
-          rolesApi.listApplications(numericRoleId, appsQuery('hired')),
-          rolesApi.listApplications(numericRoleId, appsQuery('withdrawn')),
-        ]);
-        if (seq !== loadSeqRef.current) return;
-        applicationPayloads = [
-          ...applicationPayloads,
-          ...(hiredAppsRes?.data || []),
-          ...(withdrawnAppsRes?.data || []),
-        ];
-      }
       setRole(nextRole);
       setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
       setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
@@ -2173,14 +2162,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 ))}
               </div>
               <div className="ctable-toolbar-grow" />
-              {tableStageFilter === 'sourced' && selectedSourcedAppIds.size > 0 ? (
+              {tableStageFilter === 'sourced' && !agentRunning && selectedSourcedAppIds.size > 0 ? (
                 <button
                   type="button"
                   className="btn btn-purple btn-sm"
                   onClick={() => setReachOutOpen(true)}
-                  title="Draft and send an approval-gated outreach campaign to the selected sourced candidates"
+                  title="Manual support fallback while the role agent is off or paused"
                 >
-                  <Send size={12} />Reach out ({selectedSourcedAppIds.size})
+                  <Send size={12} />Manual support · Reach out ({selectedSourcedAppIds.size})
                 </button>
               ) : null}
               {role?.role_kind === 'sister' && sisterScoringStatus?.status === 'running' ? (
@@ -2189,7 +2178,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 </span>
               ) : null}
             </div>
-            {tableStageFilter === 'sourced' && numericRoleId ? (
+            {numericRoleId && role?.role_kind !== 'sister' ? (
               <CampaignsMonitorPanel
                 roleId={numericRoleId} focusCampaignId={focusCampaignId}
                 defaultOpen={focusCampaignId != null}
@@ -2208,7 +2197,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               }
               const visible = sorted.slice(0, tableVisibleCount);
               const hiddenCount = sorted.length - visible.length;
-              const sourcingSelection = tableStageFilter === 'sourced';
+              // Candidate selection is an explicit support fallback only when
+              // the autonomous role agent is off/paused. Running agents own
+              // discovery and preparation without human profile picking.
+              const sourcingSelection = tableStageFilter === 'sourced' && !agentRunning;
               const visibleIds = sourcingSelection ? visible.map((a) => a.id) : [];
               const allSelected = visibleIds.length > 0
                 && visibleIds.every((id) => selectedSourcedAppIds.has(id));
@@ -2243,10 +2235,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         </th>
                         {role?.role_kind === 'sister' ? <th title={`Fit score on ${role?.ats_owner_role_name || 'the original role'}`}>Original fit</th> : null}
                         <th>Stage</th>
-                        {/* External-ATS roles show the synced ATS stage;
-                            full-ATS roles show the native Taali pipeline stage
-                            (never a wall of dashes). */}
+                        {/* Keep the provider's raw stage visible for support and
+                            sync-drift diagnosis; Hiring stage is the normalized,
+                            provider-neutral post-evaluation axis. */}
                         <th title={roleAtsType(role) === 'full_ats' ? 'Stage in the Taali pipeline' : `Current stage in ${atsTypeColumnLabel(role)}`}>{atsTypeColumnLabel(role)}</th>
+                        <th title="Provider-neutral stage after Tali evaluation handoff">Hiring stage</th>
                         <th>Agent</th>
                         <th aria-sort={tableSortField === 'last_updated' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
                           <button type="button" className="ctable-sort" onClick={() => handleTableSort('last_updated')} aria-label="Sort by last updated" title="Sort by last updated">Last updated{tableSortField === 'last_updated' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
@@ -2328,27 +2321,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
-                              <td>{(() => {
-                                if (roleAtsType(role) === 'full_ats') {
-                                  return <span className="stage-pill" title="Stage in the Taali pipeline">{stageLabel}</span>;
-                                }
-                                const externalStage = applicationAtsStage(application, role);
-                                if (externalProvider === 'workable' && application?.workable_disqualified) {
-                                  return (
-                                    <span
-                                      className="stage-pill is-disqualified"
-                                      title={externalStage ? `Disqualified in Workable (was: ${formatStatusLabel(externalStage)})` : 'Disqualified in Workable'}
-                                    >
-                                      Disqualified
-                                    </span>
-                                  );
-                                }
-                                return externalStage ? (
-                                  <span className="stage-pill" title={`Current stage in ${externalProviderLabel}`}>
-                                    {formatStatusLabel(externalStage)}
-                                  </span>
-                                ) : <span className="ctable-em">—</span>;
-                              })()}</td>
+                              <ProviderStageCell application={application} role={role} stageLabel={stageLabel} />
+                              <HiringStageCell application={application} />
                               <td>
                                 {agentLabel ? (
                                   <span className="ai-action">

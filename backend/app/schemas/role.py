@@ -356,6 +356,12 @@ class ApplicationResponse(BaseModel):
     pipeline_stage: Literal["sourced", "applied", "invited", "in_assessment", "review", "advanced"] = "applied"
     pipeline_stage_updated_at: Optional[datetime] = None
     pipeline_stage_source: Literal["system", "recruiter", "sync", "agent"] = "system"
+    recruiter_stage: Optional[Literal["screening", "interviewing", "offer", "hired"]] = None
+    recruiter_stage_source: Optional[
+        Literal["system", "recruiter", "sync", "agent", "migration"]
+    ] = None
+    recruiter_stage_updated_at: Optional[datetime] = None
+    hiring_stage_context: Optional[dict[str, Any]] = None
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"] = "open"
     application_outcome_updated_at: Optional[datetime] = None
     external_refs: Optional[dict[str, Any]] = None
@@ -502,6 +508,13 @@ class ApplicationCvUploadResponse(BaseModel):
 
 class ApplicationStageUpdate(BaseModel):
     pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "advanced"]
+    expected_version: Optional[int] = Field(default=None, ge=1)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
+
+
+class ApplicationRecruiterStageUpdate(BaseModel):
+    recruiter_stage: Literal["screening", "interviewing", "offer", "hired"]
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)

@@ -35,7 +35,6 @@ from .pipeline_service import (
     FUNNEL_BUCKETS,
     funnel_bucket_for,
     normalize_pipeline_key,
-    _post_handover_sql,
 )
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
@@ -643,8 +642,8 @@ def get_reporting_summary(
     # them in Python. total_applied is every application in scope.
     # Canonical bucketing: mirror role_pipeline_counts so Analytics agrees with
     # Home/Jobs. "Scored" = evaluated (real cv_match score OR a genuine
-    # pre-screen run); post-handover candidates (advanced in Workable) roll into
-    # "advanced"; "rejected" is an application_outcome counted separately.
+    # pre-screen run); ``advanced`` comes only from Tali's stored evaluation
+    # handoff. The provider-neutral hiring stage is a separate axis.
     scored_expr = or_(
         CandidateApplication.cv_match_score.isnot(None),
         and_(
@@ -652,7 +651,6 @@ def get_reporting_summary(
             CandidateApplication.pre_screen_run_at.isnot(None),
         ),
     )
-    ph_expr = _post_handover_sql()
     funnel_base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == org_id,
         CandidateApplication.deleted_at.is_(None),
@@ -664,18 +662,14 @@ def get_reporting_summary(
         funnel_base.with_entities(
             CandidateApplication.pipeline_stage,
             scored_expr,
-            ph_expr,
             func.count(CandidateApplication.id),
         )
-        .group_by(CandidateApplication.pipeline_stage, scored_expr, ph_expr)
+        .group_by(CandidateApplication.pipeline_stage, scored_expr)
         .all()
     )
     bucket_counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
-    for stage, is_scored, is_post_handover, total in bucket_rows:
+    for stage, is_scored, total in bucket_rows:
         n = int(total or 0)
-        if is_post_handover:
-            bucket_counts["advanced"] += n
-            continue
         bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
         if bucket:
             bucket_counts[bucket] += n

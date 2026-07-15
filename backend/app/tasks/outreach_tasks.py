@@ -5,7 +5,7 @@ degrades to a failed row, never a dead campaign):
 
 - ``generate_campaign_drafts`` — one metered Haiku call per pending message,
   grounded ONLY in supplied facts (campaign brief + role criteria + cheap stored
-  candidate/prospect data). No new scoring. Campaign → ready when done.
+  candidate data). No new scoring. Campaign → ready when done.
 - ``send_campaign_messages`` — the ONLY send path. Re-checks suppression at send
   time, renders the final body (CTA link + unsubscribe footer), and sends via
   ``EmailService.send_outreach_email`` (reply-to + List-Unsubscribe header).
@@ -29,6 +29,13 @@ logger = logging.getLogger("taali.tasks.outreach")
 _SEND_SLEEP_SECONDS = 0.5
 
 _DRAFT_MAX_TOKENS = 500
+
+# A whole campaign is retried only when every attempted draft failed.  The
+# durable counter on ``OutreachCampaign`` is the source of truth, rather than
+# Celery's delivery counter, so redelivery or a worker restart cannot create an
+# unbounded retry loop.
+_DRAFT_GENERATION_MAX_ATTEMPTS = 3
+_DRAFT_GENERATION_RETRY_DELAY_SECONDS = 30
 
 
 class _DraftOutput(BaseModel):
@@ -56,8 +63,7 @@ _DRAFT_SYSTEM = (
 def _recipient_facts(message: Any) -> str:
     """Cheap, grounded facts for one recipient — no new scoring, read-only.
 
-    Pool candidates: name / position / a short cv_sections summary if present.
-    Prospects: name / position / notes / linkedin_url."""
+    Candidates: name / position / a short cv_sections summary if present."""
     lines: list[str] = []
     name = (getattr(message, "recipient_name", None) or "").strip()
     if name:
@@ -73,18 +79,6 @@ def _recipient_facts(message: Any) -> str:
             summary = (sections.get("summary") or sections.get("headline") or "").strip()
             if summary:
                 lines.append(f"Profile summary: {summary[:400]}")
-
-    prospect = getattr(message, "prospect", None)
-    if prospect is not None:
-        pos = (getattr(prospect, "position", None) or "").strip()
-        if pos and "Current/last position" not in "".join(lines):
-            lines.append(f"Position: {pos}")
-        notes = (getattr(prospect, "notes", None) or "").strip()
-        if notes:
-            lines.append(f"Sourcing notes: {notes[:400]}")
-        linkedin = (getattr(prospect, "linkedin_url", None) or "").strip()
-        if linkedin:
-            lines.append(f"LinkedIn: {linkedin}")
 
     return "\n".join(lines) if lines else "(no additional details on file)"
 
@@ -111,11 +105,19 @@ def _role_criteria_text(db, role_id: Optional[int]) -> str:
     return "\n".join(parts)
 
 
-@celery_app.task(name="generate_campaign_drafts")
-def generate_campaign_drafts(campaign_id: int) -> dict:
+@celery_app.task(
+    bind=True,
+    name="generate_campaign_drafts",
+    max_retries=_DRAFT_GENERATION_MAX_ATTEMPTS - 1,
+    default_retry_delay=_DRAFT_GENERATION_RETRY_DELAY_SECONDS,
+)
+def generate_campaign_drafts(self, campaign_id: int) -> dict:
+    from ..domains.outreach.campaign_service import compute_counts
     from ..llm.core import MeteringContext
     from ..llm.structured import generate_structured
     from ..models.outreach_campaign import (
+        CAMPAIGN_STATUS_FAILED,
+        CAMPAIGN_STATUS_GENERATING,
         CAMPAIGN_STATUS_READY,
         MESSAGE_STATUS_DRAFT,
         MESSAGE_STATUS_DRAFTING,
@@ -136,21 +138,130 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
         campaign = db.get(OutreachCampaign, int(campaign_id))
         if campaign is None:
             return {"ok": False, "error": "campaign_not_found"}
+        if campaign.status != CAMPAIGN_STATUS_GENERATING:
+            return {
+                "ok": False,
+                "error": "invalid_campaign_status",
+                "status": campaign.status,
+            }
+
+        campaign.draft_generation_attempts = (
+            int(campaign.draft_generation_attempts or 0) + 1
+        )
+        attempt = int(campaign.draft_generation_attempts)
+        db.commit()
         org_id = int(campaign.organization_id)
+
+        def _finish_terminal_failure(error: str) -> dict:
+            # Ensure no in-flight row remains in a transient state when the
+            # bounded campaign retry budget is exhausted.
+            terminal_rows = (
+                db.query(OutreachMessage)
+                .filter(
+                    OutreachMessage.campaign_id == campaign.id,
+                    OutreachMessage.status.in_(
+                        [MESSAGE_STATUS_PENDING, MESSAGE_STATUS_DRAFTING]
+                    ),
+                )
+                .all()
+            )
+            for row in terminal_rows:
+                row.status = MESSAGE_STATUS_FAILED
+                row.error = error[:500]
+            campaign.status = CAMPAIGN_STATUS_FAILED
+            campaign.counts = compute_counts(db, campaign.id)
+            db.commit()
+            return {
+                "ok": False,
+                "error": error,
+                "drafted": 0,
+                "failed": db.query(OutreachMessage)
+                .filter(
+                    OutreachMessage.campaign_id == campaign.id,
+                    OutreachMessage.status == MESSAGE_STATUS_FAILED,
+                )
+                .count(),
+                "attempts": attempt,
+            }
+
+        def _retry_all_failed(error: str) -> None:
+            # A retry starts from pending rows again.  Clearing the row error
+            # makes the visible state deterministic while the campaign remains
+            # generating; the terminal attempt preserves its final error.
+            retry_rows = (
+                db.query(OutreachMessage)
+                .filter(
+                    OutreachMessage.campaign_id == campaign.id,
+                    OutreachMessage.status.in_(
+                        [MESSAGE_STATUS_FAILED, MESSAGE_STATUS_DRAFTING]
+                    ),
+                )
+                .all()
+            )
+            for row in retry_rows:
+                row.status = MESSAGE_STATUS_PENDING
+                row.error = None
+            campaign.status = CAMPAIGN_STATUS_GENERATING
+            campaign.counts = compute_counts(db, campaign.id)
+            db.commit()
+            logger.warning(
+                "outreach draft campaign=%s attempt=%s/%s failed: %s; retrying",
+                campaign.id,
+                attempt,
+                _DRAFT_GENERATION_MAX_ATTEMPTS,
+                error,
+            )
+            raise self.retry(
+                countdown=_DRAFT_GENERATION_RETRY_DELAY_SECONDS,
+                max_retries=_DRAFT_GENERATION_MAX_ATTEMPTS - 1,
+            )
 
         role: Optional[Role] = None
         if campaign.role_id is not None:
-            role = db.query(Role).filter(Role.id == campaign.role_id).first()
+            role = (
+                db.query(Role)
+                .filter(
+                    Role.id == campaign.role_id,
+                    Role.organization_id == org_id,
+                )
+                .first()
+            )
+        if role is None:
+            return _finish_terminal_failure("invalid_campaign_role")
 
-        # Campaign-level budget gate (role-scoped). If over budget, leave the
-        # pending messages as-is and flip the campaign back to ready so the
-        # recruiter sees no drafts were produced (with the paused reason surfaced
-        # elsewhere). Campaigns are role-scoped so the gate at generate time is
-        # sufficient.
-        if role is not None and not can_spend_on_role(db, role=role):
-            campaign.status = CAMPAIGN_STATUS_READY
-            db.commit()
-            return {"ok": False, "error": "role_budget_exhausted", "drafted": 0}
+        # Budget exhaustion is durable rather than transient, so it terminates
+        # immediately instead of consuming two retries that cannot succeed.
+        if not can_spend_on_role(db, role=role):
+            return _finish_terminal_failure("role_budget_exhausted")
+
+        pending = (
+            db.query(OutreachMessage)
+            .filter(
+                OutreachMessage.campaign_id == campaign.id,
+                OutreachMessage.status == MESSAGE_STATUS_PENDING,
+            )
+            .all()
+        )
+        if not pending:
+            existing_drafts = (
+                db.query(OutreachMessage)
+                .filter(
+                    OutreachMessage.campaign_id == campaign.id,
+                    OutreachMessage.status == MESSAGE_STATUS_DRAFT,
+                )
+                .count()
+            )
+            if existing_drafts:
+                campaign.status = CAMPAIGN_STATUS_READY
+                campaign.counts = compute_counts(db, campaign.id)
+                db.commit()
+                return {
+                    "ok": True,
+                    "drafted": existing_drafts,
+                    "failed": 0,
+                    "attempts": attempt,
+                }
+            return _finish_terminal_failure("no_pending_messages")
 
         org = db.query(Organization).filter(Organization.id == org_id).first()
         org_name = (org.name if org else None) or "the team"
@@ -161,28 +272,19 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
             client = get_metered_client(organization_id=org_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("outreach draft client init failed campaign=%s: %s", campaign_id, exc)
-            campaign.status = CAMPAIGN_STATUS_READY
-            db.commit()
-            return {"ok": False, "error": "client_init_failed"}
+            if attempt < _DRAFT_GENERATION_MAX_ATTEMPTS:
+                _retry_all_failed("client_init_failed")
+            return _finish_terminal_failure("client_init_failed")
 
         model = settings.resolved_claude_chat_model
-        pending = (
-            db.query(OutreachMessage)
-            .filter(
-                OutreachMessage.campaign_id == campaign.id,
-                OutreachMessage.status == MESSAGE_STATUS_PENDING,
-            )
-            .all()
-        )
 
         drafted = failed = 0
         for message in pending:
             message.status = MESSAGE_STATUS_DRAFTING
             db.commit()
-            recruiter_first = "the team"
             facts = _recipient_facts(message)
             system = _DRAFT_SYSTEM.replace(
-                "{sign_off}", f"[recruiter first name] via {org_name}"
+                "{sign_off}", f"Talent team at {org_name}"
             )
             user = (
                 "<FACTS>\n"
@@ -232,12 +334,31 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
                 failed += 1
             db.commit()
 
-        campaign.status = CAMPAIGN_STATUS_READY
-        from ..domains.outreach.campaign_service import compute_counts
+        total_drafts = (
+            db.query(OutreachMessage)
+            .filter(
+                OutreachMessage.campaign_id == campaign.id,
+                OutreachMessage.status == MESSAGE_STATUS_DRAFT,
+            )
+            .count()
+        )
+        if total_drafts == 0:
+            if attempt < _DRAFT_GENERATION_MAX_ATTEMPTS:
+                _retry_all_failed("draft_generation_failed")
+            return _finish_terminal_failure("draft_generation_failed")
 
+        # Partial success is usable: keep failed rows isolated and expose the
+        # successful drafts for review rather than retrying recipients that have
+        # already succeeded.
+        campaign.status = CAMPAIGN_STATUS_READY
         campaign.counts = compute_counts(db, campaign.id)
         db.commit()
-        return {"ok": True, "drafted": drafted, "failed": failed}
+        return {
+            "ok": True,
+            "drafted": drafted,
+            "failed": failed,
+            "attempts": attempt,
+        }
 
 
 def _unsubscribe_url(org_id: int, email: str) -> str:
@@ -288,6 +409,7 @@ def _render_bodies(raw_body: str, cta_url: str, unsubscribe_url: str) -> tuple[s
 def send_campaign_messages(campaign_id: int) -> dict:
     from ..components.notifications.email_client import EmailService
     from ..models.outreach_campaign import (
+        CAMPAIGN_STATUS_SENDING,
         CAMPAIGN_STATUS_SENT,
         MESSAGE_STATUS_FAILED,
         MESSAGE_STATUS_QUEUED,
@@ -297,11 +419,6 @@ def send_campaign_messages(campaign_id: int) -> dict:
         OutreachMessage,
     )
     from ..models.organization import Organization
-    from ..models.prospect import (
-        PROSPECT_STATUS_CONTACTED,
-        PROSPECT_STATUS_NEW,
-        Prospect,
-    )
     from ..models.user import User
     from ..platform.config import settings
     from ..platform.database import SessionLocal
@@ -311,6 +428,12 @@ def send_campaign_messages(campaign_id: int) -> dict:
         campaign = db.get(OutreachCampaign, int(campaign_id))
         if campaign is None:
             return {"ok": False, "error": "campaign_not_found"}
+        if campaign.status != CAMPAIGN_STATUS_SENDING:
+            return {
+                "ok": False,
+                "error": "invalid_campaign_status",
+                "status": campaign.status,
+            }
         org_id = int(campaign.organization_id)
 
         org = db.query(Organization).filter(Organization.id == org_id).first()
@@ -373,6 +496,7 @@ def send_campaign_messages(campaign_id: int) -> dict:
                     reply_to=reply_to,
                     unsubscribe_url=unsub_url,
                     display_name=org_name,
+                    idempotency_key=f"outreach-message:{int(message.id)}:v1",
                 )
             except Exception as exc:  # noqa: BLE001 — isolate this message
                 result = {"success": False, "error": str(exc)}
@@ -382,23 +506,6 @@ def send_campaign_messages(campaign_id: int) -> dict:
                 message.status = MESSAGE_STATUS_SENT
                 message.sent_at = datetime.now(timezone.utc)
                 message.error = None
-                if message.prospect_id is not None:
-                    # Compare-and-set protects stronger lifecycle states even if
-                    # an interest/conversion/archive event lands while the email
-                    # provider call is in flight. Only a genuinely new prospect
-                    # becomes contacted, and only after a successful send.
-                    (
-                        db.query(Prospect)
-                        .filter(
-                            Prospect.id == message.prospect_id,
-                            Prospect.organization_id == org_id,
-                            Prospect.status == PROSPECT_STATUS_NEW,
-                        )
-                        .update(
-                            {Prospect.status: PROSPECT_STATUS_CONTACTED},
-                            synchronize_session=False,
-                        )
-                    )
                 sent += 1
             else:
                 message.status = MESSAGE_STATUS_FAILED

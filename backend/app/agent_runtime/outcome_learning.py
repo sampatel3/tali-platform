@@ -11,7 +11,7 @@ This module records *realized outcomes* — what actually happened to a
 candidate after the agent's decision was approved. Hooks into pipeline
 state transitions:
 
-- Application stage moves to ``advanced`` after an approved
+- Downstream hiring stage reaches ``interviewing`` after an approved
   ``advance_to_interview`` agent decision → outcome="interviewed"
 - Application outcome moves to ``hired`` after an approved
   ``advance_to_interview`` agent decision → outcome="hired"
@@ -101,6 +101,14 @@ def _append_outcome(
     application_id: int,
 ) -> None:
     """Append one outcome entry to role.agent_calibration["outcomes"]."""
+    existing_outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    if any(
+        isinstance(item, dict)
+        and int(item.get("decision_id") or 0) == int(decision.id)
+        and str(item.get("outcome") or "") == str(outcome)
+        for item in existing_outcomes
+    ):
+        return
     now = datetime.now(timezone.utc)
     entry = {
         "decision_type": str(decision.decision_type),
@@ -190,16 +198,28 @@ def record_advance_outcome_on_stage(
     application: CandidateApplication,
     new_stage: str,
 ) -> None:
-    """Called from pipeline_service.transition_stage. When an application
-    reaches ``advanced`` (i.e., past Tali's handover into the recruiter's
-    Workable interview flow), look up any approved agent advance decision
-    and record outcome="interviewed".
+    """Compatibility hook called from pipeline-stage transitions.
+
+    ``advanced`` now means evaluation handoff, not proof an interview happened,
+    so this function deliberately records nothing. Interview learning is fired
+    by :func:`record_interview_outcome_on_recruiter_stage` when the independent
+    hiring-stage axis actually reaches ``interviewing``.
 
     Idempotent — re-firing on the same stage transition just appends a
     duplicate entry, which the bounded FIFO eventually drops. Cheap
     enough not to bother deduping at insert time.
     """
-    if str(new_stage) != "advanced":
+    return
+
+
+def record_interview_outcome_on_recruiter_stage(
+    db: Session,
+    *,
+    application: CandidateApplication,
+    new_stage: str,
+) -> None:
+    """Record reached-interview evidence, including later monotonic stages."""
+    if str(new_stage) not in {"interviewing", "offer", "hired"}:
         return
     role_id = getattr(application, "role_id", None)
     if role_id is None:
@@ -298,25 +318,28 @@ def record_outcome_for_approved_decision(
     The transition hooks above look the decision up by ``status="approved"``
     and exist for genuinely-later downstream transitions (e.g. a hire weeks
     after an advance). They miss the agent's own approve action, because
-    approving an advance *is* what moves the candidate to ``advanced`` and
-    approving a reject *is* what sets ``application_outcome="rejected"`` —
-    there is no separate later transition to key on, and at hook time the
-    decision is still ``processing`` (the approve action stamps it
-    ``approved`` only afterwards). So the approve action calls this with the
-    decision in hand, mapping its type + the resulting application state to an
-    outcome label. Records nothing for any other state.
+    Approving a reject sets ``application_outcome="rejected"`` before the
+    decision is stamped ``approved``, so that result is recorded here with the
+    decision in hand. An approved advance is only an evaluation handoff unless
+    an external ATS already observed interviewing/offer/hired before approval;
+    reconcile that known milestone here.
     """
     role_id = getattr(application, "role_id", None)
     if role_id is None:
         return
     dtype = str(decision.decision_type)
-    if dtype == "advance_to_interview" and str(application.pipeline_stage) == "advanced":
-        outcome = "interviewed"
-    elif (
+    if (
         dtype in ("reject", "skip_assessment_reject")
         and str(application.application_outcome) == "rejected"
     ):
         outcome = "rejected_confirmed"
+    elif dtype == "advance_to_interview":
+        from ..services.recruiter_stage_service import current_recruiter_stage
+
+        if current_recruiter_stage(application) in {"interviewing", "offer", "hired"}:
+            outcome = "interviewed"
+        else:
+            return
     else:
         return
     role = db.query(Role).filter(Role.id == int(role_id)).first()
@@ -333,6 +356,7 @@ def record_outcome_for_approved_decision(
 
 __all__ = [
     "record_advance_outcome_on_stage",
+    "record_interview_outcome_on_recruiter_stage",
     "record_outcome_on_outcome_change",
     "record_outcome_for_approved_decision",
 ]

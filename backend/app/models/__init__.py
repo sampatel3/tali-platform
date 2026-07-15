@@ -205,10 +205,6 @@ from .email_suppression import (
     SUPPRESSION_REASON_RANK,
     EmailSuppression,
 )
-from .prospect import (
-    PROSPECT_STATUSES,
-    Prospect,
-)
 from .job_hiring_team import (
     TEAM_ROLE_COORDINATOR,
     TEAM_ROLE_HIRING_MANAGER,
@@ -377,8 +373,6 @@ __all__ = [
     "EmailSuppression",
     "SUPPRESSION_REASONS",
     "SUPPRESSION_REASON_RANK",
-    "Prospect",
-    "PROSPECT_STATUSES",
     "OutreachCampaign",
     "OutreachMessage",
     "CAMPAIGN_STATUSES",

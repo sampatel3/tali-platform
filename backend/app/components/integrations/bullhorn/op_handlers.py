@@ -77,11 +77,43 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
     from ....services.workable_actions_service import strict_workable_writes
 
     application_id = int(app.id)
+    auto_decision_id = payload.get("auto_advance_decision_id")
     if not app.bullhorn_job_submission_id:
+        if auto_decision_id is not None:
+            raise WorkableWritebackError(
+                action="auto_advance",
+                code="not_linked",
+                message="Application is no longer linked to Bullhorn",
+                retriable=False,
+            )
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
     provider = _bullhorn_provider(db, org, app)
     if provider is None:
+        if auto_decision_id is not None:
+            raise WorkableWritebackError(
+                action="auto_advance",
+                code="not_configured",
+                message="Bullhorn is disabled or disconnected for this application",
+                retriable=False,
+            )
         return {"status": "skipped", "reason": "not_connected", "application_id": application_id}
+
+    auto_context = None
+    if auto_decision_id is not None:
+        from ....actions import auto_advance_decision
+
+        auto_context = auto_advance_decision.preflight(
+            db,
+            organization_id=int(org.id),
+            decision_id=int(auto_decision_id),
+            application=app,
+        )
+        if auto_context is None:
+            return {
+                "status": "skipped",
+                "reason": "decision_not_processing",
+                "application_id": application_id,
+            }
 
     reason = payload.get("reason")
     user_id = payload.get("user_id")
@@ -109,7 +141,15 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
             "taali_intent": target_intent,
         },
     )
-    if target_intent in {"advanced", "advance", "skip_advanced"}:
+    if auto_context is not None:
+        from ....actions import auto_advance_decision
+
+        auto_advance_decision.complete(
+            db,
+            context=auto_context,
+            reason=reason,
+        )
+    elif target_intent in {"advanced", "advance", "skip_advanced"}:
         transition_stage(
             db,
             app=app,

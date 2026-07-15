@@ -793,9 +793,10 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
     #   c1 "New Lead"  → needs-mapping → stays funnel-top (NOT resolved) → the
     #                    SOLE fresh candidate on the STARRED role: CV fetch + the
     #                    one gated scoring enqueue.
-    #   c2 "Interview Scheduled" → mapped → advanced (proves the mapped stage).
+    #   c2 "Interview Scheduled" → downstream recruiter stage interviewing.
     #   c3 "Client Rejected" → mapped reject → rejected outcome.
-    #   c4 "Placed"    → mapped → advanced.  c5 "Bespoke Stage" → needs-mapping.
+    #   c4 "Placed"    → downstream hired + hired outcome.
+    #   c5 "Bespoke Stage" → needs-mapping.
     # c2–c5 all sit on the UN-starred job2, so only c1 is scored.
     c1 = state.make_candidate(bh, name="Ada Lovelace", email="ada@example.com")
     c2 = state.make_candidate(bh, name="Grace Hopper", email="grace@example.com")
@@ -805,7 +806,7 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
     s1 = state.make_job_submission(bh, candidate_id=c1["id"], job_order_id=job1["id"], status="New Lead")
     s2 = state.make_job_submission(bh, candidate_id=c2["id"], job_order_id=job2["id"], status="Interview Scheduled")
     s3 = state.make_job_submission(bh, candidate_id=c3["id"], job_order_id=job2["id"], status="Client Rejected")
-    state.make_job_submission(bh, candidate_id=c4["id"], job_order_id=job2["id"], status="Placed")
+    s4 = state.make_job_submission(bh, candidate_id=c4["id"], job_order_id=job2["id"], status="Placed")
     state.make_job_submission(bh, candidate_id=c5["id"], job_order_id=job2["id"], status="Bespoke Stage")
     # A history trail on s1 + a Resume attachment on c1 (drives the CV path + parse).
     # c1 is at the funnel top (not resolved), so its CV IS fetched — a resolved
@@ -907,18 +908,24 @@ def test_full_sync_run_end_to_end_imports_everything_and_scores_fresh_candidate(
     ).all()
     assert len(apps) == 5
 
-    # Stage mapping: mapped statuses moved off the funnel top; the un-seeded ones
-    # stayed (needs-mapping) and are surfaced. Categorization seeds only
-    # interview/placed/rejected, so BOTH "Bespoke Stage" and "New Lead" are
-    # needs-mapping — neither is guessed into a stage.
+    # Stage mapping: external statuses update the downstream hiring axis while
+    # all fresh rows retain Tali's funnel-top evaluation stage. Categorization
+    # seeds only interview/placed/rejected, so BOTH "Bespoke Stage" and "New
+    # Lead" are needs-mapping — neither is guessed into a stage.
     by_sub = {a.bullhorn_job_submission_id: a for a in apps}
-    assert by_sub[str(s2["id"])].pipeline_stage == "advanced"  # Interview Scheduled → advanced
+    assert by_sub[str(s2["id"])].pipeline_stage == "applied"
+    assert by_sub[str(s2["id"])].recruiter_stage == "interviewing"
     assert by_sub[str(s2["id"])].external_stage_normalized == "advanced"
     assert by_sub[str(s1["id"])].pipeline_stage == "applied"  # New Lead unmapped → funnel top
     assert by_sub[str(s1["id"])].external_stage_normalized is None
     assert sm.unmapped_statuses(db, org) == ["Bespoke Stage", "New Lead"]
     # The rejected-category status (s3) resolved the outcome.
     assert by_sub[str(s3["id"])].application_outcome == "rejected"
+    # Bullhorn's configured confirmed status is authoritative placement, but it
+    # still does not create a Tali evaluation handoff.
+    assert by_sub[str(s4["id"])].pipeline_stage == "applied"
+    assert by_sub[str(s4["id"])].recruiter_stage == "hired"
+    assert by_sub[str(s4["id"])].application_outcome == "hired"
 
     # History → status-change events on s1's application (the only submission with
     # a seeded history trail). Scope the assertion to this app: the in-memory fake

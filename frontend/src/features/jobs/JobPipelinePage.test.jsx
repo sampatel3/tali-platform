@@ -1171,6 +1171,30 @@ Banking transformation experience
     await waitFor(() => expect(firstRowName()).toBe('Priya Anand'));
   });
 
+  it('renders provider-neutral hiring stage separately from the Tali evaluation stage', async () => {
+    apiClient.roles.listApplications.mockResolvedValue({
+      data: [
+        {
+          ...baseApplications[0],
+          pipeline_stage: 'advanced',
+          external_stage_raw: 'offer_extended',
+          hiring_stage_context: {
+            stage: 'offer',
+            provider: 'workable',
+          },
+        },
+      ],
+    });
+
+    renderPipeline();
+
+    expect(await screen.findByRole('columnheader', { name: 'Hiring stage' })).toBeInTheDocument();
+    const row = (await screen.findByText('Sam Patel')).closest('tr');
+    expect(within(row).getByText('Advanced')).toBeInTheDocument();
+    expect(within(row).getByText('Offer')).toHaveAttribute('title', 'Workable · Offer Extended');
+    expect(within(row).queryByText('Offer Extended')).not.toBeInTheDocument();
+  });
+
   it('flips the agent strip to ON the instant Resume is clicked (optimistic, no poll wait)', async () => {
     // A role whose agent is enabled but paused — the strip shows PAUSED.
     apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });

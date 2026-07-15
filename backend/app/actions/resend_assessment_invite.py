@@ -9,18 +9,42 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from ..domains.integrations_notifications.invite_flow import dispatch_assessment_invite
-from ..models.assessment import Assessment
+from ..models.assessment import Assessment, AssessmentStatus
 from ..models.organization import Organization
+from ..platform.config import settings
 from .types import ACTOR_AGENT, ACTOR_SYSTEM, Actor
 
 
 logger = logging.getLogger("taali.actions.resend_assessment_invite")
+
+
+def _normalized_email(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _latest_failed_recipient(assessment: Assessment) -> str | None:
+    """Recipient captured with the current bounce/complaint webhook.
+
+    A corrected Candidate email may legitimately receive a fresh invite.  The
+    failed address may not.  When an older webhook omitted ``data.to`` we fail
+    closed because there is no durable evidence that the address was changed.
+    """
+
+    for event in reversed(list(assessment.timeline or [])):
+        if not isinstance(event, dict):
+            continue
+        if event.get("event_type") != "assessment_invite_delivery_failed":
+            continue
+        recipient = _normalized_email(event.get("recipient"))
+        return recipient or None
+    return None
 
 
 @dataclass(frozen=True)
@@ -86,6 +110,35 @@ def run(
                 status="blocked",
                 detail=f"Automatic invite resend held: {block_reason}",
             )
+        from ..services.agent_policy_settings import (
+            automation_enabled_for_decision,
+        )
+
+        if not automation_enabled_for_decision(
+            role, "resend_assessment_invite"
+        ):
+            return ResendAssessmentInviteResult(
+                assessment_id=int(assessment.id),
+                status="blocked",
+                detail=(
+                    "Automatic invite resend held: "
+                    "role.auto_resend_assessment is not enabled"
+                ),
+            )
+        configured_allowlist = getattr(role, "agent_action_allowlist", None)
+        if configured_allowlist is not None and (
+            not isinstance(configured_allowlist, (list, tuple, set, frozenset))
+            or "resend_assessment_invite"
+            not in {str(value).strip() for value in configured_allowlist}
+        ):
+            return ResendAssessmentInviteResult(
+                assessment_id=int(assessment.id),
+                status="blocked",
+                detail=(
+                    "Automatic invite resend held: action is not in the role "
+                    "agent allowlist"
+                ),
+            )
         if role is None or not assessment_task_is_current(
             db, assessment=assessment, role=role
         ):
@@ -105,6 +158,48 @@ def run(
             detail="Assessment has no candidate email",
         )
 
+    candidate_email = _normalized_email(candidate.email)
+    from ..services.email_suppression_service import is_suppressed
+
+    suppression_reason = is_suppressed(
+        db,
+        email=candidate_email,
+        organization_id=int(organization_id),
+    )
+    if suppression_reason:
+        return ResendAssessmentInviteResult(
+            assessment_id=int(assessment.id),
+            status="blocked",
+            detail=(
+                "Invite resend held: candidate email is suppressed "
+                f"({suppression_reason}). Verify or correct the address first."
+            ),
+        )
+
+    delivery_status = str(assessment.invite_email_status or "").strip().lower()
+    if delivery_status in {"bounced", "complained"}:
+        failed_recipient = _latest_failed_recipient(assessment)
+        if failed_recipient is None or failed_recipient == candidate_email:
+            return ResendAssessmentInviteResult(
+                assessment_id=int(assessment.id),
+                status="blocked",
+                detail=(
+                    "Invite resend held after a hard delivery failure. Correct "
+                    "the candidate email before sending another invite."
+                ),
+            )
+
+    if assessment.status in {
+        AssessmentStatus.IN_PROGRESS,
+        AssessmentStatus.COMPLETED,
+        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+    }:
+        return ResendAssessmentInviteResult(
+            assessment_id=int(assessment.id),
+            status="blocked",
+            detail=f"Assessment is {assessment.status.value} and cannot be resent",
+        )
+
     org = (
         db.query(Organization)
         .filter(Organization.id == organization_id)
@@ -112,6 +207,15 @@ def run(
     )
     if org is None:
         raise HTTPException(status_code=404, detail="Organization not found")
+
+    # A resend is a fresh candidate window.  This is essential for expiry
+    # recovery: emailing the old token without moving the absolute expiry would
+    # deliver a link that immediately returns 400.  Pending lost-email and
+    # corrected-bounce resends receive the same predictable full window.
+    assessment.status = AssessmentStatus.PENDING
+    assessment.expires_at = datetime.now(timezone.utc) + timedelta(
+        days=settings.ASSESSMENT_EXPIRY_DAYS
+    )
 
     # Automatic recovery must retain one stable provider idempotency key, but
     # an explicit resend is a new logical candidate email.  Advance the durable

@@ -137,9 +137,8 @@ export const decisionPendingFromCounts = (stageCounts, decisions) => {
 
 // Workable stages that mean a recruiter has advanced the candidate past Tali's
 // hand-off (interview/offer/hired) — mirrors the backend's
-// POST_HANDOVER_WORKABLE_STAGES. Such candidates DISPLAY as 'advanced' in the
-// funnel for alignment with Workable, even though Tali's pipeline_stage (used by
-// backend decision/calibration services) stays 'applied'.
+// POST_HANDOVER_WORKABLE_STAGES. This remains an external-ATS signal for agent
+// safeguards, but it no longer rewrites the Tali evaluation funnel display.
 const POST_HANDOVER_WORKABLE_STAGES = new Set([
   'phone_screen', 'phone_interview', 'first_stage', 'interview', 'technical',
   'technical_interview', 'final_interview', 'onsite', 'presentation',
@@ -158,9 +157,6 @@ export const isPostHandoverWorkableStage = (value) =>
 export const applicationFunnelBucket = (application) => {
   const outcome = String(application?.application_outcome || '').toLowerCase();
   if (outcome === 'rejected') return 'rejected';
-  // A recruiter advance in Workable wins — the furthest stage the candidate has
-  // reached — regardless of Tali's own pipeline_stage.
-  if (isPostHandoverWorkableStage(application?.workable_stage)) return 'advanced';
   const stage = String(application?.pipeline_stage || '').toLowerCase();
   // A `sourced` prospect is pre-applied and un-scored — its OWN bucket, never
   // folded into `applied` (mirrors the backend funnel_bucket_for).

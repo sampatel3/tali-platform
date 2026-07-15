@@ -20,6 +20,7 @@ from app.components.integrations.bullhorn.service import BullhornService
 from app.components.integrations.bullhorn.stage_map import ATS_BULLHORN
 from app.components.integrations.resolver import resolve_ats_provider
 from app.models.ats_stage_map import AtsStageMap
+from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -721,6 +722,96 @@ def test_op_runner_routes_manual_outcome_and_note_to_bullhorn(db, monkeypatch):
             .one()
         )
         assert note_event.actor_type == "agent"
+
+
+def test_op_runner_auto_advance_resolves_after_bullhorn_confirmation(db, monkeypatch):
+    from app.actions import _decision_side_effects
+    from app.platform import config as config_mod
+    from app.services import workable_op_runner as runner
+
+    monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
+    org = _connected_org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org(
+        "auto-advance", status_list=["New Lead", "Interview Scheduled"]
+    )
+    candidate = state.make_candidate(bh_org, name="Agent Candidate")
+    job = state.make_job_order(bh_org, title="Agent Role", is_open=True)
+    submission = state.make_job_submission(
+        bh_org,
+        candidate_id=candidate["id"],
+        job_order_id=job["id"],
+        status="New Lead",
+    )
+    _seed_map(
+        db,
+        org,
+        remote_status="Interview Scheduled",
+        taali_stage="advanced",
+        is_reject=False,
+    )
+    app = _linked_app(
+        db,
+        org,
+        submission_id=submission["id"],
+        candidate_bh_id=str(candidate["id"]),
+    )
+    app.role.agentic_mode_enabled = True
+    app.role.auto_advance = True
+    decision = AgentDecision(
+        id=880001,
+        organization_id=int(org.id),
+        role_id=int(app.role_id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="processing",
+        reasoning="Strong deterministic match",
+        evidence={"auto_advance_dispatch": {"status": "queued"}},
+        model_version="bulk-deterministic",
+        prompt_version="policy-v1",
+        idempotency_key=f"bullhorn-auto-advance:{app.id}",
+        active_capabilities={},
+        token_spend={},
+    )
+    db.add(decision)
+    db.commit()
+    monkeypatch.setattr(
+        _decision_side_effects,
+        "post_decision_summary_to_workable",
+        lambda *_a, **_k: True,
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        monkeypatch.setattr(BullhornProvider, "_client", lambda self: client)
+        result = runner.execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type=runner.OP_MOVE_STAGE,
+            payload={
+                "application_id": int(app.id),
+                "auto_advance_decision_id": int(decision.id),
+                "role_id": int(app.role_id),
+                "target_stage": "advanced",
+                "target_intent": "advanced",
+                "reason": "Auto-approved per role.auto_advance",
+                "actor_type": "system",
+                "source": "agent",
+            },
+        )
+
+    db.refresh(app)
+    db.refresh(decision)
+    assert result["status"] == "ok"
+    assert (
+        state.orgs["auto-advance"].entities["JobSubmission"][submission["id"]]["status"]
+        == "Interview Scheduled"
+    )
+    assert app.pipeline_stage == "advanced"
+    assert app.pipeline_stage_source == "agent"
+    assert decision.status == "approved"
+    assert decision.human_disposition == "auto_approved"
 
 
 def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monkeypatch):

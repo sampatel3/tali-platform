@@ -8,6 +8,7 @@ describe('OutreachThanksPage', () => {
   it('renders the standalone thanks confirmation', () => {
     render(<OutreachThanksPage />);
     expect(screen.getByTestId('outreach-thanks')).toBeInTheDocument();
-    expect(screen.getByText(/Thanks — we'll be in touch\./)).toBeInTheDocument();
+    expect(screen.getByText(/Thanks for taking a look\./)).toBeInTheDocument();
+    expect(screen.getByText(/No application was submitted\./)).toBeInTheDocument();
   });
 });

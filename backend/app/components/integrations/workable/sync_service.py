@@ -24,7 +24,6 @@ from ....domains.assessments_runtime.pipeline_service import (
     initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,
     normalize_pipeline_key,
-    reconcile_post_handover_advanced,
     transition_outcome,
     transition_stage,
 )
@@ -54,6 +53,10 @@ from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import build_role_interview_pack_templates
 from ....services.job_spec_override_service import has_manual_job_spec_override
 from ....services.pre_screening_service import refresh_pre_screening_fields
+from ....services.recruiter_stage_service import (
+    recruiter_stage_from_workable_kind,
+    sync_from_external,
+)
 from ....services.taali_scoring import normalize_score_100
 from .service import WorkableRateLimitError, WorkableService
 
@@ -398,13 +401,10 @@ def _format_job_spec_from_api(job_data: dict) -> str:
     return sanitize_text_for_storage(result.strip())
 
 
-# Workable stages where the hiring decision is effectively made and Tali has
-# nothing left to actively do → park in `advanced`. Covers negatives
-# (rejected/disqualified/declined) AND positives (offer/hired). "offer" is
-# terminal-but-pending: it parks the candidate in `advanced` with outcome left
-# `open` (not hired yet) — it's a POSITIVE training label via workable_stage,
-# captured by the cv_match calibrator. Mid-interview stages (phone/technical/
-# final interview) are deliberately NOT here — they stay in Tali's funnel.
+# Workable stages that require terminal/outcome handling. These do not mutate
+# ``pipeline_stage``: that is Tali's evaluation axis, and ``advanced`` is only
+# entered by an explicit Tali handoff. Workable's downstream milestone is kept
+# separately on ``recruiter_stage``.
 TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived", "offer"}
 
 
@@ -500,6 +500,49 @@ def _adopt_requisition_role(
 def _is_terminal_stage(stage_value: str | None) -> bool:
     stage = (stage_value or "").strip().lower()
     return stage in TERMINAL_STAGES
+
+
+def _workable_stage_kind(
+    *,
+    candidate_payload: dict,
+    candidate_ref: dict,
+    role: Role,
+) -> str | None:
+    """Resolve Workable's semantic kind from the payload or cached job map.
+
+    Candidate ``stage``/``stage_name`` values are tenant-controlled labels (or
+    slugs on list responses), so they are never interpreted directly. The full
+    candidate payload's ``stage_kind`` is authoritative; the cached
+    ``/jobs/:shortcode/stages`` rows are an explicit provider mapping fallback.
+    """
+
+    for source in (candidate_payload, candidate_ref):
+        kind = str(source.get("stage_kind") or "").strip()
+        if kind:
+            return kind
+
+    observed = {
+        str(source.get(field) or "").strip().casefold()
+        for source in (candidate_payload, candidate_ref)
+        for field in ("stage", "stage_name")
+        if str(source.get(field) or "").strip()
+    }
+    if not observed:
+        return None
+    stages = role.workable_stages if isinstance(role.workable_stages, list) else []
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        aliases = {
+            str(stage.get(field) or "").strip().casefold()
+            for field in ("slug", "name", "id")
+            if str(stage.get(field) or "").strip()
+        }
+        if observed.isdisjoint(aliases):
+            continue
+        kind = str(stage.get("kind") or stage.get("stage_kind") or "").strip()
+        return kind or None
+    return None
 
 
 def _is_terminal_candidate(payload: dict) -> bool:
@@ -975,6 +1018,43 @@ def _stage_overwrite_blocked(app, new_stage) -> bool:
         return (datetime.now(timezone.utc) - written_at) < _LOCAL_STAGE_WRITE_GUARD
     except Exception:  # pragma: no cover — never let the guard break a sync
         return False
+
+
+def _attach_workable_application_link(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    candidate_id: str,
+) -> bool:
+    """Attach a first Workable application id and engage a sourced lead.
+
+    Workable's candidate id is per job application. Persisting that id is the
+    durable signal that a pre-application sourced row has become a real
+    applicant. The caller owns the transaction, so the linkage and audited
+    stage transition commit or roll back together. Returns ``True`` only for
+    the first ``sourced -> applied`` conversion; re-syncs are free no-ops.
+    """
+    if (app.workable_candidate_id or "").strip():
+        return False
+
+    app.workable_candidate_id = sanitize_text_for_storage(candidate_id)
+    if (app.pipeline_stage or "").strip().lower() != "sourced":
+        return False
+
+    transition_stage(
+        db,
+        app=app,
+        to_stage="applied",
+        source="system",
+        actor_type="sync",
+        reason="Sourced prospect engaged — application linked from Workable",
+        metadata={
+            "provider": "workable",
+            "workable_candidate_id": candidate_id,
+        },
+        idempotency_key=f"sourced_engaged:workable:{candidate_id}",
+    )
+    return True
 
 
 class WorkableSyncService:
@@ -2062,6 +2142,15 @@ class WorkableSyncService:
             or candidate_ref.get("stage_name")
             or ""
         )
+        stage_kind = _workable_stage_kind(
+            candidate_payload=candidate_payload,
+            candidate_ref=candidate_ref,
+            role=role,
+        )
+        semantic_hiring_stage = recruiter_stage_from_workable_kind(stage_kind)
+        normalized_stage_kind = (
+            normalize_pipeline_key(stage_kind) if semantic_hiring_stage else None
+        )
         ref_disqualified = _is_disqualified(candidate_payload, candidate_ref)
         ref_terminal = _is_terminal_candidate(candidate_payload) or _is_terminal_candidate(candidate_ref)
 
@@ -2076,6 +2165,7 @@ class WorkableSyncService:
             )
             .first()
         )
+        sourced_application_engaged = False
         if existing is None:
             # Older / manually-created rows may be linked by candidate email
             # rather than the Workable id. Match those too so terminal capture
@@ -2100,8 +2190,15 @@ class WorkableSyncService:
                         )
                         .first()
                     )
-                    if existing is not None and not existing.workable_candidate_id:
-                        existing.workable_candidate_id = sanitize_text_for_storage(candidate_id)
+        if existing is not None:
+            # The first per-application Workable id is engagement, not a
+            # profile-only enrichment. The common intake tail below dispatches
+            # scoring exactly once for this reused row.
+            sourced_application_engaged = _attach_workable_application_link(
+                db,
+                app=existing,
+                candidate_id=candidate_id,
+            )
 
         if ref_terminal or ref_disqualified:
             # The candidate has reached a terminal state in Workable
@@ -2109,47 +2206,50 @@ class WorkableSyncService:
             # left Tali are exactly the ones whose realized outcome we want for
             # model refinement. For an existing app we record the outcome (which
             # fires the outcome_learning calibration hooks via transition_outcome),
-            # refresh the observed Workable stage, and park them in Tali's
-            # terminal `advanced` stage. Brand-new terminal candidates are not
-            # imported — Tali never tracked or scored them, so there is no
-            # decision to pair the outcome with.
+            # refresh the observed Workable stage, and synchronize the separate
+            # downstream hiring-stage axis. Brand-new terminal candidates are
+            # not imported — Tali never tracked or scored them, so there is no
+            # decision to pair the outcome with. Crucially, an external terminal
+            # stage never manufactures Tali's explicit ``advanced`` handoff.
             if existing is None:
                 return counters
             existing.deleted_at = None
             if stage and not _stage_overwrite_blocked(existing, stage):
                 existing.workable_stage = sanitize_text_for_storage(str(stage))
+                existing.external_stage_raw = sanitize_text_for_storage(str(stage))
+                existing.external_stage_normalized = normalized_stage_kind
             existing.last_synced_at = now
             if ref_disqualified:
                 existing.workable_disqualified = True
                 existing.workable_disqualified_at = (
                     _disqualified_at_from_payload(candidate_payload, candidate_ref) or now
                 )
-            # Park in `advanced` — they're past Tali's flow. (No-op if already there.)
-            if (existing.pipeline_stage or "").lower() != "advanced":
-                try:
-                    # No idempotency_key: transition_stage already no-ops
-                    # when from_stage == target, and the caller guards on
-                    # "not already advanced". A permanent
-                    # ``sync_terminal_advance:{id}`` key instead blocked a
-                    # legitimate re-advance (and its outcome-learning hook)
-                    # if a candidate round-tripped back to non-terminal and
-                    # was later re-observed terminal.
-                    transition_stage(
-                        db,
-                        app=existing,
-                        to_stage="advanced",
-                        source="sync",
-                        actor_type="sync",
-                        reason="Reached terminal stage in Workable",
-                        metadata={"workable_stage": str(stage or ""), "disqualified": ref_disqualified},
-                    )
-                except Exception:  # pragma: no cover — never block a sync
-                    import logging
-                    logging.getLogger("taali.workable.sync").exception(
-                        "Terminal advance failed for app_id=%s", existing.id,
-                    )
+            outcome = _terminal_outcome(
+                candidate_payload,
+                candidate_ref,
+                disqualified=ref_disqualified,
+            )
+            forced_hiring_stage = None
+            if outcome == "hired":
+                forced_hiring_stage = "hired"
+            elif semantic_hiring_stage == "offer":
+                forced_hiring_stage = "offer"
+            try:
+                sync_from_external(
+                    db,
+                    app=existing,
+                    raw_stage=str(stage or ""),
+                    provider="workable",
+                    force_stage=forced_hiring_stage,
+                    provider_stage_kind=stage_kind,
+                )
+            except Exception:  # pragma: no cover — never block a sync
+                logger.exception(
+                    "Workable hiring-stage sync failed application_id=%s stage=%r",
+                    existing.id,
+                    stage,
+                )
             # Record the realized outcome so calibration can learn from it.
-            outcome = _terminal_outcome(candidate_payload, candidate_ref, disqualified=ref_disqualified)
             if outcome and (existing.application_outcome or "open").lower() != outcome:
                 try:
                     # No idempotency_key: transition_outcome already no-ops when
@@ -2185,7 +2285,21 @@ class WorkableSyncService:
             if stage and not _stage_overwrite_blocked(existing, stage):
                 existing.workable_stage = sanitize_text_for_storage(str(stage))
                 existing.external_stage_raw = sanitize_text_for_storage(str(stage))
-                existing.external_stage_normalized = normalize_pipeline_key(str(stage))
+                existing.external_stage_normalized = normalized_stage_kind
+                try:
+                    sync_from_external(
+                        db,
+                        app=existing,
+                        raw_stage=str(stage),
+                        provider="workable",
+                        provider_stage_kind=stage_kind,
+                    )
+                except Exception:  # pragma: no cover — never block a sync
+                    logger.exception(
+                        "Workable hiring-stage sync failed application_id=%s stage=%r",
+                        existing.id,
+                        stage,
+                    )
             existing.last_synced_at = now
 
             # Frozen for scoring, but still refresh the read-only activity feed
@@ -2348,6 +2462,17 @@ class WorkableSyncService:
                 actor_type="sync",
                 reason="Imported from Workable",
             )
+        elif not (app.workable_candidate_id or "").strip():
+            # The early email-link path above catches the common case. This
+            # second guard covers a candidate resolved by its candidate-level
+            # Workable id (or phone) whose role application has not yet been
+            # linked. It is deliberately first-link-only, so re-syncs cannot
+            # re-run engagement scoring.
+            sourced_application_engaged = _attach_workable_application_link(
+                db,
+                app=app,
+                candidate_id=candidate_id,
+            )
         app.workable_candidate_id = sanitize_text_for_storage(candidate_id)
         if mode == "full":
             # Per-application Workable context. ``candidate_payload`` and the
@@ -2362,24 +2487,11 @@ class WorkableSyncService:
                 comment_entries, other_entries = activities_split
                 app.workable_comments = sanitize_json_for_storage(comment_entries)
                 app.workable_activities = sanitize_json_for_storage(other_entries)
-        if not _stage_overwrite_blocked(app, stage):
+        stage_sync_allowed = not _stage_overwrite_blocked(app, stage)
+        if stage_sync_allowed:
             app.workable_stage = sanitize_text_for_storage(str(stage or ""))
             app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
-            app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
-
-        # A recruiter moving the candidate forward in Workable (Phone Screen /
-        # Technical / Final Interview / Offer — a post-handover stage) is a
-        # hand-off: reflect it as `advanced` on Taali so they don't strand as
-        # `applied`, and so no stale reject/advance card lingers on someone the
-        # recruiter is already interviewing. Local only — Workable already has
-        # them there, nothing is written back. Disqualification is handled near
-        # the top of this function.
-        try:
-            reconcile_post_handover_advanced(db, app=app, role=role)
-        except Exception:  # pragma: no cover — never block the candidate sync
-            logger.exception(
-                "post-handover advance reconcile failed application_id=%s", app.id
-            )
+            app.external_stage_normalized = normalized_stage_kind
 
         app.external_refs = sanitize_json_for_storage(
             {
@@ -2398,6 +2510,21 @@ class WorkableSyncService:
                 "mode": mode,
             }
         )
+        if stage_sync_allowed:
+            try:
+                sync_from_external(
+                    db,
+                    app=app,
+                    raw_stage=str(stage or ""),
+                    provider="workable",
+                    provider_stage_kind=stage_kind,
+                )
+            except Exception:  # pragma: no cover — never block a sync
+                logger.exception(
+                    "Workable hiring-stage sync failed application_id=%s stage=%r",
+                    app.id,
+                    stage,
+                )
         app.last_synced_at = now
 
         # Extract application-level Workable fields
@@ -2471,7 +2598,10 @@ class WorkableSyncService:
             # launch NEW paid parse/score work. Metadata continues to sync while
             # paused/off, and work queued before the hold is left untouched.
             paid_work_allowed = role_allows_new_paid_ats_work(role)
-            auto_score = bool(created_application and paid_work_allowed)
+            auto_score = bool(
+                (created_application or sourced_application_engaged)
+                and paid_work_allowed
+            )
             on_application_created(
                 app,
                 score=auto_score,
@@ -2487,6 +2617,17 @@ class WorkableSyncService:
             # looped on multi-role candidates and burned credits.
         else:
             refresh_pre_screening_fields(app)
+            if sourced_application_engaged:
+                # Metadata syncs do not download a CV, but the engagement event
+                # must still pass through the same cheap/paid policy gates. A
+                # missing CV naturally makes the scoring orchestrator no-op.
+                paid_work_allowed = role_allows_new_paid_ats_work(role)
+                on_application_created(
+                    app,
+                    score=paid_work_allowed,
+                    allow_paid_work=paid_work_allowed,
+                    parse_origin=CV_PARSE_ORIGIN_ATS_INGEST,
+                )
         app.rank_score = _rank_score_for_application(app)
         if not created_application:
             # Preserve local source-of-truth stage for existing applications.
