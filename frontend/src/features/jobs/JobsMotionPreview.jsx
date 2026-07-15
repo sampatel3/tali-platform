@@ -238,6 +238,13 @@ const RoleCard = ({ role, agentLive, reduced }) => {
 export const JobsMotionPreview = () => {
   const reduced = useReducedMotionSync();
   const [sourceFilter, setSourceFilter] = useState('all');
+  // `?agent=paused` is a visual-QA state for the real shared AgentHeader. It
+  // lets browser checks exercise the densest bar (count + actor + budget +
+  // three controls) without changing the default public preview.
+  const [headerPaused, setHeaderPaused] = useState(() => (
+    typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('agent') === 'paused'
+  ));
 
   const sourceCounts = useMemo(() => PREVIEW_ROLES.reduce((acc, role) => {
     acc.all += 1;
@@ -256,15 +263,30 @@ export const JobsMotionPreview = () => {
   const workableRolesCount = sourceCounts.workable;
 
   // Org-aggregate agent strip — mirrors JobsPage's showcase header agent.
-  const headerAgent = {
-    on: true,
-    paused: false,
-    pending: 3,
-    spentCents: 1820,
-    budgetCents: 5000,
-    tick: 'Scoring 14 new candidates · just now',
-    inFlight: true,
-  };
+  const headerAgent = headerPaused
+    ? {
+        on: false,
+        paused: true,
+        pending: 148,
+        spentCents: 4313,
+        budgetCents: 5000,
+        pausedReason: 'paused by recruiter',
+        pausedBy: {
+          user_id: 11,
+          name: 'Alexandra Montgomery-Smythe',
+          is_current_user: false,
+        },
+        inFlight: false,
+      }
+    : {
+        on: true,
+        paused: false,
+        pending: 3,
+        spentCents: 1820,
+        budgetCents: 5000,
+        tick: 'Scoring 14 new candidates · just now',
+        inFlight: true,
+      };
 
   return (
     <MotionSystemProvider>
@@ -277,7 +299,10 @@ export const JobsMotionPreview = () => {
               period={false}
               subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
               agent={headerAgent}
-              onPauseAgent={() => {}}
+              onPauseAgent={() => setHeaderPaused(true)}
+              onResumeAgent={() => setHeaderPaused(false)}
+              onTurnOffAgent={headerPaused ? () => setHeaderPaused(false) : undefined}
+              onAgentSettings={headerPaused ? () => {} : undefined}
               offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
             />
           </Reveal>

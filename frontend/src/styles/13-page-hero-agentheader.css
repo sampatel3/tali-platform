@@ -239,10 +239,10 @@
   /* Fixed width (per viewport) so toggling on/off/paused never resizes the
      box — it's ONE persistent box whose look morphs in place. Wide enough
      that the activity/tick line stays visible in every state. */
-  /* The count + activity now share a stacked context column, so a modest
-     amount of extra width is enough to keep an ordinary full actor name
-     visible without letting the strip dominate the role title. */
-  width: clamp(540px, 40vw, 580px);
+  /* The count + activity share a stacked context column. Desktop has enough
+     room to keep the full review label and an ordinary teammate name visible
+     alongside budget and controls; narrower layouts stack below the title. */
+  width: clamp(660px, 50vw, 700px);
   border-radius: 13px;
   padding: 0 8px 0 13px;
   position: relative;
@@ -307,8 +307,8 @@
   white-space: nowrap;
 }
 .ab-context {
-  flex: 1 1 112px;
-  min-width: 112px;
+  flex: 1 1 180px;
+  min-width: 180px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -320,8 +320,8 @@
   /* The count and actor share vertical space instead of competing on one
      horizontal line. Reserve enough width for ordinary full names so the
      identity remains visible even with budget and action controls present. */
-  flex-basis: 132px;
-  min-width: 132px;
+  flex-basis: 210px;
+  min-width: 210px;
 }
 .ab-tick {
   font-size: 12.5px;
@@ -467,11 +467,12 @@
 .ah-pending-strip-item b { font-family: var(--font-display); font-weight: 600; color: var(--ink); }
 .ah-pending-strip-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 
-/* ---- Responsive: stack the agent strip under the title on narrow screens ---- */
-@media (max-width: 920px) {
+/* ---- Responsive: stack the agent strip under the title before either the
+   title or pause attribution has to surrender its readable width. ---- */
+@media (max-width: 1240px) {
   .agent-header { min-height: 0; padding-top: 16px; padding-bottom: 16px; }
   .agent-header-inner { grid-template-columns: 1fr; gap: 14px; }
-  .agent-header-right { flex-wrap: wrap; }
+  .agent-header-right { width: 100%; flex-wrap: wrap; }
   .abar { width: 100%; }
   .ab-context { max-width: none; flex: 1; }
   .ab-tick { max-width: none; }
@@ -493,14 +494,8 @@
   }
   .ah-substrip-actions { flex-wrap: wrap; }
   .ah-facts { gap: 8px 22px; }
-}
 
-@media (max-width: 600px) {
-  .agent-header { padding: 16px 18px 16px 21px; }
-  .agent-substrip { padding: 10px 18px 10px 21px; }
-  .agent-header-left p.ah-subtitle { font-size: 0.8125rem; }
-
-  /* Phone agent strip: keep it a self-contained card that never spills past
+  /* Compact agent strip: keep it a self-contained card that never spills past
      the viewport. The activity line ("Monthly budget reached", "Scoring a
      candidate"…) drops to its own row so the status label + the
      Pause / Resume / settings buttons on row 1 are ALWAYS visible — they were
@@ -536,6 +531,12 @@
     order: 4;
     margin-left: auto;
   }
+}
+
+@media (max-width: 600px) {
+  .agent-header { padding: 16px 18px 16px 21px; }
+  .agent-substrip { padding: 10px 18px 10px 21px; }
+  .agent-header-left p.ah-subtitle { font-size: 0.8125rem; }
 }
 
 /* ============== Nav agent-running chip (Jobs / Role detail only) ============== */

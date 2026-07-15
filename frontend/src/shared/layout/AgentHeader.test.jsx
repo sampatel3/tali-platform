@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 
 import { AgentHeader, buildAgentPropFromStatus } from './AgentHeader';
 
@@ -50,7 +50,13 @@ describe('AgentHeader — Pause/Resume panel', () => {
     );
     expect(screen.getByText('Paused')).toBeInTheDocument();
     expect(screen.queryByText('Auto-paused')).not.toBeInTheDocument();
-    expect(screen.getByText('By you')).toBeInTheDocument();
+    const manualContext = container.querySelector('.ab-context-manual');
+    expect(manualContext).not.toBeNull();
+    expect(within(manualContext).getByText('3 awaiting you')).toBeInTheDocument();
+    expect(within(manualContext).getByText('Paused by you')).toHaveAttribute(
+      'aria-label',
+      'Paused by you',
+    );
     expect(container.querySelector('.abar')).toHaveAttribute('data-motion-state', 'rest');
     expect(container.querySelector('.abar-flow-layer')).toHaveAttribute('data-motion-state', 'rest');
 
@@ -75,8 +81,41 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    expect(screen.getByText('By Aisha Khan')).toBeInTheDocument();
+    expect(screen.getByText('Paused by Aisha Khan')).toHaveAttribute(
+      'title',
+      'Paused by Aisha Khan',
+    );
     expect(screen.queryByText(/by you/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps a long teammate identity explicit in the manual-pause context', () => {
+    const { container } = render(
+      <AgentHeader
+        title="Principal Specialist – Vulnerability Management & Cloud Security"
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          pending: 148,
+          pausedReason: 'paused by recruiter',
+          pausedBy: {
+            user_id: 11,
+            name: 'Alexandra Montgomery-Smythe',
+            is_current_user: false,
+          },
+        }}
+        onResumeAgent={() => {}}
+        onTurnOffAgent={() => {}}
+        onAgentSettings={() => {}}
+      />,
+    );
+
+    const manualContext = container.querySelector('.ab-context-manual');
+    expect(manualContext).not.toBeNull();
+    expect(within(manualContext).getByText('148 awaiting you')).toBeInTheDocument();
+    expect(
+      within(manualContext).getByText('Paused by Alexandra Montgomery-Smythe'),
+    ).toHaveAttribute('title', 'Paused by Alexandra Montgomery-Smythe');
   });
 
   it('uses an honest manual fallback when historical pause actor data is unavailable', () => {

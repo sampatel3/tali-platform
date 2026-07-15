@@ -64,9 +64,9 @@ const pendingSummary = (pending, breakdown) => {
 };
 
 const manualPauseAttribution = (pausedBy) => {
-  if (pausedBy?.is_current_user === true) return 'By you';
+  if (pausedBy?.is_current_user === true) return 'Paused by you';
   const actorName = String(pausedBy?.name || '').trim();
-  return actorName ? `By ${actorName}` : 'Paused manually';
+  return actorName ? `Paused by ${actorName}` : 'Paused manually';
 };
 
 // Inline activator shown inside the OFF-state agent strip: a compact budget
@@ -225,7 +225,13 @@ const AgentStrip = ({
           </span>
         ) : null}
         {message ? (
-          <span className="ab-tick" title={typeof message === 'string' ? message : undefined}>{message}</span>
+          <span
+            className="ab-tick"
+            title={typeof message === 'string' ? message : undefined}
+            aria-label={status === 'paused' && isManualPause ? message : undefined}
+          >
+            {message}
+          </span>
         ) : <span className="ab-tick" />}
       </span>
 

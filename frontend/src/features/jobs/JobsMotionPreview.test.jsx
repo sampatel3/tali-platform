@@ -23,6 +23,7 @@ const setReducedMotion = (reduced) => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  window.history.replaceState({}, '', '/');
 });
 
 describe('JobsMotionPreview (/jobs-preview)', () => {
@@ -61,5 +62,17 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     // than counting up from 0.
     expect(screen.getByText('AI Engineer')).toBeInTheDocument();
     expect(screen.getAllByText('18').length).toBeGreaterThan(0);
+  });
+
+  it('exposes the dense paused-header state for responsive browser QA', () => {
+    window.history.replaceState({}, '', '/jobs-preview?agent=paused');
+    setReducedMotion(true);
+    render(<JobsMotionPreview />);
+
+    expect(screen.getByText('148 awaiting you')).toBeInTheDocument();
+    expect(screen.getByText('Paused by Alexandra Montgomery-Smythe')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /turn off agent/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /configure agent/i })).toBeInTheDocument();
   });
 });

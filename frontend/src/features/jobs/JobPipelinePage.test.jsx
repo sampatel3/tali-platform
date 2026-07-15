@@ -1402,7 +1402,7 @@ Banking transformation experience
     // Optimistic flip to PAUSED; calls the soft-pause endpoint, never a role
     // PATCH (which would disable the agent and risk the queue).
     expect(await screen.findByText('Paused')).toBeInTheDocument();
-    expect(screen.getByText('By you')).toBeInTheDocument();
+    expect(screen.getByText('Paused by you')).toBeInTheDocument();
     expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
     expect(apiClient.roles.update).not.toHaveBeenCalled();
   });
