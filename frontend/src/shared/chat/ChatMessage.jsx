@@ -1,4 +1,5 @@
 import { ChatMarkdown } from './ChatMarkdown';
+import { Sparkles } from 'lucide-react';
 
 // Short local clock time (e.g. "2:34 PM") from an ISO timestamp; '' if absent
 // or unparseable, so a missing time just renders nothing.
@@ -15,7 +16,7 @@ const fmtTime = (iso) => {
 // calls, the workspace's cost line) slot in as children under the assistant
 // text. `time` is the message's ISO `created_at` — shown under the bubble so
 // you can see when each message was sent and when the agent replied.
-export function ChatMessage({ role, text, children, time }) {
+export function ChatMessage({ role, text, children, time, label }) {
   const stamp = fmtTime(time);
   if (role === 'user') {
     return (
@@ -26,11 +27,20 @@ export function ChatMessage({ role, text, children, time }) {
     );
   }
   return (
-    <div className="tk-msg-assistant">
-      {text ? <ChatMarkdown>{text}</ChatMarkdown> : null}
-      {children}
-      {stamp ? <time className="tk-msg-time">{stamp}</time> : null}
-    </div>
+    <article className="tk-msg-assistant">
+      {label ? (
+        <header className="tk-msg-author">
+          <span className="tk-msg-avatar" aria-hidden="true"><Sparkles size={12} /></span>
+          <strong>{label}</strong>
+          {stamp ? <time className="tk-msg-time">· {stamp}</time> : null}
+        </header>
+      ) : null}
+      <div className="tk-msg-assistant-body">
+        {text ? <ChatMarkdown>{text}</ChatMarkdown> : null}
+        {children}
+      </div>
+      {!label && stamp ? <time className="tk-msg-time">{stamp}</time> : null}
+    </article>
   );
 }
 

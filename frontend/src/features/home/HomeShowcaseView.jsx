@@ -13,7 +13,7 @@ import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
-import { ChatMessage, ChatComposer } from '../../shared/chat';
+import { ChatMessage, ChatComposer, ChatSurface } from '../../shared/chat';
 import { ActivityFeed } from './ActivityFeed';
 import { DecisionDetail } from './HomeNow';
 import { AgentSidebar } from './agentchat/AgentSidebar';
@@ -258,7 +258,7 @@ export const ShowcaseDock = ({ onAct }) => {
     onAct(`“${text}” — in the live product this runs the agent and posts the impact here.`);
   };
   return (
-    <aside className="ac-dock">
+    <ChatSurface as="aside" density="compact" className="ac-dock">
       <div className="ac-dock-head">
         <MessageSquare size={15} />
         <span>Ask the agent</span>
@@ -268,6 +268,7 @@ export const ShowcaseDock = ({ onAct }) => {
         <ChatMessage role="user" text="Cap salary at AED 25k on this role" />
         <ChatMessage
           role="assistant"
+          label="Agent"
           text={"Done — set the cap to **AED 25,000**. 22 of 278 candidates stated a figure; the cap drops 4 of them, the rest are unverified so I can't filter on them. Want me to re-screen just the 4 affected?"}
         >
           <ImpactCard card={CONSTRAINT_CARD} onApply={() => {}} busy={false} />
@@ -275,12 +276,14 @@ export const ShowcaseDock = ({ onAct }) => {
         <ChatMessage role="user" text="what if I drop the cut-off to 65?" />
         <ChatMessage
           role="assistant"
+          label="Agent"
           text={"Dropping the cut-off **70 → 65** brings 6 more into review — Ada, Bo and Chen lead them. Already-advanced and rejected candidates stay put."}
         >
           <ImpactCard card={SIM_CARD} onApply={() => {}} busy={false} />
         </ChatMessage>
         <ChatMessage
           role="assistant"
+          label="Agent"
           text={"You've also got an assessment task I drafted for this role — approve it, or reject with a steer and I'll re-author it:"}
         >
           <DraftTaskCard card={DRAFT_CARD} onApprove={() => onAct('Approved — the task is now live and assignable.')} onRevise={() => onAct('On it — re-authoring the task from your feedback.')} busy={false} />
@@ -294,7 +297,7 @@ export const ShowcaseDock = ({ onAct }) => {
           placeholder="Ask about this role's pool, or tell the agent to change something"
         />
       </div>
-    </aside>
+    </ChatSurface>
   );
 };
 

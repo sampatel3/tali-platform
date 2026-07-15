@@ -11,13 +11,14 @@ import { CircleHelp, MessageSquare, PanelLeft, Sparkles } from 'lucide-react';
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import {
-  AgentPromptCard,
   ChatComposer,
   ChatEmptyState,
-  ChatMarkdown,
   ChatMessage,
+  ChatSurface,
   NewMessageNotice,
+  RoleAgentTimeline,
   ThinkingDots,
+  useAgentRequestReply,
   useAgentUpdateAwareness,
 } from '../../shared/chat';
 import { DraftTaskCard, ImpactCard } from '../home/agentchat/cards.jsx';
@@ -26,10 +27,8 @@ import {
   AgentLoop,
   MotionAttentionBadge,
   MotionChatItem,
-  MotionList,
   motionSafeScrollBehavior,
 } from '../../shared/motion';
-import { AgentDecisionTimelineCard } from '../../shared/decisions/AgentDecisionTimelineCard';
 import { useRoleDecisionDetails } from '../../shared/decisions/useRoleDecisionDetails';
 
 const ON_SUGGESTIONS = [
@@ -209,6 +208,33 @@ const AgentConversation = ({
     [load, onAfterSend, showToast]
   );
 
+  const {
+    beginReply,
+    cancelReply,
+    replyTo,
+    replying,
+    submitReply,
+    submitting: replySubmitting,
+  } = useAgentRequestReply({
+    value: input,
+    onChange: setInput,
+    onAnswer: answer,
+  });
+  const replyRoleRef = useRef(roleId);
+
+  useEffect(() => {
+    if (replying) composerRef.current?.focus();
+  }, [replying]);
+
+  // A needs-input request belongs to one role. If the recruiter switches
+  // agents while replying, leave reply mode and restore the ordinary draft so
+  // an answer cannot accidentally be submitted to the previous role.
+  useEffect(() => {
+    if (replyRoleRef.current === roleId) return;
+    replyRoleRef.current = roleId;
+    if (replying) cancelReply();
+  }, [cancelReply, replying, roleId]);
+
   const dismiss = useCallback(
     async (needsInputId) => {
       try {
@@ -385,7 +411,7 @@ const AgentConversation = ({
   // show a calm placeholder rather than a spinner that never resolves.
   if (!roleId) {
     return (
-      <div className="cp-center">
+      <ChatSurface className="cp-center" density="comfortable" tone="agent">
         <header className="cp-head">
           {onOpenList ? (
             <button type="button" className="cp-mobile-menu" onClick={onOpenList} aria-label="Show agents">
@@ -400,12 +426,12 @@ const AgentConversation = ({
             sub="Each live role has its own agent. Choose one to see its thread, ask about the pool, or change how it screens — the same conversation you’d see on Home."
           />
         </div>
-      </div>
+      </ChatSurface>
     );
   }
 
   return (
-    <div className="cp-center">
+    <ChatSurface className="cp-center" density="comfortable" tone="agent">
       <header className="cp-head">
         {onOpenList ? (
           <button
@@ -463,104 +489,66 @@ const AgentConversation = ({
             onPick={(t) => send(t)}
           />
         ) : (
-          <MotionList className="cp-thread" aria-label="Agent conversation" layout={false}>
-            {loadError ? (
+          <RoleAgentTimeline
+            items={items}
+            className="cp-thread"
+            roleId={roleId}
+            roleName={roleName}
+            openQuestionPositions={openQuestionPositions}
+            openQuestionCount={openQuestions.length}
+            onAnswer={answer}
+            onDismiss={dismiss}
+            onPrompt={prefillPrompt}
+            onReply={beginReply}
+            decisionDetails={decisionDetails}
+            decisionDetailsLoading={decisionDetailsLoading}
+            decisionDetailsError={decisionDetailsError}
+            onRetryDecisionDetails={refreshDecisionDetails}
+            onDecisionChanged={refreshAfterDecision}
+            renderAction={(card) => (
+              card.type === 'candidate_evidence' ? (
+                <CandidateEvidenceCard data={card} />
+              ) : card.type === 'draft_task_review' ? (
+                <DraftTaskCard
+                  card={card}
+                  onApprove={approveDraft}
+                  onRevise={reviseDraft}
+                  busy={sending}
+                />
+              ) : (
+                <ImpactCard
+                  card={card}
+                  onApply={(threshold) => send(`Set the score cut-off to ${threshold}.`)}
+                  onPrompt={prefillPrompt}
+                  busy={sending}
+                />
+              )
+            )}
+            before={loadError ? (
               // A refresh blipped but we kept the last good thread on screen.
               <MotionChatItem key="refresh-error" className="tk-motion-row">
                 <div className="cp-refresh-row">Couldn’t refresh — retrying.</div>
               </MotionChatItem>
             ) : null}
-            {items.map((it) => {
-              let content;
-              if (it.kind === 'needs_input') {
-                content = (
-                  <AgentPromptCard
-                    item={it}
-                    onAnswer={answer}
-                    onDismiss={dismiss}
-                    onPrompt={prefillPrompt}
-                    position={openQuestionPositions.get(it.needs_input_id ?? it.id)}
-                    total={openQuestions.length}
-                  />
-                );
-              } else if (it.kind === 'decision') {
-                const decisionId = Number(it.decision_id);
-                content = (
-                  <AgentDecisionTimelineCard
-                    item={it}
-                    detail={decisionDetails[decisionId]}
-                    roleId={roleId}
-                    roleName={roleName}
-                    detailsLoading={decisionDetailsLoading}
-                    detailsError={decisionDetailsError}
-                    onRetryDetails={refreshDecisionDetails}
-                    onChanged={refreshAfterDecision}
-                  />
-                );
-              } else {
-                const suppressStructuredCopy = (it.message_kind === 'proactive'
-                  && (it.actions || []).some((card) => card.type === 'helper_prompt'))
-                  || (it.message_kind === 'event'
-                    && (it.actions || []).some((card) => card.type === 'agent_event'));
-                content = (
-                  <ChatMessage
-                    role={it.author === 'agent' ? 'assistant' : 'user'}
-                    text={it.author === 'agent' ? undefined : it.text}
-                    time={it.created_at}
-                  >
-                    {/* Agent replies carry the mono "AGENT" kicker above the prose.
-                        User messages stay the plain ink pill. */}
-                    {it.author === 'agent' ? (
-                      <div className="cp-agent-say">
-                        <span className="cp-who">Agent</span>
-                        {it.text && !suppressStructuredCopy ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
-                      </div>
-                    ) : null}
-                    {(it.actions || []).map((card, i) =>
-                      card.type === 'candidate_evidence' ? (
-                        <CandidateEvidenceCard key={i} data={card} />
-                      ) : card.type === 'draft_task_review' ? (
-                        <DraftTaskCard
-                          key={i}
-                          card={card}
-                          onApprove={approveDraft}
-                          onRevise={reviseDraft}
-                          busy={sending}
-                        />
-                      ) : (
-                        <ImpactCard
-                          key={i}
-                          card={card}
-                          onApply={(t) => send(`Set the score cut-off to ${t}.`)}
-                          onPrompt={prefillPrompt}
-                          busy={sending}
-                        />
-                      )
-                    )}
-                  </ChatMessage>
-                );
-              }
-              return (
-                <MotionChatItem key={it.id} className="tk-motion-row">
-                  {content}
-                </MotionChatItem>
-              );
-            })}
-            {(sending || agentWorking) && (
-              <MotionChatItem key="agent-working" className="tk-motion-row">
-                <ChatMessage role="assistant">
-                  <ThinkingDots label="Working…" />
-                </ChatMessage>
-              </MotionChatItem>
+            after={(
+              <>
+                {(sending || agentWorking) ? (
+                  <MotionChatItem key="agent-working" className="tk-motion-row">
+                    <ChatMessage role="assistant">
+                      <ThinkingDots label="Working…" />
+                    </ChatMessage>
+                  </MotionChatItem>
+                ) : null}
+                {rescreenPending && !sending && !agentWorking ? (
+                  <MotionChatItem key="agent-rescreening" className="tk-motion-row">
+                    <div className="tk-agent-working">
+                      <AgentLoop kind="pulse" className="tk-agent-working-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+                    </div>
+                  </MotionChatItem>
+                ) : null}
+              </>
             )}
-            {rescreenPending && !sending && !agentWorking && (
-              <MotionChatItem key="agent-rescreening" className="tk-motion-row">
-                <div className="ac-rescreen-live">
-                  <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
-                </div>
-              </MotionChatItem>
-            )}
-          </MotionList>
+          />
         )}
       </div>
       <div className="cp-composer-wrap">
@@ -579,16 +567,18 @@ const AgentConversation = ({
           ref={composerRef}
           value={input}
           onChange={setInput}
-          onSubmit={send}
+          onSubmit={replying ? submitReply : send}
+          replyTo={replyTo}
+          onCancelReply={cancelReply}
           placeholder={
             agentWorking
               ? 'The agent is working on your last message…'
               : 'Ask about this role’s pool, or tell the agent to change something…'
           }
-          busy={sending || agentWorking}
+          busy={sending || agentWorking || replySubmitting}
         />
       </div>
-    </div>
+    </ChatSurface>
   );
 };
 

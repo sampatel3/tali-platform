@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -81,6 +81,7 @@ export function AgentPromptCard({
   onAnswer,
   onDismiss,
   onPrompt,
+  onReply,
   position,
   total,
   extraActions = null,
@@ -120,6 +121,11 @@ export function AgentPromptCard({
   const isLongForm = inputMode === 'string'
     && ['intent_slot_missing', 'intent_clarification'].includes(questionKind);
   const stateKey = answered ? 'answered' : dismissed ? 'dismissed' : 'open';
+  // Persisted history often includes requests that were resolved long before
+  // this transcript opened. Only make the receipt live when an already-mounted
+  // open request resolves; otherwise opening history would replay old status.
+  const initialStateRef = useRef(stateKey);
+  const announceReceipt = initialStateRef.current === 'open' && stateKey !== 'open';
 
   const choose = async (option) => {
     if (busy) return;
@@ -246,7 +252,11 @@ export function AgentPromptCard({
 
       <PresenceSwap presenceKey={stateKey} className="tk-agent-prompt-state">
         {answered ? (
-          <div className="tk-agent-prompt-receipt" role="status" aria-live="polite">
+          <div
+            className="tk-agent-prompt-receipt"
+            role={announceReceipt ? 'status' : undefined}
+            aria-live={announceReceipt ? 'polite' : undefined}
+          >
             <m.span
               className="tk-agent-prompt-receipt-icon"
               aria-hidden="true"
@@ -265,7 +275,11 @@ export function AgentPromptCard({
             </span>
           </div>
         ) : dismissed ? (
-          <div className="tk-agent-prompt-receipt is-muted" role="status" aria-live="polite">
+          <div
+            className="tk-agent-prompt-receipt is-muted"
+            role={announceReceipt ? 'status' : undefined}
+            aria-live={announceReceipt ? 'polite' : undefined}
+          >
             <span><strong>Request dismissed.</strong> No answer was sent.</span>
           </div>
         ) : (
@@ -292,7 +306,17 @@ export function AgentPromptCard({
                 );
               })}
 
-              {acceptsTypedAnswer ? (
+              {acceptsTypedAnswer && onReply ? (
+                <Button
+                  className="tk-agent-prompt-reply"
+                  variant={hasOptions ? 'soft' : 'primary'}
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => onReply(item)}
+                >
+                  {hasOptions ? 'Something else…' : 'Reply in chat'} <ArrowRight size={13} />
+                </Button>
+              ) : acceptsTypedAnswer ? (
                 <form className="tk-agent-prompt-answer" onSubmit={submitTypedAnswer}>
                   {isLongForm ? (
                     <Textarea

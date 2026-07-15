@@ -89,6 +89,7 @@ const renderDock = (props = {}) =>
 beforeEach(() => {
   mocks.getTimeline.mockReset();
   mocks.sendMessage.mockReset();
+  mocks.answerNeedsInput.mockReset();
   mocks.markRead.mockReset();
   mocks.listDecisions.mockReset();
   mocks.approveDecision.mockReset();
@@ -104,10 +105,47 @@ beforeEach(() => {
   mocks.snoozeDecision.mockResolvedValue({ data: {} });
   mocks.sendFeedback.mockResolvedValue({ data: {} });
   mocks.getWorkableStages.mockResolvedValue({ data: { stages: [] } });
+  mocks.answerNeedsInput.mockResolvedValue({ data: {} });
   mocks.markRead.mockResolvedValue({ data: {} });
 });
 
 describe('AgentChatDock', () => {
+  it('answers a free-form request through reply mode and restores the saved draft', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'needs_input',
+          id: 'request-32',
+          needs_input_id: 32,
+          status: 'open',
+          prompt: 'What should I optimise for?',
+          input_mode: 'string',
+          can_answer: true,
+          can_dismiss: false,
+        }],
+        agent_working: false,
+      },
+    });
+    renderDock();
+
+    const composer = await screen.findByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(composer, { target: { value: 'Keep this role draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reply in chat' }));
+
+    const answerBox = screen.getByRole('textbox', { name: 'Answer the agent' });
+    expect(answerBox).toHaveFocus();
+    expect(answerBox).toHaveValue('');
+    fireEvent.change(answerBox, { target: { value: 'Optimise for quality' } });
+    fireEvent.keyDown(answerBox, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(mocks.answerNeedsInput).toHaveBeenCalledWith(32, { value: 'Optimise for quality' });
+    });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' }))
+      .toHaveValue('Keep this role draft');
+  });
+
   it('puts a helper quick reply in the composer without sending it', async () => {
     mocks.getTimeline.mockResolvedValue({
       data: {
@@ -347,7 +385,8 @@ describe('AgentChatDock', () => {
 
     expect(await screen.findByText('Existing history')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'New agent update' })).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    const updateStatus = document.querySelector('.tk-new-update-status');
+    expect(updateStatus).toBeEmptyDOMElement();
 
     const stream = document.querySelector('.ac-stream');
     Object.defineProperties(stream, {
@@ -364,12 +403,12 @@ describe('AgentChatDock', () => {
     expect(await screen.findByText('Three candidates moved forward.')).toBeInTheDocument();
     const notice = await screen.findByRole('button', { name: 'New agent update' });
     expect(stream.scrollTop).toBe(200);
-    expect(screen.getByRole('status')).toHaveTextContent('New agent update');
+    expect(updateStatus).toHaveTextContent('New agent update');
     expect(notice).toHaveAttribute('aria-controls', stream.id);
 
     fireEvent.click(notice);
     expect(stream.scrollTop).toBe(1200);
-    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    expect(updateStatus).toBeEmptyDOMElement();
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'New agent update' })).not.toBeInTheDocument();
     });
