@@ -221,12 +221,16 @@ def test_dismiss_honors_schema_permission_and_defaults_to_existing_behavior(db):
     assert optional.dismissed_at is not None
 
 
-def test_external_data_question_cannot_be_falsely_answered(db):
+@pytest.mark.parametrize(
+    "kind",
+    ["missing_job_spec", "missing_cv", "cv_unreadable", "task_assignment_missing"],
+)
+def test_external_data_question_cannot_be_falsely_answered(db, kind):
     _, user, role, _ = _world(db)
     row = _request(
         db,
         role,
-        kind="missing_job_spec",
+        kind=kind,
         response_schema={"link_url": f"/jobs/{int(role.id)}"},
     )
 

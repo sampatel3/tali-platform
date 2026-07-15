@@ -136,6 +136,36 @@ def test_answer_records_response_and_actor(db):
     assert not answered.is_open
 
 
+@pytest.mark.parametrize(
+    "kind",
+    ["missing_job_spec", "missing_cv", "cv_unreadable", "task_assignment_missing"],
+)
+def test_answer_rejects_questions_that_require_observed_external_state(db, kind):
+    org, role, _, _ = make_world(db)
+    row = ask_recruiter.open(
+        db,
+        _agent_actor(db, role),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind=kind,
+        prompt="Complete the required setup",
+    )
+    recruiter, _ = _recruiter_actor(db, int(org.id))
+
+    with pytest.raises(HTTPException) as exc_info:
+        ask_recruiter.answer(
+            db,
+            recruiter,
+            organization_id=int(org.id),
+            needs_input_id=int(row.id),
+            response={"value": "done"},
+        )
+
+    assert exc_info.value.status_code == 422
+    assert row.resolved_at is None
+    assert row.response is None
+
+
 def test_answer_rejects_already_answered(db):
     org, role, _, _ = make_world(db)
     agent = _agent_actor(db, role)

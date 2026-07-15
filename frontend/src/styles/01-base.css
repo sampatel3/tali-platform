@@ -69,6 +69,7 @@
   --taali-warning: var(--amber);
   --taali-warning-soft: color-mix(in oklab, var(--amber) 12%, var(--bg-2));
   --taali-warning-border: color-mix(in oklab, var(--amber) 28%, var(--line));
+  --taali-warning-ink: var(--amber-ink);
   /* Soft-fill + deep-ink amber and a faint purple wash. Mirrors the analytics
      design preview (report-preview.css) so the recoloured agent-fleet status
      surfaces read amber-on-soft (attention, not alarm) instead of the old
@@ -127,11 +128,14 @@
 }
 
 /* Generic dark-mode surfaces / accent / shadows come from 00-tokens.css
-   (html[data-theme="dark"][data-brand="taali"]). Only the hiring-specific
-   Workable accent needs a dark override here. */
+   (html[data-theme="dark"][data-brand="taali"]). Hiring-specific integration
+   and semantic foreground aliases that live here receive their overrides here. */
 html[data-theme="dark"] {
   --workable: #2faa6e;
   --workable-dark: #1a8754;
+  /* Warning labels need a light, scheme-aware foreground on dark surfaces;
+     the light-theme amber ink is intentionally too deep for this polarity. */
+  --taali-warning-ink: color-mix(in oklab, var(--amber) 72%, var(--ink));
 }
 
 @layer base {

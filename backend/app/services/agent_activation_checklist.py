@@ -28,6 +28,35 @@ from ..models.role import Role
 logger = logging.getLogger("taali.services.agent_activation_checklist")
 
 
+_ACTIVATION_QUESTION_KINDS = frozenset(
+    {
+        "threshold_ambiguous",
+        "intent_slot_missing",
+        "task_assignment_missing",
+        "monthly_budget_missing",
+    }
+)
+
+
+def resolve_satisfied_activation_questions(db: Session, *, role: Role) -> int:
+    """Close activation questions whose underlying role gap is now filled.
+
+    Settings can be completed outside the question card (for example, by
+    assigning an assessment task on the role page). Those external mutations
+    must reconcile the durable prompt instead of requiring a fictitious chat
+    answer. The response marker matches the existing data-readiness
+    auto-resolution contract.
+    """
+
+    from ..agent_runtime.data_readiness import resolve_open
+
+    live_gaps = set(_gaps_for(role))
+    resolved = 0
+    for kind in _ACTIVATION_QUESTION_KINDS - live_gaps:
+        resolved += resolve_open(db, role=role, kind=kind)
+    return resolved
+
+
 def surface_activation_questions(db: Session, *, role: Role) -> list[int]:
     """Open one needs-input row per gap. Returns the ids of opened rows.
 
@@ -35,6 +64,10 @@ def surface_activation_questions(db: Session, *, role: Role) -> list[int]:
     re-running this when a question is already open is a no-op apart
     from refreshing the prompt text.
     """
+    # Re-activation also reconciles any older prompt whose setting was filled
+    # while the agent was off.
+    resolve_satisfied_activation_questions(db, role=role)
+
     actor = Actor.system()
     opened: list[int] = []
     for kind in _gaps_for(role):
