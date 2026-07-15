@@ -1,9 +1,13 @@
 """API tests for task CRUD endpoints (/api/v1/tasks/)."""
 
 from pathlib import Path
+from unittest.mock import patch
 import uuid
 
+from app.models.agent_needs_input import AgentNeedsInput
+from app.models.role import Role
 from app.models.task import Task
+from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -19,6 +23,65 @@ def test_create_task_success(client):
     data = resp.json()
     assert data["name"] == "My Task"
     assert "id" in data
+
+
+def test_approving_linked_generated_task_auto_resolves_assignment_prompt(
+    client, db
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    role = Role(
+        organization_id=int(user.organization_id),
+        name="Generated-task role",
+        source="manual",
+        monthly_usd_budget_cents=5000,
+    )
+    task = Task(
+        organization_id=int(user.organization_id),
+        name="Generated platform exercise",
+        duration_minutes=30,
+        is_template=False,
+        is_active=False,
+        task_key=f"generated_prompt_{id(db)}",
+        repo_structure={"files": {"README.md": "# Exercise"}},
+        extra_data={
+            "generated": True,
+            "needs_review": True,
+            "battle_test": {"verdict": "pass"},
+        },
+    )
+    role.tasks.append(task)
+    db.add(role)
+    db.flush()
+    prompt = AgentNeedsInput(
+        organization_id=int(user.organization_id),
+        role_id=int(role.id),
+        kind="task_assignment_missing",
+        prompt="Choose an assessment task",
+    )
+    db.add(prompt)
+    db.commit()
+
+    with patch(
+        "app.services.task_approval_service.provision_and_validate_task_repository",
+        return_value="mock://taali-assessments/generated-prompt",
+    ):
+        response = client.post(
+            f"/api/v1/tasks/{int(task.id)}/approve",
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    open_prompts = client.get(
+        f"/api/v1/agent-needs-input?role_id={int(role.id)}",
+        headers=headers,
+    )
+    assert open_prompts.status_code == 200, open_prompts.text
+    assert open_prompts.json() == []
+    db.expire_all()
+    stored = db.query(AgentNeedsInput).filter(AgentNeedsInput.id == prompt.id).one()
+    assert stored.resolved_at is not None
+    assert stored.response == {"value": "auto_resolved", "auto_resolved": True}
 
 
 def test_create_task_all_optional_fields(client):

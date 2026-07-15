@@ -34,10 +34,6 @@ from ..models.user import User
 
 MAX_LIST_LIMIT = 50
 
-# These questions are resolved by adding the missing artifact, not by claiming
-# in chat that it was added.  They remain dismissible under the same policy as
-# the existing NeedsInput API.
-_EXTERNAL_INPUT_KINDS = frozenset({"missing_job_spec", "missing_cv", "cv_unreadable"})
 _INTEGER_INPUT_KINDS = frozenset({"threshold_ambiguous"})
 _NUMBER_INPUT_KINDS = frozenset({"monthly_budget_missing"})
 
@@ -277,19 +273,16 @@ def recruiter_input_contract(row: AgentNeedsInput) -> dict[str, Any]:
     schema = _schema(row)
     return {
         "input_mode": _input_mode(row, schema=schema, options=_options(row)),
-        "can_answer": row.kind not in _EXTERNAL_INPUT_KINDS,
+        "can_answer": not ask_recruiter.requires_external_resolution(row.kind),
         "can_dismiss": recruiter_input_allows_dismiss(row),
     }
 
 
 def _validated_response(row: AgentNeedsInput, raw_value: Any) -> dict[str, Any]:
-    if row.kind in _EXTERNAL_INPUT_KINDS:
+    if ask_recruiter.requires_external_resolution(row.kind):
         raise HTTPException(
             status_code=422,
-            detail=(
-                "this question is resolved by adding the missing role/CV data; "
-                "open its linked page or dismiss it instead"
-            ),
+            detail=ask_recruiter.EXTERNAL_RESOLUTION_DETAIL,
         )
 
     options = _options(row)
@@ -379,7 +372,7 @@ def _input_mode(
     schema: Mapping[str, Any],
     options: list[dict[str, Any]],
 ) -> str:
-    if row.kind in _EXTERNAL_INPUT_KINDS:
+    if ask_recruiter.requires_external_resolution(row.kind):
         return "external"
     if options:
         return "option_or_number" if row.kind == "threshold_ambiguous" else "option"

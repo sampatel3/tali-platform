@@ -231,12 +231,22 @@ describe('AgentConversation proactive helper behavior', () => {
           }],
           agent_working: false,
         },
-      });
+    });
     renderConversation();
+
+    const questionShortcut = await screen.findByRole('button', {
+      name: '1 question needs your input',
+    });
+    const questionCard = screen.getByRole('article', { name: 'Choose the next step' });
+    questionCard.scrollIntoView = vi.fn();
+    const focusQuestion = vi.spyOn(questionCard, 'focus');
+    fireEvent.click(questionShortcut);
+    expect(questionCard.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(focusQuestion).toHaveBeenCalledWith({ preventScroll: true });
 
     fireEvent.click(await screen.findByRole('button', { name: 'MENA' }));
 
-    expect(await screen.findByText('Answered')).toBeInTheDocument();
+    expect(await screen.findByText('Direction received.')).toBeInTheDocument();
     expect(mocks.answerNeedsInput).toHaveBeenCalledWith(8, { value: 'mena', label: 'MENA' });
   });
 

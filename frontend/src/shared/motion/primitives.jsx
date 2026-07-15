@@ -22,6 +22,7 @@ import {
 } from 'motion/react';
 
 import {
+  chatItemVariants,
   disclosureVariants,
   fadeVariants,
   listItemVariants,
@@ -296,6 +297,36 @@ export function MotionList({ as = 'div', children, className, initial = false, .
     </LayoutGroup>
   );
 }
+
+/**
+ * Immediate, one-shot arrival for chat transcript rows. Unlike MotionListItem,
+ * this primitive never derives a delay from the row's absolute transcript
+ * position; loaded history stays settled through MotionList's `initial=false`.
+ */
+export const MotionChatItem = forwardRef(function MotionChatItem({
+  as = 'div',
+  children,
+  className,
+  initial = 'hidden',
+  ...props
+}, forwardedRef) {
+  const reduced = useReducedMotionSync();
+  const Component = motionElementFor(as);
+  return (
+    <Component
+      ref={forwardedRef}
+      className={className}
+      variants={reduced ? reducedFadeVariants : chatItemVariants}
+      initial={reduced ? false : initial}
+      animate="visible"
+      exit="exit"
+      data-motion-chat-item={reduced ? 'settled' : 'arrival'}
+      {...props}
+    >
+      {children}
+    </Component>
+  );
+});
 
 export const MotionListItem = forwardRef(function MotionListItem({
   as = 'div',

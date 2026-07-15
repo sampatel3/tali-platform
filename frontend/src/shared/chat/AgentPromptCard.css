@@ -1,0 +1,473 @@
+/* Shared role-agent prompts. These styles travel with the component so Home
+   and the full Chat route cannot drift or depend on which page loaded first. */
+
+.tk-agent-prompt,
+.tk-agent-helper {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 14px);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink);
+}
+
+.tk-agent-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 15px;
+  border-color: color-mix(in oklab, var(--amber) 30%, var(--line));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--amber) 4%, var(--bg-2)) 0,
+      var(--bg-2) 64px
+    );
+}
+
+.tk-agent-prompt-accent {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--amber),
+    color-mix(in oklab, var(--amber) 35%, var(--purple-lav))
+  );
+}
+
+.tk-agent-prompt[data-status="answered"] {
+  border-color: color-mix(in oklab, var(--purple) 24%, var(--line));
+  background: var(--bg-2);
+}
+
+.tk-agent-prompt[data-status="answered"] .tk-agent-prompt-accent {
+  background: linear-gradient(90deg, var(--purple-2), var(--purple-lav));
+}
+
+.tk-agent-prompt[data-status="dismissed"] {
+  border-color: var(--line);
+  background: color-mix(in oklab, var(--bg-2) 94%, var(--bg-3));
+  box-shadow: none;
+}
+
+.tk-agent-prompt[data-status="dismissed"] .tk-agent-prompt-accent {
+  background: var(--line-2);
+}
+
+.tk-agent-prompt-head,
+.tk-agent-helper-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tk-agent-prompt-icon,
+.tk-agent-helper-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--amber) 25%, var(--line));
+  border-radius: 10px;
+  color: var(--taali-warning-ink);
+  background: var(--taali-warning-soft, var(--amber-soft));
+}
+
+.tk-agent-prompt[data-status="answered"] .tk-agent-prompt-icon {
+  border-color: color-mix(in oklab, var(--purple) 22%, var(--line));
+  color: var(--purple-2);
+  background: var(--taali-info-soft, var(--purple-soft));
+}
+
+.tk-agent-prompt[data-status="dismissed"] .tk-agent-prompt-icon {
+  border-color: var(--line);
+  color: var(--mute);
+  background: var(--bg-3);
+}
+
+.tk-agent-prompt-heading-copy,
+.tk-agent-helper-heading-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tk-agent-prompt-eyebrow,
+.tk-agent-helper-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.055em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.tk-agent-prompt-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 999px;
+  background: var(--amber);
+}
+
+.tk-agent-prompt[data-status="answered"] .tk-agent-prompt-status-dot {
+  background: var(--purple);
+}
+
+.tk-agent-prompt[data-status="dismissed"] .tk-agent-prompt-status-dot {
+  background: var(--mute-2);
+}
+
+.tk-agent-prompt-title,
+.tk-agent-helper-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tk-agent-prompt-skip {
+  flex: none;
+  margin-left: auto;
+  color: var(--mute);
+}
+
+.tk-agent-prompt:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 3px;
+}
+
+.tk-agent-prompt-copy .tk-md {
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.tk-agent-prompt-rationale-shell {
+  margin-top: -3px;
+}
+
+.tk-agent-prompt-rationale-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 0.71875rem;
+  font-weight: 600;
+}
+
+.tk-agent-prompt-rationale-trigger:hover {
+  color: var(--purple-2);
+}
+
+.tk-agent-prompt-rationale-trigger:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 3px;
+}
+
+.tk-agent-prompt-rationale-chevron {
+  display: inline-flex;
+}
+
+.tk-agent-prompt-rationale {
+  margin: 7px 0 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-3);
+  color: var(--ink-soft);
+  font-size: 0.71875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.tk-agent-prompt-state {
+  min-width: 0;
+}
+
+.tk-agent-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.tk-agent-prompt-actions > .taali-btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.tk-agent-prompt-choice {
+  flex: 1 1 130px;
+}
+
+.tk-agent-prompt-answer {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.tk-agent-prompt-input {
+  width: auto;
+  min-width: 0;
+  flex: 1;
+}
+
+textarea.tk-agent-prompt-input {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.tk-agent-prompt-actions.has-direct-action > .tk-agent-prompt-primary-action,
+.tk-agent-prompt-actions.has-direct-action > .tk-agent-prompt-assist {
+  width: 100%;
+}
+
+.tk-agent-prompt-error {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--taali-danger-soft);
+  color: var(--red-deep, var(--red));
+  font-size: 0.71875rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.tk-agent-prompt-footnote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 9px 0 0;
+  color: var(--mute);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.tk-agent-prompt-footnote::before {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 999px;
+  background: var(--amber);
+  content: "";
+}
+
+.tk-agent-prompt-receipt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in oklab, var(--purple) 20%, var(--line));
+  border-radius: 9px;
+  background: var(--taali-info-soft, var(--purple-soft));
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.tk-agent-prompt-receipt-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--purple);
+  color: var(--cloud);
+}
+
+.tk-agent-prompt-receipt.is-muted {
+  border-color: var(--line);
+  background: var(--bg-3);
+  color: var(--ink-soft);
+}
+
+/* Header shortcut shared by the compact Home dock and the full Agents chat.
+   The count acknowledges increases once through MotionAttentionBadge. */
+.tk-agent-question-shortcut {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in oklab, var(--amber) 24%, var(--line));
+  border-radius: 999px;
+  background: var(--taali-warning-soft, var(--amber-soft));
+  color: var(--taali-warning-ink);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 0.65625rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tk-agent-question-shortcut:hover {
+  border-color: color-mix(in oklab, var(--amber) 42%, var(--line));
+  background: color-mix(in oklab, var(--amber) 17%, var(--bg-2));
+}
+
+.tk-agent-question-shortcut:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+
+.tk-agent-question-shortcut-count {
+  display: inline-flex;
+  min-width: 16px;
+  justify-content: center;
+  color: currentColor;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.ac-dock-head .tk-agent-question-shortcut + .ac-dock-collapse {
+  margin-left: 0;
+}
+
+/* The Home dock is a fixed compact rail. Keep the complete meaning in the
+   accessible name while showing the icon + animated count in the header. */
+.ac-dock-head .tk-agent-question-shortcut-label {
+  display: none;
+}
+
+/* Non-blocking, proactive helper prompt. It stays neutral and lets the status
+   chip—not a full-card tint—communicate whether the suggestion is urgent. */
+.tk-agent-helper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-color: color-mix(in oklab, var(--purple) 22%, var(--line));
+}
+
+.tk-agent-helper::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--purple), var(--purple-lav));
+  content: "";
+}
+
+.tk-agent-helper[data-priority="attention"] {
+  border-color: color-mix(in oklab, var(--amber) 28%, var(--line));
+}
+
+.tk-agent-helper[data-priority="attention"]::before {
+  background: linear-gradient(180deg, var(--amber), var(--purple-lav));
+}
+
+.tk-agent-helper-icon {
+  border-color: color-mix(in oklab, var(--purple) 20%, var(--line));
+  color: var(--purple-2);
+  background: var(--taali-info-soft, var(--purple-soft));
+}
+
+.tk-agent-helper[data-priority="attention"] .tk-agent-helper-icon {
+  border-color: color-mix(in oklab, var(--amber) 25%, var(--line));
+  color: var(--taali-warning-ink);
+  background: var(--taali-warning-soft, var(--amber-soft));
+}
+
+.tk-agent-helper-priority {
+  flex: none;
+  max-width: 42%;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in oklab, var(--purple) 18%, var(--line));
+  border-radius: 999px;
+  background: var(--taali-info-soft, var(--purple-soft));
+  color: var(--purple-2);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tk-agent-helper[data-priority="attention"] .tk-agent-helper-priority {
+  border-color: color-mix(in oklab, var(--amber) 22%, var(--line));
+  background: var(--taali-warning-soft, var(--amber-soft));
+  color: var(--taali-warning-ink);
+}
+
+.tk-agent-helper-summary,
+.tk-agent-helper-question {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 0.78125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.tk-agent-helper-question {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tk-agent-helper-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.tk-agent-helper-action {
+  flex: 1 1 130px;
+  max-width: 100%;
+  white-space: normal;
+}
+
+@media (max-width: 520px) {
+  .tk-agent-prompt,
+  .tk-agent-helper {
+    padding: 13px;
+  }
+
+  .tk-agent-prompt-answer {
+    flex-wrap: wrap;
+  }
+
+  .tk-agent-prompt-answer .taali-btn,
+  .tk-agent-helper-action {
+    flex: 1 0 100%;
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .cp-head .tk-agent-question-shortcut-label {
+    display: none;
+  }
+}

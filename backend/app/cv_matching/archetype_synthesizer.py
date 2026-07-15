@@ -26,7 +26,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -318,6 +318,7 @@ def _synthesize_via_sonnet(
     client=None,
     *,
     metering: dict | None = None,
+    before_provider_call: Callable[[], None] | None = None,
 ) -> ArchetypeRubric | None:
     """Call Sonnet to synthesize a fresh archetype rubric. Returns None on failure."""
     if client is None:
@@ -332,6 +333,11 @@ def _synthesize_via_sonnet(
             return None
 
     prompt = _SYNTH_PROMPT.replace("{jd_text}", jd_text or "")
+    if before_provider_call is not None:
+        # Deliberately outside the provider-error fallback: authority denial
+        # must abort the outer score transaction instead of continuing without
+        # an archetype and making the next paid request.
+        before_provider_call()
     try:
         response = client.messages.create(
             model=_GENERATOR_MODEL,
@@ -381,6 +387,7 @@ def synthesize_archetype(
     *,
     client=None,
     metering: dict | None = None,
+    before_provider_call: Callable[[], None] | None = None,
 ) -> ArchetypeRubric | None:
     """Return an ArchetypeRubric for this JD.
 
@@ -410,7 +417,12 @@ def synthesize_archetype(
             _lru[cache_key] = from_db
             return from_db
 
-    rubric = _synthesize_via_sonnet(jd_text, client=client, metering=metering)
+    rubric = _synthesize_via_sonnet(
+        jd_text,
+        client=client,
+        metering=metering,
+        before_provider_call=before_provider_call,
+    )
     if rubric is None:
         return None
 

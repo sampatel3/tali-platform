@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
+
 from app.cv_matching import (
     CVMatchOutput,
     PROMPT_VERSION,
@@ -167,6 +169,21 @@ def _disable_archetype(monkeypatch):
     )
 
 
+def _disable_archetype_after_authority_check(monkeypatch):
+    """Simulate an uncached synthesis boundary without making its call."""
+
+    def fake_synthesize(*_args, before_provider_call=None, **_kwargs):
+        if before_provider_call is not None:
+            before_provider_call()
+        return None
+
+    monkeypatch.setattr(
+        archetype_synthesizer,
+        "synthesize_archetype",
+        fake_synthesize,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Pipeline                                                                     #
 # --------------------------------------------------------------------------- #
@@ -205,6 +222,101 @@ def test_runner_returns_canonical_output(monkeypatch):
     assert sent["tool_choice"] == {"type": "tool", "name": TOOL_NAME}
     assert sent["tools"][0]["name"] == TOOL_NAME
     assert sent["tools"][0]["input_schema"]["type"] == "object"
+
+
+def test_runner_authority_callback_blocks_main_call_after_archetype_phase(
+    monkeypatch,
+):
+    """A pause observed after archetype work stops the main score request."""
+
+    _disable_archetype_after_authority_check(monkeypatch)
+    phases: list[str] = []
+    client = _stub_client(_tu(_payload()))
+
+    def authorize(phase: str) -> None:
+        phases.append(phase)
+        if phase == "full_score.main":
+            raise RuntimeError("workspace paused")
+
+    with pytest.raises(RuntimeError, match="workspace paused"):
+        run_cv_match(
+            cv_text="Python developer for 6 years",
+            jd_text="Senior Python role",
+            requirements=[],
+            client=client,
+            skip_cache=True,
+            before_provider_call=authorize,
+        )
+
+    assert phases == ["full_score.archetype", "full_score.main"]
+    assert client.messages.calls == []
+
+
+def test_runner_authority_callback_blocks_graded_call_after_main_score(
+    monkeypatch,
+):
+    """A pause observed after the main score stops the focused graded pass."""
+
+    _disable_archetype_after_authority_check(monkeypatch)
+    monkeypatch.setenv("CV_MATCH_GRADED", "on")
+    phases: list[str] = []
+    client = _stub_client(_tu(_payload()))
+
+    def authorize(phase: str) -> None:
+        phases.append(phase)
+        if phase == "full_score.graded":
+            raise RuntimeError("workspace paused")
+
+    with pytest.raises(RuntimeError, match="workspace paused"):
+        run_cv_match(
+            cv_text="Python developer for 6 years",
+            jd_text="Senior Python role",
+            requirements=[
+                RequirementInput(
+                    id="jd_req_1",
+                    requirement="5+ years Python",
+                    priority=Priority.MUST_HAVE,
+                )
+            ],
+            client=client,
+            skip_cache=True,
+            before_provider_call=authorize,
+        )
+
+    assert phases == [
+        "full_score.archetype",
+        "full_score.main",
+        "full_score.graded",
+    ]
+    assert len(client.messages.calls) == 1
+
+
+def test_runner_rechecks_authority_before_main_validation_retry(monkeypatch):
+    _disable_archetype_after_authority_check(monkeypatch)
+    phases: list[str] = []
+    client = _stub_client(_text("no tool here"), _tu(_payload()))
+
+    def authorize(phase: str) -> None:
+        phases.append(phase)
+        if phase == "full_score.main.retry_1":
+            raise RuntimeError("workspace paused")
+
+    with pytest.raises(RuntimeError, match="workspace paused"):
+        run_cv_match(
+            cv_text="Python developer for 6 years",
+            jd_text="Senior Python role",
+            requirements=[],
+            client=client,
+            skip_cache=True,
+            before_provider_call=authorize,
+        )
+
+    assert phases == [
+        "full_score.archetype",
+        "full_score.main",
+        "full_score.main.retry_1",
+    ]
+    assert len(client.messages.calls) == 1
 
 
 def test_runner_preserves_the_complete_claude_summary(monkeypatch):

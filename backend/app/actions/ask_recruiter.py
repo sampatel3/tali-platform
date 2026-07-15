@@ -92,6 +92,30 @@ _WRITEBACK_AUDIT_ACTIONS = {
 }
 
 
+# These questions describe missing external artifacts. A chat/API payload that
+# merely says "done" cannot prove the artifact exists, so they may only close
+# when the owning readiness reconciliation observes that the gap is actually
+# filled (or when the recruiter explicitly dismisses the question).
+EXTERNAL_RESOLUTION_KINDS = frozenset(
+    {
+        "missing_job_spec",
+        "missing_cv",
+        "cv_unreadable",
+        "task_assignment_missing",
+    }
+)
+EXTERNAL_RESOLUTION_DETAIL = (
+    "this question is resolved by completing the required setup; "
+    "open its linked page or dismiss it instead"
+)
+
+
+def requires_external_resolution(kind: str) -> bool:
+    """Whether ``kind`` must be closed by observing its real-world state."""
+
+    return kind in EXTERNAL_RESOLUTION_KINDS
+
+
 def open(
     db: Session,
     actor: Actor,
@@ -573,6 +597,11 @@ def answer(
         raise HTTPException(status_code=409, detail="already answered")
     if row.dismissed_at is not None:
         raise HTTPException(status_code=409, detail="already dismissed")
+    if requires_external_resolution(row.kind):
+        raise HTTPException(
+            status_code=422,
+            detail=EXTERNAL_RESOLUTION_DETAIL,
+        )
 
     row.resolved_at = datetime.now(timezone.utc)
     row.response = response

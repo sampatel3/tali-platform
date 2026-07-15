@@ -1,5 +1,5 @@
-// Agent-authored timeline payloads are untrusted input. Navigation affordances
-// may target product routes, never a different origin or executable scheme.
+// Agent-authored chat payloads are untrusted input. Navigation affordances may
+// target product routes, never a different origin or an executable scheme.
 export const safeInternalRoute = (value) => {
   const href = String(value || '').trim();
   if (!href.startsWith('/') || href.startsWith('//') || href.includes('\\')) return null;

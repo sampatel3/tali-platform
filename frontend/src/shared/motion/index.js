@@ -26,6 +26,7 @@ export {
 export {
   MotionDisclosure,
   MotionAttentionBadge,
+  MotionChatItem,
   MotionList,
   MotionListItem,
   MotionNumber,
@@ -62,6 +63,7 @@ export {
 export {
   backdropVariants,
   cappedStaggerDelay,
+  chatItemVariants,
   createRevealVariants,
   createSheetVariants,
   dialogVariants,

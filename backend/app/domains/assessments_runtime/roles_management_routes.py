@@ -2515,6 +2515,15 @@ def add_role_task(
             reason=f"assessment task {task.id} linked",
         )
     try:
+        # Linking an already-active task fills the activation gap immediately;
+        # an inactive generated draft intentionally leaves the prompt open
+        # until the shared approval service activates it.
+        db.flush()
+        from ...services.agent_activation_checklist import (
+            resolve_satisfied_activation_questions,
+        )
+
+        resolve_satisfied_activation_questions(db, role=role)
         db.commit()
     except Exception:
         db.rollback()

@@ -4,11 +4,12 @@
 // role thread exposed by Chat > Agents.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
+import { CircleHelp, MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
 
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
 import {
+  AgentPromptCard,
   ChatComposer,
   ChatEmptyState,
   ChatMarkdown,
@@ -17,9 +18,15 @@ import {
   ThinkingDots,
   useAgentUpdateAwareness,
 } from '../../../shared/chat';
-import { DraftTaskCard, ImpactCard, NeedsInputCard } from './cards.jsx';
+import { DraftTaskCard, ImpactCard } from './cards.jsx';
 import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
-import { AgentLoop, MotionList, MotionListItem } from '../../../shared/motion';
+import {
+  AgentLoop,
+  MotionAttentionBadge,
+  MotionChatItem,
+  MotionList,
+  motionSafeScrollBehavior,
+} from '../../../shared/motion';
 import { AgentDecisionTimelineCard } from '../../../shared/decisions/AgentDecisionTimelineCard';
 import { useRoleDecisionDetails } from '../../../shared/decisions/useRoleDecisionDetails';
 
@@ -221,8 +228,10 @@ export function AgentChatDock({
       try {
         await agentChat.dismissNeedsInput(needsInputId);
         load();
+        return true;
       } catch {
         showToast?.('Couldn’t dismiss that.', 'error');
+        return false;
       }
     },
     [load, showToast]
@@ -333,6 +342,23 @@ export function AgentChatDock({
     ),
     [visibleTimeline],
   );
+  const openQuestions = useMemo(
+    () => items.filter((item) => item.kind === 'needs_input' && item.status === 'open'),
+    [items],
+  );
+  const openQuestionPositions = useMemo(
+    () => new Map(openQuestions.map((item, index) => [item.needs_input_id ?? item.id, index + 1])),
+    [openQuestions],
+  );
+  const jumpToOldestQuestion = useCallback(() => {
+    const target = scrollRef.current?.querySelector('.tk-agent-prompt[data-status="open"]');
+    if (!target) return;
+    target.scrollIntoView({
+      behavior: motionSafeScrollBehavior('smooth'),
+      block: 'center',
+    });
+    target.focus({ preventScroll: true });
+  }, []);
 
   const {
     hasNewAgentUpdate,
@@ -440,6 +466,21 @@ export function AgentChatDock({
           <>
             <span>Ask the agent</span>
             {roleName && <span className="ac-dock-role">{roleName}</span>}
+            {openQuestions.length > 0 ? (
+              <button
+                type="button"
+                className="tk-agent-question-shortcut"
+                aria-label={`${openQuestions.length} ${openQuestions.length === 1 ? 'question needs' : 'questions need'} your input`}
+                onClick={jumpToOldestQuestion}
+              >
+                <CircleHelp size={13} />
+                <MotionAttentionBadge
+                  value={openQuestions.length}
+                  className="tk-agent-question-shortcut-count"
+                />
+                <span className="tk-agent-question-shortcut-label">need input</span>
+              </button>
+            ) : null}
             {onCollapse && (
               <button className="ac-dock-collapse" title="Collapse" onClick={onCollapse}>
                 <PanelRightClose size={16} />
@@ -475,15 +516,17 @@ export function AgentChatDock({
           />
         ) : (
           <MotionList className="ac-timeline" aria-label="Agent conversation" layout={false}>
-            {items.map((it, index) => {
+            {items.map((it) => {
               let content;
               if (it.kind === 'needs_input') {
                 content = (
-                  <NeedsInputCard
+                  <AgentPromptCard
                     item={it}
                     onAnswer={answer}
                     onDismiss={dismiss}
                     onPrompt={prefillPrompt}
+                    position={openQuestionPositions.get(it.needs_input_id ?? it.id)}
+                    total={openQuestions.length}
                   />
                 );
               } else if (it.kind === 'decision') {
@@ -543,9 +586,9 @@ export function AgentChatDock({
                 );
               }
               return (
-                <MotionListItem key={it.id} index={index} className="tk-motion-row" layout={false}>
+                <MotionChatItem key={it.id} className="tk-motion-row">
                   {content}
-                </MotionListItem>
+                </MotionChatItem>
               );
             })}
           </MotionList>

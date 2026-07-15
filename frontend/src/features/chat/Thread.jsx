@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
-import { MotionList, MotionListItem, motionSafeScrollBehavior } from '../../shared/motion';
+import { MotionChatItem, MotionList, motionSafeScrollBehavior } from '../../shared/motion';
 import { Button } from '../../shared/ui/TaaliPrimitives';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
@@ -192,15 +192,15 @@ const Thread = ({ messages, isStreaming, error, onRetry }) => {
     <>
       <MotionList className="cp-thread" aria-label="Search conversation" layout={false}>
         {messages.map((m, i) => (
-          <MotionListItem key={m.id} index={i} className="tk-motion-row" layout={false}>
+          <MotionChatItem key={m.id} className="tk-motion-row">
             <Message
               msg={m}
               isStreaming={isStreaming && i === messages.length - 1 && m.role === 'assistant'}
             />
-          </MotionListItem>
+          </MotionChatItem>
         ))}
         {fr ? (
-          <MotionListItem key="thread-error" className="tk-motion-row" layout={false}>
+          <MotionChatItem key="thread-error" className="tk-motion-row">
             <div className="cp-error">
               <div className="cp-error-title">{fr.title}</div>
               <div className="cp-error-detail">{fr.detail}</div>
@@ -210,7 +210,7 @@ const Thread = ({ messages, isStreaming, error, onRetry }) => {
                 </Button>
               ) : null}
             </div>
-          </MotionListItem>
+          </MotionChatItem>
         ) : null}
       </MotionList>
       <div ref={endRef} />

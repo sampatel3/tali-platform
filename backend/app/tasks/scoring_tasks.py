@@ -261,7 +261,11 @@ def score_application_job(
     )
     from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.cv_score_orchestrator import _execute_scoring, _latest_job
+    from ..services.cv_score_orchestrator import (
+        AutonomousScoringDeferred,
+        _execute_scoring,
+        _latest_job,
+    )
     from ..services.role_execution_guard import (
         automatic_role_action_block_reason,
     )
@@ -736,6 +740,40 @@ def score_application_job(
                 "status": job.status,
                 "application_id": application_id,
                 "cache_hit": cache_hit,
+            }
+        except AutonomousScoringDeferred as exc:
+            # A workspace Pause committed between provider phases.  Discard
+            # every tentative pre-screen/score/cache write from this attempt,
+            # then retain a durable stale marker for Resume/cohort recovery.
+            # The already-in-flight provider request cannot be cancelled, but
+            # no later phase is allowed to start after the live authority
+            # recheck observes the pause.
+            db.rollback()
+            terminal_job = (
+                db.query(CvScoreJob)
+                .filter(CvScoreJob.id == int(job.id))
+                .with_for_update()
+                .one_or_none()
+            )
+            if exc.detail == "workspace agent is paused":
+                deferred_status = "deferred_workspace_paused"
+            elif exc.detail == "role agent is paused":
+                deferred_status = "deferred_agent_paused"
+            elif exc.detail == "role agent is disabled":
+                deferred_status = "deferred_agent_off"
+            else:
+                deferred_status = "deferred_role_not_runnable"
+            if terminal_job is not None and terminal_job.status == SCORE_JOB_RUNNING:
+                terminal_job.status = SCORE_JOB_STALE
+                terminal_job.error_message = deferred_status
+                terminal_job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {
+                "status": deferred_status,
+                "application_id": application_id,
+                "role_id": int(scoring_role.id),
+                "detail": exc.detail,
+                "phase": exc.phase,
             }
         except Exception as exc:
             logger.exception("score_application_job failed for application_id=%s", application_id)
