@@ -1,4 +1,14 @@
-from sqlalchemy import BigInteger, Column, Integer, String, Boolean, DateTime, JSON, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..platform.database import Base
@@ -114,6 +124,34 @@ class Organization(Base):
     # organization credits plus each role's monthly AI-usage cap; do not expose
     # this field as a hard cap until enforcement is implemented end to end.
     monthly_spend_cap_cents = Column(Integer, nullable=True)
+    # Workspace-wide agent control is an overlay on each role's own desired
+    # state.  A workspace pause must stop every enabled agent without rewriting
+    # ``Role.agent_paused_*``; clearing it therefore reveals the exact local
+    # pause/run state that existed before the workspace control was used.
+    #
+    # Keep a bounded actor-name snapshot as well as the nullable FK.  The FK is
+    # authoritative while the account exists; the snapshot keeps the current
+    # control understandable if that account is later removed.
+    agent_workspace_paused_at = Column(DateTime(timezone=True), nullable=True)
+    agent_workspace_paused_reason = Column(Text, nullable=True)
+    agent_workspace_paused_by_user_id = Column(
+        Integer,
+        ForeignKey(
+            "users.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_organizations_agent_workspace_paused_by_user_id_users",
+        ),
+        nullable=True,
+        index=True,
+    )
+    agent_workspace_paused_by_name = Column(String(200), nullable=True)
+    agent_workspace_control_version = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
     workspace_settings = Column(JSON, nullable=True)
     # The org's canonical "complete requisition spec" definition that the
     # conversational intake captures against. NULL means "use the built-in
@@ -136,7 +174,11 @@ class Organization(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    users = relationship("User", back_populates="organization")
+    users = relationship(
+        "User",
+        back_populates="organization",
+        foreign_keys="User.organization_id",
+    )
     assessments = relationship("Assessment", back_populates="organization")
     roles = relationship("Role", cascade="all, delete-orphan")
     criteria = relationship(

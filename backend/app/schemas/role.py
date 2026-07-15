@@ -81,6 +81,7 @@ class RoleUpdate(BaseModel):
     # Same fail-loud contract as RoleCreate — see comment there.
     model_config = ConfigDict(extra="forbid")
 
+    expected_version: int = Field(ge=1)
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     screening_pack_template: Optional[InterviewPack] = None
@@ -139,11 +140,15 @@ class RoleCriterionResponse(BaseModel):
     org_criterion_id: Optional[int] = None
     customized_at: Optional[datetime] = None
     text: str
+    # The criterion lives in a related table but still advances the shared
+    # job revision so other open editors can detect it.
+    role_version: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
 
 class RoleCriterionCreate(BaseModel):
+    expected_version: int = Field(ge=1)
     text: str = Field(min_length=1, max_length=220)
     bucket: Literal["must", "preferred", "constraint"] = "preferred"
     ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
@@ -151,6 +156,7 @@ class RoleCriterionCreate(BaseModel):
 
 
 class RoleCriterionUpdate(BaseModel):
+    expected_version: int = Field(ge=1)
     text: Optional[str] = Field(default=None, min_length=1, max_length=220)
     bucket: Optional[Literal["must", "preferred", "constraint"]] = None
     ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
@@ -167,8 +173,13 @@ class RoleCriteriaSummary(BaseModel):
     workspace_updated_at: Optional[datetime] = None
 
 
+class RoleVersionCommand(BaseModel):
+    expected_version: int = Field(ge=1)
+
+
 class RoleResponse(BaseModel):
     id: int
+    version: int = 1
     organization_id: int
     name: str
     description: Optional[str] = None
@@ -277,6 +288,7 @@ class JobStatusUpdate(BaseModel):
 
     status: Literal["draft", "open", "filled", "filled_external", "cancelled"]
     reason: Optional[str] = Field(default=None, max_length=2000)
+    expected_version: int = Field(ge=1)
 
 
 class RoleClientUpdate(BaseModel):
@@ -287,10 +299,12 @@ class RoleClientUpdate(BaseModel):
     ``client_id=None`` clears the assignment."""
 
     client_id: Optional[int] = Field(default=None, gt=0)
+    expected_version: int = Field(ge=1)
 
 
 class RoleTaskLinkRequest(BaseModel):
     task_id: int = Field(gt=0)
+    expected_version: int = Field(ge=1)
 
 
 class RoleJobSpecUpdate(BaseModel):
@@ -304,6 +318,7 @@ class RoleJobSpecUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    expected_version: int = Field(ge=1)
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     job_spec_text: str = Field(min_length=60, max_length=100_000)
     task_ids: Optional[list[PositiveInt]] = Field(default=None, max_length=100)
@@ -574,6 +589,7 @@ class FirefliesInterviewLinkCreate(BaseModel):
 
 class RoleFeedbackNoteCreate(BaseModel):
     note: str = Field(min_length=1, max_length=4000)
+    expected_version: int = Field(ge=1)
 
 
 class RoleFeedbackNoteResponse(BaseModel):
@@ -583,5 +599,6 @@ class RoleFeedbackNoteResponse(BaseModel):
     author_name: Optional[str] = None
     note: str
     created_at: datetime
+    role_version: Optional[int] = None
 
     model_config = {"from_attributes": True}

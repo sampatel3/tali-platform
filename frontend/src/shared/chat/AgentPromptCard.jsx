@@ -105,6 +105,7 @@ export function AgentPromptCard({
   const options = Array.isArray(item.options) ? item.options : [];
   const questionKind = item.question_kind || item.kind;
   const requestId = item.needs_input_id ?? item.id;
+  const expectedVersion = item.role_version;
   const inputMode = item.input_mode
     || (['integer', 'number'].includes(valueSchema.type) ? valueSchema.type : 'string');
   const canAnswer = item.can_answer !== false;
@@ -127,7 +128,12 @@ export function AgentPromptCard({
     setInlineError('');
     setPendingAction(actionKey);
     try {
-      const saved = await onAnswer?.(requestId, { value: option.value, label: option.label });
+      const answerArgs = [
+        requestId,
+        { value: option.value, label: option.label },
+      ];
+      if (expectedVersion != null) answerArgs.push(expectedVersion);
+      const saved = await onAnswer?.(...answerArgs);
       if (saved === false) setInlineError('That answer was not saved. Try again.');
     } catch {
       setInlineError('That answer was not saved. Try again.');
@@ -146,7 +152,9 @@ export function AgentPromptCard({
     setInlineError('');
     setPendingAction('typed-answer');
     try {
-      const saved = await onAnswer?.(requestId, { value });
+      const answerArgs = [requestId, { value }];
+      if (expectedVersion != null) answerArgs.push(expectedVersion);
+      const saved = await onAnswer?.(...answerArgs);
       // Never eat the recruiter's text after a transient failure.
       if (saved === false) {
         setInlineError('That answer was not saved. Try again.');

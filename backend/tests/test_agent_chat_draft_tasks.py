@@ -79,6 +79,7 @@ def test_draft_review_card_lists_role_drafts(db):
     card = dt.draft_review_card(db, role)
     assert card["type"] == "draft_task_review"
     assert card["role_id"] == role.id
+    assert card["role_version"] == int(role.version or 1)
     assert len(card["drafts"]) == 1
     d = card["drafts"][0]
     assert d["name"] == "Vendor Risk Task"

@@ -10,7 +10,7 @@ into a single private module keeps each route file under the
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, desc, func, or_
@@ -165,7 +165,23 @@ class OrgKpiPayload(BaseModel):
     teach_rate_pct: float
     paused_role_count: int
     active_role_count: int
+    # Local desired pauses remain visible under a workspace overlay even though
+    # effective paused_role_count becomes every enabled role.
+    local_paused_role_count: int = 0
     oldest_pending_age_seconds: Optional[int]
+
+
+class WorkspacePausedBy(BaseModel):
+    user_id: Optional[int] = None
+    name: Optional[str] = None
+    is_current_user: bool
+    changed_at: Optional[datetime] = None
+    attribution: Literal["verified", "unavailable"]
+    source: Literal["workspace_control"] = "workspace_control"
+
+
+class WorkspaceControlLastChange(WorkspacePausedBy):
+    action: Literal["paused", "resumed"]
 
 
 class OrgStatusPayload(OrgKpiPayload):
@@ -180,6 +196,12 @@ class OrgStatusPayload(OrgKpiPayload):
     current_run: Optional[dict] = None
     last_activity: Optional[dict] = None
     paused_reason: Optional[str] = None
+    workspace_paused: bool = False
+    workspace_paused_at: Optional[datetime] = None
+    workspace_paused_reason: Optional[str] = None
+    workspace_paused_by: Optional[WorkspacePausedBy] = None
+    workspace_control_version: int = 1
+    workspace_last_change: Optional[WorkspaceControlLastChange] = None
 
 
 class RoleBreakdownRow(BaseModel):
@@ -198,6 +220,8 @@ class RoleBreakdownRow(BaseModel):
     teach_rate_pct: float
     paused: bool
     paused_reason: Optional[str]
+    pause_scope: Optional[Literal["workspace", "role"]] = None
+    role_paused: bool = False
     agentic_mode_enabled: bool
     # Live candidate-pipeline standing for the role (same source the Jobs page
     # uses): {applied, invited, in_assessment, review, advanced, rejected}.
@@ -379,7 +403,12 @@ def feedback_payload(
 # ---------------------------------------------------------------------------
 
 
-def org_header_extras(db: Session, *, organization_id: int) -> dict[str, Any]:
+def org_header_extras(
+    db: Session,
+    *,
+    organization_id: int,
+    current_user_id: int | None = None,
+) -> dict[str, Any]:
     """``{current_run, last_activity, paused_reason}`` for the global AgentBar.
 
     All org-scoped aggregates (one row each) so the bar can derive its
@@ -442,6 +471,14 @@ def org_header_extras(db: Session, *, organization_id: int) -> dict[str, Any]:
             "summary": summary or (role_name or None),
         }
 
+    from ...services.workspace_agent_control import workspace_agent_pause_state
+
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=organization_id,
+        current_user_id=current_user_id,
+    )
+
     # One representative reason from a paused agent-enabled role (drives the
     # panel's "auto-paused vs deliberate pause" copy).
     paused_reason = (
@@ -461,7 +498,15 @@ def org_header_extras(db: Session, *, organization_id: int) -> dict[str, Any]:
     return {
         "current_run": current_run,
         "last_activity": last_activity,
-        "paused_reason": paused_reason,
+        "paused_reason": (
+            workspace_pause["reason"] if workspace_pause["paused"] else paused_reason
+        ),
+        "workspace_paused": bool(workspace_pause["paused"]),
+        "workspace_paused_at": workspace_pause["paused_at"],
+        "workspace_paused_reason": workspace_pause["reason"],
+        "workspace_paused_by": workspace_pause["paused_by"],
+        "workspace_control_version": int(workspace_pause["version"]),
+        "workspace_last_change": workspace_pause["last_change"],
     }
 
 
@@ -478,6 +523,8 @@ __all__ = [
     "open_needs_input_filter",
     "OrgKpiPayload",
     "OrgStatusPayload",
+    "WorkspacePausedBy",
+    "WorkspaceControlLastChange",
     "RoleBreakdownRow",
     "SnoozeResult",
     "FeedbackBody",

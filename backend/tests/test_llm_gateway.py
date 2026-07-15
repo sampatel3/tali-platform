@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
 from pydantic import BaseModel
 
 from app.llm import (
@@ -228,6 +229,31 @@ def test_generate_structured_retries_invalid_json_then_succeeds():
     assert len(client.messages.calls) == 2
     # retry threaded retry_attempt=1 into metering
     assert client.messages.calls[1]["metering"]["retry_attempt"] == 1
+
+
+def test_generate_structured_rechecks_authority_before_validation_retry():
+    client = _stub(["not json at all", _payload(score=77)])
+    attempts: list[int] = []
+
+    def authorize(attempt: int) -> None:
+        attempts.append(attempt)
+        if attempt == 1:
+            raise RuntimeError("workspace paused")
+
+    with pytest.raises(RuntimeError, match="workspace paused"):
+        generate_structured(
+            client,
+            model="m",
+            messages=[{"role": "user", "content": "x"}],
+            output_model=_Model,
+            metering=_metering(),
+            max_tokens=64,
+            before_provider_call=authorize,
+        )
+
+    assert attempts == [0, 1]
+    # Attempt 1 completed and failed validation; Pause prevented attempt 2.
+    assert len(client.messages.calls) == 1
 
 
 def test_generate_structured_invalid_json_both_attempts_fails():

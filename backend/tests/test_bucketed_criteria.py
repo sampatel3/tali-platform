@@ -26,6 +26,10 @@ def _post_org_criterion(client, headers, **kwargs):
     return client.post("/api/v1/organizations/me/criteria", json=kwargs, headers=headers)
 
 
+def _role_version(client, headers, role_id):
+    return client.get(f"/api/v1/roles/{role_id}", headers=headers).json()["version"]
+
+
 def test_workspace_criteria_crud_round_trip(client):
     headers, _ = auth_headers(client)
     resp = _list_org_criteria(client, headers)
@@ -97,7 +101,11 @@ def test_role_sync_pulls_in_new_workspace_chips_and_keeps_role_only(client):
     # Recruiter adds a role-only chip.
     add = client.post(
         f"/api/v1/roles/{role_id}/criteria",
-        json={"text": "Built async messaging at scale", "bucket": "must"},
+        json={
+            "text": "Built async messaging at scale",
+            "bucket": "must",
+            "expected_version": _role_version(client, headers, role_id),
+        },
         headers=headers,
     )
     assert add.status_code == 201
@@ -107,7 +115,11 @@ def test_role_sync_pulls_in_new_workspace_chips_and_keeps_role_only(client):
     _post_org_criterion(client, headers, text="Postgres", bucket="must")
 
     # Sync pulls in the new workspace chip; role-only chip is preserved.
-    sync = client.post(f"/api/v1/roles/{role_id}/criteria/sync", headers=headers)
+    sync = client.post(
+        f"/api/v1/roles/{role_id}/criteria/sync",
+        json={"expected_version": _role_version(client, headers, role_id)},
+        headers=headers,
+    )
     assert sync.status_code == 200
     chips = sync.json()["criteria"]
     texts = {c["text"] for c in chips}
@@ -134,12 +146,17 @@ def test_deleting_workspace_inherited_chip_on_role_records_suppression(client):
     # Delete it on the role.
     deleted = client.delete(
         f"/api/v1/roles/{role_id}/criteria/{role_chip['id']}",
+        params={"expected_version": _role_version(client, headers, role_id)},
         headers=headers,
     )
     assert deleted.status_code == 204
 
     # Sync workspace must NOT re-add it because it's suppressed.
-    sync = client.post(f"/api/v1/roles/{role_id}/criteria/sync", headers=headers)
+    sync = client.post(
+        f"/api/v1/roles/{role_id}/criteria/sync",
+        json={"expected_version": _role_version(client, headers, role_id)},
+        headers=headers,
+    )
     assert sync.status_code == 200
     after_sync = sync.json()["criteria"]
     assert org_chip_id not in {c.get("org_criterion_id") for c in after_sync}
@@ -153,7 +170,11 @@ def test_reset_role_to_workspace_drops_role_only_and_clears_suppression(client):
     # Add a role-only chip.
     client.post(
         f"/api/v1/roles/{role_id}/criteria",
-        json={"text": "role-only", "bucket": "preferred"},
+        json={
+            "text": "role-only",
+            "bucket": "preferred",
+            "expected_version": _role_version(client, headers, role_id),
+        },
         headers=headers,
     )
     # Suppress the workspace chip.
@@ -161,10 +182,18 @@ def test_reset_role_to_workspace_drops_role_only_and_clears_suppression(client):
         c for c in client.get(f"/api/v1/roles/{role_id}", headers=headers).json()["criteria"]
         if c.get("org_criterion_id") == org_chip["id"]
     )
-    client.delete(f"/api/v1/roles/{role_id}/criteria/{role_chip['id']}", headers=headers)
+    client.delete(
+        f"/api/v1/roles/{role_id}/criteria/{role_chip['id']}",
+        params={"expected_version": _role_version(client, headers, role_id)},
+        headers=headers,
+    )
 
     # Reset → the role-only chip is gone, suppression cleared so workspace chip is back.
-    reset = client.post(f"/api/v1/roles/{role_id}/criteria/reset", headers=headers)
+    reset = client.post(
+        f"/api/v1/roles/{role_id}/criteria/reset",
+        json={"expected_version": _role_version(client, headers, role_id)},
+        headers=headers,
+    )
     assert reset.status_code == 200
     chips = reset.json()["criteria"]
     texts = {c["text"] for c in chips}
@@ -184,7 +213,10 @@ def test_editing_workspace_chip_on_role_marks_customized_and_blocks_sync_overwri
     # Recruiter customizes the chip on the role.
     edit = client.patch(
         f"/api/v1/roles/{role_id}/criteria/{role_chip['id']}",
-        json={"text": "Python 3.11+"},
+        json={
+            "text": "Python 3.11+",
+            "expected_version": _role_version(client, headers, role_id),
+        },
         headers=headers,
     )
     assert edit.status_code == 200
@@ -198,6 +230,10 @@ def test_editing_workspace_chip_on_role_marks_customized_and_blocks_sync_overwri
     )
 
     # Sync must NOT overwrite the recruiter customization.
-    sync = client.post(f"/api/v1/roles/{role_id}/criteria/sync", headers=headers).json()
+    sync = client.post(
+        f"/api/v1/roles/{role_id}/criteria/sync",
+        json={"expected_version": _role_version(client, headers, role_id)},
+        headers=headers,
+    ).json()
     same = next(c for c in sync["criteria"] if c.get("org_criterion_id") == org_chip["id"])
     assert same["text"] == "Python 3.11+"

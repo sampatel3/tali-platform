@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from app.actions import ask_recruiter
 from app.actions.types import Actor
 from app.models.agent_run import AgentRun
+from app.models.job_hiring_team import JobHiringTeam
 from app.models.user import User
 
 from .conftest import make_world
@@ -35,6 +36,7 @@ def _recruiter_actor(db, organization_id: int) -> tuple[Actor, User]:
         hashed_password="x",
         is_active=True,
         is_verified=True,
+        role="owner",
     )
     db.add(user)
     db.flush()
@@ -128,6 +130,7 @@ def test_answer_records_response_and_actor(db):
         rec_actor,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "approve"},
     )
     assert answered.resolved_at is not None
@@ -159,6 +162,7 @@ def test_answer_rejects_questions_that_require_observed_external_state(db, kind)
             organization_id=int(org.id),
             needs_input_id=int(row.id),
             response={"value": "done"},
+            expected_version=int(role.version or 1),
         )
 
     assert exc_info.value.status_code == 422
@@ -183,6 +187,7 @@ def test_answer_rejects_already_answered(db):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "ok"},
     )
     with pytest.raises(HTTPException):
@@ -191,8 +196,58 @@ def test_answer_rejects_already_answered(db):
             rec,
             organization_id=int(org.id),
             needs_input_id=int(row.id),
+            expected_version=int(role.version or 1),
             response={"value": "second answer"},
         )
+
+
+@pytest.mark.parametrize("team_role", ["interviewer", "coordinator"])
+def test_answer_denies_non_controlling_job_team_roles(db, team_role):
+    org, role, _, _ = make_world(db)
+    role.score_threshold = 55
+    agent = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        agent,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="threshold_ambiguous",
+        prompt="Use 30?",
+    )
+    user = User(
+        organization_id=org.id,
+        email=f"{team_role}-{id(db)}@x.test",
+        full_name=team_role,
+        hashed_password="x",
+        is_active=True,
+        is_verified=True,
+        role="member",
+    )
+    db.add(user)
+    db.flush()
+    db.add(
+        JobHiringTeam(
+            organization_id=org.id,
+            role_id=role.id,
+            user_id=user.id,
+            team_role=team_role,
+        )
+    )
+    db.flush()
+
+    with pytest.raises(HTTPException) as exc_info:
+        ask_recruiter.answer(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            needs_input_id=int(row.id),
+            expected_version=int(role.version or 1),
+            response={"value": "30"},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert row.is_open
+    assert role.score_threshold == 55
 
 
 def test_dismiss_is_idempotent(db):

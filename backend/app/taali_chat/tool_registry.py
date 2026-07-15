@@ -17,6 +17,10 @@ from ..agent_chat.confirmations import (
     blocked_confirmation_result,
     mark_confirmation_consumed,
 )
+from ..domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ..mcp import handlers, operations
 from ..mcp.catalog import TAALI_CHAT, ToolSpec, get_tool_spec, tools_for
 from ..models.taali_chat_conversation import TaaliChatConversation
@@ -41,6 +45,16 @@ def _preview_with_receipt(
     job_spec_text: str,
     message: str | None = None,
 ) -> dict[str, Any]:
+    # Global chat can reference any role ID in the workspace. Apply the same
+    # per-job edit policy used by the role page before disclosing a creation
+    # preview, without retaining a write lock for this read-only operation.
+    require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(role_id),
+        permission=JobPermission.EDIT_ROLE,
+        lock_for_update=False,
+    )
     clean_name = str(name or "").strip()
     clean_spec = str(job_spec_text or "").strip()
     if not clean_name:
@@ -94,6 +108,14 @@ def _create_with_confirmation(
     )
     if not check.ok:
         return blocked_confirmation_result("create_related_role", check.reason)
+    # Re-check at the mutation boundary under the canonical source-role lock.
+    # Hiring-team membership may have changed while confirmation was pending.
+    require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(role_id),
+        permission=JobPermission.EDIT_ROLE,
+    )
     current = _related_roles.preview_related_role(
         db,
         role_id=role_id,
@@ -125,6 +147,7 @@ def _create_with_confirmation(
         db,
         role_id=role_id,
         organization_id=int(user.organization_id),
+        creator_user_id=int(user.id),
         name=clean_name,
         job_spec_text=clean_spec,
     )

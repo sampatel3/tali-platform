@@ -114,7 +114,7 @@ def run(
             role_id=int(app.role_id),
             organization_id=int(organization_id),
         )
-        block_reason = automatic_role_action_block_reason(role)
+        block_reason = automatic_role_action_block_reason(role, db=db)
         if block_reason:
             return SendAssessmentResult(
                 None,

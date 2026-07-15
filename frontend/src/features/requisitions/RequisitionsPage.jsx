@@ -24,6 +24,7 @@ import {
   roleExternalJobLive,
   roleExternalJobState,
 } from '../jobs/atsType';
+import { conflictActorLabel, roleVersionConflict } from '../jobs/roleConcurrency';
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
@@ -79,19 +80,55 @@ export const requisitionAtsBridgeModel = (provider, externalJobId = null) => {
   };
 };
 
-// Prefer the backend's human-readable `detail` (e.g. the 409 "Brief already
-// applied to a role") over a generic fallback, so the error banner tells the
-// recruiter what actually happened. Only surfaces `detail` when it's a plain
-// string (FastAPI validation errors hand back arrays/objects we don't want raw).
+// Prefer the backend's human-readable detail over a generic fallback. Structured
+// Role-version conflicts are reconciled separately below.
 const errorDetail = (err, fallback) => {
   const detail = err?.response?.data?.detail;
   return typeof detail === 'string' && detail.trim() ? detail : fallback;
 };
 
-// A brief that's already been applied to a live role is FROZEN on the backend
-// (update_brief_fields raises 409). Render it read-only rather than offering
-// edits that can only 409.
-const isBriefApplied = (brief) => String(brief?.status || '').toLowerCase() === 'applied';
+// Only the legacy explicit `applied` lifecycle is archived. Publishing creates
+// a linked job while leaving the brief in draft/submitted state, so that linked
+// requisition remains editable and can be re-published with Role.version.
+export const isRequisitionBriefReadOnly = (brief) => (
+  String(brief?.status || '').toLowerCase() === 'applied'
+);
+
+export const requisitionRoleConflictMessage = (error, { latestLoaded = true } = {}) => {
+  const conflict = roleVersionConflict(error);
+  if (!conflict) return null;
+  const actor = conflictActorLabel(conflict.changedBy);
+  const prefix = `${conflict.message || 'This job changed before your update was saved.'}${actor ? ` Changed by ${actor}.` : ''}`;
+  return latestLoaded
+    ? `${prefix} Latest requisition loaded — review and try again.`
+    : `${prefix} The latest requisition could not be loaded; reload this page before retrying.`;
+};
+
+export const reloadRequisitionAfterRoleConflict = async (
+  briefId,
+  error,
+  fetchBrief = requisitionApi.get,
+) => {
+  if (!roleVersionConflict(error)) return null;
+  try {
+    const latestBrief = await fetchBrief(briefId);
+    if (!latestBrief || Number(latestBrief.id) !== Number(briefId)) {
+      throw new Error('Conflict refresh returned the wrong requisition');
+    }
+    return {
+      brief: latestBrief,
+      message: requisitionRoleConflictMessage(error, { latestLoaded: true }),
+    };
+  } catch {
+    // Never adopt only the conflict's Role.version. Without the authoritative
+    // RoleBrief, doing so would let a retry pass OCC with stale requisition
+    // fields (notably the whole custom_fields object).
+    return {
+      brief: null,
+      message: requisitionRoleConflictMessage(error, { latestLoaded: false }),
+    };
+  }
+};
 
 // One conversation turn rendered with the shared message bubbles. Assistant
 // turns render Markdown under a mono "AGENT" kicker (the same attribution the
@@ -180,6 +217,19 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const selectingRef = useRef(null);
 
   const messages = useMemo(() => (Array.isArray(brief?.messages) ? brief.messages : []), [brief]);
+
+  const handleVersionConflict = useCallback(async (err) => {
+    if (selectedId == null) return false;
+    const conflictedBriefId = selectedId;
+    const result = await reloadRequisitionAfterRoleConflict(conflictedBriefId, err);
+    if (!result) return false;
+    // A user can switch requisitions while the recovery GET is in flight. The
+    // stale request remains handled, but it must not replace the newer panel.
+    if (selectingRef.current !== conflictedBriefId) return true;
+    if (result.brief) setBrief(result.brief);
+    setError(result.message);
+    return true;
+  }, [selectedId]);
 
   // Load the org template once + the requisition list on mount.
   useEffect(() => {
@@ -367,7 +417,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       : prev));
 
     try {
-      const res = await requisitionApi.chat(selectedId, { message, files: files || [] });
+      const res = await requisitionApi.chat(selectedId, {
+        message,
+        files: files || [],
+        expectedVersion: brief?.job?.version ?? null,
+      });
       // The response is authoritative for the brief + the full message log.
       const merged = {
         ...(res.brief || {}),
@@ -385,7 +439,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       patchListRow(selectedId, res.brief || {});
       // Success: the staged attachments are now sent — revoke their URLs.
       (restore?.attachments || []).forEach((a) => a.url && URL.revokeObjectURL(a.url));
-    } catch {
+    } catch (err) {
+      const conflicted = await handleVersionConflict(err);
       if (restore) {
         // Composer send: put the text + staged attachments back in the box (URLs
         // were kept alive above) and drop the pending echo, so the message lives
@@ -395,18 +450,18 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
           : prev));
         if (restore.composer) setComposer((prev) => (prev ? prev : restore.composer));
         if (restore.attachments?.length) setAttachments((prev) => [...restore.attachments, ...prev]);
-        setError('The agent couldn\'t process that message. Your text and attachments are back in the box — try sending again.');
+        if (!conflicted) setError('The agent couldn\'t process that message. Your text and attachments are back in the box — try sending again.');
       } else {
         // Quick-reply / no restore: leave the echo in place so it can be resent.
         setBrief((prev) => (prev
           ? { ...prev, messages: (prev.messages || []).map((m) => (m.__pending ? { ...m, __pending: false } : m)) }
           : prev));
-        setError('The agent couldn\'t process that message. It\'s still shown above — try again.');
+        if (!conflicted) setError('The agent couldn\'t process that message. It\'s still shown above — try again.');
       }
     } finally {
       setTurnInFlight(false);
     }
-  }, [selectedId, turnInFlight, loadingBrief, brief, patchListRow]);
+  }, [selectedId, turnInFlight, loadingBrief, brief, patchListRow, handleVersionConflict]);
 
   // Send from the composer (text + staged attachments). Clear the composer
   // OPTIMISTICALLY but hand the staged attachment objects to runTurn so a
@@ -453,7 +508,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       : prev));
 
     try {
-      const res = await requisitionApi.answer(selectedId, gap.key, value);
+      const res = await requisitionApi.answer(
+        selectedId,
+        gap.key,
+        value,
+        brief?.job?.version ?? null,
+      );
       // Response is authoritative for the brief + the full message log.
       setBrief((prev) => ({
         ...(prev || {}),
@@ -462,12 +522,14 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         gaps: res.gaps ?? res.brief?.gaps ?? prev?.gaps,
       }));
       patchListRow(selectedId, res.brief || {}); // title/completeness may move
-    } catch {
-      setError('Could not record that answer. Your reply is preserved above — try again.');
+    } catch (err) {
+      if (!(await handleVersionConflict(err))) {
+        setError('Could not record that answer. Your reply is preserved above — try again.');
+      }
     } finally {
       setTurnInFlight(false);
     }
-  }, [selectedId, turnInFlight, loadingBrief, brief, runTurn, patchListRow]);
+  }, [selectedId, turnInFlight, loadingBrief, brief, runTurn, patchListRow, handleVersionConflict]);
 
   // Tap a quick reply. `deterministic` = the chip IS one of the current gap's
   // template options, so record it against that field with no LLM (answerGap).
@@ -497,15 +559,21 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       const payload = isCustom
         ? { custom_fields: { ...(brief?.custom_fields || {}), [key]: value } }
         : { [key]: value };
-      const updated = await requisitionApi.update(selectedId, payload);
+      const updated = await requisitionApi.update(
+        selectedId,
+        payload,
+        brief?.job?.version ?? null,
+      );
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
       patchListRow(selectedId, updated || {}); // title/completeness may move
     } catch (err) {
-      setError(errorDetail(err, 'Could not save that field. Try again.'));
+      if (!(await handleVersionConflict(err))) {
+        setError(errorDetail(err, 'Could not save that field. Try again.'));
+      }
     } finally {
       setSavingKey(null);
     }
-  }, [selectedId, patchListRow, brief]);
+  }, [selectedId, patchListRow, brief, handleVersionConflict]);
 
   // ---- internal economics: assign a client / set the client rate ----
   // Both go through the EXISTING requisitionApi.update — the serialized brief
@@ -516,14 +584,20 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     setSavingEconomics(true);
     setError('');
     try {
-      const updated = await requisitionApi.update(selectedId, payload);
+      const updated = await requisitionApi.update(
+        selectedId,
+        payload,
+        brief?.job?.version ?? null,
+      );
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
     } catch (err) {
-      setError(errorDetail(err, 'Could not save the hiring-department details. Try again.'));
+      if (!(await handleVersionConflict(err))) {
+        setError(errorDetail(err, 'Could not save the hiring-department details. Try again.'));
+      }
     } finally {
       setSavingEconomics(false);
     }
-  }, [selectedId]);
+  }, [selectedId, brief, handleVersionConflict]);
 
   // ---- per-requisition Job spec (JD) override ----
   // Same shape as the economics save: PATCH jd_override (a string to set the
@@ -534,14 +608,20 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     setSavingOverride(true);
     setError('');
     try {
-      const updated = await requisitionApi.update(selectedId, { jd_override: textOrNull });
+      const updated = await requisitionApi.update(
+        selectedId,
+        { jd_override: textOrNull },
+        brief?.job?.version ?? null,
+      );
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
     } catch (err) {
-      setError(errorDetail(err, 'Could not save the job spec. Try again.'));
+      if (!(await handleVersionConflict(err))) {
+        setError(errorDetail(err, 'Could not save the job spec. Try again.'));
+      }
     } finally {
       setSavingOverride(false);
     }
-  }, [selectedId]);
+  }, [selectedId, brief, handleVersionConflict]);
 
   // ---- AI-draft the JD responsibilities ----
   // POST /draft-responsibilities returns the FULL serialized brief (same shape
@@ -553,14 +633,19 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     setDraftingResponsibilities(true);
     setError('');
     try {
-      const updated = await requisitionApi.draftResponsibilities(selectedId);
+      const updated = await requisitionApi.draftResponsibilities(
+        selectedId,
+        brief?.job?.version ?? null,
+      );
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
-    } catch {
-      setError('Could not draft responsibilities. Try again.');
+    } catch (err) {
+      if (!(await handleVersionConflict(err))) {
+        setError('Could not draft responsibilities. Try again.');
+      }
     } finally {
       setDraftingResponsibilities(false);
     }
-  }, [selectedId]);
+  }, [selectedId, brief, handleVersionConflict]);
 
   const assignClient = useCallback((clientId) => {
     // Empty selection clears the assignment. Coerce the <select>'s string value
@@ -579,15 +664,21 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       const created = await clientApi.create({ name });
       await loadClients();
       if (created?.id != null) {
-        const updated = await requisitionApi.update(selectedId, { client_id: created.id });
+        const updated = await requisitionApi.update(
+          selectedId,
+          { client_id: created.id },
+          brief?.job?.version ?? null,
+        );
         setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
       }
-    } catch {
-      setError('Could not create that hiring department. Try again.');
+    } catch (err) {
+      if (!(await handleVersionConflict(err))) {
+        setError('Could not create that hiring department. Try again.');
+      }
     } finally {
       setSavingEconomics(false);
     }
-  }, [selectedId, loadClients]);
+  }, [selectedId, loadClients, brief, handleVersionConflict]);
 
   // ---- publish ----
   // Snapshot the RENDERED JD (the recruiter's per-requisition override if set,
@@ -614,7 +705,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       // "(to be captured)" line to candidates — strip any such line before
       // sending the markdown the backend stores on the public page.
       const jdMarkdown = stripPlaceholderLines(rawMarkdown);
-      const res = await requisitionApi.publish(selectedId, jdMarkdown);
+      const res = await requisitionApi.publish(
+        selectedId,
+        jdMarkdown,
+        brief?.job?.version ?? null,
+      );
       // The publish response carries the job_page fields (token/url/status/…);
       // fold them into brief.job_page so the published state renders without a
       // refetch, and lift status to keep the header chip in sync.
@@ -626,6 +721,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         job: res?.role_id
           ? {
               role_id: res.role_id,
+              version: res.version,
               name: prev?.title ?? prev?.job?.name ?? null,
               job_status: res.job_status,
               ats_provider: res?.ats_provider ?? prev?.job?.ats_provider ?? null,
@@ -642,11 +738,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       }));
       await loadList();
     } catch (err) {
-      setError(errorDetail(err, 'Publish failed — please try again.'));
+      if (!(await handleVersionConflict(err))) {
+        setError(errorDetail(err, 'Publish failed — please try again.'));
+      }
     } finally {
       setPublishing(false);
     }
-  }, [selectedId, loadList, brief, template]);
+  }, [selectedId, loadList, brief, template, handleVersionConflict]);
 
   // The published job page (token/url/status/published_at) or null. Drives the
   // header's published state on load and after a (re-)publish.
@@ -813,14 +911,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [shouldPoll, selectedId, turnInFlight]);
 
   const published = Boolean(jobPage) || isPublishedRequisition(brief?.status);
+  const applied = isRequisitionBriefReadOnly(brief);
   // Block sends while a switch is in flight (brief null / loadingBrief) so a
   // reply can't post to the wrong requisition, and while a turn is in flight.
-  const canSend = Boolean(brief) && !loadingBrief && (composer.trim() || attachments.length > 0) && !turnInFlight;
+  const canSend = Boolean(brief) && !applied && !loadingBrief && (composer.trim() || attachments.length > 0) && !turnInFlight;
   // Required fields still open → publish is gated (see publish()). Drives the
   // Publish button's disabled state + hint.
   const requiredRemaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
-  const applied = isBriefApplied(brief);
-
   // The next required field the agent wants (gaps are ordered; first = current).
   const currentGap = (brief?.gaps || [])[0] || null;
 
@@ -1001,7 +1098,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         </a>
                       </div>
                     </div>
-                  ) : (
+                  ) : !applied ? (
                     <button
                       type="button"
                       className="rq-btn-sm is-ghost rq-share-btn"
@@ -1011,7 +1108,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     >
                       {clientLinking ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Share2 size={14} />} Share with hiring manager
                     </button>
-                  )}
+                  ) : null}
 
                   {jobPage ? (
                     <div className="rq-published">
@@ -1140,8 +1237,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                 </div>
               ) : null}
 
-              {/* Applied brief — frozen on the backend (edits 409). Explain
-                  why fields are read-only instead of letting saves fail. */}
+              {/* Legacy fully-applied intake records remain archived. A normal
+                  published/linked requisition stays draft/submitted and does
+                  not enter this read-only branch. */}
               {applied ? (
                 <div className="rq-applied-note" role="note">
                   This job brief has been applied to a live role, so it is now read-only.
@@ -1159,6 +1257,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <div ref={threadEndRef} />
                   </div>
 
+                  {applied ? (
+                    <div className="rq-applied-note" role="note">
+                      This intake conversation is archived. Continue changes in the live job.
+                    </div>
+                  ) : (
                   <div className="rq-composer-wrap">
                     {attachments.length > 0 ? (
                       <div className="rq-attach-row">
@@ -1233,6 +1336,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       </div>
                     ) : null}
                   </div>
+                  )}
                 </div>
 
                 {/* Right column — Job spec (live JD document) + Brief tabs */}
@@ -1263,8 +1367,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <JobSpec
                       template={template}
                       brief={brief}
-                      // Applied briefs are frozen (backend 409s edits) — omit the
-                      // save/draft handlers so JobSpec renders view-only.
+                      // Only legacy fully-applied intake records are archived;
+                      // linked published requisitions keep these edit handlers.
                       onSaveOverride={applied ? undefined : saveOverride}
                       savingOverride={savingOverride}
                       onDraftResponsibilities={applied ? undefined : draftResponsibilities}

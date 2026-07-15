@@ -32,7 +32,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -366,6 +366,7 @@ def derive_requirements(
     organization_id: int | None = None,
     role_id: int | None = None,
     trace_id: str | None = None,
+    before_provider_call: Callable[[str], None] | None = None,
 ) -> _Derivation:
     """Sonnet atomic-requirements derivation, cached per job-spec hash."""
     jd = (job_spec_text or "").strip()
@@ -400,6 +401,17 @@ def derive_requirements(
         temperature=0.0,
         use_tool_use=True,
         tool_name="emit_requirements",
+        before_provider_call=(
+            (
+                lambda attempt: before_provider_call(
+                    "full_score.requirements"
+                    if attempt == 0
+                    else f"full_score.requirements.retry_{attempt}"
+                )
+            )
+            if before_provider_call is not None
+            else None
+        ),
     )
     deriv = res.value if (res.ok and res.value) else _Derivation()
     if r is not None and deriv.requirements:
@@ -417,6 +429,7 @@ def run_holistic_match(
     client: Any,
     metering_context: dict | None = None,
     workable_context: str | None = None,
+    before_provider_call: Callable[[str], None] | None = None,
 ) -> CVMatchOutput:
     """Score one candidate + produce the complete report (two Sonnet calls).
 
@@ -480,7 +493,12 @@ def run_holistic_match(
         return cached
 
     deriv = derive_requirements(
-        jd, client=client, organization_id=org_id, role_id=role_id, trace_id=trace_id
+        jd,
+        client=client,
+        organization_id=org_id,
+        role_id=role_id,
+        trace_id=trace_id,
+        before_provider_call=before_provider_call,
     )
     core = deriv.core_capability or "(infer from the job spec and requirements)"
     reqblock = "\n".join(
@@ -509,6 +527,17 @@ def run_holistic_match(
         output_model=_LeanScore, metering=_meter(), max_tokens=2000,
         system=_cached_system(_SCORE_SYS.format(core=core, reqs=reqblock)),
         temperature=0.0, use_tool_use=True, tool_name="score_candidate",
+        before_provider_call=(
+            (
+                lambda attempt: before_provider_call(
+                    "full_score.main"
+                    if attempt == 0
+                    else f"full_score.main.retry_{attempt}"
+                )
+            )
+            if before_provider_call is not None
+            else None
+        ),
     )
     if not (score_res.ok and score_res.value):
         return _failed_output(
@@ -523,6 +552,17 @@ def run_holistic_match(
         output_model=_Report, metering=_meter(), max_tokens=5000,
         system=_cached_system(_REPORT_SYS.format(core=core, reqs=reqblock)),
         temperature=0.0, use_tool_use=True, tool_name="emit_report_facts",
+        before_provider_call=(
+            (
+                lambda attempt: before_provider_call(
+                    "full_score.report"
+                    if attempt == 0
+                    else f"full_score.report.retry_{attempt}"
+                )
+            )
+            if before_provider_call is not None
+            else None
+        ),
     )
     report = report_res.value if (report_res.ok and report_res.value) else _Report()
 

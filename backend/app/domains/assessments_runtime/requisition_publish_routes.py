@@ -6,13 +6,19 @@ Split out of ``requisition_routes`` and re-composed there via
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
 from ...models.role import JOB_STATUS_DRAFT, Role
+from ...models.job_hiring_team import (
+    TEAM_ROLE_HIRING_MANAGER,
+    JobHiringTeam,
+)
+from ...models.role_brief import RoleBrief
 from ...models.user import User
 from ...platform.database import get_db
+from ...platform.request_context import get_request_id
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.requisition_chat_capture import compute_gaps
 from ...services.requisition_reconfiguration import (
@@ -26,12 +32,20 @@ from ...services.role_brief_service import (
 )
 from ...services.role_criteria_service import sync_derived_criteria
 from ...services.role_intent_fingerprint import role_intent_fingerprint
+from ...services.role_concurrency import assert_role_version, bump_role_version
+from ...services.role_change_audit import (
+    ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
+    add_role_change_event,
+    capture_role_change_snapshot,
+    latest_role_change_actor,
+)
 from ...services.task_provisioning_service import (
     MIN_ASSESSMENT_INPUT_CHARS,
     role_assessment_input_text,
 )
 from ..identity_access.organization_serialization import resolve_active_ats
 from .requisition_shared import _ats_spec, _get_brief, _job_page_url, _org
+from .job_authorization import JobPermission, require_job_permission
 from .roles_management_routes import (
     _request_autogenerate_assessment_task,
 )
@@ -41,6 +55,10 @@ router = APIRouter(tags=["Requisitions"])
 
 class PublishRequisition(BaseModel):
     jd_markdown: str = ""
+    # Initial publication creates a new Role and has no prior version. Every
+    # re-publication is a shared job-spec write and must name the snapshot the
+    # recruiter reviewed.
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 @router.post("/requisitions/{brief_id}/publish")
@@ -64,7 +82,70 @@ def publish_requisition(
     Returns provider-neutral ATS metadata plus ``ats_spec``.  The historical
     ``workable_spec`` key remains as a compatibility alias.
     """
-    brief = _get_brief(db, current_user.organization_id, brief_id)
+    # Read the link state first so linked writes can follow the global lock
+    # order (Role, then RoleBrief). Initial publication has no Role yet and
+    # therefore locks only the draft brief.
+    brief_probe = (
+        db.query(RoleBrief)
+        .filter(
+            RoleBrief.id == brief_id,
+            RoleBrief.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if brief_probe is None:
+        raise HTTPException(status_code=404, detail="Requisition not found")
+    initial_role_id = (
+        int(brief_probe.role_id) if brief_probe.role_id is not None else None
+    )
+    locked: Role | None = None
+    if initial_role_id is not None:
+        locked = require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=initial_role_id,
+            permission=JobPermission.EDIT_ROLE,
+        )
+        brief = (
+            db.query(RoleBrief)
+            .filter(
+                RoleBrief.id == brief_id,
+                RoleBrief.organization_id == current_user.organization_id,
+            )
+            .with_for_update(of=RoleBrief)
+            .populate_existing()
+            .first()
+        )
+        if brief is None:
+            raise HTTPException(status_code=404, detail="Requisition not found")
+        if int(brief.role_id or 0) != initial_role_id:
+            raise HTTPException(
+                status_code=409,
+                detail="The requisition's linked job changed; refresh and retry.",
+            )
+    else:
+        brief = (
+            db.query(RoleBrief)
+            .filter(
+                RoleBrief.id == brief_id,
+                RoleBrief.organization_id == current_user.organization_id,
+            )
+            .with_for_update(of=RoleBrief)
+            .populate_existing()
+            .first()
+        )
+        if brief is None:
+            raise HTTPException(status_code=404, detail="Requisition not found")
+        if brief.role_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="The requisition was published; refresh and retry.",
+            )
+        if (
+            getattr(current_user, "role", None) != "owner"
+            and int(brief.created_by_user_id or 0) != int(current_user.id)
+        ):
+            raise HTTPException(status_code=403, detail="Forbidden")
     # Enforce the same "required brief fields must be filled" gate the frontend
     # applies — the API is the source of truth, so a direct call can't publish a
     # half-filled requisition that skips the UI guard.
@@ -91,20 +172,35 @@ def publish_requisition(
     old_intent_fingerprint: str | None = None
     role_was_enabled = False
     existing_role = brief.role_id is not None
+    audit_before: dict | None = None
+    audit_from_version: int | None = None
     if existing_role:
-        # Serialize republish against a deferred activation worker before
-        # materialization reads or mutates the old task/role snapshot.
-        locked = (
-            db.query(Role)
-            .filter(
-                Role.id == int(brief.role_id),
-                Role.organization_id == int(current_user.organization_id),
+        # Authorization and the Role→Brief locks were acquired above, so hiring
+        # team removal and linked-brief edits cannot invert lock order here.
+        assert locked is not None
+        if data.expected_version is None:
+            raise HTTPException(
+                status_code=422,
+                detail="expected_version is required when republishing a requisition",
             )
-            .with_for_update()
-            .one_or_none()
+        assert_role_version(
+            locked,
+            expected_version=int(data.expected_version),
+            current_role=lambda: {
+                "id": int(locked.id),
+                "version": int(locked.version or 1),
+                "name": locked.name,
+                "job_spec_text": locked.job_spec_text,
+                "agentic_mode_enabled": bool(locked.agentic_mode_enabled),
+            },
+            changed_by=lambda: latest_role_change_actor(
+                db,
+                organization_id=int(current_user.organization_id),
+                role_id=int(locked.id),
+            ),
         )
-        if locked is None:
-            raise HTTPException(status_code=404, detail="Linked role not found")
+        audit_before = capture_role_change_snapshot(locked)
+        audit_from_version = int(locked.version or 1)
         old_intent_fingerprint = role_intent_fingerprint(locked, db=db)
         role_was_enabled = bool(locked.agentic_mode_enabled)
         db.expire(locked, ["tasks"])
@@ -115,6 +211,15 @@ def publish_requisition(
         job_status=JOB_STATUS_DRAFT,
         job_spec_text=data.jd_markdown,
     )
+    if not existing_role:
+        db.add(
+            JobHiringTeam(
+                organization_id=int(current_user.organization_id),
+                role_id=int(role.id),
+                user_id=int(current_user.id),
+                team_role=TEAM_ROLE_HIRING_MANAGER,
+            )
+        )
     # Publication and autonomous task generation must agree on whether the
     # persisted role has enough input. Requisition criteria and structured
     # fields count alongside the rendered Markdown. Fail now—before exposing a
@@ -166,6 +271,20 @@ def publish_requisition(
             supersede_generated_drafts=True,
             defer_until_activation=True,
         )
+    if existing_role and material_intent_changed:
+        audit_to_version = bump_role_version(role)
+        add_role_change_event(
+            db,
+            role=role,
+            before=audit_before or {},
+            action=ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
+            actor_user_id=int(current_user.id),
+            from_version=int(audit_from_version or 1),
+            to_version=audit_to_version,
+            reason="requisition republished with changed role intent",
+            request_id=get_request_id(),
+            allow_empty_changes=True,
+        )
     db.commit()
     db.refresh(role)
     db.refresh(page)
@@ -197,6 +316,7 @@ def publish_requisition(
         "published_at": page.published_at.isoformat() if page.published_at else None,
         "ref_code": ref_code,
         "role_id": role.id,
+        "version": int(role.version or 1),
         "job_status": role.job_status,
         "ats_provider": ats_provider,
         "ats_spec": ats_spec,

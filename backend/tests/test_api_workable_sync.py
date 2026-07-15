@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -6,7 +7,9 @@ from app.domains.workable_sync import routes as workable_routes
 from app.components.integrations.workable import sync_runner as workable_sync_runner
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.role_change_event import RoleChangeEvent
 from app.models.user import User
+from app.services.role_change_audit import ROLE_CHANGE_ACTION_SOFT_DELETED
 from tests.conftest import auth_headers
 
 
@@ -161,8 +164,29 @@ def test_workable_clear_soft_deletes(client, db, monkeypatch):
     db.commit()
 
     # Create a workable role (no need for full relations for soft-delete count)
-    role = Role(organization_id=org_id, name="Workable Job", source="workable", workable_job_id="J1")
+    role = Role(
+        organization_id=org_id,
+        name="Workable Job",
+        source="workable",
+        workable_job_id="J1",
+        agentic_mode_enabled=True,
+        assessment_task_provisioning={
+            "activation_intent": {
+                "status": "pending",
+                "request_id": "workable-clear-intent",
+            }
+        },
+    )
     db.add(role)
+    legacy_deleted = Role(
+        organization_id=org_id,
+        name="Legacy deleted Workable Job",
+        source="workable",
+        workable_job_id="J-LEGACY-DELETED",
+        deleted_at=datetime.now(timezone.utc),
+        agentic_mode_enabled=True,
+    )
+    db.add(legacy_deleted)
     db.commit()
     db.refresh(role)
 
@@ -177,6 +201,47 @@ def test_workable_clear_soft_deletes(client, db, monkeypatch):
     r = db.query(Role).filter(Role.id == role.id).first()
     assert r is not None
     assert r.deleted_at is not None
+    assert r.agentic_mode_enabled is False
+    assert r.agent_paused_at is not None
+    assert "Workable job deleted or closed" in (r.agent_paused_reason or "")
+    assert r.version == 2
+    assert r.assessment_task_provisioning["activation_intent"]["status"] == "cancelled"
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.action == ROLE_CHANGE_ACTION_SOFT_DELETED
+    assert event.actor_user_id == owner.id
+    assert event.from_version == 1
+    assert event.to_version == 2
+    assert {"deleted_at", "agentic_mode_enabled", "agent_paused_at"}.issubset(
+        event.changes
+    )
+    db.refresh(legacy_deleted)
+    assert legacy_deleted.deleted_at is not None
+    assert legacy_deleted.agentic_mode_enabled is False
+    assert legacy_deleted.agent_paused_at is not None
+    assert legacy_deleted.version == 2
+    legacy_event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == legacy_deleted.id)
+        .one()
+    )
+    assert legacy_event.action == ROLE_CHANGE_ACTION_SOFT_DELETED
+
+    # Repeating Clear is a lifecycle no-op, not another revision/event.
+    repeat = client.post("/api/v1/workable/clear", headers=headers)
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.json()["roles_soft_deleted"] == 0
+    db.expire_all()
+    assert db.get(Role, role.id).version == 2
+    assert (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .count()
+        == 1
+    )
 
 
 def test_workable_diagnostic_returns_api_structure(client, db, monkeypatch):

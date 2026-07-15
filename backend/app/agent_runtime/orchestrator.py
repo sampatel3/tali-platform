@@ -356,6 +356,37 @@ def run_cycle(
     if org is None:
         raise ValueError(f"role {role.id} has no organization")
 
+    from ..services.workspace_agent_control import (
+        workspace_agent_control_snapshot,
+    )
+
+    workspace_paused, cycle_workspace_version = workspace_agent_control_snapshot(
+        db,
+        organization_id=int(role.organization_id),
+    )
+    if workspace_paused:
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="aborted",
+            error="workspace_paused_before_cycle",
+            model_version=settings.resolved_agent_autonomous_model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db,
+            run=run,
+            application_id=application_id,
+            reason="Agent cycle skipped — the workspace agent is paused.",
+        )
+        try_post_agent_run_event(db, role=role, run=run)
+        return run
+
     # Per-role override (Sonnet for borderline-judgment roles, etc.) wins; else
     # the autonomous-loop model (cheaper than the interactive agent by default —
     # this loop is ~92% no-op/fail and the clear decisions are deterministic).
@@ -481,6 +512,47 @@ def run_cycle(
     # subsequent mutations stay attached and tracked.
     db.refresh(run)
     db.refresh(role)
+    cycle_role_version = int(getattr(role, "version", 1) or 1)
+
+    def _control_state_abort_reason(*, lock: bool = False) -> str | None:
+        """Re-read, and optionally lock, the shared control-state boundary."""
+
+        # Workspace control is the outer execution authority and therefore the
+        # first lock.  A Pause that commits before this fence is observed; one
+        # that starts after it waits for this one tool transaction and wins
+        # before the next tool/provider round.
+        current_workspace_paused, current_workspace_version = (
+            workspace_agent_control_snapshot(
+                db,
+                organization_id=int(role.organization_id),
+                lock=lock,
+            )
+        )
+        if current_workspace_paused:
+            return "workspace_paused_during_cycle"
+        if int(current_workspace_version) != int(cycle_workspace_version):
+            return "workspace_control_changed_during_cycle"
+
+        control_query = db.query(Role).filter(
+            Role.id == int(role.id),
+            Role.organization_id == int(role.organization_id),
+            Role.deleted_at.is_(None),
+        )
+        if lock:
+            # Linearize each tool with UI/chat power changes. A turn-off that
+            # commits first is observed here; one that starts after this lock
+            # waits for this single tool transaction and wins before the next.
+            control_query = control_query.with_for_update(of=Role)
+        current_role = control_query.populate_existing().first()
+        if current_role is None:
+            return "role_unavailable_during_cycle"
+        if not bool(current_role.agentic_mode_enabled):
+            return "agent_disabled_during_cycle"
+        if current_role.agent_paused_at is not None:
+            return "agent_paused_during_cycle"
+        if int(getattr(current_role, "version", 1) or 1) != cycle_role_version:
+            return "role_configuration_changed_during_cycle"
+        return None
 
     trigger_context = (
         f"{trigger} → application_id={application_id}"
@@ -522,6 +594,12 @@ def run_cycle(
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         rounds_used = round_idx + 1
+
+        control_abort = _control_state_abort_reason()
+        if control_abort is not None:
+            run.status = "aborted"
+            run.error = control_abort
+            break
 
         # Re-check every paid round.  A long cycle must not spend past a cap
         # that another worker reached after this cycle's initial preflight.
@@ -642,6 +720,15 @@ def run_cycle(
             cache_creation_tokens=round_usage.cache_creation_tokens,
         )
 
+        # A recruiter may turn the agent off while the provider request is in
+        # flight. The call is already metered, but its response must not queue
+        # decisions or actions against a now-disabled/stale job snapshot.
+        control_abort = _control_state_abort_reason()
+        if control_abort is not None:
+            run.status = "aborted"
+            run.error = control_abort
+            break
+
         # Do not execute actions produced by a response that already pushed the
         # cycle over its configured token ceiling.  The paid call is still
         # durably metered above; the next cycle starts cleanly.
@@ -676,10 +763,26 @@ def run_cycle(
 
         round_tool_count = 0
         round_error_count = 0
+        control_aborted_during_tools = False
+
+        # Persist the provider usage before isolating each tool in its own
+        # transaction. This lets a failed tool roll back only its own partial
+        # writes and prevents long tool rounds from holding a Role row lock
+        # that would delay a recruiter's Turn off request.
+        db.commit()
+        db.refresh(run)
+        db.refresh(role)
 
         for block in assistant_blocks:
             if block.get("type") != "tool_use":
                 continue
+            control_abort = _control_state_abort_reason(lock=True)
+            if control_abort is not None:
+                run.status = "aborted"
+                run.error = control_abort
+                control_aborted_during_tools = True
+                db.commit()
+                break
             tool_use_id = str(block.get("id", ""))
             name = str(block.get("name", ""))
             args = block.get("input") or {}
@@ -702,6 +805,14 @@ def run_cycle(
                 is_error = True
             if is_error:
                 round_error_count += 1
+                db.rollback()
+            else:
+                # One tool is one durable, lock-bounded action. This makes
+                # power/config changes linearizable between tool blocks in a
+                # single model response instead of only between LLM rounds.
+                db.commit()
+            db.refresh(run)
+            db.refresh(role)
 
             tool_results.append(
                 {
@@ -711,6 +822,9 @@ def run_cycle(
                     "is_error": is_error,
                 }
             )
+
+        if control_aborted_during_tools:
+            break
 
         messages.append({"role": "user", "content": tool_results})
 

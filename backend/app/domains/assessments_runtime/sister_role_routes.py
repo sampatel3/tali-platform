@@ -40,6 +40,7 @@ from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.sister_role_service import ensure_sister_evaluations
 from ...tasks.sister_role_tasks import score_sister_role
 from .roles_management_routes import _serialize_role_detail
+from .job_authorization import JobPermission, require_job_permission
 
 router = APIRouter(tags=["Sister roles"])
 logger = logging.getLogger("taali.sister_roles")
@@ -108,6 +109,12 @@ def create_sister_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=source_role_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     source = _source_role(
         db, role_id=source_role_id, organization_id=current_user.organization_id
     )
@@ -116,6 +123,7 @@ def create_sister_role(
             db,
             role_id=int(source.id),
             organization_id=int(current_user.organization_id),
+            creator_user_id=int(current_user.id),
             name=data.name,
             job_spec_text=data.job_spec_text,
         )
@@ -143,6 +151,12 @@ def rescore_sister_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     role = _sister_role(db, role_id=role_id, organization_id=current_user.organization_id)
     ensure_sister_evaluations(db, role, reset_existing=True)
     db.commit()

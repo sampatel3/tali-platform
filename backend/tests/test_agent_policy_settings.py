@@ -496,7 +496,7 @@ def test_organization_settings_flow_into_new_role_api_without_enabling_it(client
     legacy_patch = client.patch(
         f"/api/v1/roles/{role['id']}",
         headers=headers,
-        json={"auto_promote": True},
+        json={"expected_version": role["version"], "auto_promote": True},
     )
     assert legacy_patch.status_code == 200, legacy_patch.text
     preserved = legacy_patch.json()
@@ -508,7 +508,7 @@ def test_organization_settings_flow_into_new_role_api_without_enabling_it(client
     granular_patch = client.patch(
         f"/api/v1/roles/{role['id']}",
         headers=headers,
-        json={"auto_resend_assessment": True},
+        json={"expected_version": preserved["version"], "auto_resend_assessment": True},
     )
     assert granular_patch.status_code == 200, granular_patch.text
     enabled = granular_patch.json()

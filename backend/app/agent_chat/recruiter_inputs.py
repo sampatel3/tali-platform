@@ -144,6 +144,7 @@ def answer_recruiter_input(
     user: User,
     needs_input_id: int,
     value: Any,
+    expected_role_version: int,
 ) -> dict[str, Any]:
     """Validate and answer one open request on this conversation's role.
 
@@ -165,6 +166,7 @@ def answer_recruiter_input(
         organization_id=int(role.organization_id),
         needs_input_id=int(row.id),
         response=response,
+        expected_version=int(expected_role_version),
     )
     return {
         "type": "recruiter_input_answered",

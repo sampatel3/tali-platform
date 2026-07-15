@@ -443,7 +443,7 @@ def redispatch_cv_parse(db: Session, *, outbox_id: int) -> dict:
         row.paid_work_requested
         and not is_resolved(app)
         and (
-            role_allows_new_paid_ats_work(role)
+            role_allows_new_paid_ats_work(role, db=db)
             if row.requires_active_agent
             else role is not None and role.deleted_at is None
         )

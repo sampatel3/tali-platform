@@ -145,6 +145,29 @@ def test_sweep_dispatches_due_intent_but_not_future_retry(db):
     assert future.assessment_task_provisioning["status"] == "retry_wait"
 
 
+def test_generator_delivery_leaves_paid_intent_pending_under_workspace_pause(db):
+    role = _role(db, suffix="workspace-held-generation")
+    request_assessment_task_provisioning(role, reason="agent_turn_on")
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    with patch(
+        "app.services.task_provisioning_service.generate_and_link_task_for_role"
+    ) as generate:
+        result = generate_assessment_task_for_role.run(
+            role.id, role.organization_id
+        )
+
+    assert result == {"status": "deferred", "reason": "workspace_paused"}
+    generate.assert_not_called()
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    assert persisted.assessment_task_provisioning["status"] == PROVISIONING_PENDING
+    assert persisted.assessment_task_provisioning["attempts"] == 0
+
+
 def test_generator_failure_exhausts_bounded_chain_into_recoverable_state(db):
     role = _role(db, suffix="retry")
     request_assessment_task_provisioning(role, reason="requisition_publish")
@@ -344,6 +367,64 @@ def test_deterministic_battle_failure_queues_bounded_automatic_repair(db):
     assert state["status"] == "repair_pending"
     assert "tests_collect" in state["last_error"]
     assert persisted.extra_data["battle_test"] == report
+
+
+def test_battle_failure_does_not_kick_paid_repair_under_workspace_pause(db):
+    task = _generated_task(db, suffix="workspace-held-battle")
+    org = db.query(Organization).filter(Organization.id == task.organization_id).one()
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+    report = {
+        "verdict": "fail",
+        "error": None,
+        "ran_at": datetime.now(timezone.utc).isoformat(),
+        "checks": [{"id": "tests_collect", "ok": False, "detail": "0 tests"}],
+    }
+
+    with (
+        patch("app.services.task_battle_test.run_battle_test", return_value=report),
+        patch.object(
+            repair_generated_task_after_battle_failure, "delay"
+        ) as repair_dispatch,
+    ):
+        result = battle_test_generated_task.run(task.id, task.organization_id)
+
+    assert result["status"] == "repair_deferred"
+    assert result["reason"] == "workspace_paused"
+    repair_dispatch.assert_not_called()
+    db.expire_all()
+    persisted = db.query(Task).filter(Task.id == task.id).one()
+    assert persisted.extra_data["battle_test_provisioning"]["status"] == "repair_pending"
+
+
+def test_paid_repair_delivery_is_deferred_under_workspace_pause(db):
+    task = _generated_task(db, suffix="workspace-held-repair")
+    extra = dict(task.extra_data)
+    extra["battle_test"] = {
+        "verdict": "fail",
+        "error": None,
+        "checks": [{"id": "tests_collect", "ok": False, "detail": "0 tests"}],
+    }
+    state = dict(extra["battle_test_provisioning"])
+    state["status"] = "repair_pending"
+    extra["battle_test_provisioning"] = state
+    task.extra_data = extra
+    org = db.query(Organization).filter(Organization.id == task.organization_id).one()
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    with patch("app.services.task_spec_generator.revise_task_spec") as revise:
+        result = repair_generated_task_after_battle_failure.run(
+            task.id, task.organization_id
+        )
+
+    assert result == {"status": "deferred", "reason": "workspace_paused"}
+    revise.assert_not_called()
+    db.expire_all()
+    persisted = db.query(Task).filter(Task.id == task.id).one()
+    assert persisted.extra_data["battle_test_provisioning"]["status"] == "repair_pending"
 
 
 def test_automatic_repair_reauthors_in_place_then_requests_retest(db):

@@ -23,6 +23,7 @@ const setReducedMotion = (reduced) => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  window.history.replaceState({}, '', '/');
 });
 
 describe('JobsMotionPreview (/jobs-preview)', () => {
@@ -37,6 +38,9 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     expect(screen.getByText('Senior Data Engineer')).toBeInTheDocument();
     // Real agent-status pill vocabulary (ON with spend) + the pending count.
     expect(screen.getByText('ON · $18/$50')).toBeInTheDocument();
+    // Both the global agent strip and the matching role card surface the same
+    // actionable count; the header now labels it instead of showing a bare 3.
+    expect(screen.getByLabelText('3 items awaiting review')).toHaveTextContent('3 to review');
     expect(screen.getByText(/3 awaiting you/)).toBeInTheDocument();
     const runningCard = screen.getByText('AI Engineer').closest('.job-card');
     const pausedCard = screen.getByText('Senior Data Engineer').closest('.job-card');
@@ -59,5 +63,35 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     // than counting up from 0.
     expect(screen.getByText('AI Engineer')).toBeInTheDocument();
     expect(screen.getAllByText('18').length).toBeGreaterThan(0);
+  });
+
+  it('exposes the dense workspace-paused role state for responsive browser QA', () => {
+    window.history.replaceState({}, '', '/jobs-preview?agent=paused');
+    setReducedMotion(true);
+    render(<JobsMotionPreview />);
+
+    expect(screen.getByLabelText('148 items awaiting review')).toHaveTextContent('148 to review');
+    expect(screen.getByLabelText(/Paused by Sam Patel \(you\)/i)).toHaveAttribute(
+      'title',
+      expect.stringMatching(/only member present at the time/i),
+    );
+    expect(screen.getByText('This role remains on and will resume automatically.')).toBeInTheDocument();
+    expect(screen.getByText('AI spend')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /turn off agent/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /configure agent/i })).toBeInTheDocument();
+  });
+
+  it('exposes the neutral loading state without fabricated metrics or controls', () => {
+    window.history.replaceState({}, '', '/jobs-preview?agent=loading');
+    setReducedMotion(true);
+    const { container } = render(<JobsMotionPreview />);
+
+    expect(screen.getByLabelText('Agent status')).toBeInTheDocument();
+    expect(screen.getByText('Checking role and workspace controls…')).toBeInTheDocument();
+    expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
+    expect(screen.queryByText('AI spend')).not.toBeInTheDocument();
+    expect(container.querySelector('.abar')).toHaveClass('abar-loading');
+    expect(container.querySelector('.abar .ab-actions')).toBeNull();
   });
 });

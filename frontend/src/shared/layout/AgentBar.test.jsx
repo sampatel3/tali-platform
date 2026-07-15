@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../api', () => ({
   agent: {
@@ -8,7 +8,7 @@ vi.mock('../api', () => ({
   },
 }));
 
-import { AgentBar } from './AgentBar';
+import { AgentBar, useAgentStatus, useAgentStatusOrg } from './AgentBar';
 import { agent } from '../api';
 
 describe('AgentBar — org rollup', () => {
@@ -101,6 +101,264 @@ describe('AgentBar — org rollup', () => {
 
     expect(await screen.findAllByText(/7 awaiting your review/)).toHaveLength(2);
     expect(agent.orgStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces a post-mutation org read past an older in-flight poll', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 31, organization_id: 931 }));
+    let resolveOldPoll;
+    agent.orgStatus
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldPoll = resolve;
+      }))
+      .mockResolvedValueOnce({ data: {
+        active_role_count: 0,
+        paused_role_count: 2,
+        pending_decisions: 9,
+        workspace_paused: true,
+        workspace_control_version: 6,
+      } });
+
+    const { result } = renderHook(() => useAgentStatusOrg(true));
+    await waitFor(() => expect(agent.orgStatus).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.refetch({ force: true });
+    });
+    expect(agent.orgStatus).toHaveBeenCalledTimes(2);
+    expect(result.current.status).toMatchObject({
+      workspace_paused: true,
+      workspace_control_version: 6,
+      pending_decisions: 9,
+    });
+
+    // The request that began before the workspace write can still resolve, but
+    // its generation is obsolete and must not replace the fresh snapshot.
+    await act(async () => {
+      resolveOldPoll({ data: {
+        active_role_count: 2,
+        paused_role_count: 0,
+        pending_decisions: 1,
+        workspace_paused: false,
+        workspace_control_version: 5,
+      } });
+    });
+    expect(result.current.status).toMatchObject({
+      workspace_paused: true,
+      workspace_control_version: 6,
+      pending_decisions: 9,
+    });
+  });
+
+  it('protects role optimism from an earlier poll and reconciles after the mutation', async () => {
+    let resolveOldPoll;
+    agent.status
+      .mockResolvedValueOnce({ data: { paused: false, paused_at: null, pending_decisions: 3 } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldPoll = resolve;
+      }))
+      .mockResolvedValueOnce({ data: {
+        paused: true,
+        paused_at: '2026-07-15T15:00:00Z',
+        paused_reason: 'paused by recruiter',
+        pending_decisions: 3,
+      } });
+    let resolveMutation;
+    const request = vi.fn(() => new Promise((resolve) => {
+      resolveMutation = resolve;
+    }));
+
+    const { result } = renderHook(() => useAgentStatus(44));
+    await waitFor(() => expect(result.current.status?.paused).toBe(false));
+
+    let oldPollPromise;
+    act(() => {
+      oldPollPromise = result.current.refetch();
+    });
+    await waitFor(() => expect(agent.status).toHaveBeenCalledTimes(2));
+
+    let mutationPromise;
+    act(() => {
+      mutationPromise = result.current.mutateStatus({
+        optimistic: (current) => ({
+          ...current,
+          paused: true,
+          paused_at: 'saving',
+          paused_reason: 'Saving…',
+        }),
+        request,
+      });
+    });
+    expect(result.current.status).toMatchObject({ paused: true, paused_at: 'saving' });
+
+    await act(async () => {
+      resolveOldPoll({ data: { paused: false, paused_at: null, pending_decisions: 3 } });
+      await oldPollPromise;
+    });
+    expect(result.current.status).toMatchObject({ paused: true, paused_at: 'saving' });
+
+    await act(async () => {
+      resolveMutation({ data: { version: 8 } });
+      await mutationPromise;
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(agent.status).toHaveBeenCalledTimes(3);
+    expect(result.current.status).toMatchObject({
+      paused: true,
+      paused_at: '2026-07-15T15:00:00Z',
+      paused_reason: 'paused by recruiter',
+    });
+  });
+
+  it('never exposes the previous role status while the next role is loading', async () => {
+    let resolveNextRole;
+    agent.status
+      .mockResolvedValueOnce({ data: {
+        paused: false,
+        paused_at: null,
+        pending_decisions: 7,
+      } })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveNextRole = resolve;
+      }));
+
+    const { result, rerender } = renderHook(
+      ({ roleId }) => useAgentStatus(roleId),
+      { initialProps: { roleId: 44 } },
+    );
+
+    expect(result.current.phase).toBe('loading');
+    await waitFor(() => expect(result.current.phase).toBe('ready'));
+    expect(result.current.status).toMatchObject({ paused: false, pending_decisions: 7 });
+
+    rerender({ roleId: 45 });
+
+    expect(result.current.phase).toBe('loading');
+    expect(result.current.status).toBeNull();
+    await waitFor(() => expect(agent.status).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveNextRole({ data: {
+        paused: true,
+        paused_at: '2026-07-15T18:00:00Z',
+        pending_decisions: 2,
+      } });
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'));
+    expect(result.current.status).toMatchObject({ paused: true, pending_decisions: 2 });
+  });
+
+  it('treats an empty role response as unavailable instead of loading forever', async () => {
+    agent.status.mockResolvedValueOnce({ data: null });
+
+    const { result } = renderHook(() => useAgentStatus(46));
+
+    await waitFor(() => expect(result.current.phase).toBe('error'));
+    expect(result.current.status).toBeNull();
+    expect(result.current.error).toHaveProperty(
+      'message',
+      'Agent status response did not include a payload.',
+    );
+  });
+
+  it('does not render the legacy role bar until its status is authoritative', async () => {
+    let resolveStatus;
+    agent.status.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStatus = resolve;
+    }));
+
+    const { container } = render(<AgentBar roleId={47} />);
+
+    expect(container.firstChild).toBeNull();
+
+    await act(async () => {
+      resolveStatus({ data: {
+        paused: false,
+        pending_decisions: 2,
+        monthly_spent_cents: 100,
+        monthly_budget_cents: 5000,
+      } });
+    });
+
+    expect(await screen.findByText('Agent mode is ON')).toBeInTheDocument();
+    expect(screen.getByText('2 awaiting your review')).toBeInTheDocument();
+  });
+
+  it('does not issue an opposite role mutation while the first control is saving', async () => {
+    agent.status
+      .mockResolvedValueOnce({ data: { paused: false, paused_at: null } })
+      .mockResolvedValueOnce({ data: { paused: true, paused_at: '2026-07-15T15:00:00Z' } });
+    let resolvePause;
+    const pauseRequest = vi.fn(() => new Promise((resolve) => { resolvePause = resolve; }));
+    const resumeRequest = vi.fn();
+    const { result } = renderHook(() => useAgentStatus(45));
+    await waitFor(() => expect(result.current.status?.paused).toBe(false));
+
+    let pausePromise;
+    act(() => {
+      pausePromise = result.current.mutateStatus({
+        optimistic: (current) => ({ ...current, paused: true, paused_at: 'saving' }),
+        request: pauseRequest,
+      });
+    });
+
+    let overlappingResult;
+    await act(async () => {
+      overlappingResult = await result.current.mutateStatus({
+        optimistic: (current) => ({ ...current, paused: false, paused_at: null }),
+        request: resumeRequest,
+      });
+    });
+    expect(overlappingResult).toBeNull();
+    expect(resumeRequest).not.toHaveBeenCalled();
+    expect(result.current.status).toMatchObject({ paused: true, paused_at: 'saving' });
+
+    await act(async () => {
+      resolvePause({ data: { version: 8 } });
+      await pausePromise;
+    });
+    expect(pauseRequest).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toMatchObject({
+      paused: true,
+      paused_at: '2026-07-15T15:00:00Z',
+    });
+  });
+
+  it('does not reuse viewer-specific attribution after switching users in one org', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 1, organization_id: 10 }));
+    agent.orgStatus.mockResolvedValueOnce({ data: {
+      active_role_count: 0,
+      paused_role_count: 1,
+      workspace_paused: true,
+      workspace_control_version: 3,
+      workspace_paused_by: { user_id: 1, name: 'Sam', is_current_user: true },
+    } });
+    const first = renderHook(() => useAgentStatusOrg(true));
+    await waitFor(() => expect(first.result.current.status?.workspace_paused_by).toMatchObject({
+      name: 'Sam',
+      is_current_user: true,
+    }));
+    first.unmount();
+
+    let resolveNext;
+    agent.orgStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve; }));
+    localStorage.setItem('taali_user', JSON.stringify({ id: 2, organization_id: 10 }));
+    const second = renderHook(() => useAgentStatusOrg(true));
+    expect(second.result.current.status).toBeNull();
+
+    await act(async () => {
+      resolveNext({ data: {
+        active_role_count: 0,
+        paused_role_count: 1,
+        workspace_paused: true,
+        workspace_control_version: 3,
+        workspace_paused_by: { user_id: 1, name: 'Sam', is_current_user: false },
+      } });
+    });
+    await waitFor(() => expect(second.result.current.status?.workspace_paused_by).toMatchObject({
+      name: 'Sam',
+      is_current_user: false,
+    }));
   });
 
   it('does not reveal a warm snapshot after the signed-in org changes', async () => {

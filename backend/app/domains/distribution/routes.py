@@ -88,7 +88,7 @@ def get_role_distribution(
             "distribution_ready": False,
             "reason": "not_published",
         }
-    intake = native_intake_state(role)
+    intake = native_intake_state(role, db=db)
     if not settings.ATS_PUBLIC_APPLY_ENABLED:
         intake = {"ready": False, "reason": "public_apply_disabled"}
     if not intake.get("ready"):
@@ -136,7 +136,11 @@ def careers_feed(
         else []
     )
     pages = (
-        [page for page, role in page_roles if native_intake_state(role).get("ready")]
+        [
+            page
+            for page, role in page_roles
+            if native_intake_state(role, db=db).get("ready")
+        ]
         if settings.ATS_PUBLIC_APPLY_ENABLED
         else []
     )

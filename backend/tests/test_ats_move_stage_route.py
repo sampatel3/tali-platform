@@ -4,12 +4,18 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
 from app.platform.config import settings
+from app.domains.assessments_runtime.applications_routes import (
+    WorkableMoveStageRequest,
+    move_application_in_active_ats,
+)
 from app.services.workable_op_runner import AtsJobRunPersistenceError
 from tests.conftest import TestingSessionLocal, auth_headers
 
@@ -82,6 +88,43 @@ def test_generic_move_stage_routes_bullhorn_intent_through_shared_runner(
     assert payload["application_id"] == app.id
     assert payload["target_stage"] == "advanced"
     assert payload["target_intent"] == "advanced"
+
+
+@pytest.mark.parametrize("team_role", [None, "interviewer", "coordinator"])
+def test_generic_move_stage_denies_non_editors(client, db, team_role):
+    _headers, org, role, app = _application(client, db)
+    actor = User(
+        email=f"ats-denied-{team_role or 'unassigned'}@example.com",
+        hashed_password="x",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(actor)
+    db.flush()
+    if team_role is not None:
+        db.add(
+            JobHiringTeam(
+                organization_id=org.id,
+                role_id=role.id,
+                user_id=actor.id,
+                team_role=team_role,
+            )
+        )
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        move_application_in_active_ats(
+            application_id=int(app.id),
+            data=WorkableMoveStageRequest(target_stage="advanced"),
+            db=db,
+            current_user=actor,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Forbidden"
 
 
 def test_manual_bullhorn_reject_queues_while_role_agent_is_paused(
@@ -390,6 +433,8 @@ def test_manual_bullhorn_outcome_commit_failure_never_publishes(db, monkeypatch)
         email="commit-guard@example.com",
         hashed_password="not-used",
         full_name="Commit Guard",
+        role="owner",
+        is_active=True,
     )
     role = Role(
         organization_id=org.id,

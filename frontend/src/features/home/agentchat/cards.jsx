@@ -387,6 +387,9 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
             ? `${drafts.length} assessment${drafts.length === 1 ? '' : 's'} being validated for Turn on`
             : `${drafts.length} task draft${drafts.length === 1 ? '' : 's'} available for optional review`}
         </span>
+        {card?.role_version != null && (
+          <span className="ac-draft-tag">Job revision {card.role_version}</span>
+        )}
       </div>
       {drafts.map((d) => (
         <div key={d.task_id} className="ac-draft">
@@ -415,7 +418,7 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
               onCancel={() => setRejectingId(null)}
               onSubmit={(fb) => {
                 setRejectingId(null);
-                onRevise?.(d.task_id, fb);
+                onRevise?.(d.task_id, fb, card.role_version);
               }}
             />
           ) : (
@@ -423,7 +426,7 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
               <button
                 className="ac-btn ac-btn-primary"
                 disabled={busy}
-                onClick={() => onApprove?.(d.task_id)}
+                onClick={() => onApprove?.(d.task_id, card.role_version)}
               >
                 <Check size={13} /> Approve
               </button>

@@ -21,7 +21,11 @@ from ...models.user import User
 def _role_in_org(db: Session, organization_id: int, role_id: int) -> Role:
     role = (
         db.query(Role)
-        .filter(Role.id == role_id, Role.organization_id == organization_id)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
         .first()
     )
     if role is None:

@@ -22,6 +22,10 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ..models.candidate_application import CandidateApplication
 from ..models.agent_decision import AgentDecision
 from ..models.decision_feedback import (
@@ -30,8 +34,18 @@ from ..models.decision_feedback import (
     FEEDBACK_DIRECTIONS,
     FEEDBACK_SCOPES,
 )
+from ..models.org_criterion import BUCKET_MUST, CRITERION_BUCKETS
 from ..models.role import Role
+from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from ..services import related_role_service as _related_roles
+from ..services.role_change_audit import (
+    ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
+    ROLE_CHANGE_ACTION_UPDATED,
+    add_role_change_event,
+    capture_role_change_snapshot,
+    latest_role_change_actor,
+)
+from ..services.role_concurrency import assert_role_version, bump_role_version
 from ..services.sister_role_service import text_fingerprint
 from . import application_commands as _application_commands
 from . import assessments as _assessments
@@ -82,6 +96,128 @@ MUTATION_CARD_TYPES = frozenset(
         "operation_receipt",
     }
 )
+
+
+# Permission is re-evaluated at the tool boundary, not only when the message is
+# accepted.  Chat turns run asynchronously, so a recruiter can be removed from
+# a configured hiring team while a model call is in flight.  Taking the shared
+# Role lock here closes that time-of-check/time-of-use gap and serializes every
+# chat mutation with the direct role/agent routes.
+_MUTATION_PERMISSIONS: dict[str, JobPermission] = {
+    "set_threshold": JobPermission.EDIT_ROLE,
+    "add_or_update_constraint": JobPermission.EDIT_ROLE,
+    "remove_constraint": JobPermission.EDIT_ROLE,
+    "update_job_spec": JobPermission.EDIT_ROLE,
+    "create_related_role": JobPermission.EDIT_ROLE,
+    "rescreen_role": JobPermission.CONTROL_AGENT,
+    "rescore_candidates": JobPermission.CONTROL_AGENT,
+    "rescreen_scoped": JobPermission.CONTROL_AGENT,
+    "set_agent_state": JobPermission.CONTROL_AGENT,
+    "adjust_agent_settings": JobPermission.CONTROL_AGENT,
+    "sync_workable_comments": JobPermission.CONTROL_AGENT,
+    "answer_recruiter_input": JobPermission.CONTROL_AGENT,
+    "dismiss_recruiter_input": JobPermission.CONTROL_AGENT,
+    "approve_decision": JobPermission.CONTROL_AGENT,
+    "override_decision": JobPermission.CONTROL_AGENT,
+    "snooze_decision": JobPermission.CONTROL_AGENT,
+    "re_evaluate_decision": JobPermission.CONTROL_AGENT,
+    "teach_decision": JobPermission.CONTROL_AGENT,
+    "create_application": JobPermission.CONTROL_AGENT,
+    "add_internal_note": JobPermission.CONTROL_AGENT,
+    "post_workable_note": JobPermission.CONTROL_AGENT,
+    "run_agent_now": JobPermission.CONTROL_AGENT,
+}
+MUTATION_TOOL_NAMES = frozenset(_MUTATION_PERMISSIONS)
+
+
+def _locked_authorized_role(
+    db: Session,
+    *,
+    role: Role,
+    user: Any,
+    permission: JobPermission,
+    expected_role_version: int | None = None,
+) -> Role:
+    """Return the current, locked role after the canonical per-job check."""
+
+    # The engine intentionally catches tool authorization errors and continues
+    # the conversation. Keep the check in a savepoint so a denied FOR UPDATE is
+    # released immediately without rolling back the already-persisted tool-use
+    # message in the outer chat transaction.
+    with db.begin_nested():
+        locked = require_job_permission(
+            db,
+            current_user=user,
+            role_id=int(role.id),
+            permission=permission,
+        )
+        # ``role`` was loaded before the (potentially slow) model call.
+        # SQLAlchemy's identity map can otherwise return that stale Python
+        # object. Refresh while the savepoint owns FOR UPDATE, then compare the
+        # immutable turn cursor. A conflict rolls back the savepoint, releasing
+        # the lock without discarding already-persisted chat tool plumbing.
+        db.refresh(locked)
+        if expected_role_version is not None:
+            assert_role_version(
+                locked,
+                expected_version=int(expected_role_version),
+                current_role=lambda: {
+                    "id": int(locked.id),
+                    "version": int(locked.version or 1),
+                    "name": locked.name,
+                    "agentic_mode_enabled": bool(locked.agentic_mode_enabled),
+                    "monthly_usd_budget_cents": locked.monthly_usd_budget_cents,
+                    "score_threshold": locked.score_threshold,
+                },
+                changed_by=lambda: latest_role_change_actor(
+                    db,
+                    organization_id=int(locked.organization_id),
+                    role_id=int(locked.id),
+                ),
+            )
+    return locked
+
+
+def _audit_role_mutation(
+    db: Session,
+    *,
+    role: Role,
+    before: dict[str, Any],
+    from_version: int,
+    actor_user_id: int,
+    action: str,
+    reason: str = "agent chat",
+    allow_empty_changes: bool = False,
+) -> bool:
+    """Version and audit a shared Role/configuration change atomically."""
+
+    try:
+        changed = capture_role_change_snapshot(role) != before
+        if changed or allow_empty_changes:
+            to_version = bump_role_version(role)
+            add_role_change_event(
+                db,
+                role=role,
+                before=before,
+                action=action,
+                actor_user_id=int(actor_user_id),
+                from_version=int(from_version),
+                to_version=int(to_version),
+                reason=reason,
+                allow_empty_changes=allow_empty_changes,
+            )
+        # End the locked write transaction before the next external model call.
+        # The Role update, any derived/reconciled rows, its version, and audit
+        # event commit together.
+        db.commit()
+        db.refresh(role)
+        return changed
+    except Exception:
+        # The engine converts tool exceptions into a model-visible error and
+        # keeps the turn alive. Explicit rollback is therefore essential: no
+        # later conversation commit may persist a Role mutation without audit.
+        db.rollback()
+        raise
 
 
 _DECISION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
@@ -773,6 +909,7 @@ MUTATING_TOOL_NAMES = frozenset(
         "add_or_update_constraint",
         "remove_constraint",
         "update_job_spec",
+        "create_related_role",
         "set_agent_state",
         "adjust_agent_settings",
         "rescreen_role",
@@ -1497,10 +1634,20 @@ def dispatch_tool(
     role: Role,
     user: Any,
     conversation: Any = None,
+    expected_role_version: int | None = None,
 ) -> Any:
     """Run one tool against the conversation's role. Raises on unknown tool
     or bad arguments; the engine converts exceptions to a tool_result error."""
     args = arguments or {}
+    permission = _MUTATION_PERMISSIONS.get(name)
+    if permission is not None:
+        role = _locked_authorized_role(
+            db,
+            role=role,
+            user=user,
+            permission=permission,
+            expected_role_version=expected_role_version,
+        )
     org_id = int(role.organization_id)
     confirmation_binding = _confirmation_binding(
         role=role, user=user, conversation=conversation
@@ -1600,6 +1747,11 @@ def dispatch_tool(
             user=user,
             needs_input_id=int(args["needs_input_id"]),
             value=args.get("value"),
+            expected_role_version=int(
+                expected_role_version
+                if expected_role_version is not None
+                else (role.version or 1)
+            ),
         )
         message = f"Recruiter question {int(args['needs_input_id'])} was answered."
         return {
@@ -1648,22 +1800,87 @@ def dispatch_tool(
             target_total=int(tt) if tt is not None else None,
         )
     if name == "set_threshold":
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         raw = args.get("threshold")
-        return _impact.apply_threshold(
+        result = _impact.apply_threshold(
             db,
             role,
             float(raw) if raw is not None else None,
             organization_id=org_id,
         )
+        _audit_role_mutation(
+            db,
+            role=role,
+            before=audit_before,
+            from_version=audit_from,
+            actor_user_id=int(user.id),
+            action=ROLE_CHANGE_ACTION_UPDATED,
+        )
+        return result
     if name == "add_or_update_constraint":
         cid = args.get("criterion_id")
+        criterion_id = int(cid) if cid is not None else None
+        requested_text = str(args.get("text") or "").strip()
+        requested_bucket = str(args.get("bucket") or "constraint")
+        existing = None
+        if criterion_id is not None:
+            existing = next(
+                (
+                    criterion
+                    for criterion in (role.criteria or [])
+                    if int(criterion.id) == criterion_id
+                    and criterion.deleted_at is None
+                    and criterion.source != CRITERION_SOURCE_DERIVED
+                ),
+                None,
+            )
+        if (
+            existing is not None
+            and bool(requested_text)
+            and requested_bucket in CRITERION_BUCKETS
+            and existing.text == requested_text
+            and existing.bucket == requested_bucket
+            and existing.must_have == (requested_bucket == BUCKET_MUST)
+        ):
+            # The model can repeat an identical tool call in adjacent rounds.
+            # Preserve the response shape while consuming no Role revision and
+            # creating no misleading related-table audit boundary.
+            db.commit()
+            return {
+                "type": "constraint_change",
+                "action": "updated",
+                "criterion": {
+                    "id": int(existing.id),
+                    "text": existing.text,
+                    "bucket": existing.bucket,
+                },
+                "invalidates_scores": False,
+                "rescreening_count": 0,
+            }
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         result = _constraints.add_or_update_constraint(
             db,
             role,
-            text=str(args.get("text") or ""),
-            bucket=str(args.get("bucket") or "constraint"),
-            criterion_id=int(cid) if cid is not None else None,
+            text=requested_text,
+            bucket=requested_bucket,
+            criterion_id=criterion_id,
             trigger_rescreen=False,  # P0: never auto-spend — the recruiter opts in
+        )
+        changed_criterion_id = int(result["criterion"]["id"])
+        _audit_role_mutation(
+            db,
+            role=role,
+            before=audit_before,
+            from_version=audit_from,
+            actor_user_id=int(user.id),
+            action="role_criteria_updated",
+            reason=(
+                f"agent chat criterion {result['action']}: "
+                f"criterion_id={changed_criterion_id}"
+            ),
+            allow_empty_changes=True,
         )
         if result.get("invalidates_scores"):
             result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
@@ -1679,8 +1896,24 @@ def dispatch_tool(
             )
         return result
     if name == "remove_constraint":
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         result = _constraints.remove_constraint(
             db, role, int(args["criterion_id"]), trigger_rescreen=False
+        )
+        removed_criterion_id = int(result["criterion"]["id"])
+        _audit_role_mutation(
+            db,
+            role=role,
+            before=audit_before,
+            from_version=audit_from,
+            actor_user_id=int(user.id),
+            action="role_criteria_updated",
+            reason=(
+                "agent chat criterion removed: "
+                f"criterion_id={removed_criterion_id}"
+            ),
+            allow_empty_changes=True,
         )
         if result.get("invalidates_scores"):
             result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
@@ -1696,9 +1929,24 @@ def dispatch_tool(
             )
         return result
     if name == "update_job_spec":
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
         result = _constraints.update_job_spec(
             db, role, job_spec_text=str(args.get("job_spec_text") or "")
         )
+        if isinstance(result, dict) and bool(result.get("applied")):
+            _audit_role_mutation(
+                db,
+                role=role,
+                before=audit_before,
+                from_version=audit_from,
+                actor_user_id=int(user.id),
+                action=ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
+            )
+        else:
+            # Invalid/no-op input still ends the authorization lock before the
+            # model is called again; no Role version is consumed.
+            db.commit()
         if isinstance(result, dict) and result.get("would_rescreen"):
             estimate = result["would_rescreen"]
             result = attach_confirmation(
@@ -1791,6 +2039,7 @@ def dispatch_tool(
             db,
             role_id=int(role.id),
             organization_id=org_id,
+            creator_user_id=int(user.id),
             name=clean_name,
             job_spec_text=clean_spec,
         )
@@ -1985,15 +2234,20 @@ def dispatch_tool(
         )
         return {"type": "candidate_evidence", **payload}
     if name == "set_agent_state":
-        return _controls.set_agent_state(
+        result = _controls.set_agent_state(
             db,
             role,
             action=str(args.get("action") or ""),
             user_id=int(user.id),
         )
+        # Successful mutations already commit with their audit. Invalid/no-op
+        # commands reach here with only the authorization lock outstanding.
+        if db.in_transaction():
+            db.commit()
+        return result
     if name == "adjust_agent_settings":
         mbc = args.get("monthly_budget_cents")
-        return _controls.adjust_agent_settings(
+        result = _controls.adjust_agent_settings(
             db,
             role,
             monthly_budget_cents=int(mbc) if mbc is not None else None,
@@ -2004,7 +2258,11 @@ def dispatch_tool(
             auto_resend_assessment=args.get("auto_resend_assessment"),
             auto_advance=args.get("auto_advance"),
             auto_skip_assessment=args.get("auto_skip_assessment"),
+            user_id=int(user.id),
         )
+        if db.in_transaction():
+            db.commit()
+        return result
     if name == "list_draft_tasks":
         return _draft_tasks.draft_review_card(db, role)
     if name == "role_health_check":
@@ -2020,5 +2278,6 @@ __all__ = [
     "CARD_TYPES",
     "MUTATING_TOOL_NAMES",
     "MUTATION_CARD_TYPES",
+    "MUTATION_TOOL_NAMES",
     "dispatch_tool",
 ]

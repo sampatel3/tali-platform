@@ -12,40 +12,76 @@ export const roles = {
   createSister: (sourceRoleId, data) => api.post(`/roles/${sourceRoleId}/sisters`, data),
   rescoreSister: (roleId) => api.post(`/roles/${roleId}/sister-rescore`),
   sisterScoringStatus: (roleId) => api.get(`/roles/${roleId}/sister-scoring-status`),
+  // Shared role writes use optimistic concurrency. Callers must forward the
+  // `version` they rendered as `expected_version`; a stale write returns 409
+  // with the latest role so the draft/control can be reconciled safely.
   update: (id, data) => api.patch(`/roles/${id}`, data),
   updateJobSpec: (id, data) => api.put(`/roles/${id}/job-spec`, data),
-  remove: (id) => api.delete(`/roles/${id}`),
-  star: (id) => api.post(`/roles/${id}/star`),
-  unstar: (id) => api.delete(`/roles/${id}/star`),
+  remove: (id, expectedVersion) => api.delete(`/roles/${id}`, {
+    params: { expected_version: expectedVersion },
+  }),
+  star: (id, expectedVersion) => api.post(`/roles/${id}/star`, {
+    expected_version: expectedVersion,
+  }),
+  unstar: (id, expectedVersion) => api.delete(`/roles/${id}/star`, {
+    params: { expected_version: expectedVersion },
+  }),
   // Requisition->Workable job lifecycle: draft | open | filled | filled_external | cancelled.
-  setJobStatus: (id, status, reason) =>
-    api.post(`/roles/${id}/job-status`, { status, reason }),
+  setJobStatus: (id, status, reason, expectedVersion) =>
+    api.post(`/roles/${id}/job-status`, {
+      status,
+      reason,
+      expected_version: expectedVersion,
+    }),
   // Assign (or clear, with clientId null) the consultancy client a role
   // belongs to — works for legacy / Workable-imported roles that never went
   // through a requisition. Returns the updated role (incl. client_id/_name).
-  setClient: (id, clientId) =>
-    api.post(`/roles/${id}/client`, { client_id: clientId ?? null }),
+  setClient: (id, clientId, expectedVersion) =>
+    api.post(`/roles/${id}/client`, {
+      client_id: clientId ?? null,
+      expected_version: expectedVersion,
+    }),
   // Auto-reject threshold recommendation. Returns {value, source,
   // rationale, sample_size}. Frontend calls this when the role's
   // ``auto_reject_threshold_mode`` is ``auto`` to show the computed
   // value + plain-English rationale next to the slider.
   suggestedAutoRejectThreshold: (id) => api.get(`/roles/${id}/auto-reject-threshold/suggested`),
   // Per-role criteria chip CRUD + workspace sync.
-  createCriterion: (roleId, data) => api.post(`/roles/${roleId}/criteria`, data),
-  updateCriterion: (roleId, criterionId, data) =>
-    api.patch(`/roles/${roleId}/criteria/${criterionId}`, data),
-  deleteCriterion: (roleId, criterionId) =>
-    api.delete(`/roles/${roleId}/criteria/${criterionId}`),
-  syncCriteriaWithWorkspace: (roleId) => api.post(`/roles/${roleId}/criteria/sync`),
-  resetCriteriaToWorkspace: (roleId) => api.post(`/roles/${roleId}/criteria/reset`),
-  regenerateInterviewFocus: (roleId) => api.post(`/roles/${roleId}/regenerate-interview-focus`),
+  createCriterion: (roleId, data, expectedVersion) => api.post(
+    `/roles/${roleId}/criteria`,
+    { ...data, expected_version: expectedVersion },
+  ),
+  updateCriterion: (roleId, criterionId, data, expectedVersion) =>
+    api.patch(`/roles/${roleId}/criteria/${criterionId}`, {
+      ...data,
+      expected_version: expectedVersion,
+    }),
+  deleteCriterion: (roleId, criterionId, expectedVersion) =>
+    api.delete(`/roles/${roleId}/criteria/${criterionId}`, {
+      params: { expected_version: expectedVersion },
+    }),
+  syncCriteriaWithWorkspace: (roleId, expectedVersion) => api.post(
+    `/roles/${roleId}/criteria/sync`,
+    { expected_version: expectedVersion },
+  ),
+  resetCriteriaToWorkspace: (roleId, expectedVersion) => api.post(
+    `/roles/${roleId}/criteria/reset`,
+    { expected_version: expectedVersion },
+  ),
+  regenerateInterviewFocus: (roleId, expectedVersion) => api.post(
+    `/roles/${roleId}/regenerate-interview-focus`,
+    { expected_version: expectedVersion },
+  ),
   // Recruiter feedback notes — append-only freeform observations the
   // recruiter writes about agent behaviour on this role. The agent
   // inlines the most recent notes into its system prompt; the full
   // history is the timeline UI's source of truth.
   listFeedbackNotes: (roleId) => api.get(`/roles/${roleId}/feedback-notes`),
-  createFeedbackNote: (roleId, note) =>
-    api.post(`/roles/${roleId}/feedback-notes`, { note }),
+  createFeedbackNote: (roleId, note, expectedVersion) =>
+    api.post(`/roles/${roleId}/feedback-notes`, {
+      note,
+      expected_version: expectedVersion,
+    }),
   // Public-application screening questions. The authenticated management
   // payload includes deterministic knockout configuration; the public job
   // payload deliberately strips the expected answers.
@@ -57,18 +93,29 @@ export const roles = {
     api.post(`/roles/${roleId}/screening-questions`, data),
   updateScreeningQuestion: (roleId, questionId, data) =>
     api.patch(`/roles/${roleId}/screening-questions/${questionId}`, data),
-  deleteScreeningQuestion: (roleId, questionId) =>
-    api.delete(`/roles/${roleId}/screening-questions/${questionId}`),
-  uploadJobSpec: (roleId, file) => {
+  deleteScreeningQuestion: (roleId, questionId, expectedVersion) =>
+    api.delete(`/roles/${roleId}/screening-questions/${questionId}`, {
+      params: { expected_version: expectedVersion },
+    }),
+  uploadJobSpec: (roleId, file, expectedVersion) => {
     const form = new FormData();
     form.append('file', file);
+    if (Number.isInteger(expectedVersion)) {
+      form.append('expected_version', String(expectedVersion));
+    }
     return api.post(`/roles/${roleId}/upload-job-spec`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
   listTasks: (roleId) => api.get(`/roles/${roleId}/tasks`),
-  addTask: (roleId, taskId) => api.post(`/roles/${roleId}/tasks`, { task_id: taskId }),
-  removeTask: (roleId, taskId) => api.delete(`/roles/${roleId}/tasks/${taskId}`),
+  addTask: (roleId, taskId, expectedVersion) => api.post(`/roles/${roleId}/tasks`, {
+    task_id: taskId,
+    expected_version: expectedVersion,
+  }),
+  removeTask: (roleId, taskId, expectedVersion) => api.delete(
+    `/roles/${roleId}/tasks/${taskId}`,
+    { params: { expected_version: expectedVersion } },
+  ),
   listApplications: (roleId, params = {}) => api.get(`/roles/${roleId}/applications`, { params }),
   listPipeline: (roleId, params = {}) => api.get(`/roles/${roleId}/pipeline`, { params }),
   listApplicationsGlobal: (params = {}) => api.get('/applications', { params }),

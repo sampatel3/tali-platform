@@ -27,9 +27,11 @@ export const RoleSpecEditPanel = ({
   role,
   saving = false,
   error = '',
+  conflict = null,
   onSubmit,
   onCancel,
   onDirtyChange,
+  onResolveConflict,
 }) => {
   const initialSeed = roleSeed(role);
   const baselineRef = useRef(initialSeed);
@@ -98,11 +100,25 @@ export const RoleSpecEditPanel = ({
   const handleSave = async (event) => {
     event?.preventDefault();
     markTouched();
-    if (!dirty || !nameValid || !specValid || saving) return;
+    if (!dirty || !nameValid || !specValid || saving || conflict) return;
     await onSubmit?.({
       name: externallyManagedTitle ? undefined : cleanName,
       jobSpecText: cleanSpec,
     });
+  };
+
+  const resolveConflict = (keepDraft) => {
+    const latest = roleSeed(role);
+    baselineRef.current = latest;
+    if (!keepDraft) {
+      dirtyRef.current = false;
+      setName(latest.name);
+      setJobSpecText(latest.jobSpecText);
+      setNameTouched(false);
+      setSpecTouched(false);
+      setMode('write');
+    }
+    onResolveConflict?.(keepDraft ? 'review-draft' : 'reload-latest');
   };
 
   const requestCancel = () => {
@@ -145,6 +161,28 @@ export const RoleSpecEditPanel = ({
           </div>
         </div>
 
+        {conflict ? (
+          <div className="role-spec-editor-conflict" role="alert">
+            <div>
+              <strong>A newer job specification is available</strong>
+              <span>
+                {conflict.changedBy
+                  ? `${conflict.changedBy} saved changes while you were editing. `
+                  : `${conflict.message || 'Someone saved changes while you were editing.'} `}
+                {Number.isInteger(conflict.currentVersion) ? `Version ${conflict.currentVersion} is now current. ` : ''}
+                Your draft is safe. Review it, then keep it deliberately or load the latest saved version.
+              </span>
+            </div>
+            <div className="role-spec-editor-conflict-actions">
+              <Button type="button" variant="ghost" size="sm" onClick={() => resolveConflict(false)}>
+                Discard draft &amp; load latest
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => resolveConflict(true)}>
+                Keep draft for review
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {error ? <div className="role-spec-editor-error" role="alert">{error}</div> : null}
 
         <div className="role-spec-editor-actions">
@@ -162,7 +200,7 @@ export const RoleSpecEditPanel = ({
               size="sm"
               loading={saving}
               loadingLabel="Saving…"
-              disabled={!dirty || !nameValid || !specValid}
+              disabled={!dirty || !nameValid || !specValid || Boolean(conflict)}
             >
               <Save size={14} aria-hidden="true" /> Save job spec
             </Button>

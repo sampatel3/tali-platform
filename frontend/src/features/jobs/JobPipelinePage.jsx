@@ -40,6 +40,7 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
+import { conflictActorLabel, reconcileRoleVersionConflict, roleExpectedVersion, roleVersionConflict, versionedRolePayload } from './roleConcurrency';
 import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
 import { ReachOutDialog } from './ReachOutDialog';
 import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
@@ -63,7 +64,12 @@ import {
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
+import { useRoleAutonomyChange } from './useRoleAutonomyChange';
+import { useRoleAgentControls } from './useRoleAgentControls';
 import {
+  EMPTY_FETCH_PROGRESS,
+  EMPTY_PRE_SCREEN_PROGRESS,
+  EMPTY_PROGRESS,
   GRANULAR_AUTOMATION_KEYS,
   PIPELINE_STAGE_ORDER,
   activationAutonomyPayload,
@@ -76,14 +82,9 @@ import {
   resolveOptionalPercent,
   resolvedDeterministicReject,
   resolvedRoleAutomation,
-} from './jobPipelinePageUtils';
+  summarizeUnscoredApplications,
+} from './jobPipelineUtils';
 
-const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
-const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
-const EMPTY_PRE_SCREEN_PROGRESS = { status: 'idle', total: 0, processed: 0, errors: 0, refresh: false };
-
-// Mirror of backend settings.PRE_SCREEN_THRESHOLD.
-const PRE_SCREEN_FILTER_THRESHOLD = 30;
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
   const navigate = useNavigate();
@@ -97,12 +98,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   void onViewCandidate;
 
   const numericRoleId = Number(roleId);
-  // Batch progress is owned by the global JobStatusContext — single source of truth.
   const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
-  // Live agent status for THIS role — backend serves /roles/{id}/agent/status
-  // with monthly_spent_cents + monthly_budget_cents + pending_decisions +
-  // last_activity. Polled every 30s, paused when the tab is hidden.
-  const { status: agentStatus, setStatus: setAgentStatus, refetch: refetchAgentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
+  // Live status is polled every 30s and pauses when the tab is hidden.
+  const {
+    status: agentStatus,
+    phase: agentStatusPhase,
+    setStatus: setAgentStatus,
+    refetch: refetchAgentStatus,
+    mutateStatus: mutateAgentStatus,
+  } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
   // Per-feature spend breakdown for the role budget panel. Refetched
   // whenever the role's monthly spend ticks (a coarse proxy for "new
   // usage events landed"); cheap enough to call inline.
@@ -207,18 +211,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
-  // The lightweight role shell paints the page immediately; aggregate funnel
-  // counts and the full job specification arrive on a second request.
   const [roleDetailLoading, setRoleDetailLoading] = useState(true);
   const [roleDetailLoadError, setRoleDetailLoadError] = useState('');
-  // Set only on a cold-load failure with nothing cached to paint — drives the
-  // in-page error state (with Retry) instead of stranding an empty shell.
+  // Cold-load failure state with an in-page retry.
   const [loadError, setLoadError] = useState('');
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [savingAssessmentTask, setSavingAssessmentTask] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [suggestedThreshold, setSuggestedThreshold] = useState(null);
   const [savingThresholdMode, setSavingThresholdMode] = useState(false);
+  const handleRoleVersionConflict = useCallback(
+    (error) => reconcileRoleVersionConflict(error, setRole, showToast),
+    [showToast],
+  );
+  const handleAutonomyChange = useRoleAutonomyChange({
+    numericRoleId,
+    role,
+    rolesApi,
+    setRole,
+    showToast,
+  });
 
   useEffect(() => {
     if (role?.role_kind !== 'sister' || !rolesApi?.sisterScoringStatus) {
@@ -250,7 +262,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSavingThresholdMode(true);
     setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode } : cur));
     try {
-      await rolesApi.update(numericRoleId, { auto_reject_threshold_mode: nextMode });
+      const response = await rolesApi.update(numericRoleId, versionedRolePayload(role, {
+        auto_reject_threshold_mode: nextMode,
+      }));
+      if (response?.data) setRole(response.data);
       if (nextMode === 'auto') {
         try {
           const res = await rolesApi.suggestedAutoRejectThreshold(numericRoleId);
@@ -259,12 +274,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       }
       showToast(nextMode === 'auto' ? 'Threshold mode set to auto — agent will pick the cut-off.' : 'Threshold mode set to manual.', 'success');
     } catch (error) {
-      setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode === 'auto' ? 'manual' : 'auto' } : cur));
-      showToast(getErrorMessage(error, 'Failed to update threshold mode.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode === 'auto' ? 'manual' : 'auto' } : cur));
+        showToast(getErrorMessage(error, 'Failed to update threshold mode.'), 'error');
+      }
     } finally {
       setSavingThresholdMode(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, showToast]);
   // Requisition->Workable job lifecycle (draft/open/filled/filled_external/
   // cancelled). The control lives on the Job Spec tab; optimistic with rollback.
   const [savingJobStatus, setSavingJobStatus] = useState(false);
@@ -275,16 +292,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSavingJobStatus(true);
     setRole((cur) => (cur ? { ...cur, job_status: nextStatus } : cur));
     try {
-      const res = await rolesApi.setJobStatus(numericRoleId, nextStatus);
+      const res = await rolesApi.setJobStatus(
+        numericRoleId,
+        nextStatus,
+        undefined,
+        role?.version,
+      );
       if (res?.data) setRole(res.data);
       showToast('Job status updated.', 'success');
     } catch (error) {
-      setRole((cur) => (cur ? { ...cur, job_status: previous } : cur));
-      showToast(getErrorMessage(error, 'Failed to update job status.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        setRole((cur) => (cur ? { ...cur, job_status: previous } : cur));
+        showToast(getErrorMessage(error, 'Failed to update job status.'), 'error');
+      }
     } finally {
       setSavingJobStatus(false);
     }
-  }, [numericRoleId, role?.job_status, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.job_status, role?.version, rolesApi, showToast]);
   // Consultancy client assignment — the org's clients (for the picker) + the
   // mutation. Lets recruiters tag a client onto ANY role, including legacy /
   // Workable-imported jobs that never went through a requisition. Optimistic
@@ -310,16 +334,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSavingClient(true);
     setRole((cur) => (cur ? { ...cur, client_id: nextClientId ?? null, client_name: nextName } : cur));
     try {
-      const res = await rolesApi.setClient(numericRoleId, nextClientId);
+      const res = await rolesApi.setClient(numericRoleId, nextClientId, role?.version);
       if (res?.data) setRole(res.data);
       showToast(nextClientId == null ? 'Hiring department cleared.' : 'Hiring department assigned.', 'success');
     } catch (error) {
-      setRole((cur) => (cur ? { ...cur, client_id: prevId, client_name: prevName } : cur));
-      showToast(getErrorMessage(error, 'Failed to update hiring department.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        setRole((cur) => (cur ? { ...cur, client_id: prevId, client_name: prevName } : cur));
+        showToast(getErrorMessage(error, 'Failed to update hiring department.'), 'error');
+      }
     } finally {
       setSavingClient(false);
     }
-  }, [numericRoleId, role?.client_id, role?.client_name, clients, rolesApi, showToast]);
+  }, [clients, handleRoleVersionConflict, numericRoleId, role?.client_id, role?.client_name, role?.version, rolesApi, showToast]);
   const [, setRefreshTick] = useState(0);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [activeView, setActiveView] = useRoleView();
@@ -351,6 +377,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (tableStageFilter !== 'sourced') setSelectedSourcedAppIds(new Set());
   }, [tableStageFilter]);
   const [jobSpecError, setJobSpecError] = useState('');
+  const [jobSpecConflict, setJobSpecConflict] = useState(null);
   // The legacy slide-out <AgentSettingsPanel> drawer state has been
   // retired — the canvas-spec Agent settings tab on this page owns
   // the same controls inline. See the AgentBar onPause handler below.
@@ -371,25 +398,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSpecEditorDirty(false);
     setPendingRoleView(null);
     setJobSpecError('');
+    setJobSpecConflict(null);
   }, [role?.role_kind]);
-  // Only the most recently started loadRoleWorkspace may write state, so a
-  // slow earlier load can't clobber fresher state (e.g. revert an optimistic
-  // agent toggle to OFF). loadedRoleIdRef marks the last fully-loaded role so
-  // a warm revalidate skips the (stale) cache repaint.
+  // Only the most recent workspace load may write state.
   const loadSeqRef = useRef(0);
   const loadedRoleIdRef = useRef(null);
-  // One hover-intent controller for the whole page (rows + kanban cards share
-  // it, so moving between them cancels the prior pending prefetch).
   const hoverPrefetchRef = useRef(null);
   if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeCandidateCvHoverPrefetch();
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     const seq = (loadSeqRef.current += 1);
-    // Stale-while-revalidate on a cold load (first visit to this role id):
-    // paint cache, revalidate silently. A warm refresh (revalidate after a
-    // mutation like the agent toggle or budget save) must NOT repaint from
-    // cache — it lags the optimistic state and would flip it back.
     const cacheKey = `role-workspace:${numericRoleId}`;
     const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
     const cached = isColdForRole ? readCache(cacheKey) : null;
@@ -404,7 +423,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setWorkspaceCriteria(Array.isArray(c.workspaceCriteria) ? c.workspaceCriteria : []);
       setLoading(false);
       setRoleDetailLoading(false);
-      // Painted data for this role — later revalidates are warm (no repaint).
       loadedRoleIdRef.current = numericRoleId;
     } else if (isColdForRole) {
       setLoading(true);
@@ -413,31 +431,28 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setApplicationsLoading(true);
     let rolePainted = Boolean(cached?.data);
     try {
-      // Two separate fetches (open + rejected) at the backend's 2000-row
-      // ceiling — splits the budget so a long reject history can't crowd
-      // open candidates out, and avoids the 500-row default that would
-      // silently truncate thousand-applicant roles. They deliberately run
-      // SEQUENTIALLY: two large ORM/serialization queries at once saturated
-      // the API on large roles and made the whole page hit the 60s timeout.
       const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
-      // Paint from a bounded, single-query shell endpoint. The ordinary role
-      // detail endpoint computes funnel and decision aggregates and can be
-      // slow on large roles; none of that should block the first useful paint.
       const shellRes = rolesApi.getShell
         ? await rolesApi.getShell(numericRoleId)
         : await rolesApi.get(numericRoleId);
-      // A newer load started while we were in flight — drop this stale result.
       if (seq !== loadSeqRef.current) return;
       loadedRoleIdRef.current = numericRoleId;
       let nextRole = shellRes?.data || null;
-      setRole(nextRole);
+      setRole((current) => (
+        current && !isColdForRole
+          ? {
+              ...current,
+              ...nextRole,
+              stage_counts: current.stage_counts,
+              pending_decisions_by_type: current.pending_decisions_by_type,
+              active_candidates_count: current.active_candidates_count,
+            }
+          : nextRole
+      ));
       rolePainted = Boolean(nextRole);
       setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
       setLoading(false);
 
-      // Hydrate the authoritative job detail after first paint. A failure here
-      // leaves the navigable shell intact and is surfaced inline instead of
-      // returning the user to a blank error screen.
       try {
         const roleRes = await rolesApi.get(numericRoleId);
         if (seq !== loadSeqRef.current) return;
@@ -451,9 +466,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         if (seq === loadSeqRef.current) setRoleDetailLoading(false);
       }
 
-      // Cheap supporting requests can run together after first paint. Each is
-      // independently optional so a transient status/criteria failure cannot
-      // prevent the candidate roster from loading.
       const [tasksRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.listTasks(numericRoleId).catch(() => ({ data: [] })),
         rolesApi.batchScoreStatus(numericRoleId).catch(() => ({ data: null })),
@@ -476,8 +488,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         const openAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('open'));
         if (seq !== loadSeqRef.current) return;
         applicationPayloads = [...(openAppsRes?.data || [])];
-        // Paint the useful, active roster before loading the potentially much
-        // larger reject history.
         setRoleApplications(applicationPayloads);
       } catch (error) {
         applicationError = error;
@@ -490,9 +500,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       } catch (error) {
         applicationError ||= error;
       }
-      // Sister roles evaluate the complete source cohort, including prior
-      // hires/withdrawals. The standard page keeps its two-query hot path;
-      // only the uncommon sister view pays this extra terminal-outcome fetch.
       if (nextRole?.role_kind === 'sister') {
         const [hiredAppsRes, withdrawnAppsRes] = await Promise.all([
           rolesApi.listApplications(numericRoleId, appsQuery('hired')),
@@ -509,8 +516,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       if (applicationError) {
         setApplicationsLoadError(getErrorMessage(applicationError, 'Some candidates could not be loaded.'));
       }
-      // Fetch the agent's threshold recommendation when the role is
-      // in auto mode so the panel shows it without waiting for click.
+      // Preload the automatic threshold recommendation.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
         rolesApi.suggestedAutoRejectThreshold(numericRoleId)
           .then((res) => setSuggestedThreshold(res?.data || null))
@@ -523,24 +529,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       }
       const nextApps = [...byId.values()];
       setRoleApplications(nextApps);
-      // Refresh the SWR cache so the next visit paints instantly.
       writeCache(cacheKey, {
         role: nextRole,
         roleTasks: nextTasks,
         roleApplications: nextApps,
         workspaceCriteria: nextCriteria,
       });
-      // Hand off batch status to the global context — it owns display state.
-      // If a batch is already running when this page loads, make the context
-      // track it immediately (no waiting for the next 10s discovery poll).
       const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
       if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
         trackRole?.(numericRoleId);
       }
     } catch (error) {
-      // Don't wipe a cached paint if a background revalidate fails — only
-      // surface a hard failure when there was nothing to show in the first
-      // place (cold load with no cache).
+      // Preserve any shell/cache paint when a background request fails.
       if (!rolePainted && isColdForRole && !cached?.data) {
         setRole(null);
         setRoleTasks([]);
@@ -696,32 +696,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // pre-screen-filtered (screened OUT below the global cutoff, no newer CV
   // since that run) and no-CV (nothing to score). The backend's third skip —
   // error backoff — isn't visible in the list payload, so it isn't mirrored.
-  const newCvBreakdown = useMemo(() => {
-    let scoreable = 0;
-    let preScreenFiltered = 0;
-    let noCv = 0;
-    for (const application of unscoredApplications) {
-      // has_cv_text mirrors the auto-scorer's exact cv_text filter (a CV file
-      // can exist while extraction produced nothing). Fall back to the file
-      // metadata for cached payloads written before the field existed.
-      const hasCvText = application?.has_cv_text
-        ?? Boolean(application?.cv_uploaded_at || application?.cv_filename);
-      if (!hasCvText) {
-        noCv += 1;
-        continue;
-      }
-      const cvAt = Date.parse(application?.cv_uploaded_at || '');
-      const runAt = Date.parse(application?.pre_screen_run_at || '');
-      const freshCv = Number.isFinite(cvAt) && Number.isFinite(runAt) && cvAt > runAt;
-      const preScreen = Number(application?.pre_screen_score);
-      if (Number.isFinite(preScreen) && preScreen < PRE_SCREEN_FILTER_THRESHOLD && !freshCv) {
-        preScreenFiltered += 1;
-      } else {
-        scoreable += 1;
-      }
-    }
-    return { scoreable, preScreenFiltered, noCv };
-  }, [unscoredApplications]);
+  const newCvBreakdown = useMemo(
+    () => summarizeUnscoredApplications(unscoredApplications),
+    [unscoredApplications],
+  );
 
   const thresholdValue = useMemo(
     () => resolveOptionalPercent(role?.score_threshold),
@@ -896,14 +874,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setSavingRoleConfig(true);
     try {
-      await rolesApi.update(numericRoleId, {
+      const response = await rolesApi.update(numericRoleId, versionedRolePayload(role, {
         score_threshold: thresholdDraft === '' ? null : Number(normalizeThreshold(thresholdDraft)),
-      });
+      }));
+      if (response?.data) setRole(response.data);
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
       showToast('Screening threshold updated.', 'success');
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save reject threshold.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        showToast(getErrorMessage(error, 'Failed to save reject threshold.'), 'error');
+      }
     } finally {
       setSavingRoleConfig(false);
     }
@@ -915,33 +896,48 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
     try {
-      const { data } = await rolesApi.createCriterion(numericRoleId, { text, bucket });
+      const { data } = await rolesApi.createCriterion(
+        numericRoleId,
+        { text, bucket },
+        role?.version,
+      );
       if (data) setRole((cur) => cur && ({
         ...cur,
+        version: data.role_version ?? cur.version,
         criteria: [...(cur.criteria || []).filter((c) => c.id !== data.id), data],
       }));
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to add criterion.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        showToast(getErrorMessage(error, 'Failed to add criterion.'), 'error');
+      }
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
 
   const handleUpdateRoleCriterion = useCallback(async (criterionId, updates) => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
     try {
-      const { data } = await rolesApi.updateCriterion(numericRoleId, criterionId, updates);
+      const { data } = await rolesApi.updateCriterion(
+        numericRoleId,
+        criterionId,
+        updates,
+        role?.version,
+      );
       if (data) setRole((cur) => cur && ({
         ...cur,
+        version: data.role_version ?? cur.version,
         criteria: (cur.criteria || []).map((c) => (c.id === criterionId ? data : c)),
       }));
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to update criterion.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        showToast(getErrorMessage(error, 'Failed to update criterion.'), 'error');
+      }
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
 
   const handleDeleteRoleCriterion = useCallback(async (criterionId) => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -961,42 +957,51 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       };
     });
     try {
-      await rolesApi.deleteCriterion(numericRoleId, criterionId);
+      await rolesApi.deleteCriterion(numericRoleId, criterionId, role?.version);
+      // Criterion deletion advances exactly one server-side role revision.
+      setRole((cur) => cur && ({ ...cur, version: roleExpectedVersion(cur) + 1 }));
     } catch (error) {
       // Refetch authoritative state; a stale snapshot restore would clobber
       // concurrent successful deletes of other criteria.
+      const conflict = handleRoleVersionConflict(error);
       await loadRoleWorkspace();
-      showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
+      if (!conflict) {
+        showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
+      }
     }
-  }, [numericRoleId, rolesApi, showToast, loadRoleWorkspace]);
+  }, [handleRoleVersionConflict, loadRoleWorkspace, numericRoleId, role?.version, rolesApi, showToast]);
 
   const handleSyncRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaSyncing(true);
     try {
-      const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
+      const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId, role?.version);
       if (res?.data) setRole(res.data);
       showToast('Workspace updates pulled in.', 'success');
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to sync workspace criteria.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        showToast(getErrorMessage(error, 'Failed to sync workspace criteria.'), 'error');
+      }
     } finally {
       setCriteriaSyncing(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
 
   const handleResetRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaResetting(true);
     try {
-      const res = await rolesApi.resetCriteriaToWorkspace(numericRoleId);
+      const res = await rolesApi.resetCriteriaToWorkspace(numericRoleId, role?.version);
       if (res?.data) setRole(res.data);
       showToast('Criteria reset to workspace defaults.', 'success');
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to reset criteria.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        showToast(getErrorMessage(error, 'Failed to reset criteria.'), 'error');
+      }
     } finally {
       setCriteriaResetting(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
 
   // Restore a hidden (suppressed) workspace chip on this role: re-add it
   // by calling create with the workspace text + bucket. The backend
@@ -1010,26 +1015,35 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       const remainingSuppressed = (role?.suppressed_org_criterion_ids || [])
         .filter((id) => Number(id) !== Number(workspaceChip.id));
       // First, drop the suppression so Sync would also re-add it next time.
-      await rolesApi.update(numericRoleId, { suppressed_org_criterion_ids: remainingSuppressed });
+      const patchRes = await rolesApi.update(numericRoleId, versionedRolePayload(role, {
+        suppressed_org_criterion_ids: remainingSuppressed,
+      }));
+      if (patchRes?.data) setRole(patchRes.data);
       // Then sync to bring the chip back with full provenance (org_criterion_id set).
-      const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
+      const res = await rolesApi.syncCriteriaWithWorkspace(
+        numericRoleId,
+        patchRes?.data?.version ?? roleExpectedVersion(role) + 1,
+      );
       if (res?.data) setRole(res.data);
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to restore criterion.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        showToast(getErrorMessage(error, 'Failed to restore criterion.'), 'error');
+      }
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, role, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, showToast]);
 
   const handleJobSpecSubmit = async ({ name, jobSpecText }) => {
     if (!Number.isFinite(numericRoleId) || !canEditJobSpec) return false;
     setSavingJobSpec(true);
     setJobSpecError('');
+    setJobSpecConflict(null);
     try {
-      const payload = {
+      const payload = versionedRolePayload(role, {
         job_spec_text: jobSpecText,
         ...(name ? { name } : {}),
-      };
+      });
       const response = await rolesApi.updateJobSpec(numericRoleId, payload);
       if (response?.data?.role) {
         setRole(response.data.role);
@@ -1045,7 +1059,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       );
       return true;
     } catch (error) {
-      setJobSpecError(getErrorMessage(error, 'Failed to save the job specification.'));
+      const conflict = roleVersionConflict(error);
+      if (conflict) {
+        setRole((current) => current && ({
+          ...current, ...(conflict.currentRole || {}),
+          version: conflict.currentVersion ?? conflict.currentRole?.version ?? current.version,
+        }));
+        setJobSpecConflict({ message: conflict.message, changedBy: conflictActorLabel(conflict.changedBy), currentVersion: conflict.currentVersion });
+      } else {
+        setJobSpecError(getErrorMessage(error, 'Failed to save the job specification.'));
+      }
       return false;
     } finally {
       setSavingJobSpec(false);
@@ -1062,6 +1085,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
     setEditingSpec(false);
     setJobSpecError('');
+    setJobSpecConflict(null);
   }, [editingSpec, specEditorDirty]);
 
   const discardSpecAndNavigate = useCallback(() => {
@@ -1070,6 +1094,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSpecEditorDirty(false);
     setEditingSpec(false);
     setJobSpecError('');
+    setJobSpecConflict(null);
     if (nextView) setActiveView(nextView);
   }, [pendingRoleView, setActiveView]);
 
@@ -1081,14 +1106,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       const desired = [...new Set((taskIds || []).map((id) => Number(id)).filter(Number.isFinite))];
       const currentIds = (roleTasks || []).map((task) => Number(task.id));
+      let expectedVersion = roleExpectedVersion(role);
       if (rolesApi.addTask) {
         for (const id of desired) {
-          if (!currentIds.includes(id)) await rolesApi.addTask(numericRoleId, id);
+          if (!currentIds.includes(id)) {
+            const response = await rolesApi.addTask(numericRoleId, id, expectedVersion);
+            expectedVersion = response?.data?.version ?? expectedVersion + 1;
+          }
         }
       }
       if (rolesApi.removeTask) {
         for (const id of currentIds) {
-          if (!desired.includes(id)) await rolesApi.removeTask(numericRoleId, id);
+          if (!desired.includes(id)) {
+            await rolesApi.removeTask(numericRoleId, id, expectedVersion);
+            expectedVersion += 1;
+          }
         }
       }
       await loadRoleWorkspace();
@@ -1105,12 +1137,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       );
       return true;
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to update assessment tasks.'), 'error');
+      if (!handleRoleVersionConflict(error)) {
+        showToast(getErrorMessage(error, 'Failed to update assessment tasks.'), 'error');
+      }
+      await loadRoleWorkspace();
       throw error;
     } finally {
       setSavingAssessmentTask(false);
     }
-  }, [numericRoleId, role?.agentic_mode_enabled, roleTasks, rolesApi, loadRoleWorkspace, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role, roleTasks, rolesApi, loadRoleWorkspace, showToast]);
 
   /*
    * Job-spec text and linked assessments intentionally have separate owners:
@@ -1168,6 +1203,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     viewCandidateReport,
   });
 
+  const canControlRoleAgent = agentStatus != null
+    && agentStatus.can_control_agent !== false;
+  const roleAgentControlDisabledReason = agentStatus == null
+    ? (agentStatusPhase === 'error'
+      ? 'Agent controls are temporarily unavailable because the current status could not be loaded.'
+      : 'Checking your role agent permissions…')
+    : canControlRoleAgent
+      ? null
+      : 'Only workspace owners, hiring managers, and recruiters assigned to this role can change its agent controls.';
+  const {
+    controlAction: roleAgentControlAction,
+    pauseAgent: handlePauseAgent,
+    resumeAgent: handleResumeAgent,
+  } = useRoleAgentControls({
+    roleId: numericRoleId,
+    role,
+    agentStatus,
+    canControlAgent: canControlRoleAgent,
+    mutateAgentStatus,
+    setAgentStatus,
+    setRole,
+    loadRoleWorkspace,
+    handleRoleVersionConflict,
+    showToast,
+  });
+
   // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
   // AgentHeader with a role-scoped agent panel on the right. Builds the
   // panel agent prop from the polled /agent/status payload, with the
@@ -1177,17 +1238,35 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     const enabled = Boolean(role?.agentic_mode_enabled);
     if (!agentStatus) {
       return {
-        on: enabled,
+        loading: agentStatusPhase !== 'error',
+        unavailable: agentStatusPhase === 'error',
+        on: false,
         paused: false,
-        pending: 0,
-        spentCents: 0,
-        budgetCents: Number(role?.monthly_usd_budget_cents || 0) || 5000,
-        tick: enabled ? 'Loading agent status…' : null,
-        inFlight: false,
+        tick: agentStatusPhase === 'error'
+          ? 'Could not load current controls.'
+          : 'Checking role and workspace controls…',
+        controlScope: 'role',
+        controlAction: roleAgentControlAction,
       };
     }
-    return buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
-  }, [agentStatus, role]);
+    const built = buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
+    return built ? { ...built, controlAction: roleAgentControlAction } : built;
+  }, [agentStatus, agentStatusPhase, role, roleAgentControlAction]);
+  const rolePendingReviewTitle = (() => {
+    const total = Number(roleAgent?.pending || 0);
+    const decisions = roleAgent?.pendingBreakdown?.decisions;
+    const questions = roleAgent?.pendingBreakdown?.questions;
+    const parts = [];
+    if (Number.isFinite(decisions)) {
+      parts.push(`${decisions} candidate decision${decisions === 1 ? '' : 's'}`);
+    }
+    if (Number.isFinite(questions)) {
+      parts.push(`${questions} agent question${questions === 1 ? '' : 's'}`);
+    }
+    return parts.length
+      ? `${total} awaiting you: ${parts.join(' and ')}`
+      : `${total} item${total === 1 ? '' : 's'} awaiting you`;
+  })();
 
   // Agent state remains explicit in decision/candidate detail surfaces. Routine
   // processing and ATS sync controls are intentionally absent from this page:
@@ -1322,14 +1401,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     // the backend has accepted the autonomy grant and returned authoritative
     // role state; a rejected PATCH must never flash ON or "starting".
     rolesApi
-      .update(numericRoleId, {
+      .update(numericRoleId, versionedRolePayload(role, {
         agentic_mode_enabled: true,
         monthly_usd_budget_cents: monthlyBudgetCents,
         // Turn on executes the policy the recruiter reviewed. It must never
         // silently broaden a role's existing autonomy grant.
         ...activationAutonomyPayload(role),
         ...assessmentFields,
-      })
+      }))
       .then((response) => {
         if (response?.data) setRole(response.data);
         void refetchAgentStatus?.();
@@ -1338,7 +1417,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       .catch((error) => {
         void refetchAgentStatus?.();
         void loadRoleWorkspace();
-        showToast(getErrorMessage(error, 'Failed to turn on agent mode.'), 'error');
+        if (!handleRoleVersionConflict(error)) {
+          showToast(getErrorMessage(error, 'Failed to turn on agent mode.'), 'error');
+        }
       });
   };
 
@@ -1351,12 +1432,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       activationRequested: false,
       activationError: null,
     });
-    rolesApi.update(numericRoleId, {
+    rolesApi.update(numericRoleId, versionedRolePayload(role, {
       agentic_mode_enabled: true,
       monthly_usd_budget_cents: monthlyBudgetCents,
       ...activationAutonomyPayload(role),
       activation_assessment_action: 'approve_when_ready',
-    })
+    }))
       .then((response) => {
         if (response?.data) setRole(response.data);
         setActivationReview((current) => (current ? {
@@ -1369,18 +1450,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         void loadRoleWorkspace();
       })
       .catch((error) => {
-        const detail = getErrorMessage(error, 'Failed to queue agent activation.');
+        const conflict = roleVersionConflict(error);
+        const detail = conflict?.message || getErrorMessage(error, 'Failed to queue agent activation.');
         setActivationReview((current) => (current ? {
           ...current,
           activationSubmitting: false,
           activationRequested: false,
           activationError: detail,
         } : current));
-        showToast(detail, 'error');
+        if (!handleRoleVersionConflict(error)) showToast(detail, 'error');
       });
   };
 
   const handleActivateAgent = (monthlyBudgetCents) => {
+    if (!canControlRoleAgent) return;
     if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
       showToast('Set a monthly cap greater than $0 before activating.', 'error');
       return;
@@ -1389,6 +1472,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   };
 
   const confirmAgentActivation = () => {
+    if (!canControlRoleAgent) return;
     const monthlyBudgetCents = Number(activationPreflight?.monthlyBudgetCents);
     if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
       setActivationPreflight(null);
@@ -1407,60 +1491,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     requestAgentActivationWhenReady(monthlyBudgetCents, generatedDraft);
   };
 
-  // Manual SOFT pause — stop the agent and its spend, but KEEP this role's
-  // pending decisions (you can still action them). Resume brings it back.
-  // Distinct from Turn off (handleTurnOffAgent), which disables the agent
-  // indefinitely. Optimistically flip the polled status to paused so the strip
-  // morphs to amber without waiting for the 30s poll.
-  const handlePauseAgent = () => {
-    if (!Number.isFinite(numericRoleId)) return;
-    if (setAgentStatus) {
-      setAgentStatus((cur) => (cur
-        ? { ...cur, paused: true, paused_at: new Date().toISOString(), paused_reason: 'paused by recruiter' }
-        : cur));
-    }
-    apiClient.agent
-      .pause(numericRoleId)
-      // Keep the acknowledged optimistic state. An immediate read can hit a
-      // replica before the write is visible and visibly flip the strip back to
-      // ON; the normal status poll will reconcile it shortly.
-      .catch((error) => {
-        void refetchAgentStatus?.();
-        showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
-      });
-  };
-
-  // PAUSED → ON. Clears the pause (manual or budget) server-side and kicks an
-  // immediate cycle; clear it locally too for an instant flip.
-  const handleResumeAgent = () => {
-    if (!Number.isFinite(numericRoleId)) return;
-    if (setAgentStatus) {
-      setAgentStatus((cur) => (cur
-        ? { ...cur, paused: false, paused_at: null, paused_reason: null }
-        : cur));
-    }
-    apiClient.agent
-      .resume(numericRoleId)
-      .then(() => { void loadRoleWorkspace(); })
-      .catch((error) => {
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
-        showToast(getErrorMessage(error, 'Failed to resume agent.'), 'error');
-      });
-  };
-
   // Turn the agent OFF for this role — indefinite, no auto-resume. Opens a
   // confirm: off KEEPS pending decisions by default (they stay actionable),
   // with an opt-in to also discard the queue for a clean slate.
   const handleTurnOffAgent = () => {
+    if (!canControlRoleAgent) return;
     setTurnOffDiscard(false);
     setTurnOffOpen(true);
   };
 
   const confirmTurnOffAgent = () => {
-    if (!Number.isFinite(numericRoleId)) return;
+    if (!canControlRoleAgent || !Number.isFinite(numericRoleId)) return;
     const alsoDiscard = turnOffDiscard && (roleAgent?.pending || 0) > 0;
-    const wasEnabled = Boolean(role?.agentic_mode_enabled);
+    const previousRole = role;
     setTurnOffOpen(false);
     // Optimistic: roleAgent.on is driven by role.agentic_mode_enabled, so flip
     // that in one frame; zero the pending count too when discarding.
@@ -1469,35 +1512,35 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setAgentStatus((cur) => (cur ? { ...cur, pending_decisions: 0 } : cur));
     }
     rolesApi
-      .update(numericRoleId, { agentic_mode_enabled: false })
-      .then(() => (alsoDiscard ? apiClient.agent.discardPending(numericRoleId) : null))
+      .update(numericRoleId, versionedRolePayload(role, { agentic_mode_enabled: false }))
+      .then((response) => {
+        if (response?.data) setRole((current) => (current ? {
+          ...current, ...response.data,
+          stage_counts: current.stage_counts, pending_decisions_by_type: current.pending_decisions_by_type,
+          active_candidates_count: current.active_candidates_count,
+        } : response.data));
+        return alsoDiscard
+          ? apiClient.agent.discardPending(
+              numericRoleId,
+              roleExpectedVersion(response?.data),
+            )
+          : null;
+      })
       .then(() => {
         void refetchAgentStatus?.();
-        // Turning off changes no candidate stage or outcome, and keeping the
-        // queue changes no decisions either. A full workspace reload here used
-        // to re-download up to 4,000 rows and could transiently replace the
-        // role's stage_counts with an empty aggregate, animating the funnel to
-        // zero. Only the opt-in discard path needs fresh decision aggregates.
         if (alsoDiscard) {
           void fetchPendingDecisions();
-          void rolesApi.get(numericRoleId)
-            .then((response) => {
-              const fresh = response?.data;
-              if (!fresh) return;
-              setRole((cur) => (cur ? {
-                ...cur,
-                pending_decisions_by_type: fresh.pending_decisions_by_type
-                  ?? cur.pending_decisions_by_type,
-                stage_counts: fresh.stage_counts ?? cur.stage_counts,
-              } : cur));
-            })
-            .catch(() => {});
+          void rolesApi.get(numericRoleId).then((response) => {
+            if (response?.data) setRole(response.data);
+          }).catch(() => {});
         }
       })
       .catch((error) => {
-        setRole((cur) => (cur ? { ...cur, agentic_mode_enabled: wasEnabled } : cur));
+        setRole(previousRole);
         void refetchAgentStatus?.();
-        showToast(getErrorMessage(error, 'Failed to turn off agent.'), 'error');
+        if (!handleRoleVersionConflict(error)) {
+          showToast(getErrorMessage(error, 'Failed to turn off agent.'), 'error');
+        }
       });
   };
 
@@ -1525,14 +1568,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
         actions={(
           <>
-            {/* Reverse deep-link to the Hub: when this role has pending
-                agent decisions, surface a one-click jump to the Home
-                review queue filtered to this role. Hidden when zero. */}
+            {/* Reverse deep-link to the Hub: the total includes candidate
+                decisions and open agent questions, so call them review items
+                rather than implying every item is a decision. */}
             {(roleAgent?.pending || 0) > 0 ? (
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
-                title={`${roleAgent.pending} pending agent decisions for this role`}
+                title={rolePendingReviewTitle}
+                aria-label={`${rolePendingReviewTitle}. Open the Home review queue.`}
                 onClick={() => {
                   // SPA nav — a full document reload here re-downloads the JS
                   // bundle and re-runs the auth/bootstrap chain (several extra
@@ -1544,7 +1588,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   navigate(`/home?${params.toString()}`);
                 }}
               >
-                {roleAgent.pending} pending → Home
+                Review {roleAgent.pending} {roleAgent.pending === 1 ? 'item' : 'items'} →
               </button>
             ) : null}
             {role?.role_kind === 'sister' ? (
@@ -1581,6 +1625,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 className="btn btn-outline btn-sm"
                 onClick={() => {
                   setJobSpecError('');
+                  setJobSpecConflict(null);
                   setSpecEditorDirty(false);
                   setEditingSpec(true);
                   setActiveView('activity');
@@ -1629,6 +1674,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         onResumeAgent={role?.role_kind === 'sister' ? undefined : handleResumeAgent}
         onTurnOffAgent={role?.role_kind === 'sister' ? undefined : handleTurnOffAgent}
         onAgentSettings={role?.role_kind === 'sister' ? undefined : goToAgentSettings}
+        controlsDisabledReason={role?.role_kind === 'sister' ? null : roleAgentControlDisabledReason}
       />
       {role?.role_kind === 'sister' ? (
         <div className="mx-auto mt-4 flex max-w-[1440px] flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3 text-sm">
@@ -1828,6 +1874,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           <RoleAgentSettingsTab
             role={role}
             agentStatus={agentStatus}
+            canControlAgent={canControlRoleAgent}
+            controlDisabledReason={roleAgentControlDisabledReason}
             roleCriteria={agentCriteria}
             workspaceCriteria={workspaceCriteria}
             criteriaBusy={criteriaBusy}
@@ -1853,7 +1901,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               if (!Number.isFinite(numericRoleId)) return;
               const cents = Math.max(1, Math.round(Number(dollars) * 100));
               try {
-                const res = await rolesApi.update(numericRoleId, { monthly_usd_budget_cents: cents });
+                const res = await rolesApi.update(numericRoleId, versionedRolePayload(role, {
+                  monthly_usd_budget_cents: cents,
+                }));
                 // Apply the committed value at once so the cap reflects the
                 // save instead of blocking the spinner on the full workspace
                 // reload; revalidate the rest in the background.
@@ -1869,100 +1919,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 void loadRoleWorkspace();
                 void refetchAgentStatus?.();
               } catch (error) {
-                showToast(getErrorMessage(error, 'Failed to update budget.'), 'error');
+                if (!handleRoleVersionConflict(error)) {
+                  showToast(getErrorMessage(error, 'Failed to update budget.'), 'error');
+                }
                 throw error;
               }
             }}
-            onAutonomyChange={async (key, value) => {
-              if (!Number.isFinite(numericRoleId)) return;
-              const labels = {
-                auto_send_assessment: 'Assessment sending',
-                auto_resend_assessment: 'Assessment resending',
-                auto_advance: 'Candidate advancement',
-                deterministic_pre_screen_reject: 'Pre-screen auto-reject',
-                auto_skip_assessment: 'Assessment skipping',
-              };
-              if (!labels[key]) return;
-              // The UI exposes one precise rejection grant. Keep both legacy
-              // flags aligned until every deployed backend has migrated, so a
-              // stale auto_reject=true can never re-broaden the visible rule.
-              const isGranularAutomation = GRANULAR_AUTOMATION_KEYS.includes(key);
-              let payload;
-              if (key === 'deterministic_pre_screen_reject') {
-                payload = { auto_reject: value, auto_reject_pre_screen: value };
-              } else if (isGranularAutomation) {
-                // An untouched role intentionally previews all reversible
-                // actions as ON even though its persisted granular values are
-                // still null. Materialize the entire visible policy when the
-                // recruiter changes one switch; persisting only that switch
-                // would make the remaining nulls inherit legacy
-                // auto_promote=false and silently flip them OFF.
-                const granularPolicy = Object.fromEntries(
-                  GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
-                    automationKey,
-                    automationKey === key
-                      ? Boolean(value)
-                      : resolvedRoleAutomation(role, automationKey),
-                  ]),
-                );
-                payload = {
-                  ...granularPolicy,
-                  auto_promote: GRANULAR_AUTOMATION_KEYS.every(
-                    (automationKey) => granularPolicy[automationKey],
-                  ),
-                };
-              } else {
-                payload = { [key]: value };
-              }
-              try {
-                const response = await rolesApi.update(numericRoleId, payload);
-                setRole((cur) => {
-                  if (!cur) return response?.data || cur;
-                  const effectivePatch = key === 'deterministic_pre_screen_reject'
-                    ? { auto_reject_pre_screen: value }
-                    : (isGranularAutomation
-                      ? Object.fromEntries(
-                        GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
-                          automationKey,
-                          payload[automationKey],
-                        ]),
-                      )
-                      : { [key]: value });
-                  return {
-                    ...cur,
-                    ...payload,
-                    ...(response?.data || {}),
-                    agent_effective_policy: {
-                      ...(cur.agent_effective_policy || {}),
-                      ...effectivePatch,
-                      ...(response?.data?.agent_effective_policy || {}),
-                    },
-                  };
-                });
-                const enabledMessages = {
-                  auto_send_assessment: 'Assessment sending on — approved on-policy invites send automatically.',
-                  auto_resend_assessment: 'Assessment resending on — policy-approved retries run automatically.',
-                  auto_advance: 'Candidate advancement on — qualified candidates move to recruiter handoff automatically.',
-                  deterministic_pre_screen_reject: 'Pre-screen auto-reject on — failed pre-screens reject automatically; later-stage rejections still need approval.',
-                };
-                const disabledMessages = {
-                  auto_send_assessment: 'Assessment sending off — each initial invite waits in the Decision Hub.',
-                  auto_resend_assessment: 'Assessment resending off — each retry waits for approval.',
-                  auto_advance: 'Candidate advancement off — each advance waits in the Decision Hub.',
-                  deterministic_pre_screen_reject: 'Pre-screen auto-reject off — failed pre-screens wait in the Decision Hub.',
-                };
-                showToast(
-                  key === 'auto_skip_assessment'
-                    ? (value
-                      ? 'Assessment skip on — strong candidates bypass assessment.'
-                      : 'Assessment skip off — assessment invites resume for this role.')
-                    : (value ? enabledMessages[key] : disabledMessages[key]),
-                  'success',
-                );
-              } catch (error) {
-                showToast(getErrorMessage(error, 'Failed to update autonomy setting.'), 'error');
-              }
-            }}
+            onAutonomyChange={handleAutonomyChange}
             thresholdMode={role?.auto_reject_threshold_mode || 'manual'}
             suggestedThreshold={suggestedThreshold}
             savingThresholdMode={savingThresholdMode}
@@ -1971,6 +1934,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             allTasks={allTasks}
             onAssignAssessmentTasks={handleAssignAssessmentTasks}
             savingAssessmentTask={savingAssessmentTask}
+            onRoleVersionChange={(version) => {
+              setRole((current) => (current ? { ...current, version } : current));
+            }}
+            onRoleConflict={loadRoleWorkspace}
           />
         ) : activeView === 'activity' ? (
           <div className={`role-spec-layout${editingSpec ? ' is-editing' : ''}`}>
@@ -1984,7 +1951,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   <button
                     type="button"
                     className="btn btn-outline btn-sm"
-                    onClick={() => { setJobSpecError(''); setSpecEditorDirty(false); setEditingSpec(true); }}
+                    onClick={() => {
+                      setJobSpecError('');
+                      setJobSpecConflict(null);
+                      setSpecEditorDirty(false);
+                      setEditingSpec(true);
+                    }}
                   >
                     Edit
                   </button>
@@ -1997,12 +1969,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     role={role}
                     saving={savingJobSpec}
                     error={jobSpecError}
+                    conflict={jobSpecConflict}
                     onDirtyChange={setSpecEditorDirty}
                     onSubmit={async (payload) => {
                       const ok = await handleJobSpecSubmit(payload);
                       if (ok) setEditingSpec(false);
                     }}
-                    onCancel={() => { setJobSpecError(''); setEditingSpec(false); }}
+                    onResolveConflict={() => setJobSpecConflict(null)}
+                    onCancel={() => {
+                      setJobSpecError('');
+                      setJobSpecConflict(null);
+                      setEditingSpec(false);
+                    }}
                   />
                 ) : (
                   <div className="role-spec-read">
@@ -2119,7 +2097,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             </aside> : null}
           </div>
         ) : activeView === 'hiring-team' ? (
-          <HiringTeamPanel roleId={role?.id} />
+          <HiringTeamPanel
+            roleId={role?.id}
+            roleVersion={role?.version}
+            onChanged={loadRoleWorkspace}
+          />
         ) : (
           <>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — KPI row
@@ -2180,28 +2162,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 defaultOpen={focusCampaignId != null}
               />
             ) : null}
-            {applicationsLoadError ? (
-              <div className="mc-agent-warn" role="alert" style={{ marginBottom: '0.75rem' }}>
-                <div>
-                  <div className="mc-agent-warn-title">Candidate list partially loaded</div>
-                  <div className="mc-agent-warn-body">{applicationsLoadError}</div>
-                </div>
-                <Button type="button" variant="secondary" size="sm" onClick={() => { void loadRoleWorkspace(); }}>
-                  Retry
-                </Button>
-              </div>
-            ) : null}
             {(() => {
               const sorted = sortedTableApplications;
+              if (applicationsLoading && roleApplications.length === 0) {
+                return (
+                  <div className="ctable-wrap">
+                    <div className="ctable-empty" role="status">
+                      <Spinner size={16} /> Loading candidates…
+                    </div>
+                  </div>
+                );
+              }
+              if (applicationsLoadError && roleApplications.length === 0) {
+                return (
+                  <div className="ctable-wrap">
+                    <div className="ctable-empty" role="alert">
+                      {applicationsLoadError}{' '}
+                      <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>Retry</button>
+                    </div>
+                  </div>
+                );
+              }
               if (sorted.length === 0) {
                 return (
                   <div className="ctable-wrap">
                     <div className="ctable-empty">
-                      {applicationsLoading ? (
-                        <span className="inline-flex items-center gap-2" role="status">
-                          <Spinner size={14} /> Loading candidates…
-                        </span>
-                      ) : 'No candidates match the current filter. Try widening the stage segment above.'}
+                      No candidates match the current filter. Try widening the stage segment above.
                     </div>
                   </div>
                 );
@@ -2454,7 +2440,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
-              <Button type="button" variant="primary" onClick={confirmAgentActivation}>Turn on with this policy</Button>
+              <Button type="button" variant="primary" onClick={confirmAgentActivation} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn on with this policy</Button>
             </div>
           )}
         >
@@ -2524,7 +2510,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 type="button"
                 variant="secondary"
                 onClick={() => activateAgentWithAssessmentChoice(activationReview?.monthlyBudgetCents, 'skip_assessment')}
-                disabled={Boolean(activationReview?.activationSubmitting)}
+                disabled={!canControlRoleAgent || Boolean(activationReview?.activationSubmitting)}
+                title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
               >
                 Skip assessment &amp; turn on
               </Button>
@@ -2532,6 +2519,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   <Button
                     type="button"
                     variant="primary"
+                    disabled={!canControlRoleAgent}
+                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
                     onClick={() => requestAgentActivationWhenReady(
                       activationReview?.monthlyBudgetCents,
                       activationReview?.draft || null,
@@ -2618,7 +2607,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setTurnOffOpen(false)}>Cancel</Button>
-              <Button type="button" variant="danger" onClick={confirmTurnOffAgent}>Turn off</Button>
+              <Button type="button" variant="danger" onClick={confirmTurnOffAgent} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn off</Button>
             </div>
           )}
         >

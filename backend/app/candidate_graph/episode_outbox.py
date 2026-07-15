@@ -37,6 +37,7 @@ from ..models.graph_episode_outbox import (
     OUTBOX_STATUS_SENT,
     GraphEpisodeOutbox,
 )
+from ..models.organization import Organization
 from ..models.role import Role
 from . import agent_episodes
 from . import client as graph_client
@@ -307,12 +308,14 @@ def _role_allows_outbox_dispatch(
     """
     return (
         db.query(Role.id)
+        .join(Organization, Organization.id == Role.organization_id)
         .filter(
             Role.id == int(role_id),
             Role.organization_id == int(organization_id),
             Role.deleted_at.is_(None),
             Role.agentic_mode_enabled.is_(True),
             Role.agent_paused_at.is_(None),
+            Organization.agent_workspace_paused_at.is_(None),
         )
         .scalar()
         is not None

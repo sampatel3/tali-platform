@@ -177,6 +177,7 @@ def _recruiter(db, role) -> User:
         is_active=True,
         is_verified=True,
         is_superuser=False,
+        role="owner",
     )
     db.add(user)
     db.flush()
@@ -202,6 +203,7 @@ def test_confirm_apply_rederives_criteria(db, monkeypatch):
         Actor.recruiter(user),
         organization_id=int(role.organization_id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "apply"},
     )
     db.flush()
@@ -229,6 +231,7 @@ def test_confirm_ignore_keeps_criteria(db, monkeypatch):
         Actor.recruiter(user),
         organization_id=int(role.organization_id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "ignore"},
     )
     db.flush()
