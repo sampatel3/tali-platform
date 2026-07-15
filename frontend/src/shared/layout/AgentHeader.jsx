@@ -120,6 +120,7 @@ const AgentStrip = ({
     inFlight = false,
     pausedReason = null,
     bootstrapStatus = null,
+    controlAction = null,
   } = agent || {};
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
   const pauseCopy = getAgentPauseCopy(pausedReason);
@@ -176,7 +177,13 @@ const AgentStrip = ({
     // ONE persistent box (no key/remount) — the abar-{status} class morphs it
     // in place: the dark-purple Motion layer / amber ::after fill crossfade,
     // and the border / text / glow tween (see 13-page-hero CSS).
-    <AgentLoop as="div" kind="glow" active={status === 'on'} className={`abar abar-${status}`}>
+    <AgentLoop
+      as="div"
+      kind="glow"
+      active={status === 'on'}
+      className={`abar abar-${status}`}
+      aria-busy={controlAction ? 'true' : undefined}
+    >
       <AgentLoop kind="flow" active={status === 'on'} className="abar-flow-layer" />
       <span className="ab-spark">
         <Sparkles size={15} strokeWidth={2} />
@@ -222,14 +229,24 @@ const AgentStrip = ({
                   size="sm"
                   className="ab-btn"
                   onClick={onPause}
-                  disabled={!onPause}
+                  disabled={!onPause || Boolean(controlAction)}
+                  loading={controlAction === 'pause'}
+                  loadingLabel="Pausing…"
                 >
                   <Pause size={11} strokeWidth={2} />
                   {pauseLabel}
                 </Button>
               ) : null}
               {Number(resumeAllCount) > 0 ? (
-                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="ab-btn primary"
+                  onClick={onResume}
+                  disabled={!onResume || Boolean(controlAction)}
+                  loading={controlAction === 'resume'}
+                  loadingLabel="Resuming…"
+                >
                   <Play size={11} strokeWidth={2} fill="currentColor" />
                   {resumeLabel}
                 </Button>
@@ -237,7 +254,15 @@ const AgentStrip = ({
             </>
           ) : status === 'on' ? (
             <>
-              <Button variant="inverse" size="sm" className="ab-btn" onClick={onPause} disabled={!onPause}>
+              <Button
+                variant="inverse"
+                size="sm"
+                className="ab-btn"
+                onClick={onPause}
+                disabled={!onPause || Boolean(controlAction)}
+                loading={controlAction === 'pause'}
+                loadingLabel="Pausing…"
+              >
                 <Pause size={11} strokeWidth={2} />
                 {pauseLabel}
               </Button>
@@ -257,7 +282,15 @@ const AgentStrip = ({
             </>
           ) : status === 'paused' ? (
             <>
-              <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+              <Button
+                variant="primary"
+                size="sm"
+                className="ab-btn primary"
+                onClick={onResume}
+                disabled={!onResume || Boolean(controlAction)}
+                loading={controlAction === 'resume'}
+                loadingLabel="Resuming…"
+              >
                 <Play size={11} strokeWidth={2} fill="currentColor" />
                 {resumeLabel}
               </Button>

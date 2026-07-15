@@ -19,6 +19,29 @@ from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
 
 
+def test_role_shell_returns_first_paint_payload_without_aggregates(client):
+    headers, _ = auth_headers(client)
+    role = client.post(
+        "/api/v1/roles",
+        json={"name": "Fast shell role", "description": "Large detail payload"},
+        headers=headers,
+    ).json()
+
+    response = client.get(
+        f"/api/v1/roles/{role['id']}?shell=true",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["id"] == role["id"]
+    assert payload["name"] == "Fast shell role"
+    assert payload["description"] is None
+    assert payload["stage_counts"] == {}
+    assert payload["pending_decisions_by_type"] == {}
+    assert payload["applications_count"] == 0
+
+
 def test_role_application_assessment_lifecycle(client, db, monkeypatch):
     from app.components.notifications.tasks import dispatch_pending_assessment_invite
 

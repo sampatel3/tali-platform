@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -57,6 +57,8 @@ class AgentDecision(Base):
     __tablename__ = "agent_decisions"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_agent_decisions_idempotency_key"),
+        Index("ix_agent_decisions_application_status", "application_id", "status"),
+        Index("ix_agent_decisions_role_status", "role_id", "status"),
     )
 
     id = Column(BigInteger, primary_key=True, index=True)

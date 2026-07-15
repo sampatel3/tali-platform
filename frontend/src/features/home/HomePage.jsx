@@ -393,24 +393,31 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // back under their monthly cap. A ref guard blocks double-fire; on success we
   // re-poll org-status so the strip flips Pause⇄Resume immediately.
   const orgAgentBusyRef = useRef(false);
-  const runOrgAgentBulk = useCallback(async (action) => {
+  const [orgAgentAction, setOrgAgentAction] = useState(null);
+  const runOrgAgentBulk = useCallback(async (actionName, action) => {
     if (orgAgentBusyRef.current) return;
     orgAgentBusyRef.current = true;
+    setOrgAgentAction(actionName);
     try {
       await action();
-      await reloadAll();
+      // Reconcile the header first. The decision list and role rail can refresh
+      // in the background; keeping the mutation locked behind those slower
+      // requests used to make a following Pause/Resume click get discarded.
+      await refetchOrgStatus();
+      void Promise.all([loadDecisions(), loadRoles()]);
     } catch {
       showToast?.('Could not update the agents — try again.', 'error');
     } finally {
       orgAgentBusyRef.current = false;
+      setOrgAgentAction(null);
     }
-  }, [reloadAll, showToast]);
+  }, [loadDecisions, loadRoles, refetchOrgStatus, showToast]);
   const handlePauseAllAgents = useCallback(
-    () => runOrgAgentBulk(() => agentApi.pauseAll()),
+    () => runOrgAgentBulk('pause', () => agentApi.pauseAll()),
     [runOrgAgentBulk],
   );
   const handleResumeAllAgents = useCallback(
-    () => runOrgAgentBulk(() => agentApi.resumeAll()),
+    () => runOrgAgentBulk('resume', () => agentApi.resumeAll()),
     [runOrgAgentBulk],
   );
 
@@ -638,6 +645,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       budgetCents: Number(kpis.org_budget_cap_cents || 0),
       tick,
       inFlight: false,
+      controlAction: orgAgentAction,
       pausedReason: running === 0 && paused > 0 ? 'Paused by you' : null,
     };
   }, [
@@ -647,6 +655,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     kpis.org_budget_spent_cents,
     kpis.org_budget_cap_cents,
     kpis.last_decision_at,
+    orgAgentAction,
   ]);
 
   return (

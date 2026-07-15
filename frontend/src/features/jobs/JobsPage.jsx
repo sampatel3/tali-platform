@@ -674,25 +674,31 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // reload roles + re-poll the org-aggregate so the panel flips Pause⇄Resume
   // immediately instead of waiting for the 30s poll.
   const agentBulkBusyRef = useRef(false);
-  const runAgentBulk = useCallback(async (action, failMsg) => {
+  const [agentBulkAction, setAgentBulkAction] = useState(null);
+  const runAgentBulk = useCallback(async (actionName, action, failMsg) => {
     if (isShowcase || agentBulkBusyRef.current) return;
     agentBulkBusyRef.current = true;
+    setAgentBulkAction(actionName);
     setError('');
     try {
       await action();
-      await Promise.all([loadJobsHub(), refetchAgentStatus()]);
+      // Release the mutation guard before the heavier jobs refresh. The org
+      // status request is enough to reconcile the header immediately.
+      await refetchAgentStatus();
+      void loadJobsHub();
     } catch {
       setError(failMsg);
     } finally {
       agentBulkBusyRef.current = false;
+      setAgentBulkAction(null);
     }
   }, [isShowcase, loadJobsHub, refetchAgentStatus]);
   const handlePauseAllAgents = useCallback(
-    () => runAgentBulk(() => apiClient.agent.pauseAll(), 'Could not pause agents.'),
+    () => runAgentBulk('pause', () => apiClient.agent.pauseAll(), 'Could not pause agents.'),
     [runAgentBulk],
   );
   const handleResumeAllAgents = useCallback(
-    () => runAgentBulk(() => apiClient.agent.resumeAll(), 'Could not resume agents.'),
+    () => runAgentBulk('resume', () => apiClient.agent.resumeAll(), 'Could not resume agents.'),
     [runAgentBulk],
   );
   // Running vs paused split across agent-enabled roles. In a mixed org the
@@ -762,7 +768,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             </button>
           </>
         )}
-        agent={headerAgent}
+        agent={headerAgent ? { ...headerAgent, controlAction: agentBulkAction } : headerAgent}
         onPauseAgent={isShowcase ? undefined : handlePauseAllAgents}
         onResumeAgent={isShowcase ? undefined : handleResumeAllAgents}
         pauseAllCount={isShowcase ? null : agentRunningCount}
