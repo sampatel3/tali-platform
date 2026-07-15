@@ -3,6 +3,10 @@ import api from './httpClient';
 export const roles = {
   list: (params = {}) => api.get('/roles', { params }),
   get: (id) => api.get(`/roles/${id}`),
+  // Fast first-paint payload for role detail. Expensive funnel/decision
+  // aggregates and full job-spec relationships follow via `get` after the
+  // shell is visible.
+  getShell: (id) => api.get(`/roles/${id}`, { params: { shell: true } }),
   create: (data) => api.post('/roles', data),
   previewSister: (sourceRoleId) => api.get(`/roles/${sourceRoleId}/sisters/preview`),
   createSister: (sourceRoleId, data) => api.post(`/roles/${sourceRoleId}/sisters`, data),

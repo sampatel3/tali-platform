@@ -552,16 +552,18 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
 @router.get("/roles/{role_id}", response_model=RoleResponse)
 def get_role_endpoint(
     role_id: int,
+    shell: bool = Query(
+        default=False,
+        description="Return the lightweight role shell without pipeline aggregates.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    query = db.query(Role).options(joinedload(Role.ats_owner_role))
+    if not shell:
+        query = query.options(joinedload(Role.tasks), selectinload(Role.sister_roles))
     role = (
-        db.query(Role)
-        .options(
-            joinedload(Role.tasks),
-            joinedload(Role.ats_owner_role),
-            selectinload(Role.sister_roles),
-        )
+        query
         .filter(
             Role.id == role_id,
             Role.organization_id == current_user.organization_id,
@@ -571,6 +573,13 @@ def get_role_endpoint(
     )
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
+    if shell:
+        return role_to_response(
+            role,
+            summary=True,
+            tasks_count=0,
+            applications_count=0,
+        )
     return _serialize_role_detail(db, role, current_user.organization_id)
 
 

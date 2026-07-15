@@ -11,7 +11,7 @@ import {
   useReducedMotionSync,
 } from '../motion';
 import { BreadcrumbsRow } from '../ui/Breadcrumbs';
-import { Button } from '../ui/TaaliPrimitives';
+import { Button, Spinner } from '../ui/TaaliPrimitives';
 
 // AgentHeader — the single compact LIGHT header at the top of every recruiter
 // page (redesign 2026-06). One fixed height (96px) across every page so the
@@ -203,7 +203,9 @@ const AgentStrip = ({
     pausedBy = null,
     pendingBreakdown = null,
     bootstrapStatus = null,
+    controlAction = null,
   } = agent || {};
+  const controlsBusy = Boolean(controlAction);
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
   const pauseCopy = getAgentPauseCopy(pausedReason);
   const isManualPause = pauseCopy.kind === 'manual';
@@ -398,22 +400,23 @@ const AgentStrip = ({
                   size="sm"
                   className="ab-btn"
                   onClick={onPause}
-                  disabled={!onPause}
+                  disabled={!onPause || controlsBusy}
+                  aria-busy={controlAction === 'pause'}
                 >
-                  <Pause size={11} strokeWidth={2} />
-                  {pauseLabel}
+                  {controlAction === 'pause' ? <Spinner size={11} /> : <Pause size={11} strokeWidth={2} />}
+                  {controlAction === 'pause' ? 'Pausing…' : pauseLabel}
                 </Button>
               ) : null}
               {Number(resumeAllCount) > 0 ? (
-                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
-                  <Play size={11} strokeWidth={2} fill="currentColor" />
-                  {resumeLabel}
+                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy} aria-busy={controlAction === 'resume'}>
+                  {controlAction === 'resume' ? <Spinner size={11} /> : <Play size={11} strokeWidth={2} fill="currentColor" />}
+                  {controlAction === 'resume' ? 'Resuming…' : resumeLabel}
                 </Button>
               ) : null}
             </>
           ) : status === 'on' ? (
             <>
-              <Button variant="inverse" size="sm" className="ab-btn" onClick={onPause} disabled={!onPause}>
+              <Button variant="inverse" size="sm" className="ab-btn" onClick={onPause} disabled={!onPause || controlsBusy} aria-busy={controlAction === 'pause'}>
                 <Pause size={11} strokeWidth={2} />
                 {pauseLabel}
               </Button>
@@ -433,7 +436,7 @@ const AgentStrip = ({
             </>
           ) : status === 'paused' ? (
             <>
-              <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+              <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy} aria-busy={controlAction === 'resume'}>
                 <Play size={11} strokeWidth={2} fill="currentColor" />
                 {resumeLabel}
               </Button>

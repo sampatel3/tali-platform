@@ -447,5 +447,20 @@ describe('AgentHeader — Pause/Resume panel', () => {
       expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^pause$/i })).not.toBeInTheDocument();
     });
+
+    it('acknowledges a bulk pause immediately and locks both controls', () => {
+      render(
+        <AgentHeader
+          title="Jobs"
+          agent={{ ...runningAgent, controlAction: 'pause' }}
+          onPauseAgent={() => {}}
+          onResumeAgent={() => {}}
+          pauseAllCount={1}
+          resumeAllCount={2}
+        />,
+      );
+      expect(screen.getByRole('button', { name: /pausing/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^resume$/i })).toBeDisabled();
+    });
   });
 });

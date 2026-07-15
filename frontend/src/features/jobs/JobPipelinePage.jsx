@@ -35,14 +35,7 @@ import {
   motionSafeScrollBehavior,
   motionTransition,
 } from '../../shared/motion';
-// AgentRail (the legacy left "cockpit rail") was retired with the v3
-// role detail layout — top AgentBar replaces it. Component file stays
-// in the tree until any other surface that may import it is also
-// migrated; remove that import here to avoid unused-import warnings.
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
-// CandidatesDirectoryPage is no longer embedded on the role detail —
-// the Candidates tab now renders a canvas-spec inline ctable directly.
-// Standalone /candidates route still uses the directory.
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
@@ -104,11 +97,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   void onViewCandidate;
 
   const numericRoleId = Number(roleId);
-  // Batch progress is owned by the global JobStatusContext — single source of truth.
   const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
-  // Live agent status for THIS role — backend serves /roles/{id}/agent/status
-  // with monthly_spent_cents + monthly_budget_cents + pending_decisions +
-  // last_activity. Polled every 30s, paused when the tab is hidden.
+  // Live status is polled every 30s and pauses when the tab is hidden.
   const { status: agentStatus, setStatus: setAgentStatus, refetch: refetchAgentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
   // Per-feature spend breakdown for the role budget panel. Refetched
   // whenever the role's monthly spend ticks (a coarse proxy for "new
@@ -196,10 +186,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
-  // Workspace chips loaded once per role-workspace load. Used by the
-  // role page chip editor for the "Show hidden" suppressed-chips view
-  // (we need the workspace text/bucket for chips the recruiter has
-  // hidden from this role).
+  // Workspace chips also power the role editor's suppressed-chip view.
   const [workspaceCriteria, setWorkspaceCriteria] = useState([]);
   const [criteriaBusy, setCriteriaBusy] = useState(false);
   const [criteriaSyncing, setCriteriaSyncing] = useState(false);
@@ -207,6 +194,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [roleApplications, setRoleApplications] = useState([]);
+  const [applicationsLoading, setApplicationsLoading] = useState(false);
+  const [applicationsLoadError, setApplicationsLoadError] = useState('');
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
@@ -215,8 +204,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
-  // Set only on a cold-load failure with nothing cached to paint — drives the
-  // in-page error state (with Retry) instead of stranding an empty shell.
+  const [roleDetailLoading, setRoleDetailLoading] = useState(true);
+  const [roleDetailLoadError, setRoleDetailLoadError] = useState('');
+  // Cold-load failure state with an in-page retry.
   const [loadError, setLoadError] = useState('');
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [savingAssessmentTask, setSavingAssessmentTask] = useState(false);
@@ -403,28 +393,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setJobSpecError('');
     setJobSpecConflict(null);
   }, [role?.role_kind]);
-  // Only the most recently started loadRoleWorkspace may write state, so a
-  // slow earlier load can't clobber fresher state (e.g. revert an optimistic
-  // agent toggle to OFF). loadedRoleIdRef marks the last fully-loaded role so
-  // a warm revalidate skips the (stale) cache repaint.
+  // Only the most recent workspace load may write state.
   const loadSeqRef = useRef(0);
   const loadedRoleIdRef = useRef(null);
-  // One hover-intent controller for the whole page (rows + kanban cards share
-  // it, so moving between them cancels the prior pending prefetch).
   const hoverPrefetchRef = useRef(null);
   if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeCandidateCvHoverPrefetch();
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     const seq = (loadSeqRef.current += 1);
-    // Stale-while-revalidate on a cold load (first visit to this role id):
-    // paint cache, revalidate silently. A warm refresh (revalidate after a
-    // mutation like the agent toggle or budget save) must NOT repaint from
-    // cache — it lags the optimistic state and would flip it back.
     const cacheKey = `role-workspace:${numericRoleId}`;
     const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
     const cached = isColdForRole ? readCache(cacheKey) : null;
     setLoadError('');
+    setApplicationsLoadError('');
+    setRoleDetailLoadError('');
     if (cached?.data) {
       const c = cached.data;
       setRole(c.role || null);
@@ -432,43 +415,84 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setRoleApplications(Array.isArray(c.roleApplications) ? c.roleApplications : []);
       setWorkspaceCriteria(Array.isArray(c.workspaceCriteria) ? c.workspaceCriteria : []);
       setLoading(false);
-      // Painted data for this role — later revalidates are warm (no repaint).
+      setRoleDetailLoading(false);
       loadedRoleIdRef.current = numericRoleId;
     } else if (isColdForRole) {
       setLoading(true);
+      setRoleDetailLoading(true);
     }
+    setApplicationsLoading(true);
+    let rolePainted = Boolean(cached?.data);
     try {
-      // Two separate fetches (open + rejected) at the backend's 2000-row
-      // ceiling — splits the budget so a long reject history can't crowd
-      // open candidates out, and avoids the 500-row default that would
-      // silently truncate thousand-applicant roles.
       const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
-      const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
-        rolesApi.get(numericRoleId),
-        rolesApi.listTasks(numericRoleId),
-        rolesApi.listApplications(numericRoleId, appsQuery('open')),
-        rolesApi.listApplications(numericRoleId, appsQuery('rejected')),
-        rolesApi.batchScoreStatus(numericRoleId),
-        rolesApi.fetchCvsStatus(numericRoleId),
+      const shellRes = rolesApi.getShell
+        ? await rolesApi.getShell(numericRoleId)
+        : await rolesApi.get(numericRoleId);
+      if (seq !== loadSeqRef.current) return;
+      loadedRoleIdRef.current = numericRoleId;
+      let nextRole = shellRes?.data || null;
+      setRole((current) => (
+        current && !isColdForRole
+          ? {
+              ...current,
+              ...nextRole,
+              stage_counts: current.stage_counts,
+              pending_decisions_by_type: current.pending_decisions_by_type,
+              active_candidates_count: current.active_candidates_count,
+            }
+          : nextRole
+      ));
+      rolePainted = Boolean(nextRole);
+      setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
+      setLoading(false);
+
+      try {
+        const roleRes = await rolesApi.get(numericRoleId);
+        if (seq !== loadSeqRef.current) return;
+        nextRole = roleRes?.data || nextRole;
+        setRole(nextRole);
+        setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
+      } catch (error) {
+        if (seq !== loadSeqRef.current) return;
+        setRoleDetailLoadError(getErrorMessage(error, 'Pipeline summary could not be loaded.'));
+      } finally {
+        if (seq === loadSeqRef.current) setRoleDetailLoading(false);
+      }
+
+      const [tasksRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
+        rolesApi.listTasks(numericRoleId).catch(() => ({ data: [] })),
+        rolesApi.batchScoreStatus(numericRoleId).catch(() => ({ data: null })),
+        rolesApi.fetchCvsStatus(numericRoleId).catch(() => ({ data: EMPTY_FETCH_PROGRESS })),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
-        // Workspace chips for the suppressed-chips ("hidden from this
-        // role") view in the chip editor. Defensive: optional-chained
-        // call + .catch so a missing API client or transient failure
-        // doesn't blow up the whole role workspace load.
         Promise.resolve(apiClient.organizations?.listCriteria?.() ?? { data: [] })
           .catch(() => ({ data: [] })),
       ]);
-      // A newer load started while we were in flight — drop this stale result.
       if (seq !== loadSeqRef.current) return;
-      loadedRoleIdRef.current = numericRoleId;
-      const nextRole = roleRes?.data || null;
-      let applicationPayloads = [
-        ...(openAppsRes?.data || []),
-        ...(rejectedAppsRes?.data || []),
-      ];
-      // Sister roles evaluate the complete source cohort, including prior
-      // hires/withdrawals. The standard page keeps its two-query hot path;
-      // only the uncommon sister view pays this extra terminal-outcome fetch.
+      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
+      const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
+      setRoleTasks(nextTasks);
+      setWorkspaceCriteria(nextCriteria);
+      setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
+      setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
+
+      let applicationPayloads = [];
+      let applicationError = null;
+      try {
+        const openAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('open'));
+        if (seq !== loadSeqRef.current) return;
+        applicationPayloads = [...(openAppsRes?.data || [])];
+        setRoleApplications(applicationPayloads);
+      } catch (error) {
+        applicationError = error;
+      }
+      try {
+        const rejectedAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('rejected'));
+        if (seq !== loadSeqRef.current) return;
+        applicationPayloads = [...applicationPayloads, ...(rejectedAppsRes?.data || [])];
+        setRoleApplications(applicationPayloads);
+      } catch (error) {
+        applicationError ||= error;
+      }
       if (nextRole?.role_kind === 'sister') {
         const [hiredAppsRes, withdrawnAppsRes] = await Promise.all([
           rolesApi.listApplications(numericRoleId, appsQuery('hired')),
@@ -480,19 +504,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           ...(hiredAppsRes?.data || []),
           ...(withdrawnAppsRes?.data || []),
         ];
+        setRoleApplications(applicationPayloads);
       }
-      setRole(nextRole);
-      setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
-      setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
-      // Fetch the agent's threshold recommendation when the role is
-      // in auto mode so the panel shows it without waiting for click.
+      if (applicationError) {
+        setApplicationsLoadError(getErrorMessage(applicationError, 'Some candidates could not be loaded.'));
+      }
+      // Preload the automatic threshold recommendation.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
         rolesApi.suggestedAutoRejectThreshold(numericRoleId)
           .then((res) => setSuggestedThreshold(res?.data || null))
           .catch(() => setSuggestedThreshold(null));
       } else setSuggestedThreshold(null);
-      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
-      setRoleTasks(nextTasks);
       // Dedupe by id — defensive against any backend overlap.
       const byId = new Map();
       for (const a of applicationPayloads) {
@@ -500,36 +522,33 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       }
       const nextApps = [...byId.values()];
       setRoleApplications(nextApps);
-      const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
-      // Refresh the SWR cache so the next visit paints instantly.
       writeCache(cacheKey, {
         role: nextRole,
         roleTasks: nextTasks,
         roleApplications: nextApps,
         workspaceCriteria: nextCriteria,
       });
-      // Hand off batch status to the global context — it owns display state.
-      // If a batch is already running when this page loads, make the context
-      // track it immediately (no waiting for the next 10s discovery poll).
       const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
       if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
         trackRole?.(numericRoleId);
       }
-      setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
-      setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
     } catch (error) {
-      // Don't wipe a cached paint if a background revalidate fails — only
-      // surface a hard failure when there was nothing to show in the first
-      // place (cold load with no cache).
-      if (isColdForRole && !cached?.data) {
+      // Preserve any shell/cache paint when a background request fails.
+      if (!rolePainted && isColdForRole && !cached?.data) {
         setRole(null);
         setRoleTasks([]);
         setRoleApplications([]);
         setLoadError(getErrorMessage(error, 'Failed to load this job.'));
         showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
+      } else if (rolePainted) {
+        setApplicationsLoadError(getErrorMessage(error, 'Some job data could not be loaded.'));
       }
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+        setRoleDetailLoading(false);
+        setApplicationsLoading(false);
+      }
     }
   }, [numericRoleId, rolesApi, showToast, trackRole]);
 
@@ -1458,7 +1477,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       .pause(numericRoleId, roleExpectedVersion(role))
       .then((response) => {
         if (response?.data) setRole((current) => (current ? { ...current, ...response.data } : response.data));
-        void refetchAgentStatus?.();
       })
       .catch((error) => {
         void refetchAgentStatus?.();
@@ -1481,8 +1499,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       .resume(numericRoleId, roleExpectedVersion(role))
       .then((response) => {
         if (response?.data) setRole((current) => (current ? { ...current, ...response.data } : response.data));
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
       })
       .catch((error) => {
         void refetchAgentStatus?.();
@@ -1504,6 +1520,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const confirmTurnOffAgent = () => {
     if (!Number.isFinite(numericRoleId)) return;
     const alsoDiscard = turnOffDiscard && (roleAgent?.pending || 0) > 0;
+    const previousRole = role;
     setTurnOffOpen(false);
     // Optimistic: roleAgent.on is driven by role.agentic_mode_enabled, so flip
     // that in one frame; zero the pending count too when discarding.
@@ -1514,7 +1531,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     rolesApi
       .update(numericRoleId, versionedRolePayload(role, { agentic_mode_enabled: false }))
       .then((response) => {
-        if (response?.data) setRole(response.data);
+        if (response?.data) setRole((current) => (current ? {
+          ...current, ...response.data,
+          stage_counts: current.stage_counts, pending_decisions_by_type: current.pending_decisions_by_type,
+          active_candidates_count: current.active_candidates_count,
+        } : response.data));
         return alsoDiscard
           ? apiClient.agent.discardPending(
               numericRoleId,
@@ -1522,10 +1543,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             )
           : null;
       })
-      .then(() => { void refetchAgentStatus?.(); void loadRoleWorkspace(); })
-      .catch((error) => {
+      .then(() => {
         void refetchAgentStatus?.();
-        void loadRoleWorkspace();
+        if (alsoDiscard) {
+          void fetchPendingDecisions();
+          void rolesApi.get(numericRoleId).then((response) => {
+            if (response?.data) setRole(response.data);
+          }).catch(() => {});
+        }
+      })
+      .catch((error) => {
+        setRole(previousRole);
+        void refetchAgentStatus?.();
         if (!handleRoleVersionConflict(error)) {
           showToast(getErrorMessage(error, 'Failed to turn off agent.'), 'error');
         }
@@ -1703,7 +1732,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             stacks value + label + the agent's pending-decision chips inline, with
             the terminal Rejected cell set apart. The home hub uses the same
             variant — one funnel look across surfaces. */}
-        <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
+        {roleDetailLoading ? (
+          <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-text-muted)]" role="status">
+            <Spinner size={18} />
+            <span className="ml-2">Loading pipeline summary…</span>
+          </div>
+        ) : (
+          <>
+            {roleDetailLoadError ? (
+              <div className="mc-agent-warn mb-3" role="alert">
+                <div>
+                  <div className="mc-agent-warn-title">Pipeline summary unavailable</div>
+                  <div className="mc-agent-warn-body">{roleDetailLoadError}</div>
+                </div>
+                <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>Retry</button>
+              </div>
+            ) : null}
+            <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
+          </>
+        )}
 
         <RoleViewTabs activeView={activeView} onBeforeNavigate={handleRoleViewNavigate} />
 
@@ -2131,6 +2178,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             ) : null}
             {(() => {
               const sorted = sortedTableApplications;
+              if (applicationsLoading && roleApplications.length === 0) {
+                return (
+                  <div className="ctable-wrap">
+                    <div className="ctable-empty" role="status">
+                      <Spinner size={16} /> Loading candidates…
+                    </div>
+                  </div>
+                );
+              }
+              if (applicationsLoadError && roleApplications.length === 0) {
+                return (
+                  <div className="ctable-wrap">
+                    <div className="ctable-empty" role="alert">
+                      {applicationsLoadError}{' '}
+                      <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>Retry</button>
+                    </div>
+                  </div>
+                );
+              }
               if (sorted.length === 0) {
                 return (
                   <div className="ctable-wrap">
