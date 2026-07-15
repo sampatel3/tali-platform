@@ -1,9 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pause, Play, Power, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 
 import { useAgentStatus } from './AgentBar';
 import { getAgentPauseCopy } from '../agentPauseCopy';
-import { AgentLoop } from '../motion';
+import {
+  AgentLoop,
+  MotionNumber,
+  m,
+  motionTransition,
+  useReducedMotionSync,
+} from '../motion';
 import { BreadcrumbsRow } from '../ui/Breadcrumbs';
 import { Button } from '../ui/TaaliPrimitives';
 
@@ -37,7 +43,7 @@ const formatUsd = (cents) => {
   if (cents == null) return '$0';
   const dollars = Number(cents) / 100;
   if (!Number.isFinite(dollars)) return '$0';
-  return dollars >= 100 ? `$${Math.round(dollars)}` : `$${dollars.toFixed(2)}`;
+  return Number.isInteger(dollars) ? `$${Math.round(dollars)}` : `$${dollars.toFixed(2)}`;
 };
 
 const DEFAULT_BUDGET_USD = 50;
@@ -59,14 +65,56 @@ const pendingSummary = (pending, breakdown) => {
     parts.push(`${questions} agent question${questions === 1 ? '' : 's'}`);
   }
   return parts.length > 0
-    ? `${total} awaiting you: ${parts.join(' and ')}`
-    : `${total} item${total === 1 ? '' : 's'} awaiting you`;
+    ? `${total} awaiting review: ${parts.join(' and ')}`
+    : `${total} item${total === 1 ? '' : 's'} awaiting review`;
 };
 
-const manualPauseAttribution = (pausedBy) => {
-  if (pausedBy?.is_current_user === true) return 'Paused by you';
+const formatRelative = (iso) => {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  const diff = Math.max(0, Date.now() - t);
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  if (diff < 7 * 86_400_000) return `${Math.round(diff / 86_400_000)}d ago`;
+  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(new Date(t));
+};
+
+const manualPauseAttribution = (pausedBy, pausedAt) => {
   const actorName = String(pausedBy?.name || '').trim();
-  return actorName ? `Paused by ${actorName}` : 'Paused manually';
+  const when = formatRelative(pausedBy?.changed_at || pausedAt);
+  const suffix = when ? ` · ${when}` : '';
+  const currentUserSuffix = pausedBy?.is_current_user === true ? ' (you)' : '';
+  const attribution = pausedBy?.attribution || (actorName || pausedBy?.user_id ? 'verified' : null);
+
+  if (attribution === 'inferred' && actorName) {
+    return {
+      text: `Likely paused by ${actorName}${currentUserSuffix}${suffix}`,
+      title: 'Legacy pause: inferred from the only workspace member present at the time. It is not a verified audit event.',
+    };
+  }
+  if (attribution === 'verified' && actorName) {
+    return { text: `Paused by ${actorName}${currentUserSuffix}${suffix}`, title: null };
+  }
+  if (
+    (attribution === 'verified' && pausedBy?.user_id == null)
+    || (attribution === 'unavailable' && pausedBy?.source === 'role_change_event')
+  ) {
+    return {
+      text: `Paused by a former team member${suffix}`,
+      title: 'The pause event is retained, but the team member account is no longer available.',
+    };
+  }
+  // Optimistic local state: the signed-in viewer just clicked Pause and the
+  // audit-backed status refetch has not returned yet.
+  if (pausedBy?.is_current_user === true) {
+    return { text: 'Paused by you · Saving…', title: null };
+  }
+  return {
+    text: `Pause owner not recorded${suffix}`,
+    title: 'This role was paused before actor tracking was available. New pause actions record the team member.',
+  };
 };
 
 // Inline activator shown inside the OFF-state agent strip: a compact budget
@@ -137,6 +185,11 @@ const AgentStrip = ({
   pauseAllCount = null,
   resumeAllCount = null,
 }) => {
+  const reduced = useReducedMotionSync();
+  const hasMounted = useRef(false);
+  useEffect(() => {
+    hasMounted.current = true;
+  }, []);
   const {
     on = true,
     paused = false,
@@ -145,6 +198,7 @@ const AgentStrip = ({
     budgetCents = 5000,
     tick = null,
     inFlight = false,
+    pausedAt = null,
     pausedReason = null,
     pausedBy = null,
     pendingBreakdown = null,
@@ -167,12 +221,13 @@ const AgentStrip = ({
   const label = status === 'on'
     ? (bootstrapStatus === 'starting' ? 'Agent starting' : 'Agent on')
     : status === 'paused'
-      ? (isManualPause ? 'Paused' : 'Auto-paused')
+      ? (isManualPause ? 'Agent paused' : 'Auto-paused')
       : 'Agent off';
 
   // The middle "tick" line — live activity (ON), humanized pause reason
   // (PAUSED), or the activation hint (OFF, no activator).
   let message = null;
+  let messageTitle = null;
   if (status === 'on') {
     message = tick;
   } else if (status === 'paused') {
@@ -181,7 +236,9 @@ const AgentStrip = ({
     if (isManualPause) {
       // Persisted pause reasons deliberately remain generic. The append-only
       // role audit is the source of truth for who acted in a shared workspace.
-      message = manualPauseAttribution(pausedBy);
+      const attributionCopy = manualPauseAttribution(pausedBy, pausedAt);
+      message = attributionCopy.text;
+      messageTitle = attributionCopy.title;
     } else {
       const r = String(pausedReason || '').toLowerCase();
       if (r.includes('bootstrap failed')) {
@@ -199,6 +256,7 @@ const AgentStrip = ({
   // instead, which is also what the two buttons act on.
   if (isMixed) {
     message = `${pauseAllCount} running · ${resumeAllCount} paused`;
+    messageTitle = null;
   }
 
   const showBudget = (status === 'on' || status === 'paused') && budgetCents > 0 && !isMixed;
@@ -206,39 +264,110 @@ const AgentStrip = ({
   const pendingLabel = pendingCount > 0
     ? pendingSummary(pendingCount, pendingBreakdown)
     : null;
+  const layoutMotion = reduced ? false : 'position';
+  // The first paint is fully settled. Later authoritative state/copy changes
+  // get a tiny acknowledgement without delaying or ghosting the new text.
+  const swapInitial = reduced || !hasMounted.current ? false : { opacity: 0.7, y: 2 };
+  const swapTransition = reduced ? motionTransition.instant : motionTransition.fast;
 
   return (
     // ONE persistent box (no key/remount) — the abar-{status} class morphs it
     // in place: the dark-purple Motion layer / amber ::after fill crossfade,
     // and the border / text / glow tween (see 13-page-hero CSS).
-    <AgentLoop as="div" kind="glow" active={status === 'on'} className={`abar abar-${status}`}>
+    <AgentLoop
+      as="div"
+      kind="glow"
+      active={status === 'on'}
+      className={`abar abar-${status}`}
+      layout={layoutMotion}
+      transition={{ layout: reduced ? motionTransition.instant : motionTransition.layout }}
+    >
       <AgentLoop kind="flow" active={status === 'on'} className="abar-flow-layer" />
-      <span className="ab-spark">
-        <Sparkles size={15} strokeWidth={2} />
-        {inFlight && on && !paused ? <AgentLoop kind="ring" className="ab-pulse" /> : null}
-      </span>
-      <span className="ab-label">{label}</span>
-      <span className={`ab-context${status === 'paused' && isManualPause && !isMixed ? ' ab-context-manual' : ''}`}>
-        {pendingLabel ? (
-          <span className="ab-pending" title={pendingLabel} aria-label={pendingLabel}>
-            {pendingCount} awaiting you
+      <m.span
+        className={`ab-state${status === 'paused' && isManualPause && !isMixed ? ' ab-state-manual' : ''}`}
+        layout={layoutMotion}
+        transition={reduced ? motionTransition.instant : motionTransition.layout}
+      >
+        <m.span
+          key={status}
+          className="ab-spark"
+          initial={reduced || !hasMounted.current ? false : { opacity: 0.7, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={swapTransition}
+        >
+          <Sparkles size={15} strokeWidth={2} />
+          {inFlight && on && !paused ? <AgentLoop kind="ring" className="ab-pulse" /> : null}
+        </m.span>
+        <span className="ab-state-copy">
+          <span className="ab-label" aria-label={label}>
+            <m.span
+              key={label}
+              aria-hidden="true"
+              initial={swapInitial}
+              animate={{ opacity: 1, y: 0 }}
+              transition={swapTransition}
+            >
+              {label}
+            </m.span>
           </span>
-        ) : null}
-        {message ? (
-          <span
-            className="ab-tick"
-            title={typeof message === 'string' ? message : undefined}
-            aria-label={status === 'paused' && isManualPause ? message : undefined}
-          >
-            {message}
+          {message ? (
+            <span
+              className="ab-tick"
+              title={messageTitle || (typeof message === 'string' ? message : undefined)}
+              aria-label={status === 'paused' && isManualPause ? message : undefined}
+            >
+              <m.span
+                key={String(message)}
+                aria-hidden={status === 'paused' && isManualPause ? 'true' : undefined}
+                initial={swapInitial}
+                animate={{ opacity: 1, y: 0 }}
+                transition={swapTransition}
+              >
+                {message}
+              </m.span>
+            </span>
+          ) : <span className="ab-tick" />}
+        </span>
+      </m.span>
+
+      {pendingLabel ? (
+        <m.span
+          className="ab-review"
+          title={pendingLabel}
+          aria-label={pendingLabel}
+          layout={layoutMotion}
+          transition={reduced ? motionTransition.instant : motionTransition.layout}
+        >
+          <span className="ab-metric-label">Review queue</span>
+          <span className="ab-review-value" aria-hidden="true">
+            <MotionNumber
+              value={pendingCount}
+              format={(value) => String(Math.round(value))}
+              reduced={reduced}
+              aria-label={undefined}
+            />
+            <span> to review</span>
           </span>
-        ) : <span className="ab-tick" />}
-      </span>
+        </m.span>
+      ) : null}
 
       {showBudget ? (
-        <span className="ab-budget" title="AI usage only: model-backed pre-screening, scoring, semantic search, assessment grading, and agent reasoning. Sandbox, email, storage, and repository hosting are separate.">
-          <span className="ab-budget-amt">{spentLabel}<span className="of"> / {budgetLabel}</span></span>
-          <span className="ab-budget-bar"><i style={{ width: `${pct}%` }} /></span>
+        <span
+          className="ab-budget"
+          title="AI usage only: model-backed pre-screening, scoring, semantic search, assessment grading, and agent reasoning. Sandbox, email, storage, and repository hosting are separate."
+        >
+          <span className="ab-metric-label">AI spend</span>
+          <span className="ab-budget-amt">{spentLabel}<span className="of"> of {budgetLabel}</span></span>
+          <span
+            className="ab-budget-bar"
+            role="progressbar"
+            aria-label={`AI spend ${spentLabel} of ${budgetLabel}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct}
+          >
+            <i style={{ width: `${pct}%` }} />
+          </span>
         </span>
       ) : null}
 
@@ -485,22 +614,12 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     // Actual reason the orchestrator set — surfaces "per-cycle token
     // budget exhausted" / "monthly USD cap reached" / etc. instead of a
     // hardcoded blanket message.
+    pausedAt: status.paused_at || null,
     pausedReason: status.paused_reason || null,
     pausedBy: status.paused_by || null,
     bootstrapStatus: status.bootstrap_status || null,
     bootstrapError: status.bootstrap_error || null,
   };
-};
-
-const formatRelative = (iso) => {
-  if (!iso) return null;
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return null;
-  const diff = Math.max(0, Date.now() - t);
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
-  return `${Math.round(diff / 86_400_000)}d ago`;
 };
 
 const tickFromActivity = (activity) => {

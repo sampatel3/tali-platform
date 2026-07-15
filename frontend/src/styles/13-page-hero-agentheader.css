@@ -232,19 +232,18 @@
    the header, the chat agent-rail, and job cards.
    ============================================================ */
 .abar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) max-content max-content max-content;
   align-items: center;
-  gap: 9px;
-  height: 52px;
+  column-gap: 12px;
+  min-height: 64px;
   /* Fixed width (per viewport) so toggling on/off/paused never resizes the
-     box — it's ONE persistent box whose look morphs in place. Wide enough
-     that the activity/tick line stays visible in every state. */
-  /* The count + activity share a stacked context column. Desktop has enough
-     room to keep the full review label and an ordinary teammate name visible
-     alongside budget and controls; narrower layouts stack below the title. */
-  width: clamp(660px, 50vw, 700px);
-  border-radius: 13px;
-  padding: 0 8px 0 13px;
+     card — it's ONE persistent surface whose look morphs in place. A deliberate
+     grid gives state, review queue, spend, and actions their own hierarchy
+     instead of stretching one ambiguous text column across empty space. */
+  width: clamp(620px, 48vw, 680px);
+  border-radius: 14px;
+  padding: 8px 9px 8px 12px;
   position: relative;
   isolation: isolate;
   overflow: hidden;
@@ -273,12 +272,20 @@
 /* ON fill = the signed-off flowing dark-purple gradient (design-language pass).
    5 stops + 300% sizing; Motion.dev drifts the colour across the bar. */
 .abar-flow-layer { background: var(--grad-agent-on-animated); background-size: 300% 300%; }
-.abar::after  { background: color-mix(in oklab, var(--amber) 13%, var(--bg-2)); }
+.abar::after  { background: color-mix(in oklab, var(--amber) 7%, var(--bg)); }
 .abar-on .abar-flow-layer { opacity: 1; }
 .abar-paused::after { opacity: 1; }
+.ab-state {
+  grid-column: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
 .ab-spark {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 9px;
   flex-shrink: 0;
   display: inline-flex;
@@ -288,6 +295,7 @@
   transition: background 360ms ease, border-color 360ms ease, color 360ms ease;
 }
 .ab-label {
+  display: block;
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 700;
@@ -297,34 +305,46 @@
   flex-shrink: 0;
   transition: color 360ms ease;
 }
-.ab-pending {
+.ab-state-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.ab-metric-label {
+  display: block;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 9px;
   font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 7px;
-  line-height: 1.35;
+  letter-spacing: .08em;
+  line-height: 1.1;
+  text-transform: uppercase;
+  color: var(--mute);
   white-space: nowrap;
 }
-.ab-context {
-  flex: 1 1 180px;
-  min-width: 180px;
+.ab-review {
+  grid-column: 2;
+  min-width: 90px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 2px;
-  overflow: hidden;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
 }
-.ab-context-manual {
-  /* The count and actor share vertical space instead of competing on one
-     horizontal line. Reserve enough width for ordinary full names so the
-     identity remains visible even with budget and action controls present. */
-  flex-basis: 210px;
-  min-width: 210px;
+.ab-review-value {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+  line-height: 1.1;
+  white-space: nowrap;
 }
 .ab-tick {
-  font-size: 12.5px;
+  display: block;
+  font-size: 12px;
   width: 100%;
   white-space: nowrap;
   overflow: hidden;
@@ -332,12 +352,26 @@
   line-height: 1.2;
   transition: color 360ms ease;
 }
-.ab-context-manual .ab-tick { font-weight: 600; }
-.ab-budget { display: flex; flex-direction: column; gap: 4px; width: 92px; flex-shrink: 0; }
-.ab-budget-amt { font-family: var(--font-mono); font-size: 11px; text-align: right; white-space: nowrap; }
+.ab-state-manual .ab-tick {
+  font-weight: 600;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.ab-budget {
+  grid-column: 3;
+  min-width: 104px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+.ab-budget-amt { font-family: var(--font-mono); font-size: 11px; text-align: left; white-space: nowrap; }
 .ab-budget-amt .of { opacity: .7; }
-.ab-budget-bar { height: 4px; border-radius: 2px; overflow: hidden; }
+.ab-budget-bar { width: 100%; height: 3px; border-radius: 999px; overflow: hidden; }
 .ab-budget-bar i { display: block; height: 100%; border-radius: 2px; }
+.ab-actions { grid-column: 4; }
 .ab-actions, .ab-activate { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 /* Simulated press — the landing scroll-trigger "presses" Turn-on before flipping. */
 .ab-btn.is-pressing { transform: scale(0.94); filter: brightness(0.9); }
@@ -369,24 +403,25 @@
   border: 2px solid rgba(196, 165, 253, .6);
 }
 .abar-on .ab-label { color: #fff; }
-.abar-on .ab-pending { background: rgba(196, 165, 253, .26); color: #fff; }
 .abar-on .ab-tick { color: rgba(255, 255, 255, .74); }
+.abar-on .ab-metric-label { color: rgba(255, 255, 255, .58); }
+.abar-on .ab-review,
+.abar-on .ab-budget { border-left-color: rgba(255, 255, 255, .18); }
+.abar-on .ab-review-value { color: #fff; }
 .abar-on .ab-budget-amt { color: #fff; }
 .abar-on .ab-budget-bar { background: rgba(255, 255, 255, .2); }
 .abar-on .ab-budget-bar i { background: var(--purple-lav); }
 /* PAUSED — amber (fill on .abar::after) */
 .abar-paused {
   border-color: color-mix(in oklab, var(--amber) 40%, var(--line));
-  color: var(--amber-ink);
+  color: var(--ink);
+  box-shadow: 0 5px 18px -14px color-mix(in oklab, var(--amber) 55%, transparent);
 }
 .abar-paused .ab-spark { background: var(--bg-2); border: 1px solid color-mix(in oklab, var(--amber) 40%, var(--line)); color: var(--amber); }
 .abar-paused .ab-label { color: var(--amber-ink); }
-.abar-paused .ab-tick { color: var(--amber-ink); }
-/* PAUSED shows the budget figure but not a live meter — the bar carries no
-   fill in this state, so its (invisible) 4px row would otherwise lift the
-   amount off the strip's baseline, above PAUSED / the pending pill / the tick.
-   Drop it so the amount sits centred in line with the rest of the text. */
-.abar-paused .ab-budget-bar { display: none; }
+.abar-paused .ab-tick { color: var(--ink-soft); }
+.abar-paused .ab-budget-bar { background: color-mix(in oklab, var(--amber) 16%, var(--line)); }
+.abar-paused .ab-budget-bar i { background: var(--amber); }
 /* OFF — quiet light (the .abar base IS the off look); just the inner bits. */
 .abar-off .ab-spark { background: var(--bg-3); border: 1px solid var(--line); color: var(--mute); }
 .abar-off .ab-label { color: var(--ink-soft); }
@@ -395,7 +430,14 @@
 /* BLOCK — the agent strip reused full-width as a section header (e.g. the
    "Agent assessed" band over the candidate report's scored dimensions). Same
    ON treatment, just unclamped + carrying a trailing score instead of buttons. */
-.abar.abar-block { width: 100%; padding-right: 16px; margin-bottom: 16px; }
+.abar.abar-block {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  min-height: 52px;
+  padding-right: 16px;
+  margin-bottom: 16px;
+}
 .abar-block .ab-assess {
   display: inline-flex;
   align-items: baseline;
@@ -474,8 +516,6 @@
   .agent-header-inner { grid-template-columns: 1fr; gap: 14px; }
   .agent-header-right { width: 100%; flex-wrap: wrap; }
   .abar { width: 100%; }
-  .ab-context { max-width: none; flex: 1; }
-  .ab-tick { max-width: none; }
 }
 
 /* Tablet / large phone: the role-detail sub-strip can't fit its facts AND the
@@ -495,42 +535,57 @@
   .ah-substrip-actions { flex-wrap: wrap; }
   .ah-facts { gap: 8px 22px; }
 
-  /* Compact agent strip: keep it a self-contained card that never spills past
-     the viewport. The activity line ("Monthly budget reached", "Scoring a
-     candidate"…) drops to its own row so the status label + the
-     Pause / Resume / settings buttons on row 1 are ALWAYS visible — they were
-     previously clipped by `overflow: hidden`, which hid the Resume button on an
-     auto-paused role. The in-bar budget meter is redundant on phones (the role
-     budget tile and KPI tiles already show spend) and is the first thing to
-     overflow, so it's dropped to make room. */
+  /* Compact status card: state/actor owns the first row; review queue, labelled
+     AI spend, and controls share the second. Nothing is silently removed, so a
+     paused role keeps both its recovery action and the context for the hold. */
   .abar {
-    height: auto;
-    min-height: 48px;
-    flex-wrap: wrap;
-    padding: 9px 11px;
-    row-gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    min-height: 0;
+    padding: 10px 11px;
+    row-gap: 10px;
   }
-  .abar .ab-context {
-    order: 6;
-    flex: 1 0 100%;
+  .abar .ab-state {
+    grid-column: 1 / -1;
+  }
+  .abar .ab-review {
+    grid-column: 1;
     min-width: 0;
-    align-items: flex-start;
-    overflow: visible;
+    padding-left: 0;
+    border-left: 0;
   }
-  .abar .ab-tick {
-    width: auto;
-    white-space: normal;
-    line-height: 1.3;
-    overflow: visible;
-    text-overflow: clip;
-  }
-  .abar .ab-context:has(.ab-tick:empty):not(:has(.ab-pending)) { display: none; }
-  .abar .ab-budget { display: none; }
-  .abar .ab-actions,
-  .abar .ab-activate {
-    order: 4;
+  .abar .ab-budget { grid-column: 2; min-width: 100px; }
+  .abar .ab-actions {
+    grid-column: 3;
     margin-left: auto;
   }
+  .abar-off .ab-actions { grid-column: 1 / -1; }
+}
+
+@media (max-width: 520px) {
+  .abar { grid-template-columns: minmax(0, 1fr); }
+  .abar .ab-state,
+  .abar .ab-review,
+  .abar .ab-budget,
+  .abar .ab-actions { grid-column: 1; }
+  .abar .ab-review,
+  .abar .ab-budget {
+    width: 100%;
+    min-width: 0;
+    padding: 8px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .abar-on .ab-review,
+  .abar-on .ab-budget { border-top-color: rgba(255, 255, 255, .18); }
+  .abar .ab-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+  .abar .ab-actions .ab-btn { min-height: 40px; }
+  .abar .ab-actions .ab-btn.ic { width: 40px; min-width: 40px; }
+  .abar .ab-actions > .ab-btn:not(.ic) { flex: 1; }
+  .abar .ab-activate { flex: 1; }
+  .abar .ab-activate .ab-btn { flex: 1; }
 }
 
 @media (max-width: 600px) {

@@ -13,7 +13,7 @@ discarding it is an explicit opt-in via POST /agent-decisions/discard.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from sqlalchemy import event
@@ -390,11 +390,20 @@ def test_agent_status_attributes_current_human_pause_not_latest_editor(client):
     )
     assert mine.status_code == 200, mine.text
     paused_by = mine.json()["paused_by"]
-    assert set(paused_by) == {"user_id", "name", "is_current_user", "changed_at"}
+    assert set(paused_by) == {
+        "user_id",
+        "name",
+        "is_current_user",
+        "changed_at",
+        "attribution",
+        "source",
+    }
     assert paused_by["user_id"] == _user_id(owner_email)
     assert paused_by["name"] == "Pause Owner"
     assert paused_by["is_current_user"] is True
     assert paused_by["changed_at"] is not None
+    assert paused_by["attribution"] == "verified"
+    assert paused_by["source"] == "role_change_event"
 
     viewer_headers, viewer_email = auth_headers(
         client,
@@ -418,6 +427,137 @@ def test_agent_status_attributes_current_human_pause_not_latest_editor(client):
     assert viewed.json()["paused_by"]["user_id"] == _user_id(owner_email)
     assert viewed.json()["paused_by"]["name"] == "Pause Owner"
     assert viewed.json()["paused_by"]["is_current_user"] is False
+
+
+def test_agent_status_labels_unique_member_legacy_pause_as_inferred(client):
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(
+        client,
+        full_name="Legacy Pause Owner",
+        organization_name="Legacy Pause Source Org",
+    )
+    seeded = _seed_org_with_agent_roles(
+        "Legacy Unique Pause Attribution Org", role_names=["A"]
+    )
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    sess = TestingSessionLocal()
+    try:
+        role = sess.query(Role).filter(Role.id == role_id).one()
+        # A future instant avoids SQLite timestamp precision making the user
+        # appear to have been created after this synthetic legacy pause.
+        role.agent_paused_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+        role.agent_paused_reason = "paused by recruiter"
+        sess.commit()
+    finally:
+        sess.close()
+
+    status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=headers
+    )
+    assert status.status_code == 200, status.text
+    paused_by = status.json()["paused_by"]
+    assert paused_by["user_id"] == _user_id(email)
+    assert paused_by["name"] == "Legacy Pause Owner"
+    assert paused_by["is_current_user"] is True
+    assert paused_by["changed_at"] == status.json()["paused_at"]
+    assert paused_by["attribution"] == "inferred"
+    assert paused_by["source"] == "legacy_unique_member"
+
+
+def test_agent_status_leaves_ambiguous_legacy_pause_actor_unavailable(client):
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    first_headers, first_email = auth_headers(
+        client,
+        full_name="First Legacy Member",
+        organization_name="First Legacy Member Org",
+    )
+    _, second_email = auth_headers(
+        client,
+        full_name="Second Legacy Member",
+        organization_name="Second Legacy Member Org",
+    )
+    seeded = _seed_org_with_agent_roles(
+        "Ambiguous Legacy Pause Attribution Org", role_names=["A"]
+    )
+    _attach_user_to_org(first_email, seeded["org_id"])
+    _attach_user_to_org(second_email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    sess = TestingSessionLocal()
+    try:
+        role = sess.query(Role).filter(Role.id == role_id).one()
+        role.agent_paused_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+        role.agent_paused_reason = "paused by recruiter"
+        sess.commit()
+    finally:
+        sess.close()
+
+    status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=first_headers
+    )
+    assert status.status_code == 200, status.text
+    paused_by = status.json()["paused_by"]
+    assert paused_by["user_id"] is None
+    assert paused_by["name"] is None
+    assert paused_by["is_current_user"] is False
+    assert paused_by["changed_at"] == status.json()["paused_at"]
+    assert paused_by["attribution"] == "unavailable"
+    assert paused_by["source"] == "legacy_history"
+
+
+def test_agent_status_preserves_audit_time_when_actor_is_unavailable(client):
+    from app.services.role_change_audit import (
+        ROLE_CHANGE_ACTION_AGENT_PAUSED,
+        add_role_change_event,
+        capture_role_change_snapshot,
+    )
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles(
+        "Unavailable Audited Pause Attribution Org", role_names=["A"]
+    )
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    sess = TestingSessionLocal()
+    try:
+        role = sess.query(Role).filter(Role.id == role_id).one()
+        before = capture_role_change_snapshot(role)
+        role.agent_paused_at = datetime.now(timezone.utc)
+        role.agent_paused_reason = "paused by recruiter"
+        role.version = 2
+        add_role_change_event(
+            sess,
+            role=role,
+            before=before,
+            action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+            # Mirrors a preserved append-only event after its actor account is
+            # removed and the FK anonymizes the actor reference.
+            actor_user_id=None,
+            from_version=1,
+            to_version=2,
+            reason="paused by recruiter",
+        )
+        sess.commit()
+    finally:
+        sess.close()
+
+    status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=headers
+    )
+    assert status.status_code == 200, status.text
+    paused_by = status.json()["paused_by"]
+    assert paused_by["user_id"] is None
+    assert paused_by["name"] is None
+    assert paused_by["is_current_user"] is False
+    assert paused_by["changed_at"] is not None
+    assert paused_by["attribution"] == "unavailable"
+    assert paused_by["source"] == "role_change_event"
 
 
 def test_agent_status_does_not_attribute_system_pause_to_older_human(client):

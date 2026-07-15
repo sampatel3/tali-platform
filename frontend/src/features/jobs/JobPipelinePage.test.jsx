@@ -1371,7 +1371,7 @@ Banking transformation experience
     renderPipeline();
 
     const resumeBtn = await screen.findByRole('button', { name: /^resume$/i });
-    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('Agent paused')).toBeInTheDocument();
 
     fireEvent.click(resumeBtn);
 
@@ -1401,8 +1401,8 @@ Banking transformation experience
 
     // Optimistic flip to PAUSED; calls the soft-pause endpoint, never a role
     // PATCH (which would disable the agent and risk the queue).
-    expect(await screen.findByText('Paused')).toBeInTheDocument();
-    expect(screen.getByText('Paused by you')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Agent paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('Paused by you · Saving…')).toBeInTheDocument();
     expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
     expect(apiClient.roles.update).not.toHaveBeenCalled();
   });
@@ -1421,11 +1421,14 @@ Banking transformation experience
 
     renderPipeline();
 
-    const barCount = await screen.findByText('176 awaiting you');
+    const barCount = await screen.findByLabelText(
+      '176 awaiting review: 175 candidate decisions and 1 agent question',
+    );
     expect(barCount).toHaveAttribute(
       'aria-label',
-      '176 awaiting you: 175 candidate decisions and 1 agent question',
+      '176 awaiting review: 175 candidate decisions and 1 agent question',
     );
+    expect(barCount).toHaveTextContent('176 to review');
     const reviewAction = screen.getByRole('button', {
       name: /176 awaiting you: 175 candidate decisions and 1 agent question.*Home review queue/i,
     });

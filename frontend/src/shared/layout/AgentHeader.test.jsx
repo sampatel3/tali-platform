@@ -1,8 +1,14 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 
 import { AgentHeader, buildAgentPropFromStatus } from './AgentHeader';
+
+const defaultMatchMedia = window.matchMedia;
+
+afterEach(() => {
+  window.matchMedia = defaultMatchMedia;
+});
 
 const runningAgent = {
   on: true,
@@ -33,7 +39,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByRole('button', { name: /^pause$/i })).toBeDisabled();
   });
 
-  it('shows Paused (not Auto-paused) and the Resume button after a manual pause', () => {
+  it('shows Agent paused (not Auto-paused), the full actor, and Resume after a manual pause', () => {
     const onResume = vi.fn();
     const { container } = render(
       <AgentHeader
@@ -48,14 +54,14 @@ describe('AgentHeader — Pause/Resume panel', () => {
         onResumeAgent={onResume}
       />,
     );
-    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('Agent paused')).toBeInTheDocument();
     expect(screen.queryByText('Auto-paused')).not.toBeInTheDocument();
-    const manualContext = container.querySelector('.ab-context-manual');
-    expect(manualContext).not.toBeNull();
-    expect(within(manualContext).getByText('3 awaiting you')).toBeInTheDocument();
-    expect(within(manualContext).getByText('Paused by you')).toHaveAttribute(
+    const manualState = container.querySelector('.ab-state-manual');
+    expect(manualState).not.toBeNull();
+    expect(screen.getByLabelText('3 items awaiting review')).toHaveTextContent('3 to review');
+    expect(within(manualState).getByLabelText('Paused by Sam Patel (you)')).toHaveAttribute(
       'aria-label',
-      'Paused by you',
+      'Paused by Sam Patel (you)',
     );
     expect(container.querySelector('.abar')).toHaveAttribute('data-motion-state', 'rest');
     expect(container.querySelector('.abar-flow-layer')).toHaveAttribute('data-motion-state', 'rest');
@@ -81,7 +87,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    expect(screen.getByText('Paused by Aisha Khan')).toHaveAttribute(
+    expect(screen.getByLabelText('Paused by Aisha Khan')).toHaveAttribute(
       'title',
       'Paused by Aisha Khan',
     );
@@ -110,11 +116,11 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    const manualContext = container.querySelector('.ab-context-manual');
-    expect(manualContext).not.toBeNull();
-    expect(within(manualContext).getByText('148 awaiting you')).toBeInTheDocument();
+    const manualState = container.querySelector('.ab-state-manual');
+    expect(manualState).not.toBeNull();
+    expect(screen.getByLabelText('148 items awaiting review')).toHaveTextContent('148 to review');
     expect(
-      within(manualContext).getByText('Paused by Alexandra Montgomery-Smythe'),
+      within(manualState).getByLabelText('Paused by Alexandra Montgomery-Smythe'),
     ).toHaveAttribute('title', 'Paused by Alexandra Montgomery-Smythe');
   });
 
@@ -127,8 +133,116 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    expect(screen.getByText('Paused manually')).toBeInTheDocument();
+    expect(screen.getByLabelText('Pause owner not recorded')).toHaveAttribute(
+      'title',
+      expect.stringMatching(/before actor tracking/i),
+    );
     expect(screen.queryByText(/by you/i)).not.toBeInTheDocument();
+  });
+
+  it('names a uniquely inferable legacy actor without presenting it as verified', () => {
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          pausedAt: '2026-06-01T15:21:42Z',
+          pausedReason: 'paused by recruiter',
+          pausedBy: {
+            user_id: 1,
+            name: 'Sam Patel',
+            is_current_user: true,
+            changed_at: '2026-06-01T15:21:42Z',
+            attribution: 'inferred',
+            source: 'legacy_unique_member',
+          },
+        }}
+        onResumeAgent={() => {}}
+      />,
+    );
+
+    const attribution = screen.getByLabelText(/Likely paused by Sam Patel \(you\)/i);
+    expect(attribution).toHaveAttribute('title', expect.stringMatching(/not a verified audit event/i));
+  });
+
+  it('keeps paused AI spend labelled and available to assistive technology', () => {
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          spentCents: 4313,
+          pausedReason: 'paused by recruiter',
+          pausedBy: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        }}
+        onResumeAgent={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('AI spend')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'AI spend $43.13 of $50' }))
+      .toHaveAttribute('aria-valuenow', '86');
+  });
+
+  it('keeps new status and attribution semantics immediate while the visual state transitions', () => {
+    const { rerender } = render(
+      <AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={() => {}} />,
+    );
+
+    rerender(
+      <AgentHeader
+        title="Jobs"
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          pending: 148,
+          pausedReason: 'paused by recruiter',
+          pausedBy: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        }}
+        onResumeAgent={() => {}}
+      />,
+    );
+
+    expect(screen.getByLabelText('Agent paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('148 items awaiting review')).toBeInTheDocument();
+    expect(screen.getByLabelText('Paused by Aisha Khan')).toBeInTheDocument();
+  });
+
+  it('settles count and copy changes directly at their final values under reduced motion', () => {
+    window.matchMedia = vi.fn().mockImplementation((query) => ({
+      matches: String(query).includes('prefers-reduced-motion'),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    }));
+
+    const { rerender } = render(
+      <AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={() => {}} />,
+    );
+    rerender(
+      <AgentHeader
+        title="Jobs"
+        agent={{
+          ...runningAgent,
+          on: false,
+          paused: true,
+          pending: 148,
+          pausedReason: 'paused by recruiter',
+          pausedBy: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        }}
+        onResumeAgent={() => {}}
+      />,
+    );
+
+    expect(screen.getByLabelText('148 items awaiting review')).toHaveTextContent('148 to review');
+    expect(screen.getByLabelText('Paused by Aisha Khan')).toHaveTextContent('Paused by Aisha Khan');
   });
 
   it('labels the actionable total and exposes its decision/question breakdown', () => {
@@ -142,11 +256,14 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
     render(<AgentHeader title="Jobs" agent={agent} onPauseAgent={() => {}} />);
 
-    const pending = screen.getByText('176 awaiting you');
+    const pending = screen.getByLabelText(
+      '176 awaiting review: 175 candidate decisions and 1 agent question',
+    );
     expect(pending).toHaveAttribute(
       'aria-label',
-      '176 awaiting you: 175 candidate decisions and 1 agent question',
+      '176 awaiting review: 175 candidate decisions and 1 agent question',
     );
+    expect(pending).toHaveTextContent('176 to review');
     expect(agent.pending).toBe(176);
     expect(agent.pendingBreakdown).toEqual({ total: 176, decisions: 175, questions: 1 });
   });

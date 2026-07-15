@@ -270,11 +270,15 @@ export const JobsMotionPreview = () => {
         pending: 148,
         spentCents: 4313,
         budgetCents: 5000,
+        pausedAt: '2026-06-01T15:21:42Z',
         pausedReason: 'paused by recruiter',
         pausedBy: {
-          user_id: 11,
-          name: 'Alexandra Montgomery-Smythe',
-          is_current_user: false,
+          user_id: 1,
+          name: 'Sam Patel',
+          is_current_user: true,
+          changed_at: '2026-06-01T15:21:42Z',
+          attribution: 'inferred',
+          source: 'legacy_unique_member',
         },
         inFlight: false,
       }

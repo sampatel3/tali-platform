@@ -485,6 +485,47 @@ def latest_role_change_actor(
     }
 
 
+def infer_legacy_unique_org_actor(
+    session: Session,
+    *,
+    organization_id: int,
+    changed_at: datetime,
+) -> dict[str, Any] | None:
+    """Return the sole surviving org member who predates a legacy change.
+
+    Roles changed before :mod:`role_change_events` was introduced have no
+    verified actor record.  When exactly one surviving user account existed by
+    the time of the change, that account is useful *inferred* provenance for
+    the status UI.  Callers must label it as inferred and must never use it for
+    authorization, conflict ownership, or append-only audit history.
+
+    Inactive users remain candidates because this describes historical state,
+    not present-day access.  Limiting to two rows makes the ambiguity check
+    bounded; zero or multiple plausible users deliberately returns ``None``.
+    A deleted historical account cannot be recovered by this helper, which is
+    why its result must not be presented as verified attribution.
+    """
+
+    users = (
+        session.query(User)
+        .filter(
+            User.organization_id == int(organization_id),
+            User.created_at <= changed_at,
+        )
+        .order_by(User.id.asc())
+        .limit(2)
+        .all()
+    )
+    if len(users) != 1:
+        return None
+    user = users[0]
+    return {
+        "user_id": int(user.id),
+        "name": str(user.full_name)[:200] if user.full_name is not None else None,
+        "changed_at": changed_at,
+    }
+
+
 def serialize_role_change_event(event: RoleChangeEvent) -> dict[str, Any]:
     """Return a JSON-safe representation suitable for a later API route."""
 

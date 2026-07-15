@@ -40,7 +40,8 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     expect(screen.getByText('ON · $18/$50')).toBeInTheDocument();
     // Both the global agent strip and the matching role card surface the same
     // actionable count; the header now labels it instead of showing a bare 3.
-    expect(screen.getAllByText(/3 awaiting you/)).toHaveLength(2);
+    expect(screen.getByLabelText('3 items awaiting review')).toHaveTextContent('3 to review');
+    expect(screen.getByText(/3 awaiting you/)).toBeInTheDocument();
     const runningCard = screen.getByText('AI Engineer').closest('.job-card');
     const pausedCard = screen.getByText('Senior Data Engineer').closest('.job-card');
     const offCard = screen.getByText('Frontend Engineer').closest('.job-card');
@@ -69,8 +70,12 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     setReducedMotion(true);
     render(<JobsMotionPreview />);
 
-    expect(screen.getByText('148 awaiting you')).toBeInTheDocument();
-    expect(screen.getByText('Paused by Alexandra Montgomery-Smythe')).toBeInTheDocument();
+    expect(screen.getByLabelText('148 items awaiting review')).toHaveTextContent('148 to review');
+    expect(screen.getByLabelText(/Likely paused by Sam Patel \(you\)/i)).toHaveAttribute(
+      'title',
+      expect.stringMatching(/not a verified audit event/i),
+    );
+    expect(screen.getByText('AI spend')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /turn off agent/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /configure agent/i })).toBeInTheDocument();

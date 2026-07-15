@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -53,6 +53,7 @@ from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_RESUMED,
     add_role_change_event,
     capture_role_change_snapshot,
+    infer_legacy_unique_org_actor,
     latest_role_change_actor,
 )
 from ...services.workable_op_runner import AtsJobRunPersistenceError
@@ -270,10 +271,16 @@ class AgentStatusCurrentRun(BaseModel):
 
 
 class AgentStatusPausedBy(BaseModel):
-    user_id: int
+    user_id: Optional[int] = None
     name: Optional[str] = None
     is_current_user: bool
     changed_at: Optional[datetime] = None
+    attribution: Literal["verified", "inferred", "unavailable"]
+    source: Literal[
+        "role_change_event",
+        "legacy_unique_member",
+        "legacy_history",
+    ]
 
 
 class AgentStatusPendingBreakdown(BaseModel):
@@ -1601,18 +1608,61 @@ def agent_status(
             role_id=role_id,
             action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
         )
-        # A manual-looking legacy row without an auditable human must remain
-        # unattributed.  In particular, never fall back to the actor from an
-        # unrelated edit or an older pause after a system hold replaces it.
-        pause_actor_user_id = (
-            pause_actor.get("user_id") if pause_actor is not None else None
-        )
-        if pause_actor_user_id is not None:
+        if pause_actor is not None:
+            # The matching append-only event is the source of truth. Its user
+            # can be unavailable after account deletion, but the event time is
+            # still useful and must not be replaced with a different member.
+            pause_actor_user_id = pause_actor.get("user_id")
             paused_by = AgentStatusPausedBy(
-                user_id=int(pause_actor_user_id),
+                user_id=(
+                    int(pause_actor_user_id)
+                    if pause_actor_user_id is not None
+                    else None
+                ),
                 name=pause_actor.get("name"),
-                is_current_user=int(pause_actor_user_id) == int(current_user.id),
+                is_current_user=(
+                    pause_actor_user_id is not None
+                    and int(pause_actor_user_id) == int(current_user.id)
+                ),
                 changed_at=pause_actor.get("changed_at"),
+                attribution=(
+                    "verified" if pause_actor_user_id is not None else "unavailable"
+                ),
+                source="role_change_event",
+            )
+        else:
+            # Migration 169 introduced role_change_events without fabricating
+            # history for already-paused roles. A sole surviving account that
+            # predates such a pause is useful context, but remains explicitly
+            # inferred because deleted historical users cannot be recovered.
+            inferred_actor = infer_legacy_unique_org_actor(
+                db,
+                organization_id=int(current_user.organization_id),
+                changed_at=role.agent_paused_at,
+            )
+            inferred_user_id = (
+                inferred_actor.get("user_id") if inferred_actor is not None else None
+            )
+            paused_by = AgentStatusPausedBy(
+                user_id=(
+                    int(inferred_user_id) if inferred_user_id is not None else None
+                ),
+                name=(
+                    inferred_actor.get("name")
+                    if inferred_actor is not None
+                    else None
+                ),
+                is_current_user=(
+                    inferred_user_id is not None
+                    and int(inferred_user_id) == int(current_user.id)
+                ),
+                changed_at=role.agent_paused_at,
+                attribution=("inferred" if inferred_actor is not None else "unavailable"),
+                source=(
+                    "legacy_unique_member"
+                    if inferred_actor is not None
+                    else "legacy_history"
+                ),
             )
 
     return AgentStatusPayload(
