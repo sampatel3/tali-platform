@@ -248,15 +248,6 @@
 .ac-card-applied .ac-card-head svg { color: var(--purple); }
 .ac-card-actions { display: flex; gap: 7px; flex-wrap: wrap; }
 
-/* ---- Proactive helper prompt ------------------------------------------ */
-/* Suggestions are durable agent messages, but their quick replies only fill
-   the composer. They deliberately share the softer card vocabulary instead of
-   looking like an already-running operation. */
-.ac-card-helper { border-color: var(--purple-soft); background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); }
-.ac-helper-priority { margin-left: auto; font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--purple-2); background: var(--bg-2); border: 1px solid var(--purple-soft); border-radius: 999px; padding: 2px 7px; }
-.ac-helper-summary, .ac-helper-question { margin: 0; font-size: 0.75rem; line-height: 1.5; color: var(--ink-2); }
-.ac-helper-question { color: var(--ink); font-weight: 500; }
-
 /* ---- Durable agent events --------------------------------------------- */
 /* Event cards are transcript history, not ephemeral toasts: severity is
    written as text as well as colour, and the card deliberately has no live
@@ -309,53 +300,6 @@ a.ac-event-source:focus-visible { outline: 2px solid var(--purple); outline-offs
 .ac-reject-note { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2); padding: 7px 9px; font-family: var(--font-sans); font-size: 0.75rem; color: var(--ink); resize: none; outline: none; }
 .ac-reject-note:focus { border-color: var(--purple-lav); }
 .ac-reject-note::placeholder { color: var(--mute); }
-
-/* ---- Needs-input cards -------------------------------------------------- */
-/* A chat-native request, not an alert. The neutral surface and semantic
-   info tint both derive from scheme-aware tokens, including in dark mode. */
-.ac-needs {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-2);
-  box-shadow: var(--shadow-sm);
-}
-.ac-needs[data-status="answered"],
-.ac-needs[data-status="dismissed"] { background: color-mix(in oklab, var(--bg-2) 94%, var(--bg-3)); }
-.ac-needs-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.ac-needs-icon {
-  display: inline-flex;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in oklab, var(--purple) 16%, var(--line));
-  border-radius: 9px;
-  color: var(--taali-button-accent-fg, var(--purple));
-  background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 10%, var(--bg-2)));
-}
-.ac-needs-heading-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
-.ac-needs-eyebrow { color: var(--mute); font-size: 0.625rem; font-weight: 600; letter-spacing: 0.06em; line-height: 1.25; text-transform: uppercase; }
-.ac-needs-title { margin: 0; color: var(--ink); font-size: 0.8125rem; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
-.ac-needs-dismiss { flex: none; margin-left: auto; color: var(--mute); }
-.ac-needs-prompt { margin: 0; color: var(--ink-2); font-size: 0.8125rem; line-height: 1.55; overflow-wrap: anywhere; }
-.ac-needs-rationale { margin: -2px 0 0; color: var(--ink-soft); font-size: 0.71875rem; line-height: 1.5; overflow-wrap: anywhere; }
-.ac-needs-options { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 2px; }
-.ac-needs-options > .taali-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-.ac-needs-answer { display: flex; flex: 1 1 100%; gap: 7px; min-width: 0; }
-.ac-needs-input { width: auto; min-width: 0; flex: 1; }
-.ac-needs-status { display: flex; align-items: center; gap: 5px; color: var(--taali-button-accent-fg, var(--purple)); font-size: 0.71875rem; font-weight: 600; }
-.ac-needs-status-muted { color: var(--ink-soft); }
-
-@media (max-width: 520px) {
-  .ac-needs { padding: 12px; }
-  .ac-needs-answer { flex-wrap: wrap; }
-  .ac-needs-answer .taali-btn { flex: 1 0 100%; }
-}
 
 /* ---- Buttons ----------------------------------------------------------- */
 .ac-btn { display: inline-flex; align-items: center; gap: 6px; justify-content: center; padding: 7px 12px; border-radius: 9px; font-size: 0.75rem; font-weight: 500; cursor: pointer; border: 1px solid transparent; font-family: var(--font-sans); transition: all 0.13s ease; white-space: nowrap; }

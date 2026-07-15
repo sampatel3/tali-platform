@@ -164,6 +164,23 @@ def approve_task_for_use(
     task.is_active = True
     db.add(task)
     db.flush()
+
+    # Generated drafts are linked to their role while still inactive. Once
+    # approval makes the task executable, close the role's stale setup prompt
+    # in this same transaction. Keeping this at the shared approval boundary
+    # covers Tasks, Agent Chat, and durable Turn-on without route drift.
+    from ..models.role import Role, role_tasks
+    from .agent_activation_checklist import resolve_satisfied_activation_questions
+
+    linked_roles = (
+        db.query(Role)
+        .join(role_tasks, role_tasks.c.role_id == Role.id)
+        .filter(role_tasks.c.task_id == int(task.id))
+        .all()
+    )
+    for role in linked_roles:
+        resolve_satisfied_activation_questions(db, role=role)
+    db.flush()
     return task
 
 

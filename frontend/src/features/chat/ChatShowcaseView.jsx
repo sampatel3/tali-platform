@@ -2,9 +2,8 @@ import React, { Suspense, lazy, useMemo, useState } from 'react';
 import { ArrowUp, Sparkles } from 'lucide-react';
 
 import './chat.css';
-// The agent-action cards (impact / needs-a-steer) carry their own `ac-*`
-// styling here. The live /chat page rides these in globally via Home; the
-// standalone showcase iframe must pull them in itself.
+// Home-specific impact cards still carry `ac-*` styling. Shared agent prompts
+// bring their own chat-kit styles, so they cannot depend on route order.
 import '../home/agentchat/agentchat.css';
 // Lazy so cytoscape (~455 kB) stays out of the showcase path until a
 // message actually carries a graph payload.
@@ -13,9 +12,8 @@ import CandidateGrid from './CandidateGrid';
 import ToolCallCard from './ToolCallCard';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
 import Sidebar from './Sidebar';
-import { ChatMarkdown, ChatMessage } from '../../shared/chat';
+import { AgentPromptCard, ChatMarkdown, ChatMessage } from '../../shared/chat';
 import { AgentLoop } from '../../shared/motion';
-import { NeedsInputCard } from '../home/agentchat/cards.jsx';
 
 // ChatShowcaseView — the step-05 "locked preview" embedded by DemoShowcasePage.
 // It mirrors the REAL two-mode Chat surface 1:1: the same <Sidebar> with its
@@ -499,7 +497,7 @@ const AGENT_TOP_RESULT = {
 };
 
 // After the grounded answer, the agent offers to ACT on it — the thing the Ask
-// surface can't do. Rendered by the live <NeedsInputCard>.
+// surface can't do. Rendered by the live <AgentPromptCard>.
 const AGENT_NEEDS_INPUT = {
   kind: 'needs_input',
   needs_input_id: 'ni_invite',
@@ -613,7 +611,7 @@ const AgentCenter = () => (
           <CandidateEvidenceCard data={AGENT_TOP_RESULT} />
           <ChatMarkdown>{AGENT_TAIL_TEXT}</ChatMarkdown>
         </ChatMessage>
-        <NeedsInputCard item={AGENT_NEEDS_INPUT} onAnswer={noop} onDismiss={noop} />
+        <AgentPromptCard item={AGENT_NEEDS_INPUT} onAnswer={noop} onDismiss={noop} />
       </div>
     </div>
     <ShowcaseComposer placeholder="Ask about this role’s pool, or tell the agent to change something…" />

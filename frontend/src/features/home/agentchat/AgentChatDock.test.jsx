@@ -278,6 +278,14 @@ describe('AgentChatDock', () => {
     // The agent's question + its options.
     expect(screen.getByText('Marcus or Lena?')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Marcus' })).toBeInTheDocument();
+    const questionShortcut = screen.getByRole('button', { name: '1 question needs your input' });
+    expect(questionShortcut).toBeInTheDocument();
+    const questionCard = screen.getByRole('article', { name: 'Choose who to prioritise' });
+    questionCard.scrollIntoView = vi.fn();
+    const focusQuestion = vi.spyOn(questionCard, 'focus');
+    fireEvent.click(questionShortcut);
+    expect(questionCard.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(focusQuestion).toHaveBeenCalledWith({ preventScroll: true });
     // HITL decisions now stay in the same role thread.
     expect(await screen.findByText('Tom Hale')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Candidate report' })).toHaveAttribute('href', '/candidates/55?from=home');

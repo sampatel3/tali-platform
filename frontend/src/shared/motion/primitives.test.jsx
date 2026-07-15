@@ -7,6 +7,7 @@ import {
   AgentLoop,
   MotionDisclosure,
   MotionAttentionBadge,
+  MotionChatItem,
   MotionProgress,
   MotionSkeleton,
   MotionSpinner,
@@ -17,6 +18,8 @@ import {
   PresenceSwap,
   Reveal,
   agentLoopPresets,
+  chatItemVariants,
+  motionTransition,
   motionSafeScrollBehavior,
   resolveAgentLoop,
 } from './index';
@@ -139,6 +142,43 @@ describe('shared motion primitives', () => {
       </MotionSystemProvider>,
     );
     await waitFor(() => expect(screen.queryByText('3')).not.toBeInTheDocument());
+  });
+
+  it('gives chat rows an immediate spatial arrival with no transcript-index delay', () => {
+    expect(chatItemVariants.hidden).toEqual({ opacity: 0, y: 4, scale: 0.995 });
+    expect(chatItemVariants.visible.transition).toBe(motionTransition.spatial);
+    expect(chatItemVariants.visible.transition.delay).toBeUndefined();
+
+    render(
+      <MotionSystemProvider>
+        <MotionChatItem data-testid="chat-item">New agent question</MotionChatItem>
+      </MotionSystemProvider>,
+    );
+
+    expect(screen.getByTestId('chat-item')).toHaveAttribute('data-motion-chat-item', 'arrival');
+    expect(screen.getByText('New agent question')).toBeInTheDocument();
+  });
+
+  it('settles chat rows without a transform entrance under reduced motion', () => {
+    window.matchMedia = vi.fn().mockImplementation((query) => ({
+      matches: query === '(prefers-reduced-motion: reduce)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    }));
+
+    render(
+      <MotionSystemProvider>
+        <MotionChatItem data-testid="reduced-chat-item">Critical agent question</MotionChatItem>
+      </MotionSystemProvider>,
+    );
+
+    const item = screen.getByTestId('reduced-chat-item');
+    expect(item).toHaveAttribute('data-motion-chat-item', 'settled');
+    expect(item).toHaveStyle({ opacity: '1' });
+    expect(item.style.transform).toBe('');
   });
 
   it('settles Reveal and native scroll behavior immediately under reduced motion', async () => {

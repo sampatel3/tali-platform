@@ -180,6 +180,7 @@ describe('Agent Chat recruiter questions', () => {
     });
 
     expect(answers).toEqual([[17, { value: 72 }]]);
+    fireEvent.click(screen.getByRole('button', { name: 'Why this is needed' }));
     expect(screen.getByText(/triage the current pool consistently/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
   });
@@ -202,6 +203,79 @@ describe('Agent Chat recruiter questions', () => {
     expect(screen.queryByLabelText('Answer the agent')).not.toBeInTheDocument();
   });
 
+  it('turns the missing-task blocker into a primary resolver instead of a fake answer', () => {
+    const prompts = [];
+    const { container } = render(
+      <NeedsInputCard
+        item={{
+          status: 'open',
+          needs_input_id: 181,
+          question_kind: 'task_assignment_missing',
+          prompt: "'Data Modeler' has no assessment task linked.",
+          rationale: 'The assessment task is the deliverable candidates receive.',
+          input_mode: 'external',
+          can_answer: false,
+          can_dismiss: true,
+          response_schema: {
+            link_url: '/jobs/97?tab=agent-settings',
+            link_label: 'Choose a task',
+          },
+        }}
+        position={1}
+        total={3}
+        onPrompt={(prompt) => prompts.push(prompt)}
+      />,
+    );
+
+    expect(screen.getByRole('article', { name: 'Choose an assessment task' }))
+      .toHaveAttribute('data-status', 'open');
+    expect(screen.getByText('Waiting on you · 1 of 3')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Answer the agent')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Choose a task/ }))
+      .toHaveClass('taali-btn-primary', 'tk-agent-prompt-primary-action');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask agent for help' }));
+    expect(prompts).toEqual(['Help me choose or create an assessment task for this role.']);
+    expect(container.querySelector('.tk-agent-prompt-rationale')).not.toBeInTheDocument();
+  });
+
+  it('renders agent-authored emphasis as markdown instead of literal markers', () => {
+    const { container } = render(
+      <NeedsInputCard
+        item={{
+          status: 'open',
+          needs_input_id: 182,
+          question_kind: 'threshold_ambiguous',
+          prompt: 'Use **70** as the score bar?',
+          options: [{ value: '70', label: 'Use 70' }],
+          can_answer: true,
+          can_dismiss: false,
+        }}
+      />,
+    );
+
+    expect(container.querySelector('.tk-agent-prompt-copy strong')).toHaveTextContent('70');
+    expect(screen.queryByText('Use **70** as the score bar?')).not.toBeInTheDocument();
+  });
+
+  it('describes an externally completed setup without claiming the user answered', () => {
+    render(
+      <NeedsInputCard
+        item={{
+          status: 'resolved',
+          needs_input_id: 183,
+          question_kind: 'task_assignment_missing',
+          prompt: 'Choose an assessment task.',
+          response: { value: 'auto_resolved', auto_resolved: true },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Setup completed')).toBeInTheDocument();
+    expect(screen.getByText('Setup detected.')).toBeInTheDocument();
+    expect(screen.queryByText('Direction received.')).not.toBeInTheDocument();
+  });
+
   it('renders an unreadable-CV request as an actionable, semantic prompt', () => {
     const prompts = [];
     const answers = [];
@@ -221,14 +295,14 @@ describe('Agent Chat recruiter questions', () => {
       />,
     );
 
-    expect(screen.getByRole('article', { name: 'CVs need readable text' })).toHaveAttribute(
+    expect(screen.getByRole('article', { name: 'Make these CVs readable' })).toHaveAttribute(
       'data-status',
       'open',
     );
-    expect(screen.getByText('Needs your input')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Skip for now' })).toBeInTheDocument();
+    expect(screen.getByText('Waiting on you')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss request' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review affected candidates' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ask agent to review' }));
 
     expect(prompts).toEqual([
       'Show me the candidates whose CVs could not be read and what I can do for each.',
@@ -258,9 +332,9 @@ describe('Agent Chat recruiter questions', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss request' }));
 
-    expect(screen.getByRole('button', { name: 'Skipping request' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'Dismissing request' })).toHaveAttribute('aria-busy', 'true');
     expect(screen.getByRole('article')).toHaveAttribute('aria-busy', 'true');
     expect(screen.getByRole('button', { name: 'Marcus' })).toBeDisabled();
     expect(dismissals).toEqual([20]);
@@ -269,7 +343,30 @@ describe('Agent Chat recruiter questions', () => {
       finishDismiss();
     });
 
-    expect(screen.getByRole('button', { name: 'Skip for now' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Dismiss request' })).not.toBeDisabled();
+  });
+
+  it('keeps a request open and explains when dismissal fails', async () => {
+    render(
+      <NeedsInputCard
+        item={{
+          status: 'open',
+          needs_input_id: 201,
+          question_kind: 'candidate_tie_break',
+          prompt: 'Which candidate should I prioritise?',
+          options: [{ value: 'marcus', label: 'Marcus' }],
+          can_dismiss: true,
+        }}
+        onDismiss={async () => false}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss request' }));
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('This request was not dismissed. Try again.');
+    expect(screen.getByRole('article')).toHaveAttribute('data-status', 'open');
   });
 
   it('preserves a typed answer when its parent reports a save failure', async () => {

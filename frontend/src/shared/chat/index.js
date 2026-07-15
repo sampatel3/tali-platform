@@ -9,4 +9,5 @@ export { ChatMessage } from './ChatMessage';
 export { ChatEmptyState } from './ChatEmptyState';
 export { ThinkingDots } from './ThinkingDots';
 export { NewMessageNotice } from './NewMessageNotice';
+export { AgentHelperPromptCard, AgentPromptCard } from './AgentPromptCard';
 export { useAgentUpdateAwareness } from './useAgentUpdateAwareness';

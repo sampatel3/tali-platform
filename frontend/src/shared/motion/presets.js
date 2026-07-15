@@ -138,6 +138,21 @@ export const listItemVariants = Object.freeze({
   exit: { opacity: 0, y: MOTION_DISTANCE.small, transition: motionTransition.exit },
 });
 
+// Chat updates are usually appended one at a time, often deep in a long
+// transcript. They need immediate acknowledgement rather than the absolute-row
+// stagger used by general lists, so this entrance is deliberately compact and
+// contains no index-derived delay.
+export const chatItemVariants = Object.freeze({
+  hidden: { opacity: 0, y: MOTION_DISTANCE.small, scale: 0.995 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: motionTransition.spatial },
+  exit: {
+    opacity: 0,
+    y: MOTION_DISTANCE.micro,
+    scale: 0.995,
+    transition: motionTransition.exit,
+  },
+});
+
 export const createRevealVariants = ({ distance = MOTION_DISTANCE.medium, axis = 'y' } = {}) => ({
   hidden: { opacity: 0, [axis]: distance },
   visible: { opacity: 1, [axis]: 0 },

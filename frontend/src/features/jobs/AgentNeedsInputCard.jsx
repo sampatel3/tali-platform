@@ -157,8 +157,8 @@ export default function AgentNeedsInputCard({ roleId }) {
                   </button>
                 ))
               ) : LINK_ONLY_KINDS.has(row.kind) ? (
-                // Data-readiness gaps are fixed by adding the missing data
-                // (via the link), not by typing an answer — so no text box.
+                // Artifact/setup gaps are fixed through the linked workflow,
+                // not by typing an answer — so no text box.
                 null
               ) : (
                 <FreeTextAnswer
@@ -248,10 +248,15 @@ export default function AgentNeedsInputCard({ roleId }) {
 // for short numeric answers (threshold, budget).
 const LONG_FORM_KINDS = new Set(['intent_slot_missing', 'intent_clarification']);
 
-// Data-readiness gaps: the recruiter resolves them by adding the missing
-// data (job spec / CV) via the link, not by typing an answer — so we render
-// just the link + Skip, no free-text box.
-const LINK_ONLY_KINDS = new Set(['missing_job_spec', 'missing_cv', 'cv_unreadable']);
+// Artifact/setup gaps: the recruiter resolves them by adding the missing data
+// or selecting the missing task via the link, not by typing an answer — so we
+// render just the link + Skip, no free-text box.
+const LINK_ONLY_KINDS = new Set([
+  'missing_job_spec',
+  'missing_cv',
+  'cv_unreadable',
+  'task_assignment_missing',
+]);
 
 // CV-gap cards that carry a bulk reject action. Both reject their own
 // cohort (the backend stamps a cause-specific reason); the label differs.

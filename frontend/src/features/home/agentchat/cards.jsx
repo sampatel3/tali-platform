@@ -4,22 +4,19 @@
 // empty state) now comes from the shared kit at shared/chat. Decision cards are
 // intentionally NOT rendered here in Option C — those live in the main feed.
 
-import { useId, useState } from 'react';
+import { useState } from 'react';
 import {
-  ArrowUpRight,
   Check,
   CircleHelp,
   ExternalLink,
   FileText,
   GitFork,
-  Sparkles,
   SlidersHorizontal,
   X,
 } from 'lucide-react';
-import { AgentLoop, PresenceSwap } from '../../../shared/motion';
-import { Button, Input } from '../../../shared/ui/TaaliPrimitives.jsx';
+import { AgentHelperPromptCard, AgentPromptCard } from '../../../shared/chat';
+import { AgentLoop } from '../../../shared/motion';
 import { AgentEventCard } from './AgentEventCard.jsx';
-import { safeInternalRoute } from './safeInternalRoute';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
 
@@ -31,37 +28,7 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
   }
 
   if (card.type === 'helper_prompt') {
-    const suggestions = Array.isArray(card.suggestions) ? card.suggestions : [];
-    return (
-      <div className="ac-card ac-card-helper" data-testid="helper-prompt">
-        <div className="ac-card-head">
-          <Sparkles size={14} />
-          <span>{card.title || 'A useful next step'}</span>
-          {card.priority ? <span className="ac-helper-priority">{card.priority}</span> : null}
-        </div>
-        {card.summary ? <p className="ac-helper-summary">{card.summary}</p> : null}
-        {card.question ? <p className="ac-helper-question">{card.question}</p> : null}
-        {suggestions.length > 0 ? (
-          <div className="ac-card-actions">
-            {suggestions.map((suggestion, index) => {
-              const prompt = String(suggestion?.prompt || '').trim();
-              const label = String(suggestion?.label || prompt).trim();
-              if (!prompt || !label) return null;
-              return (
-                <button
-                  key={`${label}-${index}`}
-                  type="button"
-                  className="ac-btn ac-btn-soft"
-                  onClick={() => onPrompt?.(prompt)}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
-      </div>
-    );
+    return <AgentHelperPromptCard card={card} onPrompt={onPrompt} />;
   }
 
   if (card.type === 'operation_preview') {
@@ -475,202 +442,6 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
   );
 }
 
-const NEEDS_INPUT_TITLES = {
-  candidate_tie_break: 'Choose between candidates',
-  confirm_material_change: 'Confirm a material change',
-  cv_unreadable: 'CVs need readable text',
-  intent_clarification: 'Clarify the request',
-  intent_slot_missing: 'Complete the brief',
-  missing_cv: 'CVs are missing',
-  missing_job_spec: 'Add a job specification',
-  monthly_budget_missing: 'Set the review budget',
-  task_assignment_missing: 'Assign the task',
-  threshold_ambiguous: 'Choose a screening threshold',
-};
-
-const NEEDS_INPUT_PROMPT_ASSISTS = {
-  cv_unreadable: {
-    label: 'Review affected candidates',
-    prompt: 'Show me the candidates whose CVs could not be read and what I can do for each.',
-  },
-  missing_cv: {
-    label: 'Review affected candidates',
-    prompt: 'Show me the candidates who are missing a CV and what I can do for each.',
-  },
-  missing_job_spec: {
-    label: 'Help add the job spec',
-    prompt: 'Help me add the missing job specification for this role.',
-  },
-  monthly_budget_missing: {
-    label: 'Review the budget',
-    prompt: 'Help me review and set the monthly agent budget.',
-  },
-};
-
-const promptAssistFor = (item) => NEEDS_INPUT_PROMPT_ASSISTS[item.question_kind] || {
-  label: 'Help me resolve this',
-  prompt: `Help me resolve this request from the agent: ${String(item.prompt || '').trim()}`,
-};
-
-export function NeedsInputCard({ item, onAnswer, onDismiss, onPrompt }) {
-  const headingId = useId();
-  const [pendingAction, setPendingAction] = useState(null);
-  const [answer, setAnswer] = useState('');
-  const busy = pendingAction !== null;
-  const answered = item.status === 'answered';
-  const dismissed = item.status === 'dismissed';
-  const schema = item.response_schema || {};
-  const valueSchema = schema?.properties?.value || schema;
-  const options = Array.isArray(item.options) ? item.options : [];
-  const inputMode = item.input_mode
-    || (['integer', 'number'].includes(valueSchema.type) ? valueSchema.type : 'string');
-  const canAnswer = item.can_answer !== false;
-  const canDismiss = item.can_dismiss !== false;
-  const acceptsTypedAnswer = canAnswer && (
-    !options.length || inputMode === 'option_or_number'
-  );
-  const title = item.title || NEEDS_INPUT_TITLES[item.question_kind] || 'Choose the next step';
-  const linkHref = safeInternalRoute(schema.link_url);
-  const hasOptions = options.length > 0;
-  const needsPromptAssist = !hasOptions && !acceptsTypedAnswer && !linkHref;
-  const promptAssist = needsPromptAssist ? promptAssistFor(item) : null;
-
-  const choose = async (opt) => {
-    if (busy) return;
-    const actionKey = `option:${String(opt.value)}`;
-    setPendingAction(actionKey);
-    try {
-      await onAnswer?.(item.needs_input_id, { value: opt.value, label: opt.label });
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
-  const submitTypedAnswer = async (event) => {
-    event.preventDefault();
-    if (busy || String(answer).trim() === '') return;
-    const value = ['integer', 'number', 'option_or_number'].includes(inputMode)
-      ? Number(answer)
-      : answer.trim();
-    if (typeof value === 'number' && !Number.isFinite(value)) return;
-    setPendingAction('typed-answer');
-    try {
-      const saved = await onAnswer?.(item.needs_input_id, { value });
-      // Parent surfaces return false after showing their error toast. Keep the
-      // recruiter's text intact so a transient API failure never eats it.
-      if (saved !== false) setAnswer('');
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
-  const dismiss = async () => {
-    if (busy) return;
-    setPendingAction('dismiss');
-    try {
-      await onDismiss?.(item.needs_input_id);
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
-  return (
-    <article
-      className="ac-needs"
-      aria-labelledby={headingId}
-      aria-busy={busy}
-      data-status={answered ? 'answered' : dismissed ? 'dismissed' : 'open'}
-    >
-      <header className="ac-needs-head">
-        <span className="ac-needs-icon" aria-hidden="true">
-          <CircleHelp size={15} />
-        </span>
-        <span className="ac-needs-heading-copy">
-          <span className="ac-needs-eyebrow">Needs your input</span>
-          <h3 id={headingId} className="ac-needs-title">{title}</h3>
-        </span>
-        {!answered && !dismissed && canDismiss ? (
-          <Button
-            className="ac-needs-dismiss"
-            variant="ghost"
-            size="xs"
-            iconOnly
-            loading={pendingAction === 'dismiss'}
-            disabled={busy}
-            aria-label={pendingAction === 'dismiss' ? 'Skipping request' : 'Skip for now'}
-            title="Skip for now"
-            onClick={dismiss}
-          >
-            {pendingAction === 'dismiss' ? null : <X size={14} />}
-          </Button>
-        ) : null}
-      </header>
-      <p className="ac-needs-prompt">{item.prompt}</p>
-      {item.rationale ? <p className="ac-needs-rationale">{item.rationale}</p> : null}
-      <PresenceSwap presenceKey={answered ? 'answered' : dismissed ? 'dismissed' : 'open'}>
-        {answered ? (
-          <div className="ac-needs-status"><Check size={13} /> Answered</div>
-        ) : dismissed ? (
-          <div className="ac-needs-status ac-needs-status-muted">Skipped for now</div>
-        ) : (
-          <div className="ac-needs-options" role="group" aria-label={`Respond to ${title}`}>
-            {options.map((option) => {
-              const actionKey = `option:${String(option.value)}`;
-              return (
-                <Button
-                  key={option.value}
-                  variant="soft"
-                  size="sm"
-                  loading={pendingAction === actionKey}
-                  disabled={busy}
-                  onClick={() => choose(option)}
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
-            {acceptsTypedAnswer ? (
-              <form className="ac-needs-answer" onSubmit={submitTypedAnswer}>
-                <Input
-                  aria-label="Answer the agent"
-                  className="ac-needs-input"
-                  type={['integer', 'number', 'option_or_number'].includes(inputMode) ? 'number' : 'text'}
-                  min={valueSchema.minimum}
-                  max={valueSchema.maximum}
-                  step={inputMode === 'integer' || inputMode === 'option_or_number' ? 1 : valueSchema.multipleOf || 'any'}
-                  placeholder={inputMode === 'option_or_number' ? 'Or enter a number' : 'Type your answer'}
-                  value={answer}
-                  disabled={busy}
-                  onChange={(event) => setAnswer(event.target.value)}
-                />
-                <Button
-                  variant="primary"
-                  size="sm"
-                  loading={pendingAction === 'typed-answer'}
-                  disabled={busy || !answer.trim()}
-                  type="submit"
-                >
-                  Answer
-                </Button>
-              </form>
-            ) : null}
-            {linkHref ? (
-              <Button as="a" variant="soft" size="sm" href={linkHref}>
-                <ArrowUpRight size={13} /> {schema.link_label || 'Open settings'}
-              </Button>
-            ) : null}
-            {promptAssist && onPrompt ? (
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => onPrompt(promptAssist.prompt)}
-              >
-                {promptAssist.label}
-              </Button>
-            ) : null}
-          </div>
-        )}
-      </PresenceSwap>
-    </article>
-  );
-}
+// Compatibility export for older feature imports. New surfaces import the
+// shared component from `shared/chat` directly.
+export const NeedsInputCard = AgentPromptCard;

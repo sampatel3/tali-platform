@@ -6,11 +6,12 @@
 // the dock's internals so the Home page stays untouched.
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { MessageSquare, PanelLeft, Sparkles } from 'lucide-react';
+import { CircleHelp, MessageSquare, PanelLeft, Sparkles } from 'lucide-react';
 
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import {
+  AgentPromptCard,
   ChatComposer,
   ChatEmptyState,
   ChatMarkdown,
@@ -19,9 +20,15 @@ import {
   ThinkingDots,
   useAgentUpdateAwareness,
 } from '../../shared/chat';
-import { DraftTaskCard, ImpactCard, NeedsInputCard } from '../home/agentchat/cards.jsx';
+import { DraftTaskCard, ImpactCard } from '../home/agentchat/cards.jsx';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
-import { AgentLoop, MotionList, MotionListItem } from '../../shared/motion';
+import {
+  AgentLoop,
+  MotionAttentionBadge,
+  MotionChatItem,
+  MotionList,
+  motionSafeScrollBehavior,
+} from '../../shared/motion';
 import { AgentDecisionTimelineCard } from '../../shared/decisions/AgentDecisionTimelineCard';
 import { useRoleDecisionDetails } from '../../shared/decisions/useRoleDecisionDetails';
 
@@ -207,8 +214,10 @@ const AgentConversation = ({
       try {
         await agentChat.dismissNeedsInput(needsInputId);
         load();
+        return true;
       } catch {
         showToast?.('Couldn’t dismiss that.', 'error');
+        return false;
       }
     },
     [load, showToast]
@@ -286,6 +295,23 @@ const AgentConversation = ({
     ),
     [timeline]
   );
+  const openQuestions = useMemo(
+    () => items.filter((item) => item.kind === 'needs_input' && item.status === 'open'),
+    [items],
+  );
+  const openQuestionPositions = useMemo(
+    () => new Map(openQuestions.map((item, index) => [item.needs_input_id ?? item.id, index + 1])),
+    [openQuestions],
+  );
+  const jumpToOldestQuestion = useCallback(() => {
+    const target = scrollRef.current?.querySelector('.tk-agent-prompt[data-status="open"]');
+    if (!target) return;
+    target.scrollIntoView({
+      behavior: motionSafeScrollBehavior('smooth'),
+      block: 'center',
+    });
+    target.focus({ preventScroll: true });
+  }, []);
 
   const {
     hasNewAgentUpdate,
@@ -396,6 +422,21 @@ const AgentConversation = ({
             right edge. */}
         <span className="cp-head-lead"><MessageSquare size={15} /> Ask the agent</span>
         {roleName ? <span className="cp-head-role">{roleName}</span> : null}
+        {openQuestions.length > 0 ? (
+          <button
+            type="button"
+            className="tk-agent-question-shortcut"
+            aria-label={`${openQuestions.length} ${openQuestions.length === 1 ? 'question needs' : 'questions need'} your input`}
+            onClick={jumpToOldestQuestion}
+          >
+            <CircleHelp size={13} />
+            <MotionAttentionBadge
+              value={openQuestions.length}
+              className="tk-agent-question-shortcut-count"
+            />
+            <span className="tk-agent-question-shortcut-label">need input</span>
+          </button>
+        ) : null}
       </header>
       <div className="cp-scroll" id={timelineRegionId} ref={scrollRef}>
         {loading && items.length === 0 ? (
@@ -425,19 +466,21 @@ const AgentConversation = ({
           <MotionList className="cp-thread" aria-label="Agent conversation" layout={false}>
             {loadError ? (
               // A refresh blipped but we kept the last good thread on screen.
-              <MotionListItem key="refresh-error" className="tk-motion-row" layout={false}>
+              <MotionChatItem key="refresh-error" className="tk-motion-row">
                 <div className="cp-refresh-row">Couldn’t refresh — retrying.</div>
-              </MotionListItem>
+              </MotionChatItem>
             ) : null}
-            {items.map((it, index) => {
+            {items.map((it) => {
               let content;
               if (it.kind === 'needs_input') {
                 content = (
-                  <NeedsInputCard
+                  <AgentPromptCard
                     item={it}
                     onAnswer={answer}
                     onDismiss={dismiss}
                     onPrompt={prefillPrompt}
+                    position={openQuestionPositions.get(it.needs_input_id ?? it.id)}
+                    total={openQuestions.length}
                   />
                 );
               } else if (it.kind === 'decision') {
@@ -498,24 +541,24 @@ const AgentConversation = ({
                 );
               }
               return (
-                <MotionListItem key={it.id} index={index} className="tk-motion-row" layout={false}>
+                <MotionChatItem key={it.id} className="tk-motion-row">
                   {content}
-                </MotionListItem>
+                </MotionChatItem>
               );
             })}
             {(sending || agentWorking) && (
-              <MotionListItem key="agent-working" className="tk-motion-row" layout={false}>
+              <MotionChatItem key="agent-working" className="tk-motion-row">
                 <ChatMessage role="assistant">
                   <ThinkingDots label="Working…" />
                 </ChatMessage>
-              </MotionListItem>
+              </MotionChatItem>
             )}
             {rescreenPending && !sending && !agentWorking && (
-              <MotionListItem key="agent-rescreening" className="tk-motion-row" layout={false}>
+              <MotionChatItem key="agent-rescreening" className="tk-motion-row">
                 <div className="ac-rescreen-live">
                   <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
                 </div>
-              </MotionListItem>
+              </MotionChatItem>
             )}
           </MotionList>
         )}

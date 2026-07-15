@@ -1,6 +1,6 @@
 import { ArrowUpRight, CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
 
-import { safeInternalRoute } from './safeInternalRoute';
+import { safeInternalRoute } from '../../../shared/chat/safeInternalRoute';
 
 const EVENT_SEVERITIES = {
   info: { label: 'Info', Icon: Info },

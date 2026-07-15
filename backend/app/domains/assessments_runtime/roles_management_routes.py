@@ -1969,6 +1969,15 @@ def add_role_task(
     if not any(t.id == task.id for t in (role.tasks or [])):
         role.tasks.append(task)
     try:
+        # Linking an already-active task fills the activation gap immediately;
+        # an inactive generated draft intentionally leaves the prompt open
+        # until the shared approval service activates it.
+        db.flush()
+        from ...services.agent_activation_checklist import (
+            resolve_satisfied_activation_questions,
+        )
+
+        resolve_satisfied_activation_questions(db, role=role)
         db.commit()
     except Exception:
         db.rollback()
