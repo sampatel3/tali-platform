@@ -305,6 +305,25 @@ describe('AgentChatDock', () => {
     });
   });
 
+  it('replaces a failed initial load with a retry control', async () => {
+    mocks.getTimeline
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce({
+        data: {
+          timeline: [{ kind: 'message', id: 'recovered', author: 'agent', text: 'Back online.' }],
+          agent_working: false,
+        },
+      });
+    renderDock();
+
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.queryByText('Loading the conversation…')).not.toBeInTheDocument();
+    fireEvent.click(retry);
+
+    expect(await screen.findByText('Back online.')).toBeInTheDocument();
+    expect(mocks.getTimeline).toHaveBeenCalledTimes(2);
+  });
+
   it('renders chat, impact, question, and decision items in timeline order', async () => {
     mocks.getTimeline.mockResolvedValue({ data: { timeline: TIMELINE } });
     renderDock();

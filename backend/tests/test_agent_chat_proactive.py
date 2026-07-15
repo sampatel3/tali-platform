@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.agent_chat import proactive, service
 from app.models.agent_conversation import (
@@ -62,6 +62,24 @@ def _helper_messages(db, conversation):
         .order_by(AgentConversationMessage.id.asc())
         .all()
     )
+
+
+def test_busy_conversation_is_skipped_without_waiting():
+    """Timeline polls must not block behind an agent turn's row lock."""
+
+    query = MagicMock()
+    query.filter.return_value = query
+    query.with_for_update.return_value = query
+    query.one_or_none.return_value = None
+    db = MagicMock()
+    db.query.return_value = query
+    conversation = MagicMock(id=17)
+    role = MagicMock(id=26, organization_id=4)
+
+    assert proactive.maybe_post_helper_briefing(
+        db, conversation=conversation, role=role
+    ) is None
+    query.with_for_update.assert_called_once_with(skip_locked=True)
 
 
 def test_fresh_thread_gets_one_grounded_helper_without_model_call(db):
