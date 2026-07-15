@@ -111,6 +111,9 @@ const ChatPage = lazy(() =>
 const ChatShowcaseView = lazy(() =>
   import('./features/chat/ChatShowcaseView').then((m) => ({ default: m.ChatShowcaseView }))
 );
+const AgentPromptPreviewPage = lazy(() =>
+  import('./features/chat/AgentPromptPreviewPage').then((m) => ({ default: m.AgentPromptPreviewPage }))
+);
 const HomeShowcaseView = lazy(() =>
   import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
 );
@@ -634,6 +637,16 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <HomeMotionPreview />
+          </Suspense>
+        )}
+      />
+      {/* Public, fixture-only comparison of four agent-prompt interaction
+          directions. `?v=a|b|c|d` makes each concept directly shareable. */}
+      <Route
+        path="/agent-prompts-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AgentPromptPreviewPage />
           </Suspense>
         )}
       />

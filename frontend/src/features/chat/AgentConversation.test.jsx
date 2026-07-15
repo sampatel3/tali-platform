@@ -131,6 +131,82 @@ describe('AgentConversation decisions', () => {
 });
 
 describe('AgentConversation proactive helper behavior', () => {
+  it('answers a free-form request through reply mode and restores the saved draft', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'needs_input',
+          id: 'request-31',
+          needs_input_id: 31,
+          status: 'open',
+          prompt: 'Which region should I prioritise?',
+          input_mode: 'string',
+          can_answer: true,
+          can_dismiss: false,
+        }],
+        agent_working: false,
+      },
+    });
+    renderConversation();
+
+    const composer = await screen.findByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(composer, { target: { value: 'Keep this draft for later' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reply in chat' }));
+
+    const answerBox = screen.getByRole('textbox', { name: 'Answer the agent' });
+    expect(answerBox).toHaveFocus();
+    expect(answerBox).toHaveValue('');
+    fireEvent.change(answerBox, { target: { value: 'Prioritise MENA' } });
+    fireEvent.keyDown(answerBox, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(mocks.answerNeedsInput).toHaveBeenCalledWith(31, { value: 'Prioritise MENA' });
+    });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' }))
+      .toHaveValue('Keep this draft for later');
+  });
+
+  it('does not let a slow reply completion erase a draft restored by cancel', async () => {
+    let finishAnswer;
+    mocks.answerNeedsInput.mockImplementation(() => new Promise((resolve) => {
+      finishAnswer = resolve;
+    }));
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'needs_input',
+          id: 'request-32',
+          needs_input_id: 32,
+          status: 'open',
+          prompt: 'Which region should I prioritise?',
+          input_mode: 'string',
+          can_answer: true,
+          can_dismiss: false,
+        }],
+        agent_working: false,
+      },
+    });
+    renderConversation();
+
+    const composer = await screen.findByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(composer, { target: { value: 'Keep this draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reply in chat' }));
+    const answerBox = screen.getByRole('textbox', { name: 'Answer the agent' });
+    fireEvent.change(answerBox, { target: { value: 'Prioritise MENA' } });
+    fireEvent.keyDown(answerBox, { key: 'Enter' });
+
+    await waitFor(() => expect(mocks.answerNeedsInput).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel reply and restore draft' }));
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveValue('Keep this draft');
+
+    finishAnswer({ data: {} });
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Chat message' })).not.toBeDisabled();
+    });
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveValue('Keep this draft');
+  });
+
   it('puts a helper quick reply in the composer without sending it', async () => {
     mocks.getTimeline.mockResolvedValue({
       data: {
@@ -273,7 +349,8 @@ describe('AgentConversation proactive helper behavior', () => {
 
     expect(await screen.findByText('Existing agent history')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'New agent update' })).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    const updateStatus = document.querySelector('.tk-new-update-status');
+    expect(updateStatus).toBeEmptyDOMElement();
 
     const scroll = document.querySelector('.cp-scroll');
     Object.defineProperties(scroll, {
@@ -290,12 +367,12 @@ describe('AgentConversation proactive helper behavior', () => {
     expect(await screen.findByText('A new assessment is ready.')).toBeInTheDocument();
     const notice = await screen.findByRole('button', { name: 'New agent update' });
     expect(scroll.scrollTop).toBe(250);
-    expect(screen.getByRole('status')).toHaveTextContent('New agent update');
+    expect(updateStatus).toHaveTextContent('New agent update');
     expect(notice).toHaveAttribute('aria-controls', scroll.id);
 
     fireEvent.click(notice);
     expect(scroll.scrollTop).toBe(1400);
-    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    expect(updateStatus).toBeEmptyDOMElement();
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'New agent update' })).not.toBeInTheDocument();
     });

@@ -1,0 +1,62 @@
+/* Domain-neutral styling for structured chat artifacts. The artifact renderer
+   imports this file directly, so Search/Home cold routes load it only when
+   these artifacts are present; the shared chat barrel does not inject it. */
+.tk-artifact-impact { border: 1px solid var(--chat-agent-soft); background: color-mix(in oklab, var(--chat-agent-soft) 38%, var(--chat-surface)); border-radius: var(--chat-radius-artifact); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
+.tk-artifact-impact-line { font-size: var(--chat-body-size); line-height: 1.5; color: var(--chat-text-secondary); display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.tk-artifact-impact-label { color: var(--chat-text-secondary); }
+.tk-artifact-impact-old { font-family: var(--font-display); font-weight: 600; color: var(--chat-muted); text-decoration: line-through; text-decoration-color: var(--chat-line); }
+.tk-artifact-impact-arrow { color: var(--chat-muted); }
+.tk-artifact-impact-new { font-family: var(--font-display); font-size: 1.0625rem; font-weight: 700; color: var(--chat-agent); }
+.tk-artifact-impact-gain { color: var(--chat-agent); font-weight: 500; }
+.tk-artifact-impact-actions { display: flex; }
+
+.tk-artifact-card { border: 1px solid var(--chat-line); border-radius: var(--chat-radius-artifact); background: var(--chat-surface); padding: 12px 14px; box-shadow: var(--chat-shadow); display: flex; flex-direction: column; gap: 9px; }
+.tk-artifact-card-head { display: flex; align-items: center; gap: 7px; font-size: var(--fs-caption); font-weight: 600; color: var(--chat-text); }
+.tk-artifact-card-head svg { color: var(--chat-agent); flex-shrink: 0; }
+.tk-artifact-card-live { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--fs-eyebrow); color: var(--chat-agent); }
+.tk-artifact-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--chat-agent); }
+.tk-artifact-card-constraint { background: color-mix(in oklab, var(--chat-agent-soft) 38%, var(--chat-surface)); border-color: color-mix(in oklab, var(--chat-agent) 18%, var(--chat-line)); }
+.tk-artifact-rescreen-estimate { font-size: var(--fs-caption); color: var(--chat-text-secondary); background: var(--chat-surface-subtle); border: 1px dashed var(--chat-line); border-radius: 8px; padding: 6px 9px; line-height: 1.4; }
+.tk-artifact-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.tk-artifact-constraint-chip { font-size: var(--fs-caption); font-weight: 500; color: var(--chat-agent); background: var(--chat-surface); border: 1px solid color-mix(in oklab, var(--chat-agent) 18%, var(--chat-line)); padding: 5px 10px; border-radius: 999px; }
+.tk-artifact-spec-diff { display: flex; flex-direction: column; gap: 4px; }
+.tk-artifact-spec-diff-label { font-family: var(--font-mono); font-size: var(--fs-eyebrow); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.tk-artifact-spec-diff-label.add { color: var(--chat-agent); }
+.tk-artifact-spec-diff-label.remove { color: var(--chat-muted); }
+.tk-artifact-chip-remove { color: var(--chat-muted); border-color: var(--chat-line); text-decoration: line-through; text-decoration-color: var(--chat-muted); opacity: 0.8; }
+.tk-artifact-name-chip { font-size: var(--fs-caption); font-weight: 500; color: var(--chat-text-secondary); background: var(--chat-surface-subtle); padding: 4px 9px; border-radius: 999px; }
+.tk-artifact-thresh-line { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.tk-artifact-arrow { color: var(--chat-muted); font-size: 1rem; }
+.tk-artifact-thresh-old { font-family: var(--font-display); font-size: 1.3125rem; font-weight: 700; color: var(--chat-muted); text-decoration: line-through; text-decoration-color: var(--chat-line); }
+.tk-artifact-thresh-new { font-family: var(--font-display); font-size: 1.6875rem; font-weight: 700; color: var(--chat-agent); }
+.tk-artifact-thresh-applied { color: var(--chat-agent); }
+.tk-artifact-thresh-gain { font-size: var(--fs-caption); font-weight: 500; color: var(--chat-agent); background: var(--chat-agent-soft); padding: 4px 9px; border-radius: 999px; }
+.tk-artifact-thresh-loss, .tk-artifact-thresh-flat { font-size: var(--fs-caption); font-weight: 500; color: var(--chat-muted); background: var(--chat-surface-subtle); padding: 3px 9px; border-radius: 999px; }
+.tk-artifact-thresh-loss { border: 1px solid var(--chat-line); }
+.tk-artifact-statrow { display: flex; flex-wrap: wrap; gap: 12px; font-size: var(--fs-caption); color: var(--chat-muted); }
+.tk-artifact-statrow b { color: var(--chat-text); font-weight: 600; }
+.tk-artifact-card-applied { border-color: color-mix(in oklab, var(--chat-agent) 20%, var(--chat-line)); }
+.tk-artifact-card-applied .tk-artifact-card-head svg { color: var(--chat-agent); }
+.tk-artifact-card-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+
+.tk-artifact-card-draft { background: color-mix(in oklab, var(--chat-agent-soft) 38%, var(--chat-surface)); border-color: color-mix(in oklab, var(--chat-agent) 18%, var(--chat-line)); }
+.tk-artifact-draft { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; background: var(--chat-surface); border: 1px solid var(--chat-line); border-radius: 11px; }
+.tk-artifact-draft + .tk-artifact-draft { margin-top: 2px; }
+.tk-artifact-draft-title { font-size: var(--chat-body-size); font-weight: 600; color: var(--chat-text); line-height: 1.3; }
+.tk-artifact-draft-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; font-size: var(--fs-eyebrow); color: var(--chat-muted); }
+.tk-artifact-draft-tag { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--chat-agent); background: var(--chat-agent-soft); padding: 2px 7px; border-radius: 5px; }
+.tk-artifact-draft-decisions { margin: 1px 0 2px; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
+.tk-artifact-draft-decisions li { font-size: var(--fs-caption); color: var(--chat-text-secondary); line-height: 1.4; }
+.tk-artifact-draft-auto { padding: 8px 9px; border-radius: 8px; background: var(--chat-agent-soft); color: var(--chat-text-secondary); font-size: var(--fs-caption); line-height: 1.45; }
+
+.tk-artifact-reject { display: flex; flex-direction: column; gap: 10px; padding: 11px; background: var(--chat-surface-subtle); border: 1px solid color-mix(in oklab, var(--chat-agent) 18%, var(--chat-line)); border-radius: 10px; }
+.tk-artifact-reject-q { display: flex; flex-direction: column; gap: 6px; }
+.tk-artifact-reject-prompt { font-size: var(--fs-caption); font-weight: 600; color: var(--chat-text); }
+.tk-artifact-reject-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.tk-artifact-chip-toggle { font-size: var(--fs-caption); font-weight: 500; color: var(--chat-text-secondary); background: var(--chat-surface); border: 1px solid var(--chat-line); padding: 5px 10px; border-radius: 999px; cursor: pointer; font-family: var(--font-sans); }
+.tk-artifact-chip-toggle:hover:not(:disabled) { border-color: var(--chat-agent); }
+.tk-artifact-chip-toggle.on { color: #fff; background: var(--chat-agent); border-color: transparent; }
+.tk-artifact-chip-toggle:disabled { opacity: 0.6; cursor: default; }
+.tk-artifact-reject-note { width: 100%; box-sizing: border-box; border: 1px solid var(--chat-line); border-radius: 8px; background: var(--chat-surface); padding: 7px 9px; font-family: var(--font-sans); font-size: var(--fs-caption); color: var(--chat-text); resize: none; outline: none; }
+.tk-artifact-reject-note:focus { border-color: var(--chat-agent); }
+.tk-artifact-reject-note::placeholder { color: var(--chat-muted); }

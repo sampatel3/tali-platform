@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PanelLeft } from 'lucide-react';
 import './chat.css';
 import EmptyState from './EmptyState';
-import { ChatComposer, ChatMessage, ThinkingDots } from '../../shared/chat';
+import { ChatComposer, ChatMessage, ChatSurface, ThinkingDots } from '../../shared/chat';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
 import ConfirmDialog from './ConfirmDialog';
@@ -12,6 +12,9 @@ import useChatStream from './useChatStream';
 import { conversationsApi } from './api';
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+
+const MOBILE_NAV_QUERY = '(max-width: 900px)';
+const MOBILE_NAV_ID = 'chat-navigation-drawer';
 
 // Backend persists messages with Anthropic-shaped content blocks. The
 // chat hook works with a slightly flatter shape (parts: text/tool_call).
@@ -110,6 +113,101 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   const [agents, setAgents] = useState([]);
   // Mobile: the conversation/agent list is an off-canvas drawer.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isMobileDrawer, setIsMobileDrawer] = useState(() => (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(MOBILE_NAV_QUERY).matches
+  ));
+  const rootRef = useRef(null);
+  const mobileNavRef = useRef(null);
+  const mobileNavReturnFocusRef = useRef(null);
+
+  const openMobileNav = useCallback((event) => {
+    const trigger = event?.currentTarget
+      || (typeof document !== 'undefined' ? document.activeElement : null);
+    if (trigger instanceof HTMLElement && trigger !== document.body) {
+      mobileNavReturnFocusRef.current = trigger;
+    }
+    setMobileNavOpen(true);
+  }, []);
+
+  const closeMobileNav = useCallback((options = {}) => {
+    const restoreFocus = options?.restoreFocus !== false;
+    setMobileNavOpen(false);
+    if (!restoreFocus || typeof window === 'undefined') return;
+
+    const restore = () => {
+      const trigger = mobileNavReturnFocusRef.current;
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    };
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(restore);
+    } else {
+      window.setTimeout(restore, 0);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const media = window.matchMedia(MOBILE_NAV_QUERY);
+    const sync = () => {
+      setIsMobileDrawer(media.matches);
+      if (!media.matches) setMobileNavOpen(false);
+    };
+    sync();
+    if (typeof media.addEventListener === 'function') media.addEventListener('change', sync);
+    else media.addListener?.(sync);
+    return () => {
+      if (typeof media.removeEventListener === 'function') media.removeEventListener('change', sync);
+      else media.removeListener?.(sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileDrawer || !mobileNavOpen) return undefined;
+    const drawer = mobileNavRef.current;
+    if (!drawer) return undefined;
+
+    drawer.focus({ preventScroll: true });
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeMobileNav();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(drawer.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute('hidden') && element.getAttribute('aria-hidden') !== 'true');
+      if (!focusable.length) {
+        event.preventDefault();
+        drawer.focus({ preventScroll: true });
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === drawer)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [closeMobileNav, isMobileDrawer, mobileNavOpen]);
+
+  // AgentConversation owns its own mobile menu buttons. Keep their drawer
+  // relationship in sync without duplicating drawer state inside that surface.
+  useEffect(() => {
+    rootRef.current?.querySelectorAll('.cp-mobile-menu').forEach((button) => {
+      button.setAttribute('aria-controls', MOBILE_NAV_ID);
+      button.setAttribute('aria-expanded', String(isMobileDrawer && mobileNavOpen));
+    });
+  }, [agentRoleId, isAgents, isMobileDrawer, mobileNavOpen]);
 
   // On error, keep the last agent list on screen — resetting to [] would
   // flash the empty two-pane shell (and yank the auto-select) on a transient
@@ -154,18 +252,18 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
 
   const onModeChange = useCallback(
     (nextMode) => {
-      setMobileNavOpen(false);
+      closeMobileNav();
       navigate(nextMode === 'agents' ? '/chat/agents' : '/chat');
     },
-    [navigate],
+    [closeMobileNav, navigate],
   );
 
   const onSelectAgent = useCallback(
     (roleId) => {
-      setMobileNavOpen(false);
+      closeMobileNav();
       navigate(`/chat/agents/${roleId}`);
     },
-    [navigate],
+    [closeMobileNav, navigate],
   );
 
   // The global search bar hands off to /chat with ?q=<query>. Seed the
@@ -275,17 +373,17 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   }, [isStreaming]);
 
   const onNew = useCallback(() => {
-    setMobileNavOpen(false);
+    closeMobileNav();
     navigate('/chat');
     setComposer('');
-  }, [navigate]);
+  }, [closeMobileNav, navigate]);
 
   const onSelect = useCallback(
     (id) => {
-      setMobileNavOpen(false);
+      closeMobileNav();
       navigate(`/chat/${id}`);
     },
-    [navigate],
+    [closeMobileNav, navigate],
   );
 
   // Two-step delete: ``onDelete`` opens an in-app confirm dialog,
@@ -355,8 +453,13 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   return (
     <>
       {NavComponent ? <NavComponent currentPage="chat" onNavigate={onNavigate} /> : null}
-      <div className={`cp-root ${mobileNavOpen ? 'cp-nav-open' : ''}`}>
+      <div ref={rootRef} className={`cp-root ${mobileNavOpen ? 'cp-nav-open' : ''}`}>
       <Sidebar
+        ref={mobileNavRef}
+        id={MOBILE_NAV_ID}
+        mobileDrawer={isMobileDrawer}
+        mobileDrawerOpen={mobileNavOpen}
+        onRequestClose={closeMobileNav}
         mode={isAgents ? 'agents' : 'ask'}
         onModeChange={onModeChange}
         conversations={conversations}
@@ -375,8 +478,9 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
         type="button"
         className="cp-nav-scrim"
         aria-label="Close list"
-        tabIndex={mobileNavOpen ? 0 : -1}
-        onClick={() => setMobileNavOpen(false)}
+        aria-hidden="true"
+        tabIndex={-1}
+        onClick={closeMobileNav}
       />
       {isAgents ? (
         <AgentConversation
@@ -385,16 +489,18 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           roleName={activeAgent?.role_name}
           agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
           onAfterSend={refreshAgents}
-          onOpenList={() => setMobileNavOpen(true)}
+          onOpenList={openMobileNav}
         />
       ) : (
-      <div className="cp-center">
+      <ChatSurface className="cp-center" density="comfortable">
         <header className="cp-head">
           <button
             type="button"
             className="cp-mobile-menu"
-            onClick={() => setMobileNavOpen(true)}
+            onClick={openMobileNav}
             aria-label="Show conversations"
+            aria-controls={MOBILE_NAV_ID}
+            aria-expanded={isMobileDrawer && mobileNavOpen}
           >
             <PanelLeft size={18} />
           </button>
@@ -456,7 +562,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             Every claim links back to the candidate’s CV.
           </div>
         </div>
-      </div>
+      </ChatSurface>
       )}
       <ConfirmDialog
         open={pendingDeleteId != null}

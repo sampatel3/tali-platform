@@ -1,7 +1,13 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ArrowUp, Mic, Square } from 'lucide-react';
+import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
+import { ArrowUp, CircleHelp, Mic, Square, X } from 'lucide-react';
 
-import { MotionLoop } from '../motion';
+import {
+  MotionDisclosure,
+  MotionLoop,
+  m,
+  motionTransition,
+  useReducedMotionSync,
+} from '../motion';
 
 const autosize = (el, max = 200) => {
   if (!el) return;
@@ -34,14 +40,24 @@ export const ChatComposer = forwardRef(function ChatComposer({
   submitMode = 'enter',
   foot = true,
   onPaste,
+  replyTo = null,
+  onCancelReply,
   // Opt-in voice dictation (off by default so existing surfaces are unchanged).
   // When true AND the browser supports the Web Speech API, a mic button appears
   // that dictates into the box — handy for hiring managers briefing on a phone.
   voice = false,
 }, forwardedRef) {
   const ref = useRef(null);
+  const replyDescriptionId = useId();
+  const focusAfterCancelRef = useRef(false);
+  const reduced = useReducedMotionSync();
   useImperativeHandle(forwardedRef, () => ref.current);
   useEffect(() => autosize(ref.current), [value]);
+  useEffect(() => {
+    if (!focusAfterCancelRef.current || replyTo || busy) return;
+    focusAfterCancelRef.current = false;
+    ref.current?.focus({ preventScroll: true });
+  }, [busy, replyTo]);
 
   // ---- voice dictation ----
   const [listening, setListening] = useState(false);
@@ -93,7 +109,22 @@ export const ChatComposer = forwardRef(function ChatComposer({
     onSubmit(text);
   };
 
+  const cancelReply = () => {
+    if (!onCancelReply) return;
+    focusAfterCancelRef.current = true;
+    onCancelReply();
+  };
+
   const onKeyDown = (e) => {
+    // Escape is also used by IMEs to dismiss or step back through their
+    // candidate UI. Treat every composition key as belonging to the IME so it
+    // cannot accidentally exit reply mode.
+    if (e.nativeEvent?.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape' && replyTo && onCancelReply) {
+      e.preventDefault();
+      cancelReply();
+      return;
+    }
     if (e.key !== 'Enter') return;
     // Don't send while an IME / dictation / autocorrect composition is open:
     // that Enter is committing the composed text, not submitting. Firing the
@@ -102,7 +133,6 @@ export const ChatComposer = forwardRef(function ChatComposer({
     // from what I typed". `isComposing` (legacy browsers: keyCode 229) stays
     // true for the whole composition; once it commits, onChange writes the
     // final text and the next Enter sends it intact.
-    if (e.nativeEvent?.isComposing || e.keyCode === 229) return;
     const sends = submitMode === 'cmd' ? (e.metaKey || e.ctrlKey) : !e.shiftKey;
     if (sends) {
       e.preventDefault();
@@ -111,12 +141,36 @@ export const ChatComposer = forwardRef(function ChatComposer({
   };
 
   return (
-    <form className="tk-composer" onSubmit={submit}>
+    <m.form
+      className="tk-composer"
+      data-replying={replyTo ? 'true' : 'false'}
+      onSubmit={submit}
+      layout={reduced ? false : true}
+      transition={reduced ? motionTransition.instant : motionTransition.layout}
+    >
+      <MotionDisclosure
+        open={Boolean(replyTo)}
+        className="tk-composer-reply"
+        id={replyTo ? replyDescriptionId : undefined}
+      >
+        <div className="tk-composer-reply-head">
+          <span><CircleHelp size={13} aria-hidden="true" /> {replyTo?.label || 'Reply to agent'}</span>
+          {onCancelReply ? (
+            <button type="button" onClick={cancelReply} aria-label="Cancel reply and restore draft">
+              <X size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        {replyTo?.prompt ? <p>{replyTo.prompt}</p> : null}
+        {replyTo?.error ? <span className="tk-composer-reply-error" role="alert">{replyTo.error}</span> : null}
+      </MotionDisclosure>
       <textarea
         ref={ref}
         rows={1}
         value={value}
-        placeholder={placeholder}
+        placeholder={replyTo ? 'Write your answer to the agent…' : placeholder}
+        aria-label={replyTo ? 'Answer the agent' : 'Chat message'}
+        aria-describedby={replyTo ? replyDescriptionId : undefined}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
@@ -161,7 +215,7 @@ export const ChatComposer = forwardRef(function ChatComposer({
           )}
         </div>
       </div>
-    </form>
+    </m.form>
   );
 });
 

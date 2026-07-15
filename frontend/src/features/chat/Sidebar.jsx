@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Pause, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { MessageSquare, Pause, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { AgentLoop, MotionAttentionBadge } from '../../shared/motion';
 
 import { formatAgentPauseStatus } from '../../shared/agentPauseCopy';
@@ -254,7 +254,11 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
   );
 };
 
-const Sidebar = ({
+const Sidebar = React.forwardRef(function Sidebar({
+  id,
+  mobileDrawer = false,
+  mobileDrawerOpen = false,
+  onRequestClose,
   mode = 'ask',
   onModeChange,
   // Ask mode
@@ -269,10 +273,32 @@ const Sidebar = ({
   activeRoleId,
   onSelectAgent,
   agentAttention = 0,
-}) => (
-  <aside className="cp-side">
+}, ref) {
+  const drawerClosed = mobileDrawer && !mobileDrawerOpen;
+  return (
+  <aside
+    ref={ref}
+    id={id}
+    className="cp-side"
+    role={mobileDrawer ? 'dialog' : undefined}
+    aria-label="Chat navigation"
+    aria-modal={mobileDrawer && mobileDrawerOpen ? 'true' : undefined}
+    aria-hidden={drawerClosed ? 'true' : undefined}
+    inert={drawerClosed ? '' : undefined}
+    tabIndex={mobileDrawer ? -1 : undefined}
+  >
     <div className="cp-side-top">
       <span className="cp-side-title">Chat</span>
+      {mobileDrawer ? (
+        <button
+          type="button"
+          className="cp-side-close"
+          onClick={onRequestClose}
+          aria-label="Close chat navigation"
+        >
+          <X size={16} aria-hidden="true" />
+        </button>
+      ) : null}
       <ModeToggle mode={mode} onModeChange={onModeChange} agentAttention={agentAttention} />
     </div>
     {mode === 'agents' ? (
@@ -288,6 +314,7 @@ const Sidebar = ({
       />
     )}
   </aside>
-);
+  );
+});
 
 export default Sidebar;

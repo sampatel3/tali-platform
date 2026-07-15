@@ -9,13 +9,14 @@ import { CircleHelp, MessageSquare, PanelRightClose, Users, X } from 'lucide-rea
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
 import {
-  AgentPromptCard,
   ChatComposer,
   ChatEmptyState,
-  ChatMarkdown,
   ChatMessage,
+  ChatSurface,
   NewMessageNotice,
+  RoleAgentTimeline,
   ThinkingDots,
+  useAgentRequestReply,
   useAgentUpdateAwareness,
 } from '../../../shared/chat';
 import { DraftTaskCard, ImpactCard } from './cards.jsx';
@@ -23,11 +24,8 @@ import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
 import {
   AgentLoop,
   MotionAttentionBadge,
-  MotionChatItem,
-  MotionList,
   motionSafeScrollBehavior,
 } from '../../../shared/motion';
-import { AgentDecisionTimelineCard } from '../../../shared/decisions/AgentDecisionTimelineCard';
 import { useRoleDecisionDetails } from '../../../shared/decisions/useRoleDecisionDetails';
 
 // Role-scoped empty-state prompts. Off roles get an activation suggestion that
@@ -215,6 +213,31 @@ export function AgentChatDock({
     },
     [load, onReload, showToast]
   );
+
+  const {
+    beginReply,
+    cancelReply,
+    replyTo,
+    replying,
+    submitReply,
+    submitting: replySubmitting,
+  } = useAgentRequestReply({
+    value: input,
+    onChange: setInput,
+    onAnswer: answer,
+  });
+  const replyScopeRef = useRef(`${isBulk ? 'bulk' : 'role'}:${roleId || ''}`);
+
+  useEffect(() => {
+    if (replying) composerRef.current?.focus();
+  }, [replying]);
+
+  useEffect(() => {
+    const scope = `${isBulk ? 'bulk' : 'role'}:${roleId || ''}`;
+    if (scope === replyScopeRef.current) return;
+    replyScopeRef.current = scope;
+    if (replying) cancelReply();
+  }, [cancelReply, isBulk, replying, roleId]);
 
   const dismiss = useCallback(
     async (needsInputId) => {
@@ -433,7 +456,7 @@ export function AgentChatDock({
   }, [agentWorking, roleId, roleName, showToast]);
 
   return (
-    <aside className="ac-dock">
+    <ChatSurface as="aside" className="ac-dock" density="compact" tone="agent">
       <div className="ac-dock-head">
         {isBulk ? <Users size={15} /> : <MessageSquare size={15} />}
         {isBulk ? (
@@ -498,83 +521,42 @@ export function AgentChatDock({
             onPick={(t) => submitComposer(t)}
           />
         ) : (
-          <MotionList className="ac-timeline" aria-label="Agent conversation" layout={false}>
-            {items.map((it) => {
-              let content;
-              if (it.kind === 'needs_input') {
-                content = (
-                  <AgentPromptCard
-                    item={it}
-                    onAnswer={answer}
-                    onDismiss={dismiss}
-                    onPrompt={prefillPrompt}
-                    position={openQuestionPositions.get(it.needs_input_id ?? it.id)}
-                    total={openQuestions.length}
-                  />
-                );
-              } else if (it.kind === 'decision') {
-                const decisionId = Number(it.decision_id);
-                content = (
-                  <AgentDecisionTimelineCard
-                    item={it}
-                    detail={decisionDetails[decisionId]}
-                    roleId={roleId}
-                    roleName={roleName}
-                    detailsLoading={decisionDetailsLoading}
-                    detailsError={decisionDetailsError}
-                    onRetryDetails={refreshDecisionDetails}
-                    onChanged={refreshAfterDecision}
-                  />
-                );
-              } else {
-                const isAgent = it.author === 'agent';
-                const suppressStructuredCopy = (it.message_kind === 'proactive'
-                  && (it.actions || []).some((card) => card.type === 'helper_prompt'))
-                  || (it.message_kind === 'event'
-                    && (it.actions || []).some((card) => card.type === 'agent_event'));
-                const cards = (it.actions || []).map((card, i) =>
-                  card.type === 'candidate_evidence' ? (
-                    <CandidateEvidenceCard key={i} data={card} />
-                  ) : card.type === 'draft_task_review' ? (
-                    <DraftTaskCard
-                      key={i}
-                      card={card}
-                      onApprove={approveDraft}
-                      onRevise={reviseDraft}
-                      busy={sending}
-                    />
-                  ) : (
-                    <ImpactCard
-                      key={i}
-                      card={card}
-                      onApply={(t) => send(`Set the score cut-off to ${t}.`)}
-                      onPrompt={prefillPrompt}
-                      busy={sending}
-                    />
-                  )
-                );
-                // Agent replies carry a mono "Agent" attribution label above the
-                // text (home-preview `.msg.bot .who`). User messages stay the
-                // plain ink pill on the opposite edge.
-                content = isAgent ? (
-                  <ChatMessage role="assistant" time={it.created_at}>
-                    <div className="ac-agent-say">
-                      <span className="ac-who">Agent</span>
-                      {it.text && !suppressStructuredCopy ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
-                    </div>
-                    {cards}
-                  </ChatMessage>
-                ) : (
-                  <ChatMessage role="user" text={it.text} time={it.created_at} />
-                );
-              }
-              return (
-                <MotionChatItem key={it.id} className="tk-motion-row">
-                  {content}
-                </MotionChatItem>
-              );
-            })}
-          </MotionList>
+          <RoleAgentTimeline
+            items={items}
+            className="ac-timeline"
+            roleId={roleId}
+            roleName={roleName}
+            openQuestionPositions={openQuestionPositions}
+            openQuestionCount={openQuestions.length}
+            onAnswer={answer}
+            onDismiss={dismiss}
+            onPrompt={prefillPrompt}
+            onReply={beginReply}
+            decisionDetails={decisionDetails}
+            decisionDetailsLoading={decisionDetailsLoading}
+            decisionDetailsError={decisionDetailsError}
+            onRetryDecisionDetails={refreshDecisionDetails}
+            onDecisionChanged={refreshAfterDecision}
+            renderAction={(card) => (
+              card.type === 'candidate_evidence' ? (
+                <CandidateEvidenceCard data={card} />
+              ) : card.type === 'draft_task_review' ? (
+                <DraftTaskCard
+                  card={card}
+                  onApprove={approveDraft}
+                  onRevise={reviseDraft}
+                  busy={sending}
+                />
+              ) : (
+                <ImpactCard
+                  card={card}
+                  onApply={(threshold) => send(`Set the score cut-off to ${threshold}.`)}
+                  onPrompt={prefillPrompt}
+                  busy={sending}
+                />
+              )
+            )}
+          />
         )}
         {(sending || agentWorking) && !stalled && (
           <ChatMessage role="assistant">
@@ -582,13 +564,13 @@ export function AgentChatDock({
           </ChatMessage>
         )}
         {stalled && !sending && (
-          <div className="ac-rescreen-live">
-            <AgentLoop kind="pulse" className="ac-pulse" /> This is taking longer than expected — still running. You can send another message, or check back shortly.
+          <div className="tk-agent-working">
+            <AgentLoop kind="pulse" className="tk-agent-working-pulse" /> This is taking longer than expected — still running. You can send another message, or check back shortly.
           </div>
         )}
         {rescreenPending && !sending && (
-          <div className="ac-rescreen-live">
-            <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+          <div className="tk-agent-working">
+            <AgentLoop kind="pulse" className="tk-agent-working-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
           </div>
         )}
       </div>
@@ -609,7 +591,9 @@ export function AgentChatDock({
           ref={composerRef}
           value={input}
           onChange={setInput}
-          onSubmit={submitComposer}
+          onSubmit={replying ? submitReply : submitComposer}
+          replyTo={replyTo}
+          onCancelReply={cancelReply}
           placeholder={
             isBulk
               ? `Message ${bulkSelectedRoles.length} agents at once…`
@@ -621,9 +605,9 @@ export function AgentChatDock({
                   ? `Message the ${roleName} agent…`
                   : "Message this role's agent…"
           }
-          busy={(sending || (agentWorking && !stalled)) && !isBulk}
+          busy={replySubmitting || ((sending || (agentWorking && !stalled)) && !isBulk)}
         />
       </div>
-    </aside>
+    </ChatSurface>
   );
 }

@@ -88,13 +88,18 @@
     width: min(320px, 86vw);
     z-index: 60;
     transform: translateX(-100%);
-    transition: transform .22s ease;
+    visibility: hidden;
+    transition: transform .22s ease, visibility 0s linear .22s;
     box-shadow: 0 24px 48px rgba(15, 8, 30, 0.22);
     border: 0;
     border-right: 1px solid var(--c-line);
     border-radius: 0;
   }
-  .cp-root.cp-nav-open .cp-side { transform: translateX(0); }
+  .cp-root.cp-nav-open .cp-side {
+    transform: translateX(0);
+    visibility: visible;
+    transition-delay: 0s;
+  }
   /* The chat card goes flush edge-to-edge on a phone. */
   .cp-root .cp-center { border: 0; border-radius: 0; }
   .cp-root .cp-nav-scrim {
@@ -110,6 +115,13 @@
     transition: opacity .22s ease;
   }
   .cp-root.cp-nav-open .cp-nav-scrim { opacity: 1; pointer-events: auto; }
+}
+
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .cp-root .cp-side,
+  .cp-root .cp-nav-scrim {
+    transition: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -139,12 +151,30 @@
    Ask/Agents switch, closed off with a hairline rule so it reads as a distinct
    head band over the list — matching the rail's bordered-card head. */
 .cp-side-top {
+  position: relative;
   padding: 13px 14px;
   display: flex;
   flex-direction: column;
   gap: 11px;
   border-bottom: 1px solid var(--c-line);
 }
+.cp-side-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--c-mute);
+  cursor: pointer;
+}
+.cp-side-close:hover { background: var(--c-bg-3); color: var(--c-ink-2); }
 /* "New conversation" tucks right under the head with the same 14px gutters the
    list rows use, 10px below. */
 .cp-side-head {
@@ -540,7 +570,7 @@
   overflow-y: auto;
   /* White conversation surface (Home dock `.ac-stream`). The larger bottom pad
      clears the absolutely-positioned composer wrap. */
-  padding: 20px 20px 180px;
+  padding: var(--chat-gutter) var(--chat-gutter) 180px;
   background: var(--c-bg-2);
   scroll-behavior: smooth;
   min-height: 0;
@@ -549,11 +579,11 @@
   .cp-scroll { scroll-behavior: auto; }
 }
 .cp-thread {
-  max-width: 760px;
+  max-width: var(--chat-content-max);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--chat-row-gap);
 }
 
 /* ============ messages ============ */
@@ -570,15 +600,6 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
-/* Search-page user bubble matches search-preview `.umsg` exactly (16px radius,
-   10/15 padding, 13.5px, pure-white ink) — scoped to the chat thread so the
-   shared kit's bubble (Home dock + candidate workspace) is untouched. */
-.cp-thread .tk-msg-user {
-  padding: 10px 15px;
-  border-radius: 16px;
-  color: #fff;
-  font-size: 0.84375rem;
-}
 .cp-msg-assistant {
   align-self: flex-start;
   max-width: 100%;
@@ -588,35 +609,6 @@
   font-size: 0.90625rem;
   line-height: 1.6;
   color: var(--c-ink);
-}
-/* Mono purple kicker above each agent/assistant turn — "TAALI" on the Ask
-   thread (Thread.jsx), "AGENT" on the Agents thread (AgentConversation.jsx),
-   matching the Home dock `.ac-who`. The assistant column uses a 14px child gap,
-   so pull the next block up to land the preview's ~5px kicker-to-text spacing. */
-.cp-thread .tk-msg-assistant .cp-who,
-.cp-msg-assistant .cp-who {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: 0.59375rem;
-  font-weight: 500;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-  color: var(--c-purple);
-  margin-bottom: -9px;
-}
-/* On the Agents thread the kicker + prose wrap in one tight column
-   (.cp-agent-say, mirroring the Home dock `.ac-agent-say`) so the shared
-   assistant column's 14px gap only separates the prose from any impact /
-   evidence cards beneath it — the wrapper's own 3px gap sets the kicker
-   spacing, so the -9px pull above must not apply here. */
-.cp-thread .cp-agent-say { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.cp-thread .cp-agent-say .cp-who { margin-bottom: 0; }
-/* search-preview `.amsg`: assistant prose is 13.5px in the slightly-softer
-   ink-2. Scoped to the chat thread so the shared kit (Home dock + candidate
-   workspace) keeps its own 14.5px/ink default. */
-.cp-thread .tk-msg-assistant,
-.cp-thread .tk-md {
-  font-size: 0.84375rem;
-  color: var(--c-ink-2);
 }
 .cp-msg-assistant p { margin: 0 0 .6em; }
 .cp-msg-assistant p:last-child { margin-bottom: 0; }
@@ -629,121 +621,6 @@
   font-size: 90%;
 }
 .cp-msg-assistant ul, .cp-msg-assistant ol { padding-left: 22px; margin: 0 0 .6em; }
-
-/* ============ tool call card ============ */
-
-.cp-tool {
-  border: 1px solid var(--c-line);
-  background: var(--c-bg-2);
-  border-radius: 11px;
-  overflow: hidden;
-}
-.cp-tool.cp-tool-pending { border-style: dashed; }
-.cp-tool.cp-tool-error { border-color: color-mix(in oklab, var(--c-red) 35%, var(--c-line)); }
-.cp-tool-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 14px;
-  cursor: pointer;
-  background: var(--c-bg-2);
-}
-.cp-tool-head:hover { background: var(--c-bg-3); }
-/* search-preview tool glyph: 26px soft-purple tile, purple-2 icon. */
-.cp-tool-glyph {
-  width: 26px; height: 26px;
-  border-radius: 8px;
-  background: var(--c-purple-soft);
-  color: var(--c-purple-2);
-  display: grid; place-items: center;
-  flex-shrink: 0;
-}
-.cp-tool.cp-tool-error .cp-tool-glyph {
-  background: color-mix(in oklab, var(--c-red) 14%, transparent);
-  color: var(--c-red);
-}
-.cp-tool-tname {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--c-ink);
-  flex-shrink: 0;
-}
-.cp-tool-args {
-  flex: 1;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.6875rem;
-  color: var(--c-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cp-tool-args b {
-  color: var(--c-ink-2);
-  font-weight: 500;
-}
-/* search-preview result count: a soft-purple pill (e.g. "3 of 41"). The
-   transient pending / error states recolour the same pill (amber is in-scheme;
-   red is reserved for a genuine tool error, not a score). */
-.cp-tool-count {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--c-purple-2);
-  background: var(--c-purple-soft);
-  border-radius: 999px;
-  padding: 2px 9px;
-  flex-shrink: 0;
-}
-.cp-tool-count.cp-pending {
-  color: var(--c-amber);
-  background: color-mix(in oklab, var(--c-amber) 14%, transparent);
-}
-.cp-tool-count.cp-error {
-  color: var(--c-red);
-  background: color-mix(in oklab, var(--c-red) 12%, transparent);
-}
-.cp-tool-chev {
-  color: var(--c-mute-2);
-  transition: transform .2s;
-  flex-shrink: 0;
-}
-.cp-tool-open .cp-tool-chev { transform: rotate(90deg); }
-
-.cp-tool-body {
-  display: none;
-  padding: 12px 14px;
-  border-top: 1px solid var(--c-line);
-  background: var(--c-bg);
-}
-.cp-tool-open .cp-tool-body { display: block; }
-.cp-tool-summary {
-  font-size: 0.78125rem;
-  color: var(--c-ink);
-  line-height: 1.5;
-}
-.cp-tool-kv {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 6px 14px;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.71875rem;
-  margin-bottom: 8px;
-}
-.cp-tool-kv .k { color: var(--c-mute); }
-.cp-tool-kv .v { color: var(--c-ink); }
-.cp-tool-raw {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.6875rem;
-  background: var(--c-bg-2);
-  border: 1px solid var(--c-line);
-  border-radius: 8px;
-  padding: 8px 10px;
-  white-space: pre-wrap;
-  max-height: 280px;
-  overflow: auto;
-  color: var(--c-ink-2);
-}
 
 /* ============ result cards (candidate grid) ============ */
 
@@ -968,10 +845,8 @@
    the input area capped to the thread width. Scoped overrides on the shared
    composer keep the other surfaces (Home dock, candidate workspace) untouched. */
 .cp-composer-wrap .tk-composer {
-  max-width: 760px;
+  max-width: var(--chat-content-max);
   margin: 0 auto;
-  border-radius: 16px;
-  box-shadow: 0 2px 14px rgba(94, 58, 168, 0.05);
 }
 /* search-preview `.cfoot` tail: a centred mono note under the composer. */
 .cp-composer-note {

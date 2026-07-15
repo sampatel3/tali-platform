@@ -48,4 +48,46 @@ describe('Chat Sidebar conversation actions', () => {
     expect(onDelete).toHaveBeenCalledWith(7);
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it('exposes mobile drawer semantics without changing the desktop sidebar contract', () => {
+    const { rerender } = render(
+      <Sidebar
+        id="chat-navigation-drawer"
+        mobileDrawer
+        mobileDrawerOpen={false}
+        onRequestClose={vi.fn()}
+        mode="ask"
+        onModeChange={vi.fn()}
+        conversations={[]}
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    const drawer = document.getElementById('chat-navigation-drawer');
+    expect(drawer).toHaveAttribute('role', 'dialog');
+    expect(drawer).toHaveAttribute('aria-hidden', 'true');
+    expect(drawer).toHaveAttribute('inert');
+
+    rerender(
+      <Sidebar
+        id="chat-navigation-drawer"
+        mobileDrawer
+        mobileDrawerOpen
+        onRequestClose={vi.fn()}
+        mode="ask"
+        onModeChange={vi.fn()}
+        conversations={[]}
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(drawer).not.toHaveAttribute('aria-hidden');
+    expect(drawer).not.toHaveAttribute('inert');
+    expect(drawer).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('button', { name: 'Close chat navigation' })).toBeInTheDocument();
+  });
 });

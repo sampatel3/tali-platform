@@ -1,10 +1,7 @@
 import React, { Suspense, lazy, useMemo, useState } from 'react';
-import { ArrowUp, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 
 import './chat.css';
-// Home-specific impact cards still carry `ac-*` styling. Shared agent prompts
-// bring their own chat-kit styles, so they cannot depend on route order.
-import '../home/agentchat/agentchat.css';
 // Lazy so cytoscape (~455 kB) stays out of the showcase path until a
 // message actually carries a graph payload.
 const GraphView = lazy(() => import('./GraphView'));
@@ -12,7 +9,13 @@ import CandidateGrid from './CandidateGrid';
 import ToolCallCard from './ToolCallCard';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
 import Sidebar from './Sidebar';
-import { AgentPromptCard, ChatMarkdown, ChatMessage } from '../../shared/chat';
+import {
+  AgentPromptCard,
+  ChatComposer,
+  ChatMarkdown,
+  ChatMessage,
+  ChatSurface,
+} from '../../shared/chat';
 import { AgentLoop } from '../../shared/motion';
 
 // ChatShowcaseView — the step-05 "locked preview" embedded by DemoShowcasePage.
@@ -520,33 +523,23 @@ const AGENT_TAIL_TEXT =
 
 const noop = () => {};
 
-// Inert composer — the preview never sends, so we render the static box rather
-// than the live <ChatComposer> (whose autosize needs a mounted, settled layout).
-// Same markup the live surface's composer compiles to.
-const ShowcaseComposer = ({ placeholder }) => (
-  <div className="cp-composer-wrap">
-    <form className="cp-composer" onSubmit={(e) => e.preventDefault()}>
-      <textarea rows={1} placeholder={placeholder} defaultValue="" />
-      <div className="cp-composer-foot">
-        <span>
-          press <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for newline
-        </span>
-        <button type="button" className="cp-send-btn" disabled>
-          <ArrowUp size={13} /> send
-        </button>
-      </div>
-    </form>
-  </div>
-);
+const ShowcaseComposer = ({ placeholder }) => {
+  const [value, setValue] = useState('');
+  return (
+    <div className="cp-composer-wrap">
+      <ChatComposer value={value} onChange={setValue} onSubmit={noop} placeholder={placeholder} />
+    </div>
+  );
+};
 
 // ─────────────────────────────────────────────────────────────── Surfaces ──
 
 const AskCenter = () => (
-  <div className="cp-center">
+  <ChatSurface className="cp-center" density="comfortable">
     <header className="cp-head">
-      <div className="cp-head-ttl">
-        YC company background + Postgres
-        <span className="sub">Taali</span>
+      <div className="cp-head-titles">
+        <div className="cp-head-ttl">YC company background + Postgres</div>
+        <div className="cp-head-sub">Taali</div>
       </div>
       <div className="cp-head-grow" />
       <span className="cp-head-pill">
@@ -561,7 +554,7 @@ const AskCenter = () => (
             return <ChatMessage key={m.id} role="user" text={m.text} />;
           }
           return (
-            <ChatMessage key={m.id} role="assistant" text={m.leadText}>
+            <ChatMessage key={m.id} role="assistant" text={m.leadText} label="Taali">
               {m.tool ? (
                 // Mirrors the live Thread's ToolResultRender: find_top_candidates
                 // → the grounded evidence card; the search tools → grid + graph.
@@ -588,15 +581,15 @@ const AskCenter = () => (
       </div>
     </div>
     <ShowcaseComposer placeholder="Ask anything about your candidates…" />
-  </div>
+  </ChatSurface>
 );
 
 const AgentCenter = () => (
-  <div className="cp-center">
+  <ChatSurface className="cp-center" density="comfortable" tone="agent">
     <header className="cp-head">
-      <div className="cp-head-ttl">
-        Senior Backend Engineer
-        <span className="sub">Agent</span>
+      <div className="cp-head-titles">
+        <div className="cp-head-ttl">Senior Backend Engineer</div>
+        <div className="cp-head-sub">Agent</div>
       </div>
       <div className="cp-head-grow" />
       <AgentLoop kind="flow" className="cp-head-pill cp-head-pill-on">
@@ -607,7 +600,7 @@ const AgentCenter = () => (
     <div className="cp-scroll">
       <div className="cp-thread">
         <ChatMessage role="user" text={AGENT_USER_TEXT} />
-        <ChatMessage role="assistant" text={AGENT_LEAD_TEXT}>
+        <ChatMessage role="assistant" text={AGENT_LEAD_TEXT} label="Agent">
           <CandidateEvidenceCard data={AGENT_TOP_RESULT} />
           <ChatMarkdown>{AGENT_TAIL_TEXT}</ChatMarkdown>
         </ChatMessage>
@@ -615,7 +608,7 @@ const AgentCenter = () => (
       </div>
     </div>
     <ShowcaseComposer placeholder="Ask about this role’s pool, or tell the agent to change something…" />
-  </div>
+  </ChatSurface>
 );
 
 export const ChatShowcaseView = () => {
