@@ -18,10 +18,9 @@
   --c-purple: var(--purple, #b450ff);
   --c-purple-2: var(--purple-2, #9d3eff);
   --c-purple-soft: var(--purple-soft, #f4e8ff);
-  /* The faintest purple wash for active rows / verdict gradients. The global
-     token set ships --purple-soft + --purple-lav but no --purple-tint, so
-     derive it here (an even lighter mix than soft) with a literal fallback. */
-  --c-purple-tint: var(--purple-tint, color-mix(in oklab, var(--purple, #b450ff) 6%, var(--bg-2, #fff)));
+  /* Scheme-derived wash: the legacy global --purple-tint is a fixed light
+     value and becomes unreadable beneath dark-mode text. */
+  --c-purple-tint: color-mix(in oklab, var(--purple, #b450ff) 7%, var(--bg-2, #fff));
   --c-purple-lav: var(--purple-lav, #c4a5fd);
   --c-green: var(--green, #15a36a);
   --c-red: var(--red, #e64a4a);
@@ -276,6 +275,7 @@
    name (Home `.ac-agent-sub{padding-left:33px}`). */
 .cp-agent-sub { display: flex; flex-direction: column; gap: 0; padding-left: 33px; min-width: 0; }
 .cp-agent-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; }
+.cp-agent-badges:empty { display: none; }
 /* Status glyph (Home `.ac-stat`) — on = purple-gradient sparkle, paused =
    amber-soft pause (icon-only on an amber chip), off = grey dot. */
 .cp-agent-stat {
@@ -288,7 +288,7 @@
   justify-content: center;
 }
 .cp-agent-stat-on { background: var(--grad-agent-on-animated); background-size: 300% 300%; color: #fff; box-shadow: 0 0 0 3px var(--c-purple-soft); }
-.cp-agent-stat-paused { background: var(--amber-soft, #fbf0dd); color: var(--c-amber); }
+.cp-agent-stat-paused { background: var(--taali-warning-soft); color: var(--c-amber); }
 .cp-agent-stat-off { background: var(--c-bg-3); color: var(--c-mute); }
 .cp-agent-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .cp-agent-role {
@@ -813,6 +813,100 @@
   font-size: 0.6875rem;
 }
 
+/* ============ operational result cards ============ */
+
+.cp-op-card {
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-bg-2);
+  padding: 14px;
+}
+.cp-op-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.cp-op-head h3 {
+  margin: 2px 0 0;
+  color: var(--c-ink);
+  font-size: .9375rem;
+}
+.cp-op-head a {
+  color: var(--c-purple-2);
+  font-size: .75rem;
+  font-weight: 600;
+}
+.cp-op-kicker {
+  color: var(--c-mute);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .625rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.cp-op-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 8px;
+}
+.cp-op-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 9px;
+  background: var(--c-bg-3);
+  padding: 9px 10px;
+}
+.cp-op-stat strong { color: var(--c-ink); font-size: 1rem; }
+.cp-op-stat span { color: var(--c-mute); font-size: .6875rem; }
+.cp-op-stat.is-alert {
+  background: color-mix(in oklab, var(--c-amber) 12%, var(--c-bg-2));
+}
+.cp-op-stat.is-alert strong { color: var(--c-amber); }
+.cp-op-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.cp-op-pills span,
+.cp-assessment-meta span {
+  border-radius: 999px;
+  background: var(--c-bg-3);
+  color: var(--c-mute);
+  padding: 2px 8px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .625rem;
+}
+.cp-assessment-list { display: grid; gap: 7px; }
+.cp-assessment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--c-line-2);
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: inherit;
+  text-decoration: none;
+}
+.cp-assessment-row:hover { border-color: var(--c-purple); }
+.cp-assessment-row > div:first-child { display: grid; gap: 2px; }
+.cp-assessment-row strong { color: var(--c-ink); font-size: .8125rem; }
+.cp-assessment-row > div:first-child span { color: var(--c-mute); font-size: .6875rem; }
+.cp-assessment-meta { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+.cp-assessment-meta span.is-alert {
+  background: color-mix(in oklab, var(--c-amber) 12%, var(--c-bg-2));
+  color: var(--c-amber);
+}
+.cp-op-empty { margin: 0; color: var(--c-mute); font-size: .8125rem; }
+
+@media (max-width: 680px) {
+  .cp-assessment-row { align-items: flex-start; flex-direction: column; }
+  .cp-assessment-meta { justify-content: flex-start; }
+}
+
 /* ============ comparison table ============ */
 
 .cp-compare {
@@ -860,6 +954,7 @@
   background: linear-gradient(to bottom, transparent 0, var(--c-bg-2) 30%);
   pointer-events: none;
 }
+.cp-new-update { top: -28px; }
 /* The wrap is pointer-events:none so taps on the transparent gradient fall
    through to the thread behind. The actual composer must re-enable them — it
    renders as the shared `.tk-composer`, not the legacy `.cp-composer`, so we

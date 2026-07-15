@@ -8,7 +8,7 @@
 import { Check, CheckSquare, Layers, MessageSquare, Pause, Sparkles } from 'lucide-react';
 
 import { formatAgentPauseStatus } from '../../../shared/agentPauseCopy';
-import { AgentLoop } from '../../../shared/motion';
+import { AgentLoop, MotionAttentionBadge } from '../../../shared/motion';
 
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
@@ -102,20 +102,21 @@ export function AgentSidebar({
             (home-preview `.aprev` / `.abadges` / `.abud`, margin-left:33px). */}
         <span className="ac-agent-sub">
           <span className="ac-agent-preview">{preview}</span>
-          {(questions > 0 || decisions > 0) && (
-            <span className="ac-agent-badges">
-              {questions > 0 && (
-                <span className="ac-badge-q" title={`${questions} awaiting your reply`}>
-                  <MessageSquare size={10} /> {questions}
-                </span>
-              )}
+          <span className="ac-agent-badges">
+              <MotionAttentionBadge
+                value={questions}
+                format={fmtCount}
+                prefix={<MessageSquare size={10} aria-hidden="true" />}
+                className="ac-badge-q"
+                title={`${questions} awaiting your reply`}
+                aria-label={`${questions} agent update${questions === 1 ? '' : 's'} awaiting your reply`}
+              />
               {decisions > 0 && (
                 <span className="ac-badge-d" title={`${decisions} pending decisions`}>
                   {fmtCount(decisions)} pending
                 </span>
               )}
-            </span>
-          )}
+          </span>
           {a.budget_cap_cents > 0 && (
             <span
               className="ac-budget"

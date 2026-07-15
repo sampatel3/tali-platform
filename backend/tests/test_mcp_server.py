@@ -159,7 +159,52 @@ def test_mcp_lists_all_tools(client, db):
         "nl_search_candidates",
         "graph_search_candidates",
         "get_candidate_cv",
+        "get_recruiting_overview",
+        "list_assessments",
     }
+
+
+def test_recruiting_overview_tool_runs_through_public_mcp(client, db, org_user):
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id, name="Platform")
+    _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Overview Candidate",
+        email="overview@x.test",
+        taali_score=81.0,
+    )
+
+    payload = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {"name": "get_recruiting_overview", "arguments": {"role_id": role.id}},
+        )
+    )
+    assert payload["scope"]["role_id"] == role.id
+    assert payload["applications"]["total"] == 1
+    assert payload["links"]["role"].endswith(f"/jobs/{role.id}")
+
+
+def test_list_assessments_tool_runs_through_public_mcp(client, db, org_user):
+    headers, _user, _org_id = org_user
+    payload = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "list_assessments",
+                "arguments": {"attention": "needs_attention", "limit": 10},
+            },
+        )
+    )
+    assert payload["items"] == []
+    assert payload["total"] == 0
+    assert payload["filters"]["attention"] == "needs_attention"
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +214,13 @@ def test_mcp_lists_all_tools(client, db):
 
 def test_list_roles_returns_org_roles_only(client, db, org_user):
     headers, _user, org_id = org_user
-    role_a = _create_role_via_db(db, organization_id=org_id, name="A")
+    role_a = _create_role_via_db(
+        db,
+        organization_id=org_id,
+        name="A",
+        job_status="open",
+        workable_job_data={"state": "published"},
+    )
     _create_role_via_db(db, organization_id=org_id, name="B")
     # Role for a different org — should not leak.
     from app.models.organization import Organization
@@ -187,6 +238,8 @@ def test_list_roles_returns_org_roles_only(client, db, org_user):
     sample = next(r for r in rows if r["name"] == "A")
     assert sample["frontend_url"].endswith(f"/jobs/{role_a.id}")
     assert sample["role_id"] == role_a.id
+    assert sample["job_status"] == "open"
+    assert sample["workable_job_state"] == "published"
 
 
 def test_get_role_returns_full_payload(client, db, org_user):
@@ -273,6 +326,90 @@ def test_search_applications_threshold_accepts_0_to_10_scale(client, db, org_use
     assert [r["application_id"] for r in rows] == [keep.id]
 
 
+def test_search_applications_offset_pages_the_stable_score_order(client, db, org_user):
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id)
+    apps = [
+        _create_application(
+            db,
+            organization_id=org_id,
+            role=role,
+            full_name=f"Candidate {score}",
+            email=f"candidate-{score}@x.test",
+            taali_score=float(score),
+        )
+        for score in (90, 80, 70)
+    ]
+
+    first = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "search_applications",
+                "arguments": {"role_id": role.id, "limit": 2, "offset": 0},
+            },
+        )
+    )
+    second = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "search_applications",
+                "arguments": {"role_id": role.id, "limit": 2, "offset": 2},
+            },
+        )
+    )
+
+    assert [row["application_id"] for row in first] == [apps[0].id, apps[1].id]
+    assert [row["application_id"] for row in second] == [apps[2].id]
+
+
+def test_search_applications_offset_has_deterministic_equal_score_tiebreaker(
+    client, db, org_user
+):
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id)
+    apps = [
+        _create_application(
+            db,
+            organization_id=org_id,
+            role=role,
+            full_name=f"Equal {index}",
+            email=f"equal-{index}@x.test",
+            taali_score=80.0,
+        )
+        for index in range(4)
+    ]
+
+    pages = []
+    for offset in (0, 2):
+        pages.extend(
+            _tool_payload(
+                _mcp_call(
+                    client,
+                    headers,
+                    "tools/call",
+                    {
+                        "name": "search_applications",
+                        "arguments": {
+                            "role_id": role.id,
+                            "limit": 2,
+                            "offset": offset,
+                        },
+                    },
+                )
+            )
+        )
+
+    assert [row["application_id"] for row in pages] == sorted(
+        [app.id for app in apps], reverse=True
+    )
+
+
 def test_search_applications_filters_by_stage_and_outcome(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
@@ -313,6 +450,97 @@ def test_search_applications_score_type_pre_screen(client, db, org_user):
     rows = _tool_payload(rpc)
     assert [r["application_id"] for r in rows] == [good.id]
     assert bad.id not in {r["application_id"] for r in rows}
+
+
+@pytest.mark.parametrize("threshold", [7, 70])
+def test_search_applications_workable_threshold_accepts_either_scale(
+    client, db, org_user, threshold
+):
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id)
+    low = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Low Workable",
+        email=f"low-workable-{threshold}@x.test",
+        taali_score=90.0,
+    )
+    high = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="High Workable",
+        email=f"high-workable-{threshold}@x.test",
+        taali_score=40.0,
+    )
+    low.workable_score = 6.9
+    high.workable_score = 8.2
+    db.commit()
+
+    rows = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "search_applications",
+                "arguments": {
+                    "role_id": role.id,
+                    "score_type": "workable",
+                    "min_score": threshold,
+                    "sort_by": "workable_score",
+                },
+            },
+        )
+    )
+
+    assert [row["application_id"] for row in rows] == [high.id]
+    assert rows[0]["workable_score"] == 8.2
+    assert rows[0]["workable_score_100"] == 82.0
+
+
+def test_search_applications_supports_assessment_score_filter_and_sort(client, db, org_user):
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id)
+    low = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Low assessment",
+        email="low-assessment@x.test",
+        taali_score=90.0,
+    )
+    high = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="High assessment",
+        email="high-assessment@x.test",
+        taali_score=40.0,
+    )
+    low.assessment_score_cache_100 = 55.0
+    high.assessment_score_cache_100 = 88.0
+    db.commit()
+
+    rows = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "search_applications",
+                "arguments": {
+                    "role_id": role.id,
+                    "score_type": "assessment",
+                    "min_score": 60,
+                    "sort_by": "assessment_score",
+                },
+            },
+        )
+    )
+    assert [row["application_id"] for row in rows] == [high.id]
+    assert rows[0]["assessment_score"] == 88.0
 
 
 def test_search_applications_q_matches_name(client, db, org_user):
@@ -603,6 +831,87 @@ def test_api_key_scope_missing_denies_application_tools(client, db, org_user):
     assert result["isError"] is True
     text = (result.get("content") or [{}])[0].get("text", "").lower()
     assert "scope" in text
+
+
+def test_api_key_assessment_scope_is_independent(client, db, org_user):
+    """Assessment queues require assessments:read, not applications:read."""
+    from app.models.api_key import (
+        SCOPE_APPLICATIONS_READ,
+        SCOPE_ASSESSMENTS_READ,
+    )
+
+    _headers, _user, org_id = org_user
+    assessment_key = _mint_key(
+        db, organization_id=org_id, scopes=[SCOPE_ASSESSMENTS_READ]
+    )
+    allowed = _mcp_call(
+        client,
+        _key_headers(assessment_key),
+        "tools/call",
+        {"name": "list_assessments", "arguments": {}},
+    )
+    assert _tool_payload(allowed)["items"] == []
+
+    applications_key = _mint_key(
+        db, organization_id=org_id, scopes=[SCOPE_APPLICATIONS_READ]
+    )
+    denied = _mcp_call(
+        client,
+        _key_headers(applications_key),
+        "tools/call",
+        {"name": "list_assessments", "arguments": {}},
+    )
+    result = denied["result"]
+    assert result["isError"] is True
+    text = (result.get("content") or [{}])[0].get("text", "").lower()
+    assert "assessments:read" in text
+
+
+def test_api_key_recruiting_overview_requires_all_source_scopes(
+    client, db, org_user
+):
+    """The aggregate cannot bypass any underlying domain's read grant."""
+    from app.models.api_key import (
+        SCOPE_APPLICATIONS_READ,
+        SCOPE_ASSESSMENTS_READ,
+        SCOPE_ROLES_READ,
+    )
+
+    _headers, _user, org_id = org_user
+    required = {
+        SCOPE_ROLES_READ,
+        SCOPE_APPLICATIONS_READ,
+        SCOPE_ASSESSMENTS_READ,
+    }
+    for missing in required:
+        key = _mint_key(
+            db,
+            organization_id=org_id,
+            scopes=sorted(required - {missing}),
+        )
+        denied = _mcp_call(
+            client,
+            _key_headers(key),
+            "tools/call",
+            {"name": "get_recruiting_overview", "arguments": {}},
+        )
+        result = denied["result"]
+        assert result["isError"] is True
+        text = (result.get("content") or [{}])[0].get("text", "").lower()
+        assert missing in text
+
+    full_key = _mint_key(
+        db,
+        organization_id=org_id,
+        scopes=sorted(required),
+    )
+    allowed = _mcp_call(
+        client,
+        _key_headers(full_key),
+        "tools/call",
+        {"name": "get_recruiting_overview", "arguments": {}},
+    )
+    assert _tool_payload(allowed)["scope"]["role_id"] is None
 
 
 def test_api_key_roles_only_strips_application_counts(client, db, org_user):

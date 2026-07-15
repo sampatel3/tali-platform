@@ -9,7 +9,8 @@ export const agentChat = {
   // Sidebar: every active agent + attention counts (unread / questions / pending).
   listConversations: () => api.get('/agent-chat/conversations'),
 
-  // Merged timeline for one role's agent (also marks the thread read).
+  // Merged timeline for one role's agent. Reading is acknowledged separately
+  // after the selected thread has remained visible for a short dwell.
   getTimeline: (roleId) => api.get(`/agent-chat/conversations/${roleId}/timeline`),
 
   // Send a message → runs the agent turn. Returns { messages, timeline, agent }.

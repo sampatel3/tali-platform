@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..models.agent_conversation import (
@@ -25,6 +26,8 @@ from ..models.agent_conversation import (
     AgentConversationMessage,
     MESSAGE_KIND_ACTION,
     MESSAGE_KIND_CHAT,
+    MESSAGE_KIND_EVENT,
+    MESSAGE_KIND_PROACTIVE,
 )
 from ..domains.agentic._reasoning_text import humanize_reasoning
 from ..models.agent_decision import AgentDecision
@@ -32,6 +35,7 @@ from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from .recruiter_inputs import recruiter_input_contract
 
 
 # How far back to surface already-resolved questions/decisions so the thread
@@ -41,7 +45,12 @@ _RESOLVED_WINDOW_DAYS = 14
 # the UI paginates the rest from the decisions endpoint).
 _MAX_DECISIONS = 60
 
-_VISIBLE_MESSAGE_KINDS = (MESSAGE_KIND_CHAT, MESSAGE_KIND_ACTION)
+_VISIBLE_MESSAGE_KINDS = (
+    MESSAGE_KIND_CHAT,
+    MESSAGE_KIND_ACTION,
+    MESSAGE_KIND_PROACTIVE,
+    MESSAGE_KIND_EVENT,
+)
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -69,6 +78,7 @@ def serialize_needs_input(n: AgentNeedsInput) -> dict[str, Any]:
         status = "dismissed"
     else:
         status = "open"
+    contract = recruiter_input_contract(n)
     return {
         "kind": "needs_input",
         "id": f"needs-{n.id}",
@@ -77,6 +87,9 @@ def serialize_needs_input(n: AgentNeedsInput) -> dict[str, Any]:
         "prompt": n.prompt,
         "options": n.options or None,
         "response_schema": n.response_schema or None,
+        "input_mode": contract["input_mode"],
+        "can_answer": contract["can_answer"],
+        "can_dismiss": contract["can_dismiss"],
         "rationale": n.rationale,
         "status": status,
         "response": n.response,
@@ -137,6 +150,7 @@ def _needs_inputs(db: Session, role: Role, *, since: datetime) -> list[AgentNeed
 def _decisions(
     db: Session, role: Role, *, since: datetime
 ) -> list[tuple[AgentDecision, str | None, float | None]]:
+    now = datetime.now(timezone.utc)
     rows = (
         db.query(
             AgentDecision,
@@ -147,16 +161,29 @@ def _decisions(
         .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .filter(
             AgentDecision.role_id == int(role.id),
-            (
-                (AgentDecision.status == "pending")
-                | (AgentDecision.created_at >= since)
+            or_(
+                and_(
+                    AgentDecision.status == "pending",
+                    or_(
+                        AgentDecision.snoozed_until.is_(None),
+                        AgentDecision.snoozed_until <= now,
+                    ),
+                ),
+                and_(
+                    AgentDecision.status != "pending",
+                    AgentDecision.created_at >= since,
+                ),
             ),
         )
-        .order_by(AgentDecision.created_at.asc())
+        # Select the newest window first; ordering ascending before applying
+        # the cap silently returned the oldest cards on high-volume roles.
+        .order_by(AgentDecision.created_at.desc(), AgentDecision.id.desc())
         .limit(_MAX_DECISIONS)
         .all()
     )
-    return [(d, name, score) for d, name, score in rows]
+    # The merged conversation remains chronological. Reversing also restores
+    # deterministic id order when several decisions share a timestamp.
+    return [(d, name, score) for d, name, score in reversed(rows)]
 
 
 def build_timeline(db: Session, *, conversation: AgentConversation, role: Role) -> list[dict[str, Any]]:

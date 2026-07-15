@@ -43,6 +43,7 @@ from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
+from .persistence import result_for_storage
 from .stream_round import _RunningUsage, _stream_one_round
 from .system_prompt import build_system_blocks
 from .tool_registry import dispatch_tool
@@ -65,12 +66,35 @@ MAX_CONSECUTIVE_ERROR_ROUNDS = 2
 # leaks org-wide results.
 _ROLE_SCOPED_TOOLS = frozenset(
     {
+        "search_applications",
+        "find_top_candidates",
+        "screen_pool_against_requirement",
+        "nl_search_candidates",
         "list_recent_agent_decisions",
         "list_recent_agent_runs",
+        "get_recruiting_overview",
+        "list_assessments",
         "preview_related_role",
         "create_related_role",
     }
 )
+
+
+def _arguments_with_role_scope(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    conversation_role_id: int | None,
+) -> dict[str, Any]:
+    """Apply a role-scoped conversation's default to optional-role tools."""
+
+    if (
+        name in _ROLE_SCOPED_TOOLS
+        and conversation_role_id is not None
+        and arguments.get("role_id") is None
+    ):
+        return {**arguments, "role_id": int(conversation_role_id)}
+    return arguments
 
 
 @dataclass
@@ -308,6 +332,7 @@ def run_chat_turn(
             break
 
         tool_results: list[dict[str, Any]] = []
+        stored_tool_results: list[dict[str, Any]] = []
         signature = json.dumps(
             [
                 {"name": b.get("name"), "input": b.get("input") or {}}
@@ -337,16 +362,15 @@ def run_chat_turn(
             name = str(block["name"])
             args = block.get("input") or {}
             tool_count += 1
-            # Enforce role scope: when the chat is role-scoped and the model
-            # omitted role_id for a role-scoped tool, inject the
-            # conversation's role_id so the handler doesn't fall back to
-            # org-wide results.
-            if (
-                name in _ROLE_SCOPED_TOOLS
-                and conversation.role_id is not None
-                and args.get("role_id") is None
-            ):
-                args = {**args, "role_id": int(conversation.role_id)}
+            # Apply the conversation's default role whenever an optional-role
+            # tool omits it. An explicitly supplied role remains valid so a
+            # recruiter can make a deliberate cross-role comparison without
+            # abandoning the conversation.
+            args = _arguments_with_role_scope(
+                name,
+                args,
+                conversation_role_id=conversation.role_id,
+            )
             try:
                 result = dispatch_tool(
                     name, args, db=db, user=user, conversation=conversation
@@ -364,6 +388,17 @@ def run_chat_turn(
                     "type": "tool_result",
                     "tool_use_id": tool_call_id,
                     "content": json.dumps(result, default=str),
+                    "is_error": is_error,
+                }
+            )
+            stored_tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_call_id,
+                    "content": json.dumps(
+                        result if is_error else result_for_storage(name, result),
+                        default=str,
+                    ),
                     "is_error": is_error,
                 }
             )
@@ -389,7 +424,7 @@ def run_chat_turn(
             db,
             conversation=conversation,
             role=ROLE_USER,
-            content=tool_results,
+            content=stored_tool_results,
         )
         messages.append({"role": "user", "content": tool_results})
         if tool_count > 0 and error_count == tool_count:

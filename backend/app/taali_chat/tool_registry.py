@@ -1,15 +1,9 @@
-"""Anthropic-tool-format catalogue + dispatcher for Taali Chat.
+"""Taali Chat adapter for the canonical MCP tool catalogue.
 
-Reuses the pure-function handlers in ``app.mcp.handlers`` so the in-product
-chat exposes the same surface as the public MCP server. Each tool
-definition includes a JSON schema so Claude can structure its arguments
-correctly.
-
-Adding a tool: implement it in ``app/mcp/handlers.py``, then register it
-here. The schema deliberately stays hand-written rather than auto-derived
-from the function signature — Claude's tool-calling accuracy is much
-better with curated descriptions and tight schemas than with introspected
-ones.
+Tool contracts live in :mod:`app.mcp.catalog`.  This module only binds those
+contracts to the in-process handlers used by the chat transport.  Keeping the
+adapter deliberately small prevents the public MCP and chat schemas from
+silently drifting apart.
 """
 
 from __future__ import annotations
@@ -23,7 +17,8 @@ from ..agent_chat.confirmations import (
     blocked_confirmation_result,
     mark_confirmation_consumed,
 )
-from ..mcp import handlers
+from ..mcp import handlers, operations
+from ..mcp.catalog import TAALI_CHAT, ToolSpec, get_tool_spec, tools_for
 from ..models.taali_chat_conversation import TaaliChatConversation
 from ..models.user import User
 from ..services import related_role_service as _related_roles
@@ -31,420 +26,10 @@ from ..services.sister_role_service import text_fingerprint
 from .confirmations import require_later_turn_confirmation
 
 
-# Anthropic tool schema. Keep descriptions terse but pointed — these are
-# what Claude actually reads to decide which tool to call.
+TAALI_CHAT_SPECS: tuple[ToolSpec, ...] = tuple(tools_for(TAALI_CHAT))
 TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "list_roles",
-        "description": (
-            "List every active role in the user's org. Use first to discover "
-            "role_id values. Set include_stage_counts=true to also return "
-            "per-stage open application counts."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "include_stage_counts": {
-                    "type": "boolean",
-                    "description": "Include open-application counts per pipeline stage.",
-                    "default": False,
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "get_role",
-        "description": (
-            "Fetch one role with its job spec, criteria, and per-stage open-"
-            "application counts."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"role_id": {"type": "integer"}},
-            "required": ["role_id"],
-        },
-    },
-    {
-        "name": "search_applications",
-        "description": (
-            "Filter applications by score / stage / outcome / simple text. "
-            "Default scope: open applications, sorted by taali_score desc. "
-            "For semantic queries (skills, years of experience, narrative "
-            "fit), use nl_search_candidates instead — this tool's q only "
-            "matches name/email/position."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "role_id": {"type": ["integer", "null"]},
-                "min_score": {
-                    "type": ["number", "null"],
-                    "description": "Threshold 0-100 (or 0-10, auto-scaled).",
-                },
-                "score_type": {
-                    "type": "string",
-                    "enum": ["taali", "pre_screen", "rank", "cv_match"],
-                    "default": "taali",
-                },
-                "pipeline_stage": {
-                    "type": ["string", "null"],
-                    "enum": [None, "applied", "invited", "in_assessment", "review"],
-                },
-                "application_outcome": {
-                    "type": ["string", "null"],
-                    "enum": [None, "open", "rejected", "withdrawn", "hired"],
-                    "default": "open",
-                },
-                "q": {"type": ["string", "null"]},
-                "sort_by": {
-                    "type": "string",
-                    "enum": [
-                        "taali_score",
-                        "pre_screen_score",
-                        "rank_score",
-                        "cv_match_score",
-                        "created_at",
-                    ],
-                    "default": "taali_score",
-                },
-                "sort_order": {
-                    "type": "string",
-                    "enum": ["desc", "asc"],
-                    "default": "desc",
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
-                "offset": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "default": 0,
-                    "description": "Page through the complete ordered match set.",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "get_application",
-        "description": (
-            "Fetch one application with all four scores, evidence, auto-reject "
-            "reason, and notes. include_cv_text=true embeds the full CV."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "application_id": {"type": "integer"},
-                "include_cv_text": {"type": "boolean", "default": False},
-            },
-            "required": ["application_id"],
-        },
-    },
-    {
-        "name": "get_candidate",
-        "description": (
-            "Fetch a candidate's profile and the full list of applications they "
-            "have across every role. Use for cross-role questions."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"candidate_id": {"type": "integer"}},
-            "required": ["candidate_id"],
-        },
-    },
-    {
-        "name": "compare_applications",
-        "description": (
-            "Side-by-side scorecard for 2-5 applications. Use when the user "
-            "asks 'which candidate should advance' — surfaces every score on a "
-            "common scale so you can reason over them."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "application_ids": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "minItems": 1,
-                    "maxItems": 5,
-                },
-            },
-            "required": ["application_ids"],
-        },
-    },
-    {
-        "name": "find_top_candidates",
-        "description": (
-            "GROUNDED top-N ranking. Use this whenever the recruiter asks for "
-            "the 'best' or 'top N' candidates with one or more qualities "
-            "(e.g. 'top 5 data engineers with banking domain experience'). It "
-            "(1) ranks the structured-match set by score, then (2) attaches "
-            "to each shortlisted candidate a per-criterion verdict backed by "
-            "VERBATIM CV evidence (a real quote with char offsets, via "
-            "citations or a stored requirement assessment). Returns a `spec` "
-            "echo of how the query was read, `total_matched`, and grounded "
-            "`candidates` (each with `criteria[].status` + `evidence[].quote`). "
-            "Prefer this over nl_search_candidates for ranked 'top/best with "
-            "<quality>' asks — it does the ranking and grounding for you. When "
-            "you answer, cite the quotes; never add a fact that isn't in the "
-            "evidence."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
-                "rank_by": {
-                    "type": "string",
-                    "enum": ["taali", "pre_screen", "rank", "cv_match"],
-                    "default": "taali",
-                    "description": "Score to rank by. Default 'taali' (merged fit).",
-                },
-                "role_id": {"type": ["integer", "null"]},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "screen_pool_against_requirement",
-        "description": (
-            "REDISCOVERY across the WHOLE scored history. The default is a "
-            "zero-per-candidate-model-call, person-deduplicated Postgres search. "
-            "Use when the recruiter "
-            "has a NEW requirement or role and wants to find who — among ALL "
-            "candidates ever scored, INCLUDING ones scored for OTHER roles whose "
-            "existing score says nothing about this requirement — fits it. "
-            "Unlike find_top_candidates (a top-N shortlist of the current "
-            "pipeline ranked by existing score), this (1) reuses each "
-            "candidate's stored fields and CV full-text index, and when "
-            "deep_verify=true (2) grounds a bounded promising set with verbatim "
-            "CV citations. Returns database coverage fields and candidates; "
-            "when deep verification is requested those candidates also carry "
-            "`criteria[].status` + `evidence[].quote`, plus how many were "
-            "`screened` (and whether the "
-            "pool was `capped`), and `rescore_candidate_ids` (those a full "
-            "re-score would clarify). Choose THIS over find_top_candidates / "
-            "nl_search_candidates whenever the ask is 'who in my existing/"
-            "already-scored candidates fits this NEW requirement'. Only cite "
-            "quotes or claim verified fit when deep_verify=true."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "requirement_text": {
-                    "type": "string",
-                    "description": "The new requirement / mini job-spec to screen against.",
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
-                "offset": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "default": 0,
-                    "description": "Page through exhaustive database matches when deep_verify is false.",
-                },
-                "role_id": {
-                    "type": ["integer", "null"],
-                    "description": "Restrict the scored history to one role; omit for org-wide.",
-                },
-                "deep_verify": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Opt in to bounded per-candidate CV evidence checks.",
-                },
-            },
-            "required": ["requirement_text"],
-        },
-    },
-    {
-        "name": "nl_search_candidates",
-        "description": (
-            "Exhaustive, person-deduplicated natural-language candidate search "
-            "over normalized skills/taxonomy aliases, current and historical "
-            "titles, locations, years and indexed CV text. Common structured "
-            "queries require no model call. deep_verify optionally checks a "
-            "bounded relevance-ranked subset; include_graph is opt-in. "
-            "Use this for questions like 'AWS Glue engineer with 5+ years' or "
-            "'senior backend devs in EMEA who've worked at fintechs'."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "role_id": {"type": ["integer", "null"]},
-                "deep_verify": {"type": "boolean", "default": False},
-                "include_graph": {"type": "boolean", "default": False},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "graph_search_candidates",
-        "description": (
-            "Knowledge-graph search across the org's temporal subgraph. "
-            "Returns candidates whose stored facts mention the query, the "
-            "actual fact strings so you can cite specifics, AND the matching "
-            "subgraph (nodes + edges) which the chat UI renders as an inline "
-            "force-directed graph. Use for graph-shaped questions: "
-            "'colleagues of X', 'people who worked at startups before joining "
-            "Big Tech', 'engineers whose CVs mention tool Y'. Returns "
-            "warnings: [{code: 'neo4j_unavailable'}] when graph is not "
-            "configured — fall back to nl_search_candidates."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "get_candidate_cv",
-        "description": (
-            "Parsed CV sections (work history, education, skills) plus the raw "
-            "extracted CV text for one candidate. Use when you need to quote a "
-            "candidate's CV verbatim or check specific experience details."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"candidate_id": {"type": "integer"}},
-            "required": ["candidate_id"],
-        },
-    },
-    # ----- Agent-aware tools -----
-    # When the conversation is role-scoped (TaaliChatConversation.role_id
-    # set), the chat service injects "default role_id = X" into the
-    # system prompt so these tools fall back to that role without the
-    # recruiter spelling it out. Outside a role-scoped conversation the
-    # recruiter passes role_id explicitly or omits it for org-wide.
-    {
-        "name": "list_recent_agent_decisions",
-        "description": (
-            "Recent decisions queued by the autonomous agent (advance / reject "
-            "/ skip-assessment-reject) — what was queued, the reasoning the "
-            "agent gave, the recruiter's resolution (pending / approved / "
-            "overridden / discarded). Use to answer 'why did the agent queue "
-            "Lucas?' or 'what did the agent decide today?'. Filter by status "
-            "to surface just pending decisions awaiting recruiter review."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "role_id": {
-                    "type": "integer",
-                    "description": "Restrict to one role. Defaults to the conversation's role when set.",
-                },
-                "status": {
-                    "type": "string",
-                    "enum": ["pending", "approved", "overridden", "discarded", "expired"],
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-            },
-        },
-    },
-    {
-        "name": "list_recent_agent_runs",
-        "description": (
-            "Recent autonomous-cycle log entries — one row per agent cycle. "
-            "Each row has trigger (event/cron/manual), status (succeeded/"
-            "failed/aborted/budget_paused), tools called, decisions emitted, "
-            "errors if any, model + prompt versions. Use to answer 'what "
-            "did the agent do today?' or 'why did the cycle fail this morning?'."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "role_id": {
-                    "type": "integer",
-                    "description": "Restrict to one role. Defaults to the conversation's role when set.",
-                },
-                "trigger": {
-                    "type": "string",
-                    "enum": ["event", "cron", "manual"],
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-            },
-        },
-    },
-    {
-        "name": "explain_agent_decision",
-        "description": (
-            "Drilldown for one queued agent decision. Returns the decision "
-            "(reasoning + cited evidence + confidence + status) plus the "
-            "linked AgentRun (which cycle produced it, what tools the agent "
-            "called, model + prompt versions). Use when the recruiter asks "
-            "'why did you queue this one' on a specific decision."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"decision_id": {"type": "integer"}},
-            "required": ["decision_id"],
-        },
-    },
-    {
-        "name": "preview_related_role",
-        "description": (
-            "Preview a NEW related Taali role over an original Workable role's "
-            "existing applicants using a complete cousin/alternate job spec. "
-            "Returns shared-roster size, scorable count, and estimated AI usage. "
-            "This preserves the original role; stages and candidate actions still "
-            "write back to Workable. Always preview, show the result, and wait for "
-            "a later explicit recruiter confirmation before create_related_role."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "role_id": {
-                    "type": "integer",
-                    "description": "The original Workable role. Defaults to the conversation's role when scoped.",
-                },
-                "name": {"type": "string"},
-                "job_spec_text": {
-                    "type": "string",
-                    "description": "The complete updated job specification, not only the differences.",
-                },
-            },
-            "required": ["role_id", "name", "job_spec_text"],
-        },
-    },
-    {
-        "name": "create_related_role",
-        "description": (
-            "Create a related role and queue fresh scores for its shared roster. "
-            "Only call after preview_related_role and an explicit confirmation in "
-            "a NEW recruiter message; the server enforces that receipt."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "role_id": {"type": "integer"},
-                "name": {"type": "string"},
-                "job_spec_text": {"type": "string"},
-                "confirmation_token": {"type": ["string", "null"]},
-            },
-            "required": ["role_id", "name", "job_spec_text"],
-        },
-    },
+    spec.anthropic_definition() for spec in TAALI_CHAT_SPECS
 ]
-
-
-_HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
-    "list_roles": handlers.list_roles,
-    "get_role": handlers.get_role,
-    "search_applications": handlers.search_applications,
-    "get_application": handlers.get_application,
-    "get_candidate": handlers.get_candidate,
-    "compare_applications": handlers.compare_applications,
-    "find_top_candidates": handlers.find_top_candidates,
-    "screen_pool_against_requirement": handlers.screen_pool_against_requirement,
-    "nl_search_candidates": handlers.nl_search_candidates,
-    "graph_search_candidates": handlers.graph_search_candidates,
-    "get_candidate_cv": handlers.get_candidate_cv,
-    "list_recent_agent_decisions": handlers.list_recent_agent_decisions,
-    "list_recent_agent_runs": handlers.list_recent_agent_runs,
-    "explain_agent_decision": handlers.explain_agent_decision,
-}
 
 
 def _preview_with_receipt(
@@ -485,6 +70,98 @@ def _preview_with_receipt(
     )
 
 
+def _create_with_confirmation(
+    db: Session,
+    *,
+    user: User,
+    conversation: TaaliChatConversation | None,
+    role_id: int,
+    name: str,
+    job_spec_text: str,
+    confirmation_token: str | None = None,
+) -> dict[str, Any]:
+    if conversation is None:
+        return blocked_confirmation_result(
+            "create_related_role", "No persisted chat confirmation is available."
+        )
+    clean_name = name.strip()
+    clean_spec = job_spec_text.strip()
+    check = require_later_turn_confirmation(
+        db,
+        conversation=conversation,
+        operation="create_related_role",
+        token=confirmation_token,
+    )
+    if not check.ok:
+        return blocked_confirmation_result("create_related_role", check.reason)
+    current = _related_roles.preview_related_role(
+        db,
+        role_id=role_id,
+        organization_id=int(user.organization_id),
+    )
+    matches_preview = (
+        int(check.payload.get("role_id") or 0) == role_id
+        and str(check.payload.get("name") or "") == clean_name
+        and str(check.payload.get("spec_fingerprint") or "")
+        == text_fingerprint(clean_spec)
+        and int(current.get("candidates_total") or 0)
+        <= int(check.payload.get("max_total") or 0)
+        and int(current.get("candidates_with_cv") or 0)
+        <= int(check.payload.get("max_scorable") or 0)
+    )
+    if not matches_preview:
+        return _preview_with_receipt(
+            db,
+            user=user,
+            role_id=role_id,
+            name=clean_name,
+            job_spec_text=clean_spec,
+            message=(
+                "The name, specification, or roster changed since the preview. "
+                "Please confirm this refreshed scope."
+            ),
+        )
+    related, evaluation_counts = _related_roles.create_related_role(
+        db,
+        role_id=role_id,
+        organization_id=int(user.organization_id),
+        name=clean_name,
+        job_spec_text=clean_spec,
+    )
+    result = _related_roles.related_role_created_payload(related, evaluation_counts)
+    return mark_confirmation_consumed(result, check=check)
+
+
+def _resolve_handlers() -> dict[str, Callable[..., Any]]:
+    """Resolve every chat catalog entry to exactly one callable handler."""
+
+    special_handlers: dict[str, Callable[..., Any]] = {
+        "preview_related_role": _preview_with_receipt,
+        "create_related_role": _create_with_confirmation,
+    }
+    result: dict[str, Callable[..., Any]] = {}
+    modules = (handlers, operations)
+    for spec in TAALI_CHAT_SPECS:
+        matches = [
+            candidate
+            for module in modules
+            if callable(candidate := getattr(module, spec.handler_name, None))
+        ]
+        special = special_handlers.get(spec.name)
+        if special is not None:
+            matches.append(special)
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Taali Chat tool {spec.name!r} must resolve exactly one handler "
+                f"named {spec.handler_name!r}; found {len(matches)}"
+            )
+        result[spec.name] = matches[0]
+    return result
+
+
+_HANDLER_BY_NAME = _resolve_handlers()
+
+
 def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
@@ -493,80 +170,38 @@ def dispatch_tool(
     user: User,
     conversation: TaaliChatConversation | None = None,
 ) -> Any:
-    """Run one tool call, returning its raw payload.
+    """Validate and run one Taali Chat tool call.
 
-    Raises ``KeyError`` on unknown tool, ``ValueError`` on bad arguments.
-    Caller is responsible for catching + converting errors into a
-    ``tool_result`` content block with ``is_error=True``.
+    Unknown or non-chat tools raise ``KeyError``.  Model-generated arguments
+    are validated against the same strict contract exposed to MCP clients, so
+    extra fields and invalid enum values cannot leak into domain handlers.
     """
-    safe_args = arguments or {}
-    if name == "preview_related_role":
-        return _preview_with_receipt(
-            db,
-            user=user,
-            role_id=int(safe_args["role_id"]),
-            name=str(safe_args.get("name") or ""),
-            job_spec_text=str(safe_args.get("job_spec_text") or ""),
-        )
-    if name == "create_related_role":
-        if conversation is None:
-            return blocked_confirmation_result(
-                "create_related_role", "No persisted chat confirmation is available."
-            )
-        role_id = int(safe_args["role_id"])
-        clean_name = str(safe_args.get("name") or "").strip()
-        clean_spec = str(safe_args.get("job_spec_text") or "").strip()
-        check = require_later_turn_confirmation(
-            db,
-            conversation=conversation,
-            operation="create_related_role",
-            token=str(safe_args.get("confirmation_token") or "") or None,
-        )
-        if not check.ok:
-            return blocked_confirmation_result("create_related_role", check.reason)
-        current = _related_roles.preview_related_role(
-            db,
-            role_id=role_id,
-            organization_id=int(user.organization_id),
-        )
-        matches_preview = (
-            int(check.payload.get("role_id") or 0) == role_id
-            and str(check.payload.get("name") or "") == clean_name
-            and str(check.payload.get("spec_fingerprint") or "")
-            == text_fingerprint(clean_spec)
-            and int(current.get("candidates_total") or 0)
-            <= int(check.payload.get("max_total") or 0)
-            and int(current.get("candidates_with_cv") or 0)
-            <= int(check.payload.get("max_scorable") or 0)
-        )
-        if not matches_preview:
-            return _preview_with_receipt(
-                db,
-                user=user,
-                role_id=role_id,
-                name=clean_name,
-                job_spec_text=clean_spec,
-                message=(
-                    "The name, specification, or roster changed since the preview. "
-                    "Please confirm this refreshed scope."
-                ),
-            )
-        related, evaluation_counts = _related_roles.create_related_role(
-            db,
-            role_id=role_id,
-            organization_id=int(user.organization_id),
-            name=clean_name,
-            job_spec_text=clean_spec,
-        )
-        result = _related_roles.related_role_created_payload(
-            related, evaluation_counts
-        )
-        return mark_confirmation_consumed(result, check=check)
-
+    spec = get_tool_spec(name)
+    if TAALI_CHAT not in spec.exposures:
+        raise KeyError(f"unknown Taali Chat tool: {name}")
     handler = _HANDLER_BY_NAME.get(name)
     if handler is None:
-        raise KeyError(f"unknown tool: {name}")
+        raise KeyError(f"no Taali Chat handler registered for: {name}")
+    safe_args = spec.validate(arguments)
+    if name == "preview_related_role":
+        return handler(db, user=user, **safe_args)
+    if name == "create_related_role":
+        return handler(db, user=user, conversation=conversation, **safe_args)
     return handler(db, user, **safe_args)
 
 
-__all__ = ["TAALI_CHAT_TOOLS", "dispatch_tool"]
+def persistence_policy_for(name: str) -> str:
+    """Return how a tool result may be stored in the chat transcript."""
+
+    spec = get_tool_spec(name)
+    if TAALI_CHAT not in spec.exposures:
+        raise KeyError(f"unknown Taali Chat tool: {name}")
+    return spec.persistence
+
+
+__all__ = [
+    "TAALI_CHAT_SPECS",
+    "TAALI_CHAT_TOOLS",
+    "dispatch_tool",
+    "persistence_policy_for",
+]

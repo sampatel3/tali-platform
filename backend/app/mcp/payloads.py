@@ -27,6 +27,9 @@ SCORE_FIELDS: dict[str, str] = {
     "pre_screen": "pre_screen_score_100",
     "rank": "rank_score",
     "cv_match": "cv_match_score",
+    "workable": "workable_score",
+    "assessment": "assessment_score_cache_100",
+    "role_fit": "role_fit_score_cache_100",
 }
 
 
@@ -55,6 +58,12 @@ def role_summary(
         "role_id": role.id,
         "name": role.name,
         "source": role.source,
+        "job_status": getattr(role, "job_status", None),
+        "workable_job_state": (
+            str(role.workable_job_data.get("state") or "").strip().lower() or None
+            if isinstance(getattr(role, "workable_job_data", None), dict)
+            else None
+        ),
         "auto_reject": bool(getattr(role, "auto_reject", False)),
         "score_threshold": role.score_threshold,
         "created_at": _isoformat(role.created_at),
@@ -127,6 +136,13 @@ def application_summary(
         "rank_score": app.rank_score,
         "cv_match_score": app.cv_match_score,
         "workable_score": app.workable_score,
+        "workable_score_100": (
+            round(max(0.0, min(100.0, float(app.workable_score) * 10.0)), 1)
+            if app.workable_score is not None
+            else None
+        ),
+        "assessment_score": getattr(app, "assessment_score_cache_100", None),
+        "role_fit_score": getattr(app, "role_fit_score_cache_100", None),
         "auto_reject_state": app.auto_reject_state,
         "created_at": _isoformat(app.created_at),
         "frontend_url": application_url(app.id, role_id=app.role_id),

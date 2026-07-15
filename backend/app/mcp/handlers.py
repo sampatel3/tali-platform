@@ -33,7 +33,14 @@ from .payloads import (
 
 logger = logging.getLogger("taali.mcp.handlers")
 
-PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "advanced")
+PIPELINE_STAGES = (
+    "sourced",
+    "applied",
+    "invited",
+    "in_assessment",
+    "review",
+    "advanced",
+)
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 
 
@@ -73,14 +80,21 @@ def _applications_count(db: Session, *, organization_id: int, role_id: int) -> i
     )
 
 
-def _normalize_score_input(value: float | None) -> float | None:
-    """Permit either 0-10 or 0-100 thresholds; coerce to 0-100."""
+def _normalize_score_input(
+    value: float | None,
+    *,
+    score_type: str,
+) -> float | None:
+    """Permit 0-10 or 0-100 input, then convert to the column's scale."""
     if value is None:
         return None
     f = float(value)
     if 0 <= f <= 10:
-        return f * 10.0
-    return f
+        f *= 10.0
+    # Workable's normalized database column is deliberately 0-10. The chat
+    # contract accepts the same human-friendly 0-10 shorthand as every other
+    # score, or a canonical 0-100 threshold, so convert only at the SQL edge.
+    return f / 10.0 if score_type == "workable" else f
 
 
 def _applications_for_ids(
@@ -193,6 +207,7 @@ def search_applications(
     sort_by: str = "taali_score",
     sort_order: str = "desc",
     limit: int = 25,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     if score_type not in SCORE_FIELDS:
         raise ValueError(
@@ -208,6 +223,7 @@ def search_applications(
             f"got {application_outcome!r}"
         )
     limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
 
     query = (
         db.query(CandidateApplication)
@@ -226,7 +242,7 @@ def search_applications(
         query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage)
     if application_outcome:
         query = query.filter(CandidateApplication.application_outcome == application_outcome)
-    threshold = _normalize_score_input(min_score)
+    threshold = _normalize_score_input(min_score, score_type=score_type)
     if threshold is not None:
         score_col = getattr(CandidateApplication, SCORE_FIELDS[score_type])
         query = query.filter(score_col >= threshold)
@@ -245,6 +261,9 @@ def search_applications(
         "pre_screen_score": "pre_screen_score_100",
         "rank_score": "rank_score",
         "cv_match_score": "cv_match_score",
+        "workable_score": "workable_score",
+        "assessment_score": "assessment_score_cache_100",
+        "role_fit_score": "role_fit_score_cache_100",
         "created_at": "created_at",
     }
     if sort_by not in sort_column_map:
@@ -263,9 +282,16 @@ def search_applications(
     # NULL scores sort as the smallest value (matches the previous
     # float("-inf") key): last on desc, first on asc.
     score_order = sort_col.asc().nullsfirst() if ascending else sort_col.desc().nullslast()
-    query = query.order_by(is_advanced.desc(), score_order)
+    # The id tie-breaker is required for offset pagination: equal/null scores
+    # are common, and an under-specified order can otherwise overlap or skip
+    # rows between pages.
+    query = query.order_by(
+        is_advanced.desc(),
+        score_order,
+        CandidateApplication.id.desc(),
+    )
 
-    apps = query.limit(limit).all()
+    apps = query.offset(offset).limit(limit).all()
     return [application_summary(a) for a in apps]
 
 
@@ -316,8 +342,8 @@ def compare_applications(
     *,
     application_ids: list[int],
 ) -> dict[str, Any]:
-    if not application_ids:
-        raise ValueError("application_ids must contain at least one id")
+    if len(application_ids) < 2:
+        raise ValueError("compare_applications requires at least 2 ids")
     if len(application_ids) > 5:
         raise ValueError("compare_applications accepts at most 5 ids")
 
@@ -381,7 +407,19 @@ def nl_search_candidates(
             CandidateApplication.deleted_at.is_(None),
         )
     )
+    scoped_role: Role | None = None
     if role_id is not None:
+        scoped_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == user.organization_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if scoped_role is None:
+            raise ValueError(f"role {role_id} not found")
         base = base.filter(CandidateApplication.role_id == int(role_id))
 
     verify = bool(deep_verify if rerank is None else rerank)
@@ -475,7 +513,19 @@ def find_top_candidates(
         getattr(CandidateApplication, SCORE_FIELDS.get(str(rank_by or "taali"), "taali_score_cache_100")).isnot(None),
         func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, ""))) != "below threshold",
     )
+    scoped_role: Role | None = None
     if role_id is not None:
+        scoped_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == user.organization_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if scoped_role is None:
+            raise ValueError(f"role {role_id} not found")
         base = base.filter(CandidateApplication.role_id == int(role_id))
 
     result = _engine(
@@ -488,31 +538,9 @@ def find_top_candidates(
         rank_by=str(rank_by or "taali"),
     )
 
-    # Carry the role onto the result so the shareable report names which job
-    # these candidates were ranked for (role-scoped queries only).
-    if role_id is not None:
-        role = db.query(Role).filter(Role.id == int(role_id)).first()
-        if role is not None:
-            result["role_name"] = role.name
-            result["role_id"] = int(role_id)
-
-    # Persist a shareable snapshot so every grounded top-N is a report the
-    # recruiter can hand out as a link. Best-effort — never fail the search.
-    try:
-        from ..domains.top_reports.service import create_report, report_public_url
-
-        report = create_report(
-            db,
-            organization_id=int(user.organization_id),
-            created_by_user_id=int(getattr(user, "id", 0)) or None,
-            role_id=int(role_id) if role_id is not None else None,
-            query=text,
-            snapshot=result,
-        )
-        result["report_token"] = report.token
-        result["report_url"] = report_public_url(report.token)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("top-candidates report persist failed: %s", exc)
+    if scoped_role is not None:
+        result["role_name"] = scoped_role.name
+        result["role_id"] = int(scoped_role.id)
 
     return result
 

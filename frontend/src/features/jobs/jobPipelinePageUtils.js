@@ -59,7 +59,7 @@ export const formatStageLabel = (stage) => (
   || (stage ? stage.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : '—')
 );
 
-const GRANULAR_AUTOMATION_KEYS = Object.freeze([
+export const GRANULAR_AUTOMATION_KEYS = Object.freeze([
   'auto_send_assessment',
   'auto_resend_assessment',
   'auto_advance',

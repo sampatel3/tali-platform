@@ -328,6 +328,13 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_recovery_sweep",
             "schedule": 300.0,
         },
+        # Reconcile durable terminal AgentRun rows into role-chat event cards.
+        # Direct publication happens in the source transaction; this is the
+        # retry net for a transient notification failure or worker interruption.
+        "agent-terminal-run-events-every-5-minutes": {
+            "task": "app.tasks.agent_tasks.agent_publish_terminal_run_events",
+            "schedule": 300.0,
+        },
         # Deterministic, free pre-screen reject catch-up. Unlike the cohort
         # tick above (which skips budget-paused roles), this culls already
         # pre-screened, below-threshold candidates on every role — agent off
@@ -344,7 +351,9 @@ celery_app.conf.update(
         # remains as a wider triage pass.
         "agent-daily-review-sweep": {
             "task": "app.tasks.agent_tasks.agent_daily_review_sweep",
-            "schedule": 86400.0,
+            # Fixed 04:30 UTC (08:30 Dubai). Unlike a 24-hour interval, this
+            # cannot be indefinitely reset/skipped by routine beat restarts.
+            "schedule": crontab(hour=4, minute=30),
         },
         # Nightly DecisionPolicy retune. Aggregates explicit feedback +
         # silent overrides + manual recruiter actions over the window

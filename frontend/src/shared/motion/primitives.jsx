@@ -27,6 +27,7 @@ import {
   listItemVariants,
   motionTransition,
   reducedFadeVariants,
+  scaleVariants,
 } from './presets';
 import { motionElementFor } from './effects';
 import { MOTION_DURATION, MOTION_EASE, MOTION_STAGGER } from './tokens';
@@ -324,6 +325,55 @@ export const MotionListItem = forwardRef(function MotionListItem({
     </Component>
   );
 });
+
+/**
+ * A quiet attention count: it is settled on hydration, enters when a previously
+ * empty count appears, and gives a single acknowledgement pop when the count
+ * increases. Decreases remain still so reading/clearing notifications feels
+ * calm rather than celebratory.
+ */
+export function MotionAttentionBadge({
+  value = 0,
+  className,
+  prefix,
+  format = Math.round,
+  ...props
+}) {
+  const numericValue = Math.max(0, Number(value) || 0);
+  const reduced = useReducedMotionSync();
+  const previousRef = useRef(numericValue);
+  const [scope, animateBadge] = useAnimate();
+  const appeared = previousRef.current <= 0 && numericValue > 0;
+
+  useEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = numericValue;
+    if (reduced || previous <= 0 || numericValue <= previous || !scope.current) return undefined;
+    const controls = animateBadge(
+      scope.current,
+      { scale: [1, 1.14, 1], y: [0, -1, 0] },
+      { ...motionTransition.base, duration: MOTION_DURATION.base },
+    );
+    return () => controls.stop();
+  }, [animateBadge, numericValue, reduced, scope]);
+
+  if (numericValue <= 0) return null;
+  return (
+    <m.span
+      ref={scope}
+      className={className}
+      variants={reduced ? reducedFadeVariants : scaleVariants}
+      initial={reduced || !appeared ? false : 'hidden'}
+      animate="visible"
+      data-motion-attention="count"
+      data-motion-value={numericValue}
+      {...props}
+    >
+      {prefix}
+      {format(numericValue)}
+    </m.span>
+  );
+}
 
 /** Interpolates from the previous value; first render is already settled. */
 export function MotionNumber({

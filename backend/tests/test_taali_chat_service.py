@@ -297,6 +297,51 @@ def test_tool_call_dispatches_and_emits_result(db):
     )
 
 
+def test_sensitive_tool_result_is_available_live_but_not_persisted(db):
+    user, org = _seed_user(db)
+    raw_cv = "PRIVATE CV SOURCE TEXT THAT MUST NOT BE STORED IN CHAT"
+    candidate = Candidate(
+        organization_id=org.id,
+        email="private@example.test",
+        full_name="Private Candidate",
+        position="Engineer",
+        cv_text=raw_cv,
+    )
+    db.add(candidate)
+    db.commit()
+
+    plans = [
+        _tool_use_plan(
+            tool_id="toolu_sensitive",
+            tool_name="get_candidate_cv",
+            args={"candidate_id": candidate.id},
+        ),
+        _text_only_plan("I checked the source CV."),
+    ]
+    fake_client = _FakeClient(plans)
+
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
+        "app.taali_chat.service.record_event"
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(user_message="check the CV", conversation_id=None),
+            )
+        )
+
+    live_result = next(json.loads(frame[2:]) for frame in frames if frame.startswith("a:"))
+    assert live_result["result"]["cv_text"] == raw_cv
+    assert raw_cv in fake_client.messages.calls[1]["messages"][-1]["content"][0]["content"]
+
+    stored_messages = db.query(TaaliChatMessage).all()
+    serialized = json.dumps([message.content for message in stored_messages])
+    assert raw_cv not in serialized
+    assert "omitted_from_transcript" in serialized
+
+
 def test_tool_error_emits_is_error_frame(db):
     user, org = _seed_user(db)
     plans = [

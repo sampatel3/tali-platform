@@ -14,6 +14,8 @@ the assistant turn as an ``action``.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -22,16 +24,28 @@ from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
 from ..models.agent_decision import AgentDecision
+from ..models.decision_feedback import (
+    ATTRIBUTED_TO_VALUES,
+    FAILURE_MODES,
+    FEEDBACK_DIRECTIONS,
+    FEEDBACK_SCOPES,
+)
 from ..models.role import Role
 from ..services import related_role_service as _related_roles
 from ..services.sister_role_service import text_fingerprint
+from . import application_commands as _application_commands
 from . import assessments as _assessments
 from . import constraints as _constraints
 from . import controls as _controls
+from . import decision_commands as _decision_commands
+from . import decision_teach as _decision_teach
 from . import draft_tasks as _draft_tasks
 from . import health as _health
 from . import impact as _impact
+from . import proactive as _proactive
+from . import recruiter_inputs as _recruiter_inputs
 from . import rescore as _rescore
+from . import run_history as _run_history
 from .confirmations import (
     attach_confirmation,
     blocked_confirmation_result,
@@ -52,12 +66,209 @@ CARD_TYPES = frozenset(
         "related_role_created",
         "draft_task_review",
         "candidate_evidence",
+        "decision_action_preview",
+        "operation_preview",
+        "operation_receipt",
+        "helper_prompt",
     }
 )
 # Cards that represent a committed mutation (vs read-only analysis).
 MUTATION_CARD_TYPES = frozenset(
-    {"threshold_change", "constraint_change", "job_spec_change", "related_role_created"}
+    {
+        "threshold_change",
+        "constraint_change",
+        "job_spec_change",
+        "related_role_created",
+        "operation_receipt",
+    }
 )
+
+
+_DECISION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "name": "list_pending_decisions",
+        "description": (
+            "List the live pending decision cards for THIS role, with candidate, "
+            "reasoning, staleness, supported alternatives and exact decision ids. "
+            "Snoozed items are hidden unless include_snoozed=true. Call this before "
+            "taking a decision action; never guess an id or alternative."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "include_snoozed": {"type": "boolean", "default": False},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "approve_decision",
+        "description": (
+            "Approve ONE pending agent recommendation on THIS role. This can send an "
+            "assessment, reject a candidate, resend an invite, or advance them, so the "
+            "first call only creates an exact server preview. Execute only after the "
+            "recruiter explicitly confirms in a later message. Workable advances require "
+            "workable_target_stage. Stale decisions must be re-evaluated first."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decision_id": {"type": "integer"},
+                "note": {"type": ["string", "null"], "maxLength": 2000},
+                "workable_target_stage": {"type": ["string", "null"], "maxLength": 200},
+            },
+            "required": ["decision_id"],
+        },
+    },
+    {
+        "name": "override_decision",
+        "description": (
+            "Reject ONE pending recommendation and take a supported alternative on THIS "
+            "role. Use the exact alternative returned by list_pending_decisions and give "
+            "a brief recruiter reason. The first call creates a bound preview; execute "
+            "only after explicit confirmation in a later message."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decision_id": {"type": "integer"},
+                "alternative": {
+                    "type": "string",
+                    "enum": ["reject", "advance", "send_assessment", "skip_assessment_advance"],
+                },
+                "note": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "workable_target_stage": {"type": ["string", "null"], "maxLength": 200},
+            },
+            "required": ["decision_id", "alternative", "note"],
+        },
+    },
+    {
+        "name": "snooze_decision",
+        "description": (
+            "Hide ONE live pending decision for the canonical one-hour snooze window. "
+            "Low-risk and immediate, but only call when the recruiter explicitly asks."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"decision_id": {"type": "integer"}},
+            "required": ["decision_id"],
+        },
+    },
+    {
+        "name": "re_evaluate_decision",
+        "description": (
+            "Refresh ONE pending decision against current inputs. It may queue a paid CV "
+            "rescore or a focused agent cycle, so the first call creates a server preview "
+            "and execution requires explicit confirmation in a later recruiter message."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"decision_id": {"type": "integer"}},
+            "required": ["decision_id"],
+        },
+    },
+    {
+        "name": "teach_decision",
+        "description": (
+            "Send ONE pending decision back with structured recruiter feedback so the "
+            "agent can correct the decision and, for role/org scope, learn from it. The "
+            "first call creates an exact preview and requires explicit confirmation in "
+            "a later message. Org-scope feedback remains inert until an admin co-signs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decision_id": {"type": "integer"},
+                "failure_mode": {"type": "string", "enum": list(FAILURE_MODES)},
+                "correction_text": {"type": "string", "minLength": 1, "maxLength": 8000},
+                "scope": {"type": "string", "enum": list(FEEDBACK_SCOPES)},
+                "attributed_to": {
+                    "type": ["string", "null"],
+                    "enum": [*ATTRIBUTED_TO_VALUES, None],
+                },
+                "direction": {
+                    "type": ["string", "null"],
+                    "enum": [*FEEDBACK_DIRECTIONS, None],
+                },
+            },
+            "required": ["decision_id", "failure_mode", "correction_text", "scope"],
+        },
+    },
+]
+
+
+_APPLICATION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "name": "create_application",
+        "description": (
+            "Create ONE candidate application on THIS role by email, reusing an existing "
+            "organization candidate when present. The first call is a no-write preview "
+            "showing dedup/profile effects; execute only after explicit confirmation in "
+            "a later recruiter message. Never use an email inferred from CV prose."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "candidate_email": {"type": "string", "format": "email"},
+                "candidate_name": {"type": ["string", "null"]},
+                "candidate_position": {"type": ["string", "null"]},
+                "notes": {"type": ["string", "null"]},
+            },
+            "required": ["candidate_email"],
+        },
+    },
+    {
+        "name": "add_internal_note",
+        "description": (
+            "Add an internal recruiter note to ONE application on THIS role. It never "
+            "writes to the ATS. Set for_agent=true (default) to make it standing context "
+            "for future agent cycles. Immediate; only call for an explicit recruiter note."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": "integer"},
+                "note": {"type": "string", "minLength": 1},
+                "for_agent": {"type": "boolean", "default": True},
+            },
+            "required": ["application_id", "note"],
+        },
+    },
+    {
+        "name": "post_workable_note",
+        "description": (
+            "Queue a note to ONE linked candidate's Workable activity feed. The first "
+            "call checks linkage/writeback readiness and previews the exact body; only a "
+            "later explicit recruiter confirmation may enqueue the serialized provider "
+            "write. Never claim it posted until the background job completes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": "integer"},
+                "body": {"type": "string", "minLength": 1, "maxLength": 8000},
+            },
+            "required": ["application_id", "body"],
+        },
+    },
+    {
+        "name": "run_agent_now",
+        "description": (
+            "Run a one-shot autonomous cycle now for THIS role, optionally focused on "
+            "one role-scoped application. It can spend credits and emit decisions, so "
+            "the first call only previews scope/state; enqueue only after an explicit "
+            "confirmation in a later recruiter message."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": ["integer", "null"]},
+            },
+            "required": [],
+        },
+    },
+]
 
 
 AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
@@ -207,9 +418,10 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "by criterion_id. Use for salary caps, location, work authorisation, "
             "must-have skills — anything evaluated from the CV. bucket 'constraint' "
             "is a hard filter, 'must' a must-have, 'preferred' a nice-to-have. This "
-            "RE-SCREENS affected candidates (changes the pre-screen prompt), so it's "
-            "not instant — tell the recruiter re-screening is underway and how many "
-            "candidates it covers."
+            "changes the screening policy immediately but NEVER starts a paid re-screen. "
+            "For hard/must changes the result contains an exact whole-pool preview and "
+            "server confirmation receipt. Show the count/cost, then wait for a later "
+            "recruiter confirmation before calling rescreen_role."
         ),
         "input_schema": {
             "type": "object",
@@ -235,7 +447,9 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "name": "remove_constraint",
         "description": (
             "Remove a recruiter constraint chip by criterion_id (get ids from "
-            "get_role_overview). Re-screens if the chip was a must-have/constraint."
+            "get_role_overview). Removal is immediate. A removed must-have/constraint "
+            "returns a paid re-screen preview but does not start the re-screen; wait for "
+            "the recruiter's confirmation in a later message."
         ),
         "input_schema": {
             "type": "object",
@@ -489,7 +703,15 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
                 "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
                 "rank_by": {
                     "type": "string",
-                    "enum": ["taali", "pre_screen", "rank", "cv_match"],
+                    "enum": [
+                        "taali",
+                        "pre_screen",
+                        "rank",
+                        "cv_match",
+                        "workable",
+                        "assessment",
+                        "role_fit",
+                    ],
                     "default": "taali",
                 },
             },
@@ -531,6 +753,44 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
 ]
+
+# Recruiter questions live in their own command module so the HTTP cards and
+# typed chat share the same validation/write-back action without bloating this
+# dispatcher further.
+AGENT_CHAT_TOOLS.extend(_recruiter_inputs.RECRUITER_INPUT_TOOL_DEFINITIONS)
+AGENT_CHAT_TOOLS.extend(_DECISION_TOOL_DEFINITIONS)
+AGENT_CHAT_TOOLS.extend(_APPLICATION_TOOL_DEFINITIONS)
+AGENT_CHAT_TOOLS.append(_proactive.HELPER_TOOL_DEFINITION)
+AGENT_CHAT_TOOLS.append(_run_history.RUN_HISTORY_TOOL_DEFINITION)
+
+# A model round may fan out reads, but it may request at most one stateful
+# command.  This prevents ambiguous ordering (for example, changing a policy
+# and approving a decision against its pre-change snapshot in the same batch).
+MUTATING_TOOL_NAMES = frozenset(
+    {
+        "sync_workable_comments",
+        "set_threshold",
+        "add_or_update_constraint",
+        "remove_constraint",
+        "update_job_spec",
+        "set_agent_state",
+        "adjust_agent_settings",
+        "rescreen_role",
+        "rescore_candidates",
+        "rescreen_scoped",
+        "answer_recruiter_input",
+        "dismiss_recruiter_input",
+        "approve_decision",
+        "override_decision",
+        "snooze_decision",
+        "re_evaluate_decision",
+        "teach_decision",
+        "create_application",
+        "add_internal_note",
+        "post_workable_note",
+        "run_agent_now",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +838,28 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
     )
     pending_by_type = {str(t): int(n) for t, n in pending_rows}
 
+    # Budget event cards point recruiters back to this read-only overview. Keep
+    # the spend lookup isolated so a metering/query problem cannot make the
+    # whole role snapshot unavailable. Report the effective cap as well as the
+    # raw override because unset roles still use the platform default cap.
+    effective_monthly_budget_cents: int | None = None
+    month_to_date_spend_cents: int | None = None
+    remaining_monthly_budget_cents: int | None = None
+    try:
+        from ..agent_runtime import budget_guard
+
+        effective_monthly_budget_cents = budget_guard.role_monthly_usd_cents(role)
+        month_to_date_spend_cents = max(
+            0, int(budget_guard.month_to_date_spend_cents(db, role=role))
+        )
+        if effective_monthly_budget_cents > 0:
+            remaining_monthly_budget_cents = max(
+                0, effective_monthly_budget_cents - month_to_date_spend_cents
+            )
+    except Exception:  # pragma: no cover - overview remains useful without usage data
+        month_to_date_spend_cents = None
+        remaining_monthly_budget_cents = None
+
     return {
         "role": {"id": int(role.id), "name": role.name},
         "agent": {
@@ -585,6 +867,9 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
             "paused": role.agent_paused_at is not None,
             "paused_reason": role.agent_paused_reason,
             "monthly_budget_cents": role.monthly_usd_budget_cents,
+            "effective_monthly_budget_cents": effective_monthly_budget_cents,
+            "month_to_date_spend_cents": month_to_date_spend_cents,
+            "remaining_monthly_budget_cents": remaining_monthly_budget_cents,
             "auto_reject": bool(role.auto_reject),
             "auto_reject_pre_screen": bool(role.auto_reject_pre_screen),
             "auto_promote": bool(role.auto_promote),
@@ -754,6 +1039,422 @@ def _list_resolved(db: Session, role: Role, *, outcome: str, limit: int) -> dict
 # ---------------------------------------------------------------------------
 
 
+def _confirmation_binding(*, role: Role, user: Any, conversation: Any) -> dict[str, int]:
+    """Authorization boundary persisted into every server preview receipt."""
+    binding = {"organization_id": int(role.organization_id)}
+    # Production Agent Chat is authenticated. Keeping read/helper dispatches
+    # compatible with a missing synthetic user lets lower-level tests and
+    # offline evaluators exercise read tools without manufacturing an actor;
+    # command services themselves still enforce the real actor boundary.
+    user_id = getattr(user, "id", None)
+    if user_id is not None:
+        binding["requested_by_user_id"] = int(user_id)
+    if conversation is not None:
+        binding["conversation_id"] = int(conversation.id)
+    return binding
+
+
+def _decision_fingerprint(snapshot: dict[str, Any]) -> str:
+    """Stable state proof for a decision-action preview."""
+    keys = (
+        "decision_id",
+        "application_id",
+        "decision_type",
+        "recommendation",
+        "status",
+        "created_at",
+        "is_stale",
+        "staleness_reasons",
+        "approval_requires_workable_stage",
+        "supported_alternatives",
+    )
+    body = {key: snapshot.get(key) for key in keys}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+
+
+def _normalized_decision_action_args(
+    action: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    out: dict[str, Any] = {"decision_id": int(args["decision_id"])}
+    if action == "approve_decision":
+        out.update(
+            {
+                "note": str(args.get("note") or "").strip() or None,
+                "workable_target_stage": (
+                    str(args.get("workable_target_stage") or "").strip() or None
+                ),
+            }
+        )
+    elif action == "override_decision":
+        out.update(
+            {
+                "alternative": str(args.get("alternative") or "").strip(),
+                "note": str(args.get("note") or "").strip(),
+                "workable_target_stage": (
+                    str(args.get("workable_target_stage") or "").strip() or None
+                ),
+            }
+        )
+    elif action == "teach_decision":
+        out.update(
+            _decision_teach.normalize_teach_payload(
+                failure_mode=str(args.get("failure_mode") or ""),
+                correction_text=str(args.get("correction_text") or ""),
+                scope=str(args.get("scope") or ""),
+                attributed_to=(
+                    str(args.get("attributed_to") or "").strip() or None
+                ),
+                direction=str(args.get("direction") or "").strip() or None,
+            )
+        )
+    return out
+
+
+def _decision_preview(
+    *,
+    action: str,
+    snapshot: dict[str, Any],
+    normalized_args: dict[str, Any],
+    binding: dict[str, int],
+    reason: str | None = None,
+) -> dict[str, Any]:
+    labels = {
+        "approve_decision": "approve the recommendation",
+        "override_decision": "override the recommendation",
+        "re_evaluate_decision": "re-evaluate the decision",
+        "teach_decision": "send the decision back with structured feedback",
+    }
+    operation = f"{action}:{int(snapshot['decision_id'])}"
+    return attach_confirmation(
+        {
+            "type": "decision_action_preview",
+            "operation": action,
+            "decision": snapshot,
+            "requested_action": normalized_args,
+            "message": reason
+            or (
+                f"Preview: {labels[action]} for {snapshot.get('candidate_name') or 'this candidate'}. "
+                "No action has run. Ask the recruiter to confirm in a new message."
+            ),
+        },
+        operation=operation,
+        payload={
+            **binding,
+            "role_id": int(binding.get("role_id") or 0),
+            "decision_id": int(snapshot["decision_id"]),
+            "arguments": normalized_args,
+            "fingerprint": _decision_fingerprint(snapshot),
+        },
+    )
+
+
+def _dispatch_confirmed_decision_action(
+    action: str,
+    args: dict[str, Any],
+    *,
+    db: Session,
+    role: Role,
+    user: Any,
+    conversation: Any,
+    binding: dict[str, int],
+) -> dict[str, Any]:
+    """Preview, bind, re-check, then execute one high-impact decision action."""
+    normalized = _normalized_decision_action_args(action, args)
+    decision_id = int(normalized["decision_id"])
+    snapshot = (
+        _decision_teach.get_teachable_decision(db, role, user, decision_id)
+        if action == "teach_decision"
+        else _decision_commands.get_pending_decision(db, role, user, decision_id)
+    )
+
+    if action == "approve_decision":
+        if not snapshot.get("can_approve"):
+            return {
+                "type": "decision_action_blocked",
+                "operation": action,
+                "decision": snapshot,
+                "message": "This decision type has no executable approval action.",
+            }
+        if snapshot.get("is_stale"):
+            return {
+                "type": "decision_action_blocked",
+                "operation": action,
+                "decision": snapshot,
+                "message": "This decision is stale. Re-evaluate it before approval.",
+            }
+        if (
+            snapshot.get("approval_requires_workable_stage")
+            and not normalized.get("workable_target_stage")
+        ):
+            return {
+                "type": "decision_action_blocked",
+                "operation": action,
+                "decision": snapshot,
+                "message": "Choose the destination Workable stage before approval.",
+            }
+    elif action == "override_decision":
+        if normalized.get("alternative") not in snapshot.get("supported_alternatives", []):
+            raise ValueError(
+                f"unsupported alternative; choose one of {snapshot.get('supported_alternatives', [])}"
+            )
+        if not normalized.get("note"):
+            raise ValueError("an override reason is required")
+        if (
+            normalized.get("alternative") == "advance"
+            and snapshot.get("approval_requires_workable_stage")
+            and not normalized.get("workable_target_stage")
+        ):
+            return {
+                "type": "decision_action_blocked",
+                "operation": action,
+                "decision": snapshot,
+                "message": "Choose the destination Workable stage before advancing.",
+            }
+
+    operation = f"{action}:{decision_id}"
+    if conversation is None:
+        return _decision_preview(
+            action=action,
+            snapshot=snapshot,
+            normalized_args=normalized,
+            binding={**binding, "role_id": int(role.id)},
+        )
+    check = require_later_turn_confirmation(
+        db,
+        conversation=conversation,
+        operation=operation,
+        token=str(args.get("confirmation_token") or "") or None,
+        user=user,
+    )
+    payload_args = check.payload.get("arguments") if check.ok else None
+    state_matches = bool(
+        check.ok
+        and int(check.payload.get("role_id") or 0) == int(role.id)
+        and int(check.payload.get("decision_id") or 0) == decision_id
+        and payload_args == normalized
+        and check.payload.get("fingerprint") == _decision_fingerprint(snapshot)
+    )
+    if not state_matches:
+        return _decision_preview(
+            action=action,
+            snapshot=snapshot,
+            normalized_args=normalized,
+            binding={**binding, "role_id": int(role.id)},
+            reason=(
+                "The prior preview is missing, expired, changed, or was not explicitly "
+                "confirmed. Here is a fresh preview; no action has run."
+            ),
+        )
+
+    if action == "approve_decision":
+        result = _decision_commands.approve_decision(
+            db, role, user, **normalized
+        )
+        message = f"Decision {decision_id} was accepted for processing."
+    elif action == "override_decision":
+        result = _decision_commands.override_decision(
+            db, role, user, **normalized
+        )
+        message = f"Decision {decision_id} override was accepted for processing."
+    elif action == "teach_decision":
+        result = _decision_commands.teach_decision(db, role, user, **normalized)
+        if result.get("cosign_required"):
+            message = (
+                f"Feedback for decision {decision_id} was recorded and now requires "
+                "an admin co-sign before organization-wide learning."
+            )
+        else:
+            message = f"Decision {decision_id} was sent back with recruiter feedback."
+    else:
+        result = _decision_commands.re_evaluate_decision(
+            db, role, user, decision_id=decision_id
+        )
+        message = f"Decision {decision_id} re-evaluation was queued."
+
+    receipt = {
+        "type": "operation_receipt",
+        "operation": action,
+        "status": result.get("status") or ("queued" if result.get("queued") else "accepted"),
+        "message": message,
+        "result": result,
+        "_terminal_message": message,
+    }
+    return mark_confirmation_consumed(receipt, check=check)
+
+
+def _normalized_application_action_args(
+    action: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    if action == "create_application":
+        return {
+            "candidate_email": str(args.get("candidate_email") or "").strip(),
+            "candidate_name": str(args.get("candidate_name") or "").strip() or None,
+            "candidate_position": (
+                str(args.get("candidate_position") or "").strip() or None
+            ),
+            "notes": str(args.get("notes") or "").strip() or None,
+        }
+    if action == "post_workable_note":
+        return {
+            "application_id": int(args["application_id"]),
+            "body": str(args.get("body") or "").strip(),
+        }
+    raw_application_id = args.get("application_id")
+    return {
+        "application_id": (
+            int(raw_application_id) if raw_application_id is not None else None
+        )
+    }
+
+
+def _application_action_preview(
+    action: str,
+    *,
+    db: Session,
+    role: Role,
+    user: Any,
+    normalized: dict[str, Any],
+) -> dict[str, Any]:
+    if action == "create_application":
+        return _application_commands.preview_create_application(
+            db, role, user, **normalized
+        )
+    if action == "post_workable_note":
+        return _application_commands.preview_workable_note(
+            db, role, user, **normalized
+        )
+    return _application_commands.preview_manual_run(db, role, user, **normalized)
+
+
+def _dispatch_confirmed_application_action(
+    action: str,
+    args: dict[str, Any],
+    *,
+    db: Session,
+    role: Role,
+    user: Any,
+    conversation: Any,
+    binding: dict[str, int],
+) -> dict[str, Any]:
+    normalized = _normalized_application_action_args(action, args)
+    preview = _application_action_preview(
+        action,
+        db=db,
+        role=role,
+        user=user,
+        normalized=normalized,
+    )
+    # ApplicationCreate normalizes email; bind execution to the canonical form.
+    if action == "create_application":
+        normalized["candidate_email"] = str(preview["candidate_email"])
+
+    if action == "create_application" and not preview.get("can_create"):
+        return {
+            "type": "operation_blocked",
+            "operation": action,
+            "preview": preview,
+            "message": f"Application creation is blocked: {preview.get('blocked_reason')}.",
+        }
+    if action == "post_workable_note" and not preview.get("can_queue"):
+        return {
+            "type": "operation_blocked",
+            "operation": action,
+            "preview": preview,
+            "message": "This application is not linked to a Workable candidate.",
+        }
+    if action == "run_agent_now" and not preview.get("can_queue"):
+        return {
+            "type": "operation_blocked",
+            "operation": action,
+            "preview": preview,
+            "message": f"The manual run is blocked: {preview.get('blocked_reason')}.",
+        }
+
+    suffix = normalized.get("application_id")
+    if suffix is None and action == "create_application":
+        suffix = hashlib.sha256(normalized["candidate_email"].encode()).hexdigest()[:16]
+    operation = f"{action}:{suffix if suffix is not None else int(role.id)}"
+    fingerprint = hashlib.sha256(
+        json.dumps(preview, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+
+    check = None
+    if conversation is not None:
+        check = require_later_turn_confirmation(
+            db,
+            conversation=conversation,
+            operation=operation,
+            token=str(args.get("confirmation_token") or "") or None,
+            user=user,
+        )
+    state_matches = bool(
+        check
+        and check.ok
+        and int(check.payload.get("role_id") or 0) == int(role.id)
+        and check.payload.get("arguments") == normalized
+        and check.payload.get("fingerprint") == fingerprint
+    )
+    if not state_matches:
+        return attach_confirmation(
+            {
+                "type": "operation_preview",
+                "operation": action,
+                "preview": preview,
+                "requested_action": normalized,
+                "message": (
+                    "No action has run. Show this exact preview and ask the recruiter "
+                    "to confirm in a new message."
+                ),
+            },
+            operation=operation,
+            payload={
+                **binding,
+                "role_id": int(role.id),
+                "arguments": normalized,
+                "fingerprint": fingerprint,
+            },
+        )
+
+    if action == "create_application":
+        result = _application_commands.create_application(
+            db, role, user, **normalized
+        )
+        message = (
+            f"Application {result['application_id']} was created for "
+            f"{result['candidate_email']}."
+        )
+    elif action == "post_workable_note":
+        result = _application_commands.queue_workable_note(
+            db, role, user, **normalized
+        )
+        message = (
+            f"The Workable note for application {result['application_id']} is queued."
+        )
+    else:
+        result = _application_commands.enqueue_manual_run(
+            db, role, user, **normalized
+        )
+        message = (
+            "The focused agent run is queued."
+            if normalized.get("application_id") is not None and result.get("queued")
+            else "The role agent run is queued."
+            if result.get("queued")
+            else str(result.get("detail") or "The agent run was not queued.")
+        )
+
+    receipt = {
+        "type": "operation_receipt",
+        "operation": action,
+        "status": result.get("status") or "accepted",
+        "message": message,
+        "result": result,
+        "_terminal_message": message,
+    }
+    return mark_confirmation_consumed(receipt, check=check)
+
+
 def _maybe_report_rescreen(db: Session, *, role: Role, conversation: Any, result: Any) -> None:
     """When a constraint edit kicked a re-screen, schedule the proactive
     "re-screen complete" impact message. Captures the qualified-pool baseline
@@ -801,9 +1502,130 @@ def dispatch_tool(
     or bad arguments; the engine converts exceptions to a tool_result error."""
     args = arguments or {}
     org_id = int(role.organization_id)
+    confirmation_binding = _confirmation_binding(
+        role=role, user=user, conversation=conversation
+    )
 
     if name == "get_role_overview":
         return _role_overview(db, role)
+    if name == "get_helper_briefing":
+        return _proactive.build_helper_briefing(db, role)
+    if name == "list_recent_agent_runs":
+        return _run_history.list_recent_agent_runs(
+            db,
+            role,
+            status=args.get("status"),
+            trigger=args.get("trigger"),
+            limit=int(args.get("limit") or 5),
+        )
+    if name == "list_pending_decisions":
+        return _decision_commands.list_pending_decisions(
+            db,
+            role,
+            user,
+            include_snoozed=bool(args.get("include_snoozed") or False),
+            limit=int(args.get("limit") or 20),
+        )
+    if name in {
+        "approve_decision",
+        "override_decision",
+        "re_evaluate_decision",
+        "teach_decision",
+    }:
+        return _dispatch_confirmed_decision_action(
+            name,
+            args,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+            binding=confirmation_binding,
+        )
+    if name == "snooze_decision":
+        decision_id = int(args["decision_id"])
+        result = _decision_commands.snooze_decision(
+            db,
+            role,
+            user,
+            decision_id=decision_id,
+        )
+        message = f"Decision {decision_id} is snoozed for one hour."
+        return {
+            "type": "operation_receipt",
+            "operation": "snooze_decision",
+            "status": "snoozed",
+            "message": message,
+            "result": result,
+            "_terminal_message": message,
+        }
+    if name in {"create_application", "post_workable_note", "run_agent_now"}:
+        return _dispatch_confirmed_application_action(
+            name,
+            args,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+            binding=confirmation_binding,
+        )
+    if name == "add_internal_note":
+        application_id = int(args["application_id"])
+        result = _application_commands.add_internal_note(
+            db,
+            role,
+            user,
+            application_id=application_id,
+            note=str(args.get("note") or ""),
+            for_agent=bool(args.get("for_agent", True)),
+        )
+        message = f"Internal note added to application {application_id}."
+        return {
+            "type": "operation_receipt",
+            "operation": "add_internal_note",
+            "status": "added",
+            "message": message,
+            "result": result,
+            "_terminal_message": message,
+        }
+    if name == "list_open_recruiter_inputs":
+        return _recruiter_inputs.list_open_recruiter_inputs(
+            db,
+            role=role,
+            limit=int(args.get("limit") or 20),
+        )
+    if name == "answer_recruiter_input":
+        result = _recruiter_inputs.answer_recruiter_input(
+            db,
+            role=role,
+            user=user,
+            needs_input_id=int(args["needs_input_id"]),
+            value=args.get("value"),
+        )
+        message = f"Recruiter question {int(args['needs_input_id'])} was answered."
+        return {
+            "type": "operation_receipt",
+            "operation": "answer_recruiter_input",
+            "status": "answered",
+            "message": message,
+            "result": result,
+            "_terminal_message": message,
+        }
+    if name == "dismiss_recruiter_input":
+        result = _recruiter_inputs.dismiss_recruiter_input(
+            db,
+            role=role,
+            user=user,
+            needs_input_id=int(args["needs_input_id"]),
+        )
+        message = f"Recruiter question {int(args['needs_input_id'])} was dismissed."
+        return {
+            "type": "operation_receipt",
+            "operation": "dismiss_recruiter_input",
+            "status": "dismissed",
+            "message": message,
+            "result": result,
+            "_terminal_message": message,
+        }
     if name == "list_candidates":
         return _list_candidates(
             db,
@@ -849,7 +1671,11 @@ def dispatch_tool(
             result = attach_confirmation(
                 result,
                 operation="rescreen_role",
-                payload={"role_id": int(role.id), "max_count": int(estimate.get("count") or 0)},
+                payload={
+                    **confirmation_binding,
+                    "role_id": int(role.id),
+                    "max_count": int(estimate.get("count") or 0),
+                },
             )
         return result
     if name == "remove_constraint":
@@ -862,7 +1688,11 @@ def dispatch_tool(
             result = attach_confirmation(
                 result,
                 operation="rescreen_role",
-                payload={"role_id": int(role.id), "max_count": int(estimate.get("count") or 0)},
+                payload={
+                    **confirmation_binding,
+                    "role_id": int(role.id),
+                    "max_count": int(estimate.get("count") or 0),
+                },
             )
         return result
     if name == "update_job_spec":
@@ -874,7 +1704,11 @@ def dispatch_tool(
             result = attach_confirmation(
                 result,
                 operation="rescreen_role",
-                payload={"role_id": int(role.id), "max_count": int(estimate.get("count") or 0)},
+                payload={
+                    **confirmation_binding,
+                    "role_id": int(role.id),
+                    "max_count": int(estimate.get("count") or 0),
+                },
             )
         return result
     if name == "preview_related_role":
@@ -894,6 +1728,7 @@ def dispatch_tool(
             result,
             operation="create_related_role",
             payload={
+                **confirmation_binding,
                 "role_id": int(role.id),
                 "name": clean_name,
                 "spec_fingerprint": text_fingerprint(clean_spec),
@@ -913,6 +1748,7 @@ def dispatch_tool(
             conversation=conversation,
             operation="create_related_role",
             token=str(args.get("confirmation_token") or "") or None,
+            user=user,
         )
         if not check.ok:
             return blocked_confirmation_result("create_related_role", check.reason)
@@ -943,6 +1779,7 @@ def dispatch_tool(
                 current,
                 operation="create_related_role",
                 payload={
+                    **confirmation_binding,
                     "role_id": int(role.id),
                     "name": clean_name,
                     "spec_fingerprint": text_fingerprint(clean_spec),
@@ -968,6 +1805,7 @@ def dispatch_tool(
                 conversation=conversation,
                 operation="rescreen_role",
                 token=str(args.get("confirmation_token") or "") or None,
+                user=user,
             )
             if not check.ok:
                 return blocked_confirmation_result("rescreen_role", check.reason)
@@ -982,7 +1820,11 @@ def dispatch_tool(
                         "message": "The candidate count increased since approval; please confirm the updated scope.",
                     },
                     operation="rescreen_role",
-                    payload={"role_id": int(role.id), "max_count": int(current.get("count") or 0)},
+                    payload={
+                        **confirmation_binding,
+                        "role_id": int(role.id),
+                        "max_count": int(current.get("count") or 0),
+                    },
                 )
         result = _constraints.rescreen_role(db, role)
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
@@ -1002,6 +1844,7 @@ def dispatch_tool(
                 conversation=conversation,
                 operation="rescore_candidates",
                 token=str(args.get("confirmation_token") or "") or None,
+                user=user,
             )
             if not check.ok:
                 return blocked_confirmation_result("rescore_candidates", check.reason)
@@ -1019,7 +1862,12 @@ def dispatch_tool(
                 return attach_confirmation(
                     current,
                     operation="rescore_candidates",
-                    payload={"role_id": int(role.id), "max_count": int(current.get("selected_count") or 0), **common},
+                    payload={
+                        **confirmation_binding,
+                        "role_id": int(role.id),
+                        "max_count": int(current.get("selected_count") or 0),
+                        **common,
+                    },
                 )
         result = _rescore.rescore_candidates(
             db,
@@ -1033,7 +1881,12 @@ def dispatch_tool(
             result = attach_confirmation(
                 result,
                 operation="rescore_candidates",
-                payload={"role_id": int(role.id), "max_count": int(result.get("selected_count") or 0), **common},
+                payload={
+                    **confirmation_binding,
+                    "role_id": int(role.id),
+                    "max_count": int(result.get("selected_count") or 0),
+                    **common,
+                },
             )
         return result
     if name == "get_criterion_breakdown":
@@ -1052,6 +1905,7 @@ def dispatch_tool(
                 conversation=conversation,
                 operation="rescreen_scoped",
                 token=str(args.get("confirmation_token") or "") or None,
+                user=user,
             )
             if not check.ok:
                 return attach_confirmation(
@@ -1065,6 +1919,7 @@ def dispatch_tool(
                     },
                     operation="rescreen_scoped",
                     payload={
+                        **confirmation_binding,
                         "role_id": int(role.id),
                         "criterion_id": int(args["criterion_id"]),
                         "statuses": list(statuses),
@@ -1087,6 +1942,7 @@ def dispatch_tool(
                     },
                     operation="rescreen_scoped",
                     payload={
+                        **confirmation_binding,
                         "role_id": int(role.id),
                         "criterion_id": int(args["criterion_id"]),
                         "statuses": list(statuses),
@@ -1159,4 +2015,10 @@ def dispatch_tool(
     raise KeyError(f"unknown tool: {name}")
 
 
-__all__ = ["AGENT_CHAT_TOOLS", "CARD_TYPES", "MUTATION_CARD_TYPES", "dispatch_tool"]
+__all__ = [
+    "AGENT_CHAT_TOOLS",
+    "CARD_TYPES",
+    "MUTATING_TOOL_NAMES",
+    "MUTATION_CARD_TYPES",
+    "dispatch_tool",
+]

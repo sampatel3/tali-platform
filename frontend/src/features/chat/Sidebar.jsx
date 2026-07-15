@@ -1,6 +1,6 @@
 import React from 'react';
 import { MessageSquare, Pause, Plus, Sparkles, Trash2 } from 'lucide-react';
-import { AgentLoop } from '../../shared/motion';
+import { AgentLoop, MotionAttentionBadge } from '../../shared/motion';
 
 import { formatAgentPauseStatus } from '../../shared/agentPauseCopy';
 import { Button } from '../../shared/ui/TaaliPrimitives';
@@ -69,7 +69,12 @@ const ModeToggle = ({ mode, onModeChange, agentAttention = 0 }) => (
       onClick={() => onModeChange('agents')}
     >
       <Sparkles size={13} /> Agents
-      {agentAttention > 0 ? <span className="cp-modeswitch-badge">{fmtCount(agentAttention)}</span> : null}
+      <MotionAttentionBadge
+        value={agentAttention}
+        format={fmtCount}
+        className="cp-modeswitch-badge"
+        aria-label={`${agentAttention} agent update${agentAttention === 1 ? '' : 's'} awaiting you`}
+      />
     </button>
   </div>
 );
@@ -180,6 +185,7 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
         key={a.role_id}
         type="button"
         className={`cp-agent cp-agent-${status} ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
+        aria-pressed={a.role_id === activeRoleId}
         onClick={() => onSelectAgent(a.role_id)}
         title={a.role_name}
       >
@@ -199,20 +205,21 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
         </span>
         <span className="cp-agent-sub">
           <span className="cp-agent-preview">{preview}</span>
-          {(questions > 0 || decisions > 0) && (
-            <span className="cp-agent-badges">
-              {questions > 0 && (
-                <span className="cp-agent-badge-q" title={`${questions} awaiting your reply`}>
-                  <MessageSquare size={10} /> {fmtCount(questions)}
-                </span>
-              )}
+          <span className="cp-agent-badges">
+              <MotionAttentionBadge
+                value={questions}
+                format={fmtCount}
+                prefix={<MessageSquare size={10} aria-hidden="true" />}
+                className="cp-agent-badge-q"
+                title={`${questions} awaiting your reply`}
+                aria-label={`${questions} agent update${questions === 1 ? '' : 's'} awaiting your reply`}
+              />
               {decisions > 0 && (
                 <span className="cp-agent-badge-d" title={`${decisions} pending decisions`}>
                   {fmtCount(decisions)} pending
                 </span>
               )}
-            </span>
-          )}
+          </span>
           {a.budget_cap_cents > 0 && (
             <span className="cp-agent-budget" title="Budget this month">
               <span

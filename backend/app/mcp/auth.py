@@ -26,6 +26,7 @@ from ..models.api_key import (
     KEY_PREFIX_LIVE,
     KEY_PREFIX_TEST,
     SCOPE_APPLICATIONS_READ,
+    SCOPE_ASSESSMENTS_READ,
     SCOPE_ROLES_READ,
 )
 from ..models.user import User
@@ -39,7 +40,9 @@ _ALGORITHM = "HS256"
 _API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
 
 # JWT (session) principals act with full read access — no scope gate.
-_FULL_READ_SCOPES = frozenset({SCOPE_ROLES_READ, SCOPE_APPLICATIONS_READ})
+_FULL_READ_SCOPES = frozenset(
+    {SCOPE_ROLES_READ, SCOPE_APPLICATIONS_READ, SCOPE_ASSESSMENTS_READ}
+)
 
 
 class MCPAuthError(Exception):

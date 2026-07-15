@@ -21,7 +21,11 @@
   gap: 3px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line, #e8e2ee);
-  background: linear-gradient(180deg, var(--purple-tint, #f4f0fb), var(--bg-2, #fff));
+  background: linear-gradient(
+    180deg,
+    var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))),
+    var(--bg-2, #fff)
+  );
 }
 .ev-title {
   font-weight: 600;

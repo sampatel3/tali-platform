@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 
 import { ChatComposer } from './ChatComposer';
@@ -74,4 +74,26 @@ test("cmd mode: plain Enter never sends, even mid-composition", () => {
   expect(onSubmit).not.toHaveBeenCalled();
   pressEnter({ metaKey: true });
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith('note to self');
+});
+
+test('forwards the textarea ref so helper actions can focus the composer', () => {
+  function FocusHarness() {
+    const inputRef = useRef(null);
+    const [value, setValue] = useState('Review affected candidates');
+    return (
+      <>
+        <button type="button" onClick={() => inputRef.current?.focus()}>Focus composer</button>
+        <ChatComposer
+          ref={inputRef}
+          value={value}
+          onChange={setValue}
+          onSubmit={() => {}}
+        />
+      </>
+    );
+  }
+
+  render(<FocusHarness />);
+  fireEvent.click(screen.getByRole('button', { name: 'Focus composer' }));
+  expect(screen.getByRole('textbox')).toHaveFocus();
 });

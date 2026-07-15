@@ -119,6 +119,7 @@ from .agent_tasks import (
     agent_recovery_sweep,
     pre_screen_reject_sweep,
     agent_expire_stuck_runs,
+    agent_publish_terminal_run_events,
     agent_expire_stale_decisions,
 )
 # Eager-import agent_chat_tasks so the worker registers the post-re-screen
@@ -240,6 +241,7 @@ __all__ = [
     "agent_recovery_sweep",
     "pre_screen_reject_sweep",
     "agent_expire_stuck_runs",
+    "agent_publish_terminal_run_events",
     "agent_expire_stale_decisions",
     "report_rescreen_impact",
     "nightly_retune_sweep",

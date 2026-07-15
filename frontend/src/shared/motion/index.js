@@ -25,6 +25,7 @@ export {
 } from './effects';
 export {
   MotionDisclosure,
+  MotionAttentionBadge,
   MotionList,
   MotionListItem,
   MotionNumber,
