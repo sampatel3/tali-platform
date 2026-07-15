@@ -13,6 +13,8 @@ const TOOL_LABELS = {
   compare_applications: 'Comparing candidates',
   find_top_candidates: 'Ranking top candidates',
   screen_pool_against_requirement: 'Screening the pool',
+  get_recruiting_overview: 'Checking recruiting operations',
+  list_assessments: 'Checking assessments',
 };
 
 // Human-friendly one-line summary of the most meaningful call arguments — a
@@ -54,6 +56,15 @@ const resultCount = (toolName, result) => {
   if (toolName === 'compare_applications' && Array.isArray(result.applications)) {
     return `${result.applications.length} compared`;
   }
+  if (toolName === 'list_assessments' && typeof result.total === 'number') {
+    return `${result.items?.length || 0} of ${result.total}`;
+  }
+  if (
+    toolName === 'get_recruiting_overview' &&
+    typeof result.assessments?.needs_attention === 'number'
+  ) {
+    return `${result.assessments.needs_attention} need attention`;
+  }
   return null;
 };
 
@@ -73,14 +84,19 @@ const ToolCallCard = ({ part }) => {
         isError ? 'cp-tool-error' : '',
       ].join(' ')}
     >
-      <button type="button" className="cp-tool-head" onClick={() => setOpen((v) => !v)}>
+      <button
+        type="button"
+        className="cp-tool-head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
         <span className="cp-tool-glyph">
           {isError ? (
-            <AlertTriangle size={13} strokeWidth={2.2} />
+            <AlertTriangle size={13} strokeWidth={2.2} aria-hidden="true" />
           ) : isPending ? (
-            <Loader2 size={13} strokeWidth={2.2} className="cp-spin" />
+            <Loader2 size={13} strokeWidth={2.2} className="cp-spin" aria-hidden="true" />
           ) : (
-            <Search size={13} strokeWidth={2.2} />
+            <Search size={13} strokeWidth={2.2} aria-hidden="true" />
           )}
         </span>
         <span className="cp-tool-tname">{TOOL_LABELS[toolName] || String(toolName).replace(/_/g, ' ')}</span>
@@ -92,7 +108,7 @@ const ToolCallCard = ({ part }) => {
         ].join(' ')}>
           {isError ? 'error' : isPending ? 'running…' : count || 'done'}
         </span>
-        <ChevronRight size={14} className="cp-tool-chev" />
+        <ChevronRight size={14} className="cp-tool-chev" aria-hidden="true" />
       </button>
       {open ? (
         <div className="cp-tool-body">

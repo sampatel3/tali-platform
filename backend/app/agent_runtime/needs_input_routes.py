@@ -6,6 +6,7 @@ Each route is org-scoped; only the current user's org rows are visible.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Optional
 
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 from . import data_readiness
 from ..actions import ask_recruiter as ask_recruiter_action
 from ..actions.types import Actor
+from ..agent_chat.recruiter_inputs import recruiter_input_allows_dismiss
 from ..deps import get_current_user
 from ..domains.assessments_runtime.job_authorization import (
     JobPermission,
@@ -23,8 +25,11 @@ from ..domains.assessments_runtime.job_authorization import (
 )
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.organization import Organization
+from ..models.role import Role
 from ..models.user import User
 from ..platform.database import get_db
+
+logger = logging.getLogger("taali.agent_runtime.needs_input_routes")
 
 # Defensive ceiling on a single bulk reject. Real CV-gap cohorts after a
 # Workable sync are tiny (a handful), but a large back-fill could in theory
@@ -53,6 +58,42 @@ _CV_GAP_REJECT = {
 
 
 router = APIRouter(prefix="/agent-needs-input", tags=["agent-needs-input"])
+
+
+def _enqueue_active_role_followup(db: Session, *, row: AgentNeedsInput) -> None:
+    """Best-effort immediate follow-up after recruiter input is committed.
+
+    The hourly cohort beat remains the reliability backstop.  This only closes
+    the conversational loop sooner for an enabled, unpaused role; a broker
+    failure must never turn a successfully recorded answer/dismissal into an
+    HTTP error.
+    """
+
+    role_id = getattr(row, "role_id", None)
+    try:
+        role_id = int(role_id)
+        role = (
+            db.query(Role.id)
+            .filter(
+                Role.id == role_id,
+                Role.organization_id == int(row.organization_id),
+                Role.deleted_at.is_(None),
+                Role.agentic_mode_enabled.is_(True),
+                Role.agent_paused_at.is_(None),
+            )
+            .first()
+        )
+        if role is None:
+            return
+
+        from ..tasks.agent_tasks import agent_daily_review_role
+
+        agent_daily_review_role.delay(role_id)
+    except Exception:  # pragma: no cover - beat retries the role later
+        logger.exception(
+            "failed to enqueue recruiter-input follow-up for role_id=%s",
+            role_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +231,7 @@ def answer_needs_input(
         expected_version=body.expected_version,
     )
     db.commit()
+    _enqueue_active_role_followup(db, row=row)
     db.refresh(row)
     return NeedsInputView.from_row(row)
 
@@ -200,6 +242,23 @@ def dismiss_needs_input(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> NeedsInputView:
+    policy_row = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.id == needs_input_id,
+            AgentNeedsInput.organization_id == int(user.organization_id),
+        )
+        .one_or_none()
+    )
+    if policy_row is None:
+        raise HTTPException(status_code=404, detail="needs_input row not found")
+    if policy_row.is_open and not recruiter_input_allows_dismiss(policy_row):
+        raise HTTPException(
+            status_code=403,
+            detail="this recruiter question must be answered and cannot be dismissed",
+        )
+    should_follow_up = policy_row.is_open
+
     actor = Actor.recruiter(user)
     row = ask_recruiter_action.dismiss(
         db,
@@ -208,6 +267,8 @@ def dismiss_needs_input(
         needs_input_id=needs_input_id,
     )
     db.commit()
+    if should_follow_up:
+        _enqueue_active_role_followup(db, row=row)
     db.refresh(row)
     return NeedsInputView.from_row(row)
 

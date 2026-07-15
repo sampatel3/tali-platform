@@ -13,6 +13,8 @@ existing ``/agent`` + ``/agent-decisions`` endpoints.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,7 @@ from ...agent_chat.draft_tasks import (
     prepare_draft_revision,
 )
 from ...agent_chat.engine import persist_user_message
+from ...agent_chat.proactive import maybe_post_helper_briefing
 from ...agent_chat.service import (
     conversation_agent_working,
     ensure_conversation,
@@ -58,6 +61,8 @@ from .route_support import (
     require_org as _require_org,
     require_role as _require_role,
 )
+
+logger = logging.getLogger("taali.agent_chat.routes")
 
 router = APIRouter(prefix="/agent-chat", tags=["agent-chat"])
 
@@ -129,10 +134,25 @@ def get_timeline(
     org_id = _require_org(current_user)
     role = _require_role(db, role_id, org_id)
     conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    # Speak first on a fresh or materially changed role without paying for a
+    # model turn. The deterministic helper emits at most one suggested next
+    # step and never changes recruiting state.
+    try:
+        # Helper generation is optional. Isolate any partial helper writes in a
+        # savepoint so a failure cannot poison the outer transaction that owns
+        # lazy conversation creation and the normal timeline read.
+        with db.begin_nested():
+            maybe_post_helper_briefing(db, conversation=conversation, role=role)
+    except Exception:
+        logger.exception(
+            "optional helper briefing failed for role_id=%s; serving timeline",
+            role.id,
+        )
     timeline = build_timeline(db, conversation=conversation, role=role)
     working = conversation_agent_working(db, conversation)
-    # Opening the thread marks it read (clears the unread badge).
-    mark_read(db, conversation=conversation, user=current_user)
+    # A fetch is not an acknowledgement. The clients call POST /read only
+    # after the selected thread has remained visibly open for a short dwell,
+    # preventing auto-selection or background reads from consuming alerts.
     db.commit()
     return {
         "conversation_id": conversation.id,

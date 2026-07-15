@@ -41,8 +41,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_agent_decisions_role_status", table_name="agent_decisions", if_exists=True)
-    op.drop_index("ix_agent_decisions_application_status", table_name="agent_decisions", if_exists=True)
+    op.drop_index(
+        "ix_agent_decisions_role_status",
+        table_name="agent_decisions",
+        if_exists=True,
+    )
+    op.drop_index(
+        "ix_agent_decisions_application_status",
+        table_name="agent_decisions",
+        if_exists=True,
+    )
     op.drop_index(
         "ix_candidate_applications_org_role_outcome_deleted",
         table_name="candidate_applications",

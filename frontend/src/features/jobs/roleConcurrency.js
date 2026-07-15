@@ -34,8 +34,10 @@ export const reconcileRoleVersionConflict = (error, setRole, showToast) => {
       ? { ...current, version: conflict.currentVersion }
       : current;
   });
+  const actorName = conflictActorLabel(conflict.changedBy);
+  const actorCopy = actorName ? ` by ${actorName}` : '';
   showToast(
-    `${conflict.message || 'This job changed before your update was saved.'} Latest settings are shown; review them and try again.`,
+    `${conflict.message || `This job was changed${actorCopy} before your update was saved.`}${actorName && conflict.message ? ` Changed by ${actorName}.` : ''} Latest settings are shown; review them and try again.`,
     'error',
   );
   return true;

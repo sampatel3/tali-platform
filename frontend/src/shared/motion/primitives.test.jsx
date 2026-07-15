@@ -6,6 +6,7 @@ import {
   AGENT_LOOP_DURATION,
   AgentLoop,
   MotionDisclosure,
+  MotionAttentionBadge,
   MotionProgress,
   MotionSkeleton,
   MotionSpinner,
@@ -111,6 +112,33 @@ describe('shared motion primitives', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Toggle details' }));
     await waitFor(() => expect(screen.queryByText('Measured content')).not.toBeInTheDocument());
+  });
+
+  it('keeps historical attention settled and exposes count changes accessibly', async () => {
+    const { rerender } = render(
+      <MotionSystemProvider>
+        <MotionAttentionBadge value={2} aria-label="2 updates" className="test-badge" />
+      </MotionSystemProvider>,
+    );
+
+    const badge = screen.getByLabelText('2 updates');
+    expect(badge).toHaveTextContent('2');
+    expect(badge).toHaveAttribute('data-motion-attention', 'count');
+    expect(badge).toHaveAttribute('data-motion-value', '2');
+
+    rerender(
+      <MotionSystemProvider>
+        <MotionAttentionBadge value={3} aria-label="3 updates" className="test-badge" />
+      </MotionSystemProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText('3 updates')).toHaveTextContent('3'));
+
+    rerender(
+      <MotionSystemProvider>
+        <MotionAttentionBadge value={0} aria-label="No updates" className="test-badge" />
+      </MotionSystemProvider>,
+    );
+    await waitFor(() => expect(screen.queryByText('3')).not.toBeInTheDocument());
   });
 
   it('settles Reveal and native scroll behavior immediately under reduced motion', async () => {

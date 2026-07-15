@@ -26,6 +26,8 @@ export default function RoleFeedbackNotes({
   roleVersion,
   onRoleVersionChange,
   onRoleConflict,
+  readOnly = false,
+  readOnlyReason = null,
 }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -51,10 +53,10 @@ export default function RoleFeedbackNotes({
   useEffect(() => { refresh(); }, [refresh]);
 
   const trimmedDraft = draft.trim();
-  const canSubmit = trimmedDraft.length > 0 && !saving;
+  const canSubmit = !readOnly && trimmedDraft.length > 0 && !saving;
 
   const submit = useCallback(async () => {
-    if (!trimmedDraft || saving) return;
+    if (readOnly || !trimmedDraft || saving) return;
     setSaving(true);
     setSaveError('');
     try {
@@ -80,7 +82,7 @@ export default function RoleFeedbackNotes({
     } finally {
       setSaving(false);
     }
-  }, [onRoleConflict, onRoleVersionChange, refresh, roleId, roleVersion, saving, trimmedDraft]);
+  }, [onRoleConflict, onRoleVersionChange, readOnly, refresh, roleId, roleVersion, saving, trimmedDraft]);
 
   const onKeyDown = (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -98,7 +100,7 @@ export default function RoleFeedbackNotes({
   }, [notes]);
 
   return (
-    <section className="mc-agent-settings-card" data-testid="role-feedback-notes">
+    <section className="mc-agent-settings-card" data-testid="role-feedback-notes" title={readOnly ? readOnlyReason : undefined}>
       <div className="mc-agent-settings-card-head">
         <div>
           <h2 className="mc-agent-settings-card-title">
@@ -118,7 +120,7 @@ export default function RoleFeedbackNotes({
           placeholder="e.g. The agent keeps over-weighting recent SaaS experience — we care more about consumer product instincts for this role."
           rows={3}
           maxLength={4000}
-          disabled={saving}
+          disabled={readOnly || saving}
           style={{
             width: '100%',
             padding: '10px 12px',

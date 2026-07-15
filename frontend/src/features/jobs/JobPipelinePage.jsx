@@ -65,7 +65,7 @@ import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 import { useRoleAutonomyChange } from './useRoleAutonomyChange';
-import { optimisticallyPauseRoleAgent, optimisticallyResumeRoleAgent } from './roleAgentStatusOptimism';
+import { useRoleAgentControls } from './useRoleAgentControls';
 import {
   EMPTY_FETCH_PROGRESS,
   EMPTY_PRE_SCREEN_PROGRESS,
@@ -1202,6 +1202,30 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     viewCandidateReport,
   });
 
+  const canControlRoleAgent = agentStatus != null
+    && agentStatus.can_control_agent !== false;
+  const roleAgentControlDisabledReason = agentStatus == null
+    ? 'Checking your role agent permissions…'
+    : canControlRoleAgent
+      ? null
+      : 'Only workspace owners, hiring managers, and recruiters assigned to this role can change its agent controls.';
+  const {
+    controlAction: roleAgentControlAction,
+    pauseAgent: handlePauseAgent,
+    resumeAgent: handleResumeAgent,
+  } = useRoleAgentControls({
+    roleId: numericRoleId,
+    role,
+    agentStatus,
+    canControlAgent: canControlRoleAgent,
+    mutateAgentStatus,
+    setAgentStatus,
+    setRole,
+    loadRoleWorkspace,
+    handleRoleVersionConflict,
+    showToast,
+  });
+
   // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
   // AgentHeader with a role-scoped agent panel on the right. Builds the
   // panel agent prop from the polled /agent/status payload, with the
@@ -1210,18 +1234,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const roleAgent = useMemo(() => {
     const enabled = Boolean(role?.agentic_mode_enabled);
     if (!agentStatus) {
+      const locallyPaused = enabled && Boolean(role?.agent_paused_at);
       return {
-        on: enabled,
-        paused: false,
+        on: enabled && !locallyPaused,
+        paused: locallyPaused,
         pending: 0,
         spentCents: 0,
         budgetCents: Number(role?.monthly_usd_budget_cents || 0) || 5000,
-        tick: enabled ? 'Loading agent status…' : null,
+        tick: enabled ? 'Loading workspace status…' : null,
         inFlight: false,
+        pausedAt: role?.agent_paused_at || null,
+        pausedReason: role?.agent_paused_reason || null,
+        rolePaused: locallyPaused,
+        rolePausedAt: role?.agent_paused_at || null,
+        rolePausedReason: role?.agent_paused_reason || null,
+        controlAction: roleAgentControlAction,
       };
     }
-    return buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
-  }, [agentStatus, role]);
+    const built = buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
+    return built ? { ...built, controlAction: roleAgentControlAction } : built;
+  }, [agentStatus, role, roleAgentControlAction]);
   const rolePendingReviewTitle = (() => {
     const total = Number(roleAgent?.pending || 0);
     const decisions = roleAgent?.pendingBreakdown?.decisions;
@@ -1433,6 +1465,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   };
 
   const handleActivateAgent = (monthlyBudgetCents) => {
+    if (!canControlRoleAgent) return;
     if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
       showToast('Set a monthly cap greater than $0 before activating.', 'error');
       return;
@@ -1441,6 +1474,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   };
 
   const confirmAgentActivation = () => {
+    if (!canControlRoleAgent) return;
     const monthlyBudgetCents = Number(activationPreflight?.monthlyBudgetCents);
     if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
       setActivationPreflight(null);
@@ -1459,56 +1493,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     requestAgentActivationWhenReady(monthlyBudgetCents, generatedDraft);
   };
 
-  // Manual SOFT pause — stop the agent and its spend, but KEEP this role's
-  // pending decisions (you can still action them). Resume brings it back.
-  // Distinct from Turn off (handleTurnOffAgent), which disables the agent
-  // indefinitely. Optimistically flip the polled status to paused so the strip
-  // morphs to amber without waiting for the 30s poll.
-  const handlePauseAgent = () => {
-    if (!Number.isFinite(numericRoleId)) return;
-    mutateAgentStatus({
-      optimistic: (current) => optimisticallyPauseRoleAgent(current),
-      request: () => apiClient.agent.pause(numericRoleId, roleExpectedVersion(role)),
-    })
-      .then((response) => {
-        if (response?.data) setRole((current) => (current ? { ...current, ...response.data } : response.data));
-      })
-      .catch((error) => {
-        if (!handleRoleVersionConflict(error)) {
-          showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
-        }
-      });
-  };
-
-  // PAUSED → ON. Clears the pause (manual or budget) server-side and kicks an
-  // immediate cycle; clear it locally too for an instant flip.
-  const handleResumeAgent = () => {
-    if (!Number.isFinite(numericRoleId)) return;
-    mutateAgentStatus({
-      optimistic: (current) => optimisticallyResumeRoleAgent(current),
-      request: () => apiClient.agent.resume(numericRoleId, roleExpectedVersion(role)),
-    })
-      .then((response) => {
-        if (response?.data) setRole((current) => (current ? { ...current, ...response.data } : response.data));
-      })
-      .catch((error) => {
-        void loadRoleWorkspace();
-        if (!handleRoleVersionConflict(error)) {
-          showToast(getErrorMessage(error, 'Failed to resume agent.'), 'error');
-        }
-      });
-  };
-
   // Turn the agent OFF for this role — indefinite, no auto-resume. Opens a
   // confirm: off KEEPS pending decisions by default (they stay actionable),
   // with an opt-in to also discard the queue for a clean slate.
   const handleTurnOffAgent = () => {
+    if (!canControlRoleAgent) return;
     setTurnOffDiscard(false);
     setTurnOffOpen(true);
   };
 
   const confirmTurnOffAgent = () => {
-    if (!Number.isFinite(numericRoleId)) return;
+    if (!canControlRoleAgent || !Number.isFinite(numericRoleId)) return;
     const alsoDiscard = turnOffDiscard && (roleAgent?.pending || 0) > 0;
     const previousRole = role;
     setTurnOffOpen(false);
@@ -1681,6 +1676,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         onResumeAgent={role?.role_kind === 'sister' ? undefined : handleResumeAgent}
         onTurnOffAgent={role?.role_kind === 'sister' ? undefined : handleTurnOffAgent}
         onAgentSettings={role?.role_kind === 'sister' ? undefined : goToAgentSettings}
+        controlsDisabledReason={role?.role_kind === 'sister' ? null : roleAgentControlDisabledReason}
       />
       {role?.role_kind === 'sister' ? (
         <div className="mx-auto mt-4 flex max-w-[1440px] flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3 text-sm">
@@ -1880,6 +1876,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           <RoleAgentSettingsTab
             role={role}
             agentStatus={agentStatus}
+            canControlAgent={canControlRoleAgent}
+            controlDisabledReason={roleAgentControlDisabledReason}
             roleCriteria={agentCriteria}
             workspaceCriteria={workspaceCriteria}
             criteriaBusy={criteriaBusy}
@@ -2444,7 +2442,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
-              <Button type="button" variant="primary" onClick={confirmAgentActivation}>Turn on with this policy</Button>
+              <Button type="button" variant="primary" onClick={confirmAgentActivation} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn on with this policy</Button>
             </div>
           )}
         >
@@ -2514,7 +2512,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 type="button"
                 variant="secondary"
                 onClick={() => activateAgentWithAssessmentChoice(activationReview?.monthlyBudgetCents, 'skip_assessment')}
-                disabled={Boolean(activationReview?.activationSubmitting)}
+                disabled={!canControlRoleAgent || Boolean(activationReview?.activationSubmitting)}
+                title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
               >
                 Skip assessment &amp; turn on
               </Button>
@@ -2522,6 +2521,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   <Button
                     type="button"
                     variant="primary"
+                    disabled={!canControlRoleAgent}
+                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
                     onClick={() => requestAgentActivationWhenReady(
                       activationReview?.monthlyBudgetCents,
                       activationReview?.draft || null,
@@ -2608,7 +2609,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setTurnOffOpen(false)}>Cancel</Button>
-              <Button type="button" variant="danger" onClick={confirmTurnOffAgent}>Turn off</Button>
+              <Button type="button" variant="danger" onClick={confirmTurnOffAgent} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn off</Button>
             </div>
           )}
         >

@@ -552,6 +552,41 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(onTurnOff).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps role controls read-only with the hiring-team permission explanation', () => {
+    const reason = 'Only workspace owners, hiring managers, and recruiters assigned to this role can change its agent controls.';
+    const onSettings = vi.fn();
+    const { rerender } = render(
+      <AgentHeader
+        title="Role"
+        agent={runningAgent}
+        onPauseAgent={() => {}}
+        onTurnOffAgent={() => {}}
+        onAgentSettings={onSettings}
+        controlsDisabledReason={reason}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /^pause$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^pause$/i })).toHaveAttribute('aria-description', reason);
+    expect(screen.getByRole('button', { name: /turn off agent/i })).toBeDisabled();
+    const settings = screen.getByRole('button', { name: 'Configure agent' });
+    expect(settings).not.toBeDisabled();
+    expect(settings.getAttribute('title')).toContain('read-only');
+    fireEvent.click(settings);
+    expect(onSettings).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <AgentHeader
+        title="Role"
+        agent={{ ...runningAgent, on: false, paused: false }}
+        onActivateAgent={() => {}}
+        controlsDisabledReason={reason}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /turn on/i })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'Role monthly budget in USD' })).toBeDisabled();
+  });
+
   it('offers Turn off alongside Resume while paused', () => {
     const onTurnOff = vi.fn();
     render(

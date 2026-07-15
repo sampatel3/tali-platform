@@ -83,6 +83,10 @@ export const useAgentStatus = (roleId) => {
   // the write is pending, then force one fresh status read before settling.
   const mutateStatus = useCallback(async ({ optimistic, request }) => {
     if (typeof request !== 'function') return null;
+    // A role control is a single-writer interaction. The optimistic state can
+    // expose the opposite action before the first request settles; ignore that
+    // second click instead of issuing two writes with the same viewed version.
+    if (activeMutationRef.current !== null) return null;
     const mutationGeneration = ++mutationGenerationRef.current;
     activeMutationRef.current = mutationGeneration;
     requestGenerationRef.current += 1;
@@ -177,7 +181,17 @@ const readOrgScopeKey = () => {
   if (typeof localStorage === 'undefined') return 'server';
   try {
     const user = JSON.parse(localStorage.getItem('taali_user') || 'null');
-    if (user?.organization_id != null) return `org:${user.organization_id}`;
+    // Org status contains viewer-specific attribution (`is_current_user`) and
+    // control permissions. Include the account identity even when two users
+    // belong to the same workspace so a warm snapshot can never call the
+    // previous recruiter "you" after an account switch in the same tab.
+    if (user?.organization_id != null && user?.id != null) {
+      return `org:${user.organization_id}:user:${user.id}`;
+    }
+    if (user?.organization_id != null && user?.email) {
+      return `org:${user.organization_id}:email:${user.email}`;
+    }
+    if (user?.organization_id != null) return `org:${user.organization_id}:anonymous`;
     if (user?.id != null) return `user:${user.id}`;
     if (user?.email) return `email:${user.email}`;
   } catch {
@@ -218,6 +232,7 @@ const normalizeOrgStatus = (data = {}) => {
     workspace_paused_at: data.workspace_paused_at || null,
     workspace_paused_reason: data.workspace_paused_reason || null,
     workspace_paused_by: data.workspace_paused_by || null,
+    workspace_last_change: data.workspace_last_change || null,
     workspace_control_version: data.workspace_control_version == null
       ? null
       : Number(data.workspace_control_version),

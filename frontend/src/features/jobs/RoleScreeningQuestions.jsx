@@ -40,7 +40,13 @@ const questionDraft = (question = null) => ({
 
 const kindLabel = (kind) => QUESTION_KINDS.find((item) => item.value === kind)?.label || kind;
 
-export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRoleVersionChange }) {
+export default function RoleScreeningQuestions({
+  roleId,
+  roleVersion = 1,
+  onRoleVersionChange,
+  readOnly = false,
+  readOnlyReason = null,
+}) {
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -93,12 +99,14 @@ export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRole
   };
 
   const edit = (question) => {
+    if (readOnly) return;
     setEditingId(question.id);
     setDraft(questionDraft(question));
     setFormError('');
   };
 
   const save = async () => {
+    if (readOnly) return;
     const prompt = draft.prompt.trim();
     const options = usesOptions ? csvValues(draft.optionsText) : null;
     const expected = draft.knockout ? csvValues(draft.expectedText) : null;
@@ -155,6 +163,7 @@ export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRole
   };
 
   const remove = async (questionId) => {
+    if (readOnly) return;
     setDeletingId(questionId);
     setFormError('');
     try {
@@ -180,7 +189,7 @@ export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRole
   };
 
   return (
-    <section className="mc-agent-settings-card" data-testid="role-screening-questions">
+    <section className="mc-agent-settings-card" data-testid="role-screening-questions" title={readOnly ? readOnlyReason : undefined}>
       <div className="mc-agent-settings-card-head">
         <div>
           <h2 className="mc-agent-settings-card-title">Application <em>screening</em></h2>
@@ -215,12 +224,12 @@ export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRole
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => edit(question)}>Edit</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => edit(question)} disabled={readOnly}>Edit</Button>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={deletingId === question.id}
+                    disabled={readOnly || deletingId === question.id}
                     onClick={() => void remove(question.id)}
                   >
                     {deletingId === question.id ? 'Removing…' : 'Remove'}
@@ -234,7 +243,7 @@ export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRole
         <p className="mc-agent-settings-card-help">No extra questions yet. Applicants will only provide their contact details and resume.</p>
       )}
 
-      <div style={{ display: 'grid', gap: 12, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+      <fieldset disabled={readOnly} style={{ display: 'grid', gap: 12, padding: 0, paddingTop: 14, margin: 0, minWidth: 0, border: 0, borderTop: '1px solid var(--line)' }}>
         <div className="mc-kicker is-mute">{editingId == null ? 'ADD A QUESTION' : 'EDIT QUESTION'}</div>
         <label className="field">
           <span className="k">Candidate-facing question</span>
@@ -306,7 +315,7 @@ export default function RoleScreeningQuestions({ roleId, roleVersion = 1, onRole
             {saving ? 'Saving…' : editingId == null ? 'Add question' : 'Save question'}
           </Button>
         </div>
-      </div>
+      </fieldset>
     </section>
   );
 }

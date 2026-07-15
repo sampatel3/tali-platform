@@ -23,6 +23,8 @@ import { Select } from '../../shared/ui/TaaliPrimitives';
 const RoleAgentSettingsTab = ({
   role,
   agentStatus = null,
+  canControlAgent = true,
+  controlDisabledReason = null,
   roleCriteria,
   workspaceCriteria,
   criteriaBusy,
@@ -57,6 +59,7 @@ const RoleAgentSettingsTab = ({
   onRoleVersionChange,
   onRoleConflict,
 }) => {
+  const controlsReadOnly = !canControlAgent;
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
@@ -125,7 +128,7 @@ const RoleAgentSettingsTab = ({
   const autonomySaveInFlightRef = React.useRef(false);
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
   const handleAutonomyToggle = async (key, value) => {
-    if (autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
@@ -188,7 +191,7 @@ const RoleAgentSettingsTab = ({
     : assessmentTaskOptions;
   const assessmentBusy = savingAssessmentTask || assessmentChangePending;
   const handleAssessmentToggle = async (taskId) => {
-    if (assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
+    if (controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
     const id = Number(taskId);
     if (!Number.isFinite(id)) return;
     const previous = selectedAssessmentTaskIds;
@@ -216,6 +219,7 @@ const RoleAgentSettingsTab = ({
   const [budgetSaving, setBudgetSaving] = React.useState(false);
   const monthlyBudgetDollars = Math.round(monthlyBudgetCents / 100);
   const startBudgetEdit = () => {
+    if (controlsReadOnly) return;
     setBudgetDraftDollars(String(monthlyBudgetDollars));
     setBudgetEditing(true);
   };
@@ -224,7 +228,7 @@ const RoleAgentSettingsTab = ({
     setBudgetDraftDollars('');
   };
   const submitBudgetEdit = async () => {
-    if (!onSaveBudget) {
+    if (controlsReadOnly || !onSaveBudget) {
       setBudgetEditing(false);
       return;
     }
@@ -255,6 +259,15 @@ const RoleAgentSettingsTab = ({
           </p>
         </section>
 
+        {controlsReadOnly ? (
+          <div className="mc-agent-warn" role="status" title={controlDisabledReason || undefined}>
+            <div>
+              <div className="mc-agent-warn-title">Agent settings are read-only</div>
+              <div className="mc-agent-warn-body">{controlDisabledReason}</div>
+            </div>
+          </div>
+        ) : null}
+
         {/* Recruiter intent for this role */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
@@ -272,7 +285,7 @@ const RoleAgentSettingsTab = ({
             criteria={roleCriteria}
             workspaceCriteria={workspaceCriteria}
             suppressedIds={Array.isArray(role?.suppressed_org_criterion_ids) ? role.suppressed_org_criterion_ids : []}
-            busy={criteriaBusy}
+            busy={criteriaBusy || controlsReadOnly}
             syncing={criteriaSyncing}
             resetting={criteriaResetting}
             onCreate={onCreateCriterion}
@@ -291,6 +304,8 @@ const RoleAgentSettingsTab = ({
           roleVersion={role?.version}
           onRoleVersionChange={onRoleVersionChange}
           onRoleConflict={onRoleConflict}
+          readOnly={controlsReadOnly}
+          readOnlyReason={controlDisabledReason}
         />
 
         {/* Q&A history with the agent — recent answers to the agent's
@@ -303,6 +318,8 @@ const RoleAgentSettingsTab = ({
             roleId={role.id}
             roleVersion={role.version}
             onRoleVersionChange={onRoleVersionChange}
+            readOnly={controlsReadOnly}
+            readOnlyReason={controlDisabledReason}
           />
         ) : null}
 
@@ -329,7 +346,7 @@ const RoleAgentSettingsTab = ({
                 value={thresholdMode}
                 onChange={(event) => onThresholdModeChange?.(event.target.value)}
                 aria-label="Threshold mode"
-                disabled={savingThresholdMode}
+                disabled={savingThresholdMode || controlsReadOnly}
               >
                 <option value="manual">Manual</option>
                 <option value="auto">Agent-managed (dynamic)</option>
@@ -362,6 +379,7 @@ const RoleAgentSettingsTab = ({
                 aria-label="Screening threshold percent"
                 className="ce-range mc-agent-settings-slider-input"
                 style={{ '--ce-range-val': thresholdDisplay }}
+                disabled={controlsReadOnly}
               />
               <div className="mc-agent-settings-slider-scale">
                 <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
@@ -505,7 +523,7 @@ const RoleAgentSettingsTab = ({
                           type="checkbox"
                           checked={checked}
                           onChange={() => handleAssessmentToggle(taskId)}
-                          disabled={assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
+                          disabled={controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
                         />
                         <span className="mc-agent-settings-task-option-copy">
                           <strong>{task.name}</strong>
@@ -632,7 +650,7 @@ const RoleAgentSettingsTab = ({
                 onClick={() => {
                   if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
                 }}
-                disabled={Boolean(rule.disabled || pendingAutonomy)}
+                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
               />
@@ -650,7 +668,7 @@ const RoleAgentSettingsTab = ({
             Automation switches save instantly. Threshold changes apply to this role only —{' '}
             <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
           </span>
-          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={savingRoleConfig}>
+          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
             {savingRoleConfig ? 'Saving…' : 'Save threshold'}
           </button>
         </div>
@@ -719,8 +737,9 @@ const RoleAgentSettingsTab = ({
                     step={5}
                     value={budgetDraftDollars}
                     onChange={(event) => setBudgetDraftDollars(event.target.value)}
-                    aria-label="Monthly budget in dollars"
-                    autoFocus
+                  aria-label="Monthly budget in dollars"
+                  autoFocus
+                  disabled={controlsReadOnly}
                   />
                 </div>
               </label>
@@ -739,7 +758,8 @@ const RoleAgentSettingsTab = ({
                   className="btn btn-purple btn-xs"
                   onClick={submitBudgetEdit}
                   disabled={
-                    budgetSaving
+                    controlsReadOnly
+                    || budgetSaving
                     || budgetDraftDollars === ''
                     || !Number.isFinite(Number(budgetDraftDollars))
                     || Number(budgetDraftDollars) <= 0
@@ -757,6 +777,8 @@ const RoleAgentSettingsTab = ({
                 type="button"
                 className="taali-text-btn mc-agent-settings-budget-edit-link"
                 onClick={startBudgetEdit}
+                disabled={controlsReadOnly}
+                title={controlsReadOnly ? controlDisabledReason : undefined}
               >
                 <Edit3 size={11} />
                 Edit

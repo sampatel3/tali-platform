@@ -326,6 +326,51 @@ def test_get_role_overview_reports_threshold_funnel_and_constraints(db):
     assert out["funnel"].get("applied") == 2
 
 
+def test_get_role_overview_reports_budget_spend_and_remaining_safely(db):
+    org = _org(db)
+    role = _role(db, org, agentic=True)
+    role.monthly_usd_budget_cents = 5_000
+    db.commit()
+    user = _user(db, org)
+
+    with patch(
+        "app.agent_runtime.budget_guard.month_to_date_spend_cents",
+        return_value=1_850,
+    ):
+        out = tools.dispatch_tool("get_role_overview", {}, db=db, role=role, user=user)
+
+    assert out["agent"]["monthly_budget_cents"] == 5_000
+    assert out["agent"]["effective_monthly_budget_cents"] == 5_000
+    assert out["agent"]["month_to_date_spend_cents"] == 1_850
+    assert out["agent"]["remaining_monthly_budget_cents"] == 3_150
+
+    with patch(
+        "app.agent_runtime.budget_guard.month_to_date_spend_cents",
+        side_effect=RuntimeError("metering unavailable: SECRET-DIAGNOSTIC"),
+    ):
+        degraded = tools.dispatch_tool(
+            "get_role_overview", {}, db=db, role=role, user=user
+        )
+
+    assert degraded["agent"]["monthly_budget_cents"] == 5_000
+    assert degraded["agent"]["effective_monthly_budget_cents"] == 5_000
+    assert degraded["agent"]["month_to_date_spend_cents"] is None
+    assert degraded["agent"]["remaining_monthly_budget_cents"] is None
+
+    role.monthly_usd_budget_cents = None
+    db.flush()
+    with patch(
+        "app.agent_runtime.budget_guard.month_to_date_spend_cents",
+        return_value=100,
+    ):
+        defaulted = tools.dispatch_tool(
+            "get_role_overview", {}, db=db, role=role, user=user
+        )
+    assert defaulted["agent"]["monthly_budget_cents"] is None
+    assert defaulted["agent"]["effective_monthly_budget_cents"] == 5_000
+    assert defaulted["agent"]["remaining_monthly_budget_cents"] == 4_900
+
+
 def test_dispatch_simulate_threshold_returns_card(db):
     org = _org(db)
     role = _role(db, org, threshold=70)

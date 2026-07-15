@@ -50,6 +50,55 @@ def _forbidden() -> HTTPException:
     return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
 
+def has_job_permission_for_role(
+    db: Session,
+    *,
+    current_user: User,
+    role: Role,
+    permission: JobPermission | str,
+) -> bool:
+    """Return the canonical viewer capability for an already-scoped role.
+
+    Read responses use this helper to describe which controls the current
+    viewer may use.  Mutations still call :func:`require_job_permission`; both
+    paths therefore share one policy matrix and cannot drift into a UI-only
+    grant.  The helper fails closed for inactive users, deleted/cross-tenant
+    roles, unsupported membership, and unconfigured hiring teams.
+    """
+    try:
+        requested_permission = JobPermission(permission)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported job permission: {permission!r}") from exc
+
+    organization_id = getattr(current_user, "organization_id", None)
+    if (
+        organization_id is None
+        or not bool(getattr(current_user, "is_active", False))
+        or getattr(role, "organization_id", None) != organization_id
+        or getattr(role, "deleted_at", None) is not None
+    ):
+        return False
+
+    if getattr(current_user, "role", None) == "owner":
+        return True
+    if requested_permission is JobPermission.VIEW:
+        return True
+
+    membership = (
+        db.query(JobHiringTeam)
+        .filter(
+            JobHiringTeam.organization_id == organization_id,
+            JobHiringTeam.role_id == role.id,
+            JobHiringTeam.user_id == current_user.id,
+        )
+        .first()
+    )
+    allowed_team_roles = _TEAM_ROLE_PERMISSIONS[requested_permission]
+    return bool(
+        membership is not None and membership.team_role in allowed_team_roles
+    )
+
+
 def require_job_permission(
     db: Session,
     *,
@@ -98,28 +147,19 @@ def require_job_permission(
     if role is None:
         raise _forbidden()
 
-    # Tenant isolation always comes first; within the tenant owners are the
-    # break-glass administrators for every per-job permission.
-    if getattr(current_user, "role", None) == "owner":
-        return role
-
-    if requested_permission is JobPermission.VIEW:
-        return role
-
-    membership = (
-        db.query(JobHiringTeam)
-        .filter(
-            JobHiringTeam.organization_id == organization_id,
-            JobHiringTeam.role_id == role.id,
-            JobHiringTeam.user_id == current_user.id,
-        )
-        .first()
-    )
-    allowed_team_roles = _TEAM_ROLE_PERMISSIONS[requested_permission]
-    if membership is not None and membership.team_role in allowed_team_roles:
+    if has_job_permission_for_role(
+        db,
+        current_user=current_user,
+        role=role,
+        permission=requested_permission,
+    ):
         return role
 
     raise _forbidden()
 
 
-__all__ = ["JobPermission", "require_job_permission"]
+__all__ = [
+    "JobPermission",
+    "has_job_permission_for_role",
+    "require_job_permission",
+]

@@ -26,6 +26,7 @@ import {
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
+import { workspaceControlConflictMessage } from '../../shared/workspaceAgentControl';
 import {
   EmptyState,
   Select,
@@ -702,7 +703,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     } catch (error) {
       await refetchAgentStatus({ force: true });
       if (Number(error?.response?.status) === 409) {
-        setAgentControlError('The workspace agent changed while this page was open. The latest state is shown — review it and try again.');
+        setAgentControlError(workspaceControlConflictMessage(error));
       } else {
         setAgentControlError(failMsg);
       }

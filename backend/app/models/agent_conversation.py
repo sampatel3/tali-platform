@@ -59,6 +59,17 @@ MESSAGE_KIND_CHAT = "chat"
 MESSAGE_KIND_ACTION = "action"
 MESSAGE_KIND_TOOL = "tool"
 MESSAGE_KIND_SYSTEM = "system"
+# Deterministic, agent-initiated helper message. It is visible and replayed as
+# assistant context, but it is not an interactive-turn reply. Keeping a
+# separate kind prevents a proactive nudge from falsely closing an in-flight
+# recruiter turn in ``conversation_agent_working``.
+MESSAGE_KIND_PROACTIVE = "proactive"
+# Durable notification emitted by background work (for example, a failed or
+# budget-paused autonomous cycle). Event rows are visible in the transcript but
+# are deliberately excluded from model history: they may arrive while an
+# interactive turn is running and must never disturb the user/assistant tool
+# sequence replayed to the model.
+MESSAGE_KIND_EVENT = "event"
 
 
 class AgentConversation(Base):
@@ -124,6 +135,16 @@ class AgentConversationMessage(Base):
 
     __tablename__ = "agent_conversation_messages"
     __table_args__ = (
+        # Background event publication is retryable and may race across Celery
+        # redeliveries. NULL for ordinary dialogue; event rows use a stable
+        # source key so the database, not a best-effort pre-query, guarantees
+        # exactly one transcript notification per role/source event.
+        UniqueConstraint(
+            "organization_id",
+            "role_id",
+            "source_key",
+            name="uq_agent_conversation_messages_event_source",
+        ),
         # The common read: "this conversation's messages, oldest first."
         # created_at + id keeps a stable order even at equal timestamps.
         {"sqlite_autoincrement": True},
@@ -156,6 +177,7 @@ class AgentConversationMessage(Base):
 
     model = Column(String, nullable=True)
     stop_reason = Column(String, nullable=True)
+    source_key = Column(String(255), nullable=True)
     token_usage = Column(JSON, nullable=True)
 
     created_at = Column(

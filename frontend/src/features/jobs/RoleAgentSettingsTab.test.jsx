@@ -301,6 +301,37 @@ describe('RoleAgentSettingsTab assessment task', () => {
 });
 
 describe('RoleAgentSettingsTab budget validation', () => {
+  it('renders agent configuration read-only without hiding the saved policy', () => {
+    const reason = 'Only workspace owners, hiring managers, and recruiters assigned to this role can change its agent controls.';
+    const onAutonomyChange = vi.fn();
+    const onAssignAssessmentTasks = vi.fn();
+    const onSave = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        canControlAgent={false}
+        controlDisabledReason={reason}
+        roleTasks={[{ id: 42, name: 'API exercise', is_active: true }]}
+        allTasks={[{ id: 42, name: 'API exercise', is_active: true }]}
+        onAutonomyChange={onAutonomyChange}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
+        onSave={onSave}
+      />,
+    );
+
+    expect(screen.getByText('Agent settings are read-only')).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'API exercise' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Threshold mode' })).toBeDisabled();
+    expect(screen.getByRole('slider', { name: 'Screening threshold percent' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save threshold' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
+    expect(onAutonomyChange).not.toHaveBeenCalled();
+    expect(onAssignAssessmentTasks).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it('does not allow a zero-dollar role cap to be saved', () => {
     const onSaveBudget = vi.fn();
     render(

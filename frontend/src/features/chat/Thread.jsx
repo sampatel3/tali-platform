@@ -1,11 +1,12 @@
 import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
-import { motionSafeScrollBehavior } from '../../shared/motion';
+import { MotionList, MotionListItem, motionSafeScrollBehavior } from '../../shared/motion';
 import { Button } from '../../shared/ui/TaaliPrimitives';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
+import { AssessmentQueueCard, RecruitingOverviewCard } from './OperationsCards';
 
 // GraphView pulls in cytoscape (~455 kB) — lazy-load it so the ~455 kB
 // graph vendor chunk only lands when a tool result actually carries a
@@ -49,6 +50,12 @@ const ToolResultRender = ({ part }) => {
   }
   if (part.toolName === 'search_applications') {
     if (Array.isArray(part.result)) return <CandidateGrid rows={part.result} />;
+  }
+  if (part.toolName === 'get_recruiting_overview') {
+    return <RecruitingOverviewCard data={part.result} />;
+  }
+  if (part.toolName === 'list_assessments') {
+    return <AssessmentQueueCard data={part.result} />;
   }
   // Both search tools share the same payload shape: ``applications`` (the
   // candidate grid) plus an optional ``graph`` (the inline subgraph from
@@ -182,27 +189,32 @@ const Thread = ({ messages, isStreaming, error, onRetry }) => {
   const fr = friendlyError(error);
 
   return (
-    <div className="cp-thread">
-      {messages.map((m, i) => (
-        <Message
-          key={m.id}
-          msg={m}
-          isStreaming={isStreaming && i === messages.length - 1 && m.role === 'assistant'}
-        />
-      ))}
-      {fr ? (
-        <div className="cp-error">
-          <div className="cp-error-title">{fr.title}</div>
-          <div className="cp-error-detail">{fr.detail}</div>
-          {onRetry ? (
-            <Button size="xs" variant="secondary" className="cp-error-retry" onClick={onRetry}>
-              Try again
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+    <>
+      <MotionList className="cp-thread" aria-label="Search conversation" layout={false}>
+        {messages.map((m, i) => (
+          <MotionListItem key={m.id} index={i} className="tk-motion-row" layout={false}>
+            <Message
+              msg={m}
+              isStreaming={isStreaming && i === messages.length - 1 && m.role === 'assistant'}
+            />
+          </MotionListItem>
+        ))}
+        {fr ? (
+          <MotionListItem key="thread-error" className="tk-motion-row" layout={false}>
+            <div className="cp-error">
+              <div className="cp-error-title">{fr.title}</div>
+              <div className="cp-error-detail">{fr.detail}</div>
+              {onRetry ? (
+                <Button size="xs" variant="secondary" className="cp-error-retry" onClick={onRetry}>
+                  Try again
+                </Button>
+              ) : null}
+            </div>
+          </MotionListItem>
+        ) : null}
+      </MotionList>
       <div ref={endRef} />
-    </div>
+    </>
   );
 };
 

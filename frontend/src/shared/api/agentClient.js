@@ -53,10 +53,10 @@ export const agent = {
   // Manual trigger
   runNow: (roleId, body = {}) => api.post(`/roles/${roleId}/agent/run-now`, body),
 
-  // Org-wide soft pause / resume. pauseAll sets the pause flag on every
-  // agent-enabled role WITHOUT disabling it, so pending review items are
-  // kept (unlike the per-role toggle-off). resumeAll clears the pause for
-  // roles back under their monthly cap. Both are one round-trip.
+  // Workspace-wide pause overlay. It gates every role without rewriting any
+  // role's own ON / locally-paused / OFF choice; resumeAll clears only that
+  // overlay. Both commands use the viewed workspace version so concurrent
+  // recruiters cannot silently overwrite one another.
   pauseAll: (expectedControlVersion) => api.post('/agent/pause-all', {
     expected_control_version: expectedControlVersion,
   }),

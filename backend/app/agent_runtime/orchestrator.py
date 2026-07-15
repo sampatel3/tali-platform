@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from ..agent_chat.events import try_post_agent_run_event
 from ..models.agent_run import AgentRun
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.organization import Organization
@@ -44,7 +45,7 @@ from .tool_registry import (
 logger = logging.getLogger("taali.agent_runtime")
 
 
-# Tool surface has 14 tools. Bumping rounds up gives the agent enough
+# The governed tool surface has 26 tools. Bumping rounds up gives the agent enough
 # headroom to chain a cohort search → compare → decision sequence. Each round
 # is still capped to MAX_TOKENS_PER_ROUND, and the per-cycle token + decision
 # budgets in budget_guard.py provide hard ceilings independent of round count.
@@ -199,13 +200,18 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
             "      must-haves — independent of any send bar.\n"
             "    - borderline → skip this cycle.\n"
             "  Always run evaluate_policy before each queue_* call. If the\n"
-            "  policy returns skip / no_action / escalate_low_confidence,\n"
-            "  skip the candidate silently and move to the next.\n\n"
+            "  policy returns escalate_low_confidence, call\n"
+            "  queue_escalate_decision with its reasoning and confidence, using\n"
+            "  rule_path / conflicting sub-agent signals as evidence, so the\n"
+            "  recruiter adjudicates. If it returns\n"
+            "  skip / no_action, skip the candidate and move to the next.\n\n"
             "Rules:\n"
             "  - ≤ 1 send_assessment or queue_advance_decision per cycle.\n"
             "  - ≤ 5 reject decisions per cycle (queue_reject_decision +\n"
             "    queue_skip_assessment_reject_decision combined). Recruiter\n"
             "    reviews them in batch.\n"
+            "  - queue_escalate_decision counts against the overall decision\n"
+            "    budget but neither risk cap; it never acts on the candidate.\n"
             "  - ask_recruiter is unbounded per cycle — surface every gap at\n"
             "    once. Idempotency on (role_id, kind) prevents duplicates.\n"
             "  - Don't call compare_applications / get_cohort_signals /\n"
@@ -224,10 +230,12 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
             "1. get_application on the focus id.\n"
             "2. search_applications (stage='applied' or 'review', sort_by=created_at desc) "
             "to surface any other recent arrivals worth a look.\n"
-            "3. For each candidate worth acting on: if score is fresh and clear, "
-            "queue/auto-execute; if borderline, use compare_applications or "
-            "get_cohort_signals before deciding; if no score yet, score_cv "
-            "and end the cycle (next cycle can act once it lands).\n"
+            "3. For each candidate worth acting on: if the score is fresh, call "
+            "evaluate_policy once and queue its matching verdict. If it returns "
+            "escalate_low_confidence, call queue_escalate_decision so the recruiter "
+            "adjudicates. If the score is borderline, use compare_applications or "
+            "get_cohort_signals before deciding; if no score exists yet, score_cv "
+            "and end the cycle (the next cycle can act once it lands).\n"
             "4. Stay within the per-cycle decision budget — at most one queued "
             "decision per cycle.\n"
             "5. End with agent_run_complete."
@@ -242,16 +250,20 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
             "3. If the score is borderline, use compare_applications or "
             "get_cohort_signals to see how this candidate ranks against the cohort "
             "before deciding to advance or reject.\n"
-            "4. If clearly above-threshold and at the right stage, call send_assessment "
+            "4. Call evaluate_policy once before any queue tool. If it returns "
+            "escalate_low_confidence, call queue_escalate_decision with its reasoning.\n"
+            "5. If clearly above-threshold and the policy agrees, call send_assessment "
             "(if still in CV review) or queue_advance_decision (if assessment is done).\n"
-            "5. If clearly below-threshold and missing requirements, queue_reject_decision "
+            "6. If clearly below-threshold and the policy agrees, queue_reject_decision "
             "or queue_skip_assessment_reject_decision.\n"
-            "6. Always end with agent_run_complete."
+            "7. Always end with agent_run_complete."
         )
     return (
         "Cycle tick — no specific application focus. Use search_applications "
         "to find ready candidates (e.g. min_score=70 in stage='review'), then "
-        "act on at most one of them. Always end with agent_run_complete."
+        "call evaluate_policy and act on at most one. If it returns "
+        "escalate_low_confidence, queue_escalate_decision rather than dropping "
+        "the candidate. Always end with agent_run_complete."
     )
 
 
@@ -336,6 +348,7 @@ def run_cycle(
             db, run=run, application_id=application_id,
             reason="Agent cycle skipped — another cycle was already running for this role.",
         )
+        try_post_agent_run_event(db, role=role, run=run)
         return run
 
     # Role has no `organization` backref defined on the model — fetch directly.
@@ -371,9 +384,9 @@ def run_cycle(
             application_id=application_id,
             reason="Agent cycle skipped — the workspace agent is paused.",
         )
+        try_post_agent_run_event(db, role=role, run=run)
         return run
 
-    client = get_client_for_org(org)
     # Per-role override (Sonnet for borderline-judgment roles, etc.) wins; else
     # the autonomous-loop model (cheaper than the interactive agent by default —
     # this loop is ~92% no-op/fail and the clear decisions are deterministic).
@@ -403,6 +416,7 @@ def run_cycle(
                 f"Raise the monthly cap above current spend to resume."
             ),
         )
+        try_post_agent_run_event(db, role=role, run=run)
         return run
 
     # Data-readiness gate: never spend Claude tokens on a role with no job
@@ -431,12 +445,47 @@ def run_cycle(
                 "(or sync it from Workable) and the agent resumes automatically."
             ),
         )
+        try_post_agent_run_event(db, role=role, run=run)
         return run
 
     # Job spec present: clear any stale missing-spec item and surface (or
     # clear) the count of candidates the agent can't act on for lack of a CV.
     data_readiness.resolve_open(db, role=role, kind="missing_job_spec")
     data_readiness.sync_cv_readiness(db, role=role)
+
+    # Resolve provider access only after the free budget/readiness gates. A
+    # configuration failure must still become durable role state (and a safe
+    # chat event), but the underlying exception may contain credentials or
+    # provider internals and therefore belongs only in server logs.
+    try:
+        client = get_client_for_org(org)
+    except Exception:
+        logger.exception(
+            "agent model client resolution failed role_id=%s org_id=%s",
+            role.id,
+            role.organization_id,
+        )
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="failed",
+            error="model_client_unavailable",
+            model_version=model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db,
+            run=run,
+            application_id=application_id,
+            reason="Agent cycle failed before model access was available.",
+        )
+        try_post_agent_run_event(db, role=role, run=run)
+        return run
 
     snapshot = calibration.load(role)
     run = AgentRun(
@@ -869,6 +918,12 @@ def run_cycle(
     role.agent_last_run_at = run.finished_at
     db.add(role)
     db.flush()
+
+    # Role-level failures and budget stops belong where recruiters already
+    # steer the agent: the shared Agent Chat transcript. Publication is
+    # idempotent by AgentRun source key and isolated in a savepoint, so it is
+    # committed atomically with this terminal status but can never break it.
+    try_post_agent_run_event(db, role=role, run=run)
 
     # Structured cycle summary — picked up by Railway log aggregation so
     # abort rate, rounds-to-completion and $-per-decision are observable

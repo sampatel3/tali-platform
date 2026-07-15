@@ -35,6 +35,7 @@ from ..models.agent_conversation import (
     AUTHOR_ROLE_USER,
     MESSAGE_KIND_ACTION,
     MESSAGE_KIND_CHAT,
+    MESSAGE_KIND_EVENT,
     MESSAGE_KIND_TOOL,
     AgentConversation,
     AgentConversationMessage,
@@ -51,6 +52,7 @@ from .system_prompt import PROMPT_VERSION, build_system_blocks
 from .tools import (
     AGENT_CHAT_TOOLS,
     CARD_TYPES,
+    MUTATING_TOOL_NAMES,
     MUTATION_CARD_TYPES,
     MUTATION_TOOL_NAMES,
     dispatch_tool,
@@ -103,7 +105,14 @@ def _load_history(db: Session, conversation: AgentConversation) -> list[dict[str
     """
     rows = (
         db.query(AgentConversationMessage)
-        .filter(AgentConversationMessage.conversation_id == conversation.id)
+        .filter(
+            AgentConversationMessage.conversation_id == conversation.id,
+            # Background events are transcript notifications, not dialogue.
+            # They can be inserted between a recruiter's message and the
+            # interactive reply, so replaying them would corrupt the model's
+            # user/assistant/tool sequence.
+            AgentConversationMessage.kind != MESSAGE_KIND_EVENT,
+        )
         .order_by(
             AgentConversationMessage.created_at.asc(),
             AgentConversationMessage.id.asc(),
@@ -306,6 +315,14 @@ def run_agent_response(
 
         tool_count = 0
         error_count = 0
+        terminal_receipt_message: str | None = None
+        requested_mutations = [
+            str(block.get("name") or "")
+            for block in blocks
+            if block.get("type") == "tool_use"
+            and str(block.get("name") or "") in MUTATING_TOOL_NAMES
+        ]
+        mutation_batch_blocked = len(requested_mutations) > 1
         for block in blocks:
             if block.get("type") != "tool_use":
                 continue
@@ -314,23 +331,38 @@ def run_agent_response(
             args = block.get("input") or {}
             tool_count += 1
             try:
-                result = dispatch_tool(
-                    name,
-                    args,
-                    db=db,
-                    role=role,
-                    user=user,
-                    conversation=conversation,
-                    expected_role_version=expected_role_version,
-                )
-                is_error = False
-                if name in MUTATION_TOOL_NAMES:
-                    # A successful tool may have advanced the role revision.
-                    # Carry that turn-owned revision into a deliberate follow-up
-                    # mutation (for example set budget, then activate).
-                    expected_role_version = int(role.version or expected_role_version)
-                if isinstance(result, dict) and result.get("type") in CARD_TYPES:
-                    collected_cards.append(result)
+                if mutation_batch_blocked and name in MUTATING_TOOL_NAMES:
+                    result = {
+                        "error": (
+                            "Only one state-changing command is allowed per model "
+                            "round. Re-read live state and run these one at a time."
+                        ),
+                        "tool": name,
+                        "requested_mutations": requested_mutations,
+                    }
+                    is_error = True
+                else:
+                    result = dispatch_tool(
+                        name,
+                        args,
+                        db=db,
+                        role=role,
+                        user=user,
+                        conversation=conversation,
+                        expected_role_version=expected_role_version,
+                    )
+                    is_error = False
+                    if name in MUTATION_TOOL_NAMES:
+                        # A successful role mutation may have advanced the
+                        # revision. Carry that turn-owned revision into a
+                        # deliberate follow-up mutation in a later round.
+                        expected_role_version = int(
+                            role.version or expected_role_version
+                        )
+                    if isinstance(result, dict) and result.get("type") in CARD_TYPES:
+                        collected_cards.append(result)
+                    if isinstance(result, dict) and result.get("_terminal_message"):
+                        terminal_receipt_message = str(result["_terminal_message"])
             except HTTPException as exc:
                 # Preserve the same structured 409 contract used by direct UI
                 # writes so the model can truthfully tell the recruiter to
@@ -370,6 +402,13 @@ def run_agent_response(
             kind=MESSAGE_KIND_TOOL,
         )
         messages.append({"role": "user", "content": tool_results})
+        if terminal_receipt_message:
+            # The state change has a committed/queued domain receipt. Do not make
+            # another model call that could fail after success and leave the
+            # recruiter seeing a contradictory error; close deterministically.
+            final_text = terminal_receipt_message
+            final_stop = "operation_complete"
+            break
         if tool_count > 0 and error_count == tool_count:
             consecutive_error_rounds += 1
         else:

@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import event
 
 from app.agent_runtime import orchestrator
+from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
@@ -104,6 +105,18 @@ def _make_app(db, *, org: Organization, role: Role) -> CandidateApplication:
     db.add(app)
     db.flush()
     return app
+
+
+def _role_event_cards(db, role: Role) -> list[dict]:
+    rows = (
+        db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.role_id == int(role.id),
+            AgentConversationMessage.kind == MESSAGE_KIND_EVENT,
+        )
+        .all()
+    )
+    return [card for row in rows for card in (row.actions or [])]
 
 
 def _block_text(text: str) -> SimpleNamespace:
@@ -318,6 +331,61 @@ def test_run_cycle_increments_decisions_when_queue_tool_called(db):
     assert run.status == "succeeded"
     assert run.decisions_emitted == 1
     assert run.trigger == "event"
+
+
+def test_run_cycle_can_queue_low_confidence_escalation(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_escalate",
+                    name="queue_escalate_decision",
+                    input_={
+                        "application_id": int(app.id),
+                        "reasoning": "The CV and assessment evidence disagree.",
+                        "evidence": {"rule_path": ["abstention_overlay:disagreement"]},
+                        "confidence": 0.4,
+                    },
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_done",
+                    name="agent_run_complete",
+                    input_={"summary": "Escalated one uncertain candidate."},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+    ])
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "succeeded"
+    assert run.decisions_emitted == 1
+    assert {entry["name"] for entry in (run.tools_called or [])} == {
+        "queue_escalate_decision",
+        "agent_run_complete",
+    }
+    decision = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == app.id)
+        .one()
+    )
+    assert decision.status == "pending"
+    assert decision.decision_type == "escalate_low_confidence"
 
 
 def test_run_cycle_drops_actions_when_agent_is_disabled_during_provider_call(db):
@@ -575,7 +643,7 @@ def test_run_cycle_pauses_role_on_monthly_budget_exhausted(db):
         return_value=fake_check,
     ), patch(
         "app.agent_runtime.orchestrator.get_client_for_org", return_value=MagicMock()
-    ):
+    ) as resolve_client:
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
         )
@@ -586,6 +654,12 @@ def test_run_cycle_pauses_role_on_monthly_budget_exhausted(db):
     db.refresh(role)
     assert role.agent_paused_at is not None
     assert role.agent_paused_reason
+    cards = _role_event_cards(db, role)
+    assert len(cards) == 1
+    assert cards[0]["event_type"] == "agent_budget_guard"
+    assert cards[0]["severity"] == "warning"
+    assert "budget" in cards[0]["title"].lower()
+    resolve_client.assert_not_called()
 
 
 def test_run_cycle_durably_pauses_when_org_credits_are_exhausted(db):
@@ -692,6 +766,29 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
     failed_call_metering = boom_client.messages.create.call_args.kwargs["metering"]
     assert failed_call_metering["trace_id"] == f"agent-run:{int(run.id)}"
     assert failed_call_metering["metadata"]["agent_run_id"] == int(run.id)
+    cards = _role_event_cards(db, role)
+    assert len(cards) == 1
+    assert cards[0]["severity"] == "error"
+    assert "network down" not in str(cards[0])
+
+
+def test_run_cycle_records_safe_failure_when_model_client_is_unavailable(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org",
+        side_effect=RuntimeError("Authorization: Bearer sk-ant-SECRET"),
+    ):
+        run = orchestrator.run_cycle(db, role=role, trigger="cron")
+    db.commit()
+
+    assert run.status == "failed"
+    assert run.error == "model_client_unavailable"
+    cards = _role_event_cards(db, role)
+    assert len(cards) == 1
+    assert cards[0]["severity"] == "error"
+    assert "sk-ant-SECRET" not in str(cards[0])
 
 
 def test_run_cycle_uses_role_agent_model_when_set(db):

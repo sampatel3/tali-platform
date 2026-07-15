@@ -1637,7 +1637,9 @@ def agent_expire_stuck_runs(self) -> dict:
     """
     from datetime import datetime, timedelta, timezone
 
+    from ..agent_chat.events import try_post_agent_run_event
     from ..models.agent_run import AgentRun
+    from ..models.role import Role
     from ..platform.database import SessionLocal
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=STUCK_RUN_TIMEOUT_MINUTES)
@@ -1653,6 +1655,14 @@ def agent_expire_stuck_runs(self) -> dict:
             .all()
         )
         now = datetime.now(timezone.utc)
+        role_by_id = {
+            int(role.id): role
+            for role in (
+                db.query(Role)
+                .filter(Role.id.in_({int(run.role_id) for run in stuck} or {0}))
+                .all()
+            )
+        }
         for run in stuck:
             run.status = "failed"
             run.error = (
@@ -1661,6 +1671,9 @@ def agent_expire_stuck_runs(self) -> dict:
             )
             run.finished_at = now
             expired_ids.append(int(run.id))
+            role = role_by_id.get(int(run.role_id))
+            if role is not None:
+                try_post_agent_run_event(db, role=role, run=run)
         if expired_ids:
             db.commit()
             logger.warning("agent_expire_stuck_runs marked %d run(s) failed: %s", len(expired_ids), expired_ids)
@@ -1671,6 +1684,70 @@ def agent_expire_stuck_runs(self) -> dict:
     finally:
         db.close()
     return {"status": "ok", "expired_count": len(expired_ids), "agent_run_ids": expired_ids}
+
+
+# Event publication reconciliation. AgentRun remains the source of truth; this
+# sweep makes the direct same-transaction chat write eventually reliable if a
+# transient notification-only failure was contained by its savepoint. The
+# message source-key unique constraint makes retries and overlapping sweeps safe.
+@celery_app.task(
+    name="app.tasks.agent_tasks.agent_publish_terminal_run_events",
+    bind=True,
+    max_retries=0,
+)
+def agent_publish_terminal_run_events(self, limit: int = 200) -> dict:
+    """Backfill missing failure/budget event cards from terminal AgentRuns."""
+
+    from datetime import datetime, timedelta, timezone
+
+    from ..agent_chat.events import try_post_agent_run_event
+    from ..models.agent_run import AgentRun
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+
+    bounded_limit = max(1, min(int(limit or 200), 500))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    db = SessionLocal()
+    attempted = 0
+    emitted = 0
+    try:
+        runs = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.status.in_(("failed", "aborted", "budget_paused")),
+                AgentRun.finished_at.isnot(None),
+                AgentRun.finished_at >= cutoff,
+            )
+            .order_by(AgentRun.finished_at.desc(), AgentRun.id.desc())
+            .limit(bounded_limit)
+            .all()
+        )
+        role_by_id = {
+            int(role.id): role
+            for role in (
+                db.query(Role)
+                .filter(
+                    Role.id.in_({int(run.role_id) for run in runs} or {0}),
+                    Role.deleted_at.is_(None),
+                )
+                .all()
+            )
+        }
+        for run in runs:
+            role = role_by_id.get(int(run.role_id))
+            if role is None:
+                continue
+            attempted += 1
+            if try_post_agent_run_event(db, role=role, run=run) is not None:
+                emitted += 1
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("agent_publish_terminal_run_events failed")
+        return {"status": "error", "attempted": attempted, "emitted": emitted}
+    finally:
+        db.close()
+    return {"status": "ok", "attempted": attempted, "emitted": emitted}
 
 
 # Stale pending decisions. BUG-2: ``expired`` is a valid AgentDecision status

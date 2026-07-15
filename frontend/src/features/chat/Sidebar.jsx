@@ -1,6 +1,6 @@
 import React from 'react';
 import { MessageSquare, Pause, Plus, Sparkles, Trash2 } from 'lucide-react';
-import { AgentLoop } from '../../shared/motion';
+import { AgentLoop, MotionAttentionBadge } from '../../shared/motion';
 
 import { formatAgentPauseStatus } from '../../shared/agentPauseCopy';
 import { Button } from '../../shared/ui/TaaliPrimitives';
@@ -69,7 +69,12 @@ const ModeToggle = ({ mode, onModeChange, agentAttention = 0 }) => (
       onClick={() => onModeChange('agents')}
     >
       <Sparkles size={13} /> Agents
-      {agentAttention > 0 ? <span className="cp-modeswitch-badge">{fmtCount(agentAttention)}</span> : null}
+      <MotionAttentionBadge
+        value={agentAttention}
+        format={fmtCount}
+        className="cp-modeswitch-badge"
+        aria-label={`${agentAttention} agent update${agentAttention === 1 ? '' : 's'} awaiting you`}
+      />
     </button>
   </div>
 );
@@ -154,6 +159,49 @@ const AGENT_GROUP_LABELS = {
   active: 'Active roles',
 };
 
+const agentPresentation = (agent) => {
+  const enabled = Boolean(agent.agent_enabled);
+  const hasEffectiveState = Object.prototype.hasOwnProperty.call(agent, 'agent_effective_paused');
+  const workspaceHeld = enabled && Boolean(
+    agent.workspace_paused || agent.agent_pause_scope === 'workspace',
+  );
+  const rolePaused = Object.prototype.hasOwnProperty.call(agent, 'role_paused')
+    ? Boolean(agent.role_paused)
+    : Boolean(agent.agent_pause_scope === 'role' || (!workspaceHeld && agent.agent_paused));
+  const effectivePaused = enabled && (hasEffectiveState
+    ? Boolean(agent.agent_effective_paused)
+    : Boolean(agent.agent_paused || workspaceHeld || rolePaused));
+  const state = workspaceHeld && effectivePaused
+    ? 'held'
+    : effectivePaused
+      ? 'paused'
+      : enabled
+        ? 'on'
+        : 'off';
+
+  if (state === 'held') {
+    const actor = agent.workspace_paused_by;
+    const heldCopy = actor?.name
+      ? `Held · Workspace paused by ${actor.name}${actor.is_current_user ? ' (you)' : ''}`
+      : 'Held by workspace pause';
+    return {
+      state,
+      preview: rolePaused
+        ? `${heldCopy} · Role stays paused after resume`
+        : heldCopy,
+    };
+  }
+  if (state === 'paused') {
+    return {
+      state,
+      preview: formatAgentPauseStatus(
+        agent.role_paused_reason || agent.agent_paused_reason,
+      ),
+    };
+  }
+  return { state, preview: null };
+};
+
 const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
   const sections = AGENT_GROUP_ORDER
     .map((key) => ({ key, label: AGENT_GROUP_LABELS[key], rows: (agents || []).filter((a) => (a.group || 'active') === key) }))
@@ -166,10 +214,10 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
   const renderAgent = (a) => {
     const questions = (a.unread_messages || 0) + (a.open_questions || 0);
     const decisions = a.pending_decisions || 0;
-    const status = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
-    const preview = a.agent_paused
-      ? formatAgentPauseStatus(a.agent_paused_reason)
-      : a.last_message_preview
+    const presentation = agentPresentation(a);
+    const status = presentation.state === 'held' ? 'paused' : presentation.state;
+    const preview = presentation.preview
+      || a.last_message_preview
         || (decisions > 0
           ? `${fmtCount(decisions)} decision${decisions === 1 ? '' : 's'} waiting`
           : a.agent_enabled
@@ -179,9 +227,11 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
       <button
         key={a.role_id}
         type="button"
-        className={`cp-agent cp-agent-${status} ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
+        className={`cp-agent cp-agent-${status} ${presentation.state === 'held' ? 'is-workspace-held' : ''} ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
+        data-agent-state={presentation.state}
+        aria-pressed={a.role_id === activeRoleId}
         onClick={() => onSelectAgent(a.role_id)}
-        title={a.role_name}
+        title={`${a.role_name} — ${preview}`}
       >
         <span className="cp-agent-top">
           {status === 'on' ? (
@@ -199,20 +249,21 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
         </span>
         <span className="cp-agent-sub">
           <span className="cp-agent-preview">{preview}</span>
-          {(questions > 0 || decisions > 0) && (
-            <span className="cp-agent-badges">
-              {questions > 0 && (
-                <span className="cp-agent-badge-q" title={`${questions} awaiting your reply`}>
-                  <MessageSquare size={10} /> {fmtCount(questions)}
-                </span>
-              )}
+          <span className="cp-agent-badges">
+              <MotionAttentionBadge
+                value={questions}
+                format={fmtCount}
+                prefix={<MessageSquare size={10} aria-hidden="true" />}
+                className="cp-agent-badge-q"
+                title={`${questions} awaiting your reply`}
+                aria-label={`${questions} agent update${questions === 1 ? '' : 's'} awaiting your reply`}
+              />
               {decisions > 0 && (
                 <span className="cp-agent-badge-d" title={`${decisions} pending decisions`}>
                   {fmtCount(decisions)} pending
                 </span>
               )}
-            </span>
-          )}
+          </span>
           {a.budget_cap_cents > 0 && (
             <span className="cp-agent-budget" title="Budget this month">
               <span

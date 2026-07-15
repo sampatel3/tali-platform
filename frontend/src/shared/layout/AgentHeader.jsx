@@ -131,7 +131,12 @@ const manualPauseAttribution = (pausedBy, pausedAt, controlScope = 'role') => {
 // input + Turn-on button, laid out horizontally. The parent owns asynchronous
 // activation; this activator remains mounted until authoritative role state
 // confirms that the agent is ON (or durable activation is shown as pending).
-const AgentOffActivator = ({ onActivate, currentBudgetCents }) => {
+const AgentOffActivator = ({
+  onActivate,
+  currentBudgetCents,
+  disabled = false,
+  disabledReason = null,
+}) => {
   // Seed from the role's already-saved cap so activating never silently
   // overwrites it with the $50 default; fall back to the default only when
   // the role has no cap yet.
@@ -147,6 +152,7 @@ const AgentOffActivator = ({ onActivate, currentBudgetCents }) => {
   }, [seededDollars, touched]);
 
   const submit = () => {
+    if (disabled) return;
     const dollars = Number(budget);
     if (!Number.isFinite(dollars) || dollars <= 0) {
       setErrorMsg('Enter a monthly cap greater than $0.');
@@ -157,7 +163,7 @@ const AgentOffActivator = ({ onActivate, currentBudgetCents }) => {
   };
 
   return (
-    <span className="ab-activate">
+    <span className="ab-activate" title={disabledReason || undefined}>
       <span className="ab-capbox" title={errorMsg || undefined}>
         <span className="pfx">$</span>
         <input
@@ -168,10 +174,18 @@ const AgentOffActivator = ({ onActivate, currentBudgetCents }) => {
           onChange={(event) => { setTouched(true); setBudget(event.target.value); }}
           aria-label="Role monthly budget in USD"
           inputMode="numeric"
+          disabled={disabled}
         />
         <span className="sfx">/mo</span>
       </span>
-      <Button variant="primary" size="sm" className="ab-btn primary" onClick={submit}>
+      <Button
+        variant="primary"
+        size="sm"
+        className="ab-btn primary"
+        onClick={submit}
+        disabled={disabled}
+        aria-description={disabledReason || undefined}
+      >
         <Play size={11} strokeWidth={2} fill="currentColor" />
         Turn on
       </Button>
@@ -194,6 +208,7 @@ const AgentStrip = ({
   resumeLabel = null,
   pauseAllCount = null,
   resumeAllCount = null,
+  controlsDisabledReason = null,
 }) => {
   const reduced = useReducedMotionSync();
   const hasMounted = useRef(false);
@@ -225,6 +240,7 @@ const AgentStrip = ({
     workspaceControlVersion = null,
   } = agent || {};
   const controlsBusy = Boolean(controlAction);
+  const controlsRestricted = Boolean(controlsDisabledReason);
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
   const isWorkspaceControl = controlScope === 'workspace';
   const workspaceControlReady = !isWorkspaceControl
@@ -428,24 +444,31 @@ const AgentStrip = ({
       ) : null}
 
       {status === 'off' && onActivate ? (
-        <span className="ab-actions">
+        <span className="ab-actions" title={controlsDisabledReason || undefined}>
           {onSettings ? (
             <Button
               variant="secondary"
               size="sm"
               iconOnly
               className="ab-btn ic"
-              title="Review agent settings before Turn on"
+              title={controlsRestricted
+                ? `View agent settings (read-only). ${controlsDisabledReason}`
+                : 'Review agent settings before Turn on'}
               aria-label="Configure agent"
               onClick={onSettings}
             >
               <SettingsIcon size={13} strokeWidth={1.7} />
             </Button>
           ) : null}
-          <AgentOffActivator onActivate={onActivate} currentBudgetCents={budgetCents} />
+          <AgentOffActivator
+            onActivate={onActivate}
+            currentBudgetCents={budgetCents}
+            disabled={controlsRestricted}
+            disabledReason={controlsDisabledReason}
+          />
         </span>
       ) : (
-        <span className="ab-actions">
+        <span className="ab-actions" title={controlsDisabledReason || undefined}>
           {hasBulkCounts ? (
             <>
               {Number(pauseAllCount) > 0 ? (
@@ -454,15 +477,16 @@ const AgentStrip = ({
                   size="sm"
                   className="ab-btn"
                   onClick={onPause}
-                  disabled={!onPause || controlsBusy}
+                  disabled={!onPause || controlsBusy || controlsRestricted}
                   aria-busy={controlAction === 'pause'}
+                  aria-description={controlsDisabledReason || undefined}
                 >
                   {controlAction === 'pause' ? <Spinner size={11} /> : <Pause size={11} strokeWidth={2} />}
                   {controlAction === 'pause' ? 'Pausing…' : resolvedPauseLabel}
                 </Button>
               ) : null}
               {Number(resumeAllCount) > 0 ? (
-                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy} aria-busy={controlAction === 'resume'}>
+                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy || controlsRestricted} aria-busy={controlAction === 'resume'} aria-description={controlsDisabledReason || undefined}>
                   {controlAction === 'resume' ? <Spinner size={11} /> : <Play size={11} strokeWidth={2} fill="currentColor" />}
                   {controlAction === 'resume' ? 'Resuming…' : resolvedResumeLabel}
                 </Button>
@@ -476,8 +500,9 @@ const AgentStrip = ({
                   size="sm"
                   className="ab-btn"
                   onClick={onResume}
-                  disabled={!onResume || controlsBusy}
-                  title="Clear this role's own pause. It will run after the workspace agent is resumed."
+                  disabled={!onResume || controlsBusy || controlsRestricted}
+                  aria-description={controlsDisabledReason || undefined}
+                  title={controlsDisabledReason || "Clear this role's own pause. It will run after the workspace agent is resumed."}
                 >
                   <Play size={11} strokeWidth={2} />
                   Resume role later
@@ -488,8 +513,9 @@ const AgentStrip = ({
                   size="sm"
                   className="ab-btn"
                   onClick={onPause}
-                  disabled={!onPause || controlsBusy}
-                  title="Keep this role paused after the workspace agent is resumed."
+                  disabled={!onPause || controlsBusy || controlsRestricted}
+                  aria-description={controlsDisabledReason || undefined}
+                  title={controlsDisabledReason || 'Keep this role paused after the workspace agent is resumed.'}
                 >
                   <Pause size={11} strokeWidth={2} />
                   Pause this role
@@ -501,9 +527,11 @@ const AgentStrip = ({
                   size="sm"
                   iconOnly
                   className="ab-btn ic"
-                  title="Turn off agent for this role"
+                  title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
+                  disabled={controlsRestricted}
+                  aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />
                 </Button>
@@ -516,16 +544,16 @@ const AgentStrip = ({
                 size="sm"
                 className="ab-btn"
                 onClick={onPause}
-                disabled={!onPause || controlsBusy || !workspaceControlReady}
+                disabled={!onPause || controlsBusy || !workspaceControlReady || controlsRestricted}
                 aria-busy={controlAction === 'pause'}
-                aria-description={isWorkspaceControl && !onPause
+                aria-description={controlsDisabledReason || (isWorkspaceControl && !onPause
                   ? 'Workspace owners can pause or resume all agents.'
-                  : undefined}
-                title={isWorkspaceControl && !workspaceControlReady
+                  : undefined)}
+                title={controlsDisabledReason || (isWorkspaceControl && !workspaceControlReady
                   ? 'Refreshing workspace controls…'
                   : (isWorkspaceControl && !onPause
                     ? 'Workspace owners can pause or resume all agents.'
-                    : undefined)}
+                    : undefined))}
               >
                 <Pause size={11} strokeWidth={2} />
                 {resolvedPauseLabel}
@@ -536,9 +564,11 @@ const AgentStrip = ({
                   size="sm"
                   iconOnly
                   className="ab-btn ic"
-                  title="Turn off agent for this role"
+                  title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
+                  disabled={controlsRestricted}
+                  aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />
                 </Button>
@@ -551,16 +581,16 @@ const AgentStrip = ({
                 size="sm"
                 className="ab-btn primary"
                 onClick={onResume}
-                disabled={!onResume || controlsBusy || !workspaceControlReady}
+                disabled={!onResume || controlsBusy || !workspaceControlReady || controlsRestricted}
                 aria-busy={controlAction === 'resume'}
-                aria-description={isWorkspaceControl && !onResume
+                aria-description={controlsDisabledReason || (isWorkspaceControl && !onResume
                   ? 'Workspace owners can pause or resume all agents.'
-                  : undefined}
-                title={isWorkspaceControl && !workspaceControlReady
+                  : undefined)}
+                title={controlsDisabledReason || (isWorkspaceControl && !workspaceControlReady
                   ? 'Refreshing workspace controls…'
                   : (isWorkspaceControl && !onResume
                     ? 'Workspace owners can pause or resume all agents.'
-                    : undefined)}
+                    : undefined))}
               >
                 <Play size={11} strokeWidth={2} fill="currentColor" />
                 {resolvedResumeLabel}
@@ -571,9 +601,11 @@ const AgentStrip = ({
                   size="sm"
                   iconOnly
                   className="ab-btn ic"
-                  title="Turn off agent for this role"
+                  title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
+                  disabled={controlsRestricted}
+                  aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />
                 </Button>
@@ -586,7 +618,9 @@ const AgentStrip = ({
               size="sm"
               iconOnly
               className="ab-btn ic"
-              title="Configure agent"
+              title={controlsRestricted
+                ? `View agent settings (read-only). ${controlsDisabledReason}`
+                : 'Configure agent'}
               aria-label="Configure agent"
               onClick={onSettings}
             >
@@ -626,6 +660,7 @@ export const AgentHeader = ({
   resumeLabel,
   pauseAllCount = null,
   resumeAllCount = null,
+  controlsDisabledReason = null,
   className = '',
   variant = 'hero',
 }) => {
@@ -678,6 +713,7 @@ export const AgentHeader = ({
                   resumeLabel={resumeLabel}
                   pauseAllCount={pauseAllCount}
                   resumeAllCount={resumeAllCount}
+                  controlsDisabledReason={controlsDisabledReason}
                 />
               ) : null}
             </div>

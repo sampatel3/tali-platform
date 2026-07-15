@@ -78,12 +78,13 @@
    name (home-preview `.aprev{margin-left:33px}`). */
 .ac-agent-sub { display: flex; flex-direction: column; gap: 0; padding-left: 33px; min-width: 0; }
 .ac-agent-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; }
+.ac-agent-badges:empty { display: none; }
 .ac-agent:hover { background: var(--bg-3); }
 /* Selected row (home-preview `.aitem.sel`): purple-tint fill + a 3px inset
    purple bar on the left. The ONLY purple treatment on a row — ON-ness is shown
    by the status glyph, not a row tint. */
 .ac-agent.is-active,
-.ac-agent.is-selected { background: var(--purple-tint); box-shadow: inset 3px 0 0 var(--purple); }
+.ac-agent.is-selected { background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); box-shadow: inset 3px 0 0 var(--purple); }
 .ac-agent.ac-off .ac-agent-role { color: var(--mute); }
 .ac-check { width: 16px; height: 16px; flex-shrink: 0; border-radius: 5px; border: 1.5px solid var(--line-2); display: inline-flex; align-items: center; justify-content: center; color: #fff; }
 .ac-check.on { background: var(--purple); border-color: transparent; }
@@ -93,7 +94,7 @@
    into the ink. */
 .ac-stat { width: 24px; height: 24px; border-radius: 8px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
 .ac-stat-on { background: var(--grad-agent-on-animated); background-size: 300% 300%; color: #fff; box-shadow: 0 0 0 3px var(--purple-soft); }
-.ac-stat-paused { background: var(--amber-soft); color: var(--amber); }
+.ac-stat-paused { background: var(--taali-warning-soft); color: var(--amber); }
 .ac-stat-off { background: var(--bg-3); color: var(--mute); }
 .ac-stat-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .ac-agent-role { flex: 1; min-width: 0; font-size: var(--fs-subtitle); font-weight: 500; color: var(--ink); line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -132,8 +133,10 @@
 /* White conversation surface (home-preview `.cbody` on the white `.chat`
    card), with the preview's tighter 11px inter-message rhythm. */
 .ac-stream { flex: 1; overflow-y: auto; min-height: 0; padding: 14px; display: flex; flex-direction: column; gap: 11px; background: var(--bg-2); }
+.ac-timeline { display: flex; flex-direction: column; gap: 11px; width: 100%; min-width: 0; }
 /* Wraps the shared <ChatComposer> at the bottom of the dock. */
-.ac-dock-composer { padding: 12px 16px 16px; flex-shrink: 0; background: var(--bg-2); }
+.ac-dock-composer { position: relative; padding: 12px 16px 16px; flex-shrink: 0; background: var(--bg-2); }
+.ac-new-update { top: -30px; }
 
 /* Reopen control — a small, clean floating icon button on the right edge.
    Brings the chat back without reclaiming the role scope. */
@@ -198,7 +201,7 @@
    line + an Apply button — the steering surface the recruiter acts on when the
    agent proposes a cut-off change. Distinct from the heavier applied/constraint
    .ac-card chrome below. */
-.ac-impact { border: 1px solid var(--purple-soft); background: var(--purple-tint); border-radius: 12px; padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
+.ac-impact { border: 1px solid var(--purple-soft); background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); border-radius: 12px; padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
 .ac-impact-line { font-size: 0.8125rem; line-height: 1.5; color: var(--ink-2); display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
 .ac-impact-label { color: var(--ink-2); }
 .ac-impact-old { font-family: var(--font-display); font-weight: 600; color: var(--mute); text-decoration: line-through; text-decoration-color: var(--line-2); }
@@ -219,7 +222,7 @@
 .ac-card-head svg { color: var(--purple); flex-shrink: 0; }
 .ac-card-live { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: 0.65625rem; color: var(--purple-2); }
 .ac-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--purple); }
-.ac-card-constraint { background: var(--purple-tint); border-color: var(--purple-soft); }
+.ac-card-constraint { background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); border-color: var(--purple-soft); }
 .ac-rescreen-estimate { font-size: 0.71875rem; color: var(--ink-2); background: var(--bg-3); border: 1px dashed var(--line-2); border-radius: 8px; padding: 6px 9px; line-height: 1.4; }
 .ac-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .ac-constraint-chip { font-size: 0.75rem; font-weight: 500; color: var(--purple-2); background: var(--bg-2); border: 1px solid var(--purple-soft); padding: 5px 10px; border-radius: 999px; }
@@ -245,8 +248,46 @@
 .ac-card-applied .ac-card-head svg { color: var(--purple); }
 .ac-card-actions { display: flex; gap: 7px; flex-wrap: wrap; }
 
+/* ---- Proactive helper prompt ------------------------------------------ */
+/* Suggestions are durable agent messages, but their quick replies only fill
+   the composer. They deliberately share the softer card vocabulary instead of
+   looking like an already-running operation. */
+.ac-card-helper { border-color: var(--purple-soft); background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); }
+.ac-helper-priority { margin-left: auto; font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--purple-2); background: var(--bg-2); border: 1px solid var(--purple-soft); border-radius: 999px; padding: 2px 7px; }
+.ac-helper-summary, .ac-helper-question { margin: 0; font-size: 0.75rem; line-height: 1.5; color: var(--ink-2); }
+.ac-helper-question { color: var(--ink); font-weight: 500; }
+
+/* ---- Durable agent events --------------------------------------------- */
+/* Event cards are transcript history, not ephemeral toasts: severity is
+   written as text as well as colour, and the card deliberately has no live
+   region that would re-announce old failures whenever a thread is opened. */
+.ac-card-event { border-left: 3px solid var(--purple); box-shadow: none; }
+.ac-card-event[data-severity="warning"] { border-left-color: var(--amber); background: var(--taali-warning-soft); }
+.ac-card-event[data-severity="error"] { border-left-color: var(--red); background: var(--taali-danger-soft); }
+.ac-event-head { min-width: 0; }
+.ac-card-event[data-severity="warning"] .ac-event-head svg,
+.ac-card-event[data-severity="warning"] .ac-event-severity { color: var(--amber-ink); }
+.ac-card-event[data-severity="error"] .ac-event-head svg,
+.ac-card-event[data-severity="error"] .ac-event-severity { color: var(--red-deep, var(--red)); }
+.ac-event-severity { color: var(--purple-2); }
+.ac-event-type { margin-left: auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mute); }
+.ac-event-title { margin: 0; font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.35; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.ac-event-summary { margin: 0; font-size: 0.75rem; line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
+.ac-event-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 12px; font-family: var(--font-mono); font-size: 0.625rem; color: var(--mute); }
+.ac-event-source { display: inline-flex; align-items: center; gap: 3px; color: var(--purple-2); overflow-wrap: anywhere; }
+a.ac-event-source { text-decoration: underline; text-underline-offset: 2px; }
+a.ac-event-source:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; border-radius: 3px; }
+.ac-event-details { border-top: 1px solid color-mix(in oklab, var(--line) 80%, transparent); padding-top: 7px; }
+.ac-event-details summary { width: fit-content; cursor: pointer; font-size: 0.6875rem; font-weight: 600; color: var(--ink-2); }
+.ac-event-details summary:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; border-radius: 3px; }
+.ac-event-details dl { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 0; }
+.ac-event-details dl > div { display: grid; grid-template-columns: minmax(80px, 0.36fr) minmax(0, 1fr); gap: 9px; }
+.ac-event-details dt { font-size: 0.6875rem; font-weight: 600; color: var(--mute); overflow-wrap: anywhere; }
+.ac-event-details dd { margin: 0; font-size: 0.6875rem; color: var(--ink-2); overflow-wrap: anywhere; }
+.ac-card-event .ac-btn:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+
 /* ---- Draft-task review card -------------------------------------------- */
-.ac-card-draft { background: var(--purple-tint); border-color: var(--purple-soft); }
+.ac-card-draft { background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); border-color: var(--purple-soft); }
 .ac-draft { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 11px; }
 .ac-draft + .ac-draft { margin-top: 2px; }
 .ac-draft-title { font-size: 0.8125rem; font-weight: 600; color: var(--ink); line-height: 1.3; }
@@ -269,16 +310,52 @@
 .ac-reject-note:focus { border-color: var(--purple-lav); }
 .ac-reject-note::placeholder { color: var(--mute); }
 
-/* ---- Needs-input cards (home-preview `.impact` family) ----------------- */
-/* The agent's clarifying question — flat purple-tint card with the inset 3px
-   purple bar, matching the impact card. */
-.ac-needs { border: 1px solid var(--purple-soft); border-left: 3px solid var(--purple); border-radius: 12px; background: var(--purple-tint); padding: 13px 14px; display: flex; flex-direction: column; gap: 9px; }
-.ac-needs-head { display: flex; align-items: center; gap: 7px; font-size: 0.71875rem; font-weight: 600; color: var(--purple-2); }
-.ac-needs-prompt { font-size: 0.78125rem; line-height: 1.5; margin: 0; color: var(--ink); }
-.ac-needs-options { display: flex; gap: 7px; flex-wrap: wrap; }
-/* Answered = a positive state → purple, never green. Dismissed = muted grey
-   (set inline in the JSX). */
-.ac-needs-answered { font-size: 0.71875rem; color: var(--purple-2); font-weight: 500; display: flex; align-items: center; gap: 5px; }
+/* ---- Needs-input cards -------------------------------------------------- */
+/* A chat-native request, not an alert. The neutral surface and semantic
+   info tint both derive from scheme-aware tokens, including in dark mode. */
+.ac-needs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-sm);
+}
+.ac-needs[data-status="answered"],
+.ac-needs[data-status="dismissed"] { background: color-mix(in oklab, var(--bg-2) 94%, var(--bg-3)); }
+.ac-needs-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.ac-needs-icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--purple) 16%, var(--line));
+  border-radius: 9px;
+  color: var(--taali-button-accent-fg, var(--purple));
+  background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 10%, var(--bg-2)));
+}
+.ac-needs-heading-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.ac-needs-eyebrow { color: var(--mute); font-size: 0.625rem; font-weight: 600; letter-spacing: 0.06em; line-height: 1.25; text-transform: uppercase; }
+.ac-needs-title { margin: 0; color: var(--ink); font-size: 0.8125rem; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.ac-needs-dismiss { flex: none; margin-left: auto; color: var(--mute); }
+.ac-needs-prompt { margin: 0; color: var(--ink-2); font-size: 0.8125rem; line-height: 1.55; overflow-wrap: anywhere; }
+.ac-needs-rationale { margin: -2px 0 0; color: var(--ink-soft); font-size: 0.71875rem; line-height: 1.5; overflow-wrap: anywhere; }
+.ac-needs-options { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 2px; }
+.ac-needs-options > .taali-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.ac-needs-answer { display: flex; flex: 1 1 100%; gap: 7px; min-width: 0; }
+.ac-needs-input { width: auto; min-width: 0; flex: 1; }
+.ac-needs-status { display: flex; align-items: center; gap: 5px; color: var(--taali-button-accent-fg, var(--purple)); font-size: 0.71875rem; font-weight: 600; }
+.ac-needs-status-muted { color: var(--ink-soft); }
+
+@media (max-width: 520px) {
+  .ac-needs { padding: 12px; }
+  .ac-needs-answer { flex-wrap: wrap; }
+  .ac-needs-answer .taali-btn { flex: 1 0 100%; }
+}
 
 /* ---- Buttons ----------------------------------------------------------- */
 .ac-btn { display: inline-flex; align-items: center; gap: 6px; justify-content: center; padding: 7px 12px; border-radius: 9px; font-size: 0.75rem; font-weight: 500; cursor: pointer; border: 1px solid transparent; font-family: var(--font-sans); transition: all 0.13s ease; white-space: nowrap; }

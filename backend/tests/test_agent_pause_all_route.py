@@ -22,6 +22,7 @@ from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
 
@@ -173,6 +174,35 @@ def _user_id(email: str) -> int:
     sess = TestingSessionLocal()
     try:
         return int(sess.query(_U.id).filter(_U.email == email).scalar())
+    finally:
+        sess.close()
+
+
+def _set_member_role_access(
+    email: str,
+    *,
+    organization_id: int,
+    role_id: int,
+    team_role: str | None,
+) -> None:
+    from app.models.user import User as _U
+    from tests.conftest import TestingSessionLocal
+
+    sess = TestingSessionLocal()
+    try:
+        user = sess.query(_U).filter(_U.email == email).one()
+        user.organization_id = organization_id
+        user.role = "member"
+        if team_role is not None:
+            sess.add(
+                JobHiringTeam(
+                    organization_id=organization_id,
+                    role_id=role_id,
+                    user_id=user.id,
+                    team_role=team_role,
+                )
+            )
+        sess.commit()
     finally:
         sess.close()
 
@@ -671,6 +701,61 @@ def test_pause_one_role_keeps_pending_decisions(client):
     assert reason == "paused by recruiter"
     assert enabled is True  # still enabled — that's what keeps the queue alive
     assert _decision_status(decision_id) == "pending"
+
+
+def test_agent_status_exposes_canonical_viewer_control_capability(client):
+    from tests.conftest import auth_headers
+
+    owner_headers, owner_email = auth_headers(
+        client,
+        full_name="Capability Owner",
+        organization_name="Capability Source Org",
+    )
+    seeded = _seed_org_with_agent_roles(
+        "Agent Status Capability Org", role_names=["A"]
+    )
+    _attach_user_to_org(owner_email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    owner_status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=owner_headers
+    )
+    assert owner_status.status_code == 200, owner_status.text
+    assert owner_status.json()["can_control_agent"] is True
+
+    viewer_headers, viewer_email = auth_headers(
+        client,
+        full_name="Role Viewer",
+        organization_name="Capability Viewer Org",
+    )
+    _set_member_role_access(
+        viewer_email,
+        organization_id=seeded["org_id"],
+        role_id=role_id,
+        team_role=None,
+    )
+    viewer_status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=viewer_headers
+    )
+    assert viewer_status.status_code == 200, viewer_status.text
+    assert viewer_status.json()["can_control_agent"] is False
+
+    recruiter_headers, recruiter_email = auth_headers(
+        client,
+        full_name="Assigned Recruiter",
+        organization_name="Capability Recruiter Org",
+    )
+    _set_member_role_access(
+        recruiter_email,
+        organization_id=seeded["org_id"],
+        role_id=role_id,
+        team_role="recruiter",
+    )
+    recruiter_status = client.get(
+        f"/api/v1/roles/{role_id}/agent/status", headers=recruiter_headers
+    )
+    assert recruiter_status.status_code == 200, recruiter_status.text
+    assert recruiter_status.json()["can_control_agent"] is True
 
 
 def test_agent_status_attributes_current_human_pause_not_latest_editor(client):

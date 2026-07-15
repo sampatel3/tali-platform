@@ -6,6 +6,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -46,15 +47,29 @@ def _is_explicit_confirmation(text: str | None) -> bool:
 
 
 def attach_confirmation(
-    result: dict[str, Any], *, operation: str, payload: dict[str, Any]
+    result: dict[str, Any],
+    *,
+    operation: str,
+    payload: dict[str, Any],
+    ttl_seconds: int = 15 * 60,
 ) -> dict[str, Any]:
-    """Attach an opaque preview receipt that the engine persists in tool history."""
+    """Attach an opaque, expiring preview receipt to persisted tool history.
+
+    Callers put the authorization boundary (organization, conversation and
+    recruiter ids) in ``payload``.  ``require_later_turn_confirmation`` checks
+    those bindings before accepting a later yes.  Keeping the receipt opaque
+    means a model-supplied ``confirm=true`` can never manufacture approval.
+    """
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=max(1, int(ttl_seconds)))
     out = dict(result)
     out["needs_confirmation"] = True
     out["_confirmation"] = {
         "token": uuid.uuid4().hex,
         "operation": operation,
         "payload": payload,
+        "issued_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
     }
     return out
 
@@ -99,8 +114,9 @@ def require_later_turn_confirmation(
     conversation: AgentConversation,
     operation: str,
     token: str | None = None,
+    user: Any | None = None,
 ) -> ConfirmationCheck:
-    """Validate a persisted preview followed by a newer visible user message."""
+    """Validate a bound preview followed by an explicit later recruiter turn."""
     rows = (
         db.query(AgentConversationMessage)
         .filter(
@@ -124,33 +140,69 @@ def require_later_turn_confirmation(
     if preview_row is None or receipt is None:
         return ConfirmationCheck(False, "No unused matching server preview exists.", {})
 
-    later_user = (
-        db.query(AgentConversationMessage)
-        .filter(
-            AgentConversationMessage.conversation_id == int(conversation.id),
-            AgentConversationMessage.kind == MESSAGE_KIND_CHAT,
-            AgentConversationMessage.author_role == AUTHOR_ROLE_USER,
-            AgentConversationMessage.id > int(preview_row.id),
+    payload = dict(receipt.get("payload") or {})
+    try:
+        expires_at_raw = str(receipt.get("expires_at") or "").strip()
+        expires_at = (
+            datetime.fromisoformat(expires_at_raw.replace("Z", "+00:00"))
+            if expires_at_raw
+            else None
         )
-        .order_by(AgentConversationMessage.id.desc())
-        .first()
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            return ConfirmationCheck(False, "The server preview expired; create a fresh preview.", payload)
+    except (TypeError, ValueError):
+        return ConfirmationCheck(False, "The server preview is invalid; create a fresh preview.", payload)
+
+    bound_conversation_id = payload.get("conversation_id")
+    if (
+        bound_conversation_id is not None
+        and int(bound_conversation_id) != int(conversation.id)
+    ):
+        return ConfirmationCheck(False, "The preview belongs to a different conversation.", payload)
+    bound_organization_id = payload.get("organization_id")
+    if (
+        bound_organization_id is not None
+        and int(bound_organization_id) != int(conversation.organization_id)
+    ):
+        return ConfirmationCheck(False, "The preview belongs to a different organization.", payload)
+
+    caller_user_id = getattr(user, "id", None)
+    bound_user_id = payload.get("requested_by_user_id")
+    if (
+        bound_user_id is not None
+        and (caller_user_id is None or int(bound_user_id) != int(caller_user_id))
+    ):
+        return ConfirmationCheck(False, "The preview belongs to a different recruiter.", payload)
+
+    expected_user_id = int(bound_user_id or caller_user_id or 0) or None
+
+    later_query = db.query(AgentConversationMessage).filter(
+        AgentConversationMessage.conversation_id == int(conversation.id),
+        AgentConversationMessage.kind == MESSAGE_KIND_CHAT,
+        AgentConversationMessage.author_role == AUTHOR_ROLE_USER,
+        AgentConversationMessage.id > int(preview_row.id),
     )
+    if expected_user_id is not None:
+        later_query = later_query.filter(
+            AgentConversationMessage.author_user_id == expected_user_id
+        )
+    later_user = later_query.order_by(AgentConversationMessage.id.desc()).first()
     if later_user is None:
         return ConfirmationCheck(
             False,
             "The preview must be shown first and confirmed by the recruiter in a later message.",
-            dict(receipt.get("payload") or {}),
+            payload,
         )
     if not _is_explicit_confirmation(later_user.text):
         return ConfirmationCheck(
             False,
             "The latest recruiter message is not an explicit confirmation.",
-            dict(receipt.get("payload") or {}),
+            payload,
         )
     return ConfirmationCheck(
         True,
         "confirmed",
-        dict(receipt.get("payload") or {}),
+        payload,
         str(receipt.get("token") or "") or None,
     )
 

@@ -5,10 +5,10 @@ the bearer JWT off the inbound request, opens a sync DB session, and
 delegates to a pure-function handler in ``handlers.py``. Org-scoping is
 enforced inside the handlers via ``user.organization_id``.
 
-Adding a tool: add the implementation to ``handlers.py``, then register
-a thin wrapper here that calls it. Both the MCP HTTP surface and the
-in-process copilot orchestrator (``app/copilot/...``) reuse the same
-handlers so behaviour stays consistent.
+Adding a tool: define its contract/exposures in ``catalog.py``, add the
+implementation to ``handlers.py`` or ``operations.py``, then register a thin
+authenticated wrapper here. Taali Chat and public MCP share the catalog and
+handler; this module only adapts the public transport.
 """
 
 # NOTE: do NOT add ``from __future__ import annotations`` — FastMCP's tool
@@ -16,7 +16,7 @@ handlers so behaviour stays consistent.
 # Context-injection convention, which only works when annotations are real
 # classes rather than stringified PEP 563 forward references.
 
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -28,24 +28,39 @@ from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.database import SessionLocal
 from ..services.role_criteria_service import render_role_intent_block
-from . import handlers
+from . import handlers, operations
 from .auth import MCPAuthError, authenticate_request, enforce_scope
-
-ScoreType = Literal["taali", "pre_screen", "rank", "cv_match"]
-SortBy = Literal["taali_score", "pre_screen_score", "rank_score", "cv_match_score", "created_at"]
-SortOrder = Literal["desc", "asc"]
+from .catalog import (
+    ApplicationOutcome,
+    AssessmentAttention,
+    AssessmentStatus,
+    ComparisonApplicationIds,
+    NonEmptyString,
+    NonNegativeInt,
+    PageLimit,
+    PipelineStage,
+    PositiveInt,
+    ScoreThreshold,
+    ScoreType,
+    SortBy,
+    SortOrder,
+    get_tool_spec,
+)
 
 
 _INSTRUCTIONS = """Read-only access to Tali's recruiting data for the
 authenticated user's organization.
 
-Pipeline stages: applied -> invited -> in_assessment -> review.
+Pipeline stages: sourced -> applied -> invited -> in_assessment -> review -> advanced.
 Application outcomes: open, rejected, withdrawn, hired.
 
 The default score (``taali``) is the merged primary score on a 0-100 scale.
 ``pre_screen`` is a cheap LLM gating score, ``rank`` is the pairwise rank
 score, ``cv_match`` is the CV/job-spec similarity score. Use ``taali`` for
-"score above X" questions unless the user specifies otherwise.
+"score above X" questions unless the user specifies otherwise. ``workable``
+filters accept 0-10 or 0-100 input; results include both the stored 0-10
+``workable_score`` and normalized ``workable_score_100``. ``assessment`` and
+``role_fit`` expose their corresponding cached 0-100 scores when present.
 
 For semantic queries ("AWS Glue engineer with 5+ years", "people who worked
 at YC companies"), use ``nl_search_candidates`` rather than
@@ -84,13 +99,21 @@ mcp_app = FastMCP(
 class _open_session:  # noqa: N801 — context-manager-as-class is intentional
     """Sync DB session + authenticated principal scoped to one MCP tool call.
 
-    ``require_scope`` gates API-key principals; JWT (session) principals are
+    ``require_scopes`` gate API-key principals; JWT (session) principals are
     exempt. Handlers read only ``.organization_id`` off the returned principal.
     """
 
-    def __init__(self, ctx: Context, require_scope: str) -> None:
+    def __init__(
+        self,
+        ctx: Context,
+        require_scopes: str | frozenset[str],
+    ) -> None:
         self._ctx = ctx
-        self._require_scope = require_scope
+        self._require_scopes = (
+            frozenset({require_scopes})
+            if isinstance(require_scopes, str)
+            else require_scopes
+        )
         self._db: Session | None = None
 
     def __enter__(self) -> tuple[Session, Any]:
@@ -100,7 +123,8 @@ class _open_session:  # noqa: N801 — context-manager-as-class is intentional
             if request is None:
                 raise MCPAuthError("MCP context has no HTTP request bound")
             principal = authenticate_request(request, self._db)
-            enforce_scope(principal, self._require_scope)
+            for scope in sorted(self._require_scopes):
+                enforce_scope(principal, scope)
         except Exception:
             self._db.close()
             self._db = None
@@ -130,205 +154,208 @@ def _strip_application_counts(role_payload: dict[str, Any]) -> dict[str, Any]:
     return role_payload
 
 
-@mcp_app.tool(
-    name="list_roles",
-    description=(
-        "List every active role for the authenticated user's organization. "
-        "Use this first to discover ``role_id`` values for other tools. "
-        "Set ``include_stage_counts=True`` to also return per-stage open "
-        "application counts (one extra query per role)."
-    ),
-)
+def _catalog_tool(name: str):
+    """Register a flat FastMCP adapter using the catalog's description."""
+
+    return mcp_app.tool(name=name, description=get_tool_spec(name).description)
+
+
+@_catalog_tool("list_roles")
 def list_roles(
     ctx: Context,
     include_stage_counts: bool = False,
 ) -> list[dict[str, Any]]:
-    with _open_session(ctx, SCOPE_ROLES_READ) as (db, user):
+    args = get_tool_spec("list_roles").validate(
+        {"include_stage_counts": include_stage_counts}
+    )
+    with _open_session(ctx, get_tool_spec("list_roles").required_scopes) as (db, user):
         can_read_applications = user.has_scope(SCOPE_APPLICATIONS_READ)
         roles = handlers.list_roles(
             db,
             user,
-            include_stage_counts=include_stage_counts and can_read_applications,
+            include_stage_counts=args["include_stage_counts"] and can_read_applications,
         )
         if not can_read_applications:
             roles = [_strip_application_counts(r) for r in roles]
         return roles
 
 
-@mcp_app.tool(
-    name="get_role",
-    description=(
-        "Fetch one role with its full job spec, criteria, and per-stage "
-        "open-application counts. ``role_id`` comes from ``list_roles``."
-    ),
-)
-def get_role(ctx: Context, role_id: int) -> dict[str, Any]:
-    with _open_session(ctx, SCOPE_ROLES_READ) as (db, user):
-        role = handlers.get_role(db, user, role_id=role_id)
+@_catalog_tool("get_role")
+def get_role(ctx: Context, role_id: PositiveInt) -> dict[str, Any]:
+    args = get_tool_spec("get_role").validate({"role_id": role_id})
+    with _open_session(ctx, get_tool_spec("get_role").required_scopes) as (db, user):
+        role = handlers.get_role(db, user, **args)
         if not user.has_scope(SCOPE_APPLICATIONS_READ):
             role = _strip_application_counts(role)
         return role
 
 
-@mcp_app.tool(
-    name="search_applications",
-    description=(
-        "Filter applications by score / stage / outcome / simple text. Default "
-        "scope returns only open applications sorted by ``taali_score`` desc. "
-        "For semantic queries (skills, years of experience, narrative fit), use "
-        "``nl_search_candidates`` instead — this tool's ``q`` only matches the "
-        "candidate's name/email/position."
-    ),
-)
+@_catalog_tool("search_applications")
 def search_applications(
     ctx: Context,
-    role_id: Optional[int] = None,
-    min_score: Optional[float] = None,
+    role_id: Optional[PositiveInt] = None,
+    min_score: Optional[ScoreThreshold] = None,
     score_type: ScoreType = "taali",
-    pipeline_stage: Optional[str] = None,
-    application_outcome: Optional[str] = "open",
+    pipeline_stage: Optional[PipelineStage] = None,
+    application_outcome: Optional[ApplicationOutcome] = "open",
     q: Optional[str] = None,
     sort_by: SortBy = "taali_score",
     sort_order: SortOrder = "desc",
-    limit: int = 25,
+    limit: PageLimit = 25,
+    offset: NonNegativeInt = 0,
 ) -> list[dict[str, Any]]:
-    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        return handlers.search_applications(
-            db,
-            user,
-            role_id=role_id,
-            min_score=min_score,
-            score_type=score_type,
-            pipeline_stage=pipeline_stage,
-            application_outcome=application_outcome,
-            q=q,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            limit=limit,
-        )
+    args = get_tool_spec("search_applications").validate(
+        {
+            "role_id": role_id,
+            "min_score": min_score,
+            "score_type": score_type,
+            "pipeline_stage": pipeline_stage,
+            "application_outcome": application_outcome,
+            "q": q,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("search_applications").required_scopes
+    ) as (db, user):
+        return handlers.search_applications(db, user, **args)
 
 
-@mcp_app.tool(
-    name="get_application",
-    description=(
-        "Fetch one application by id with all four scores, evidence, "
-        "auto-reject reason, and notes. Set ``include_cv_text=True`` to "
-        "embed the full CV in the response (otherwise a 500-char preview "
-        "is returned)."
-    ),
-)
+@_catalog_tool("get_application")
 def get_application(
     ctx: Context,
-    application_id: int,
+    application_id: PositiveInt,
     include_cv_text: bool = False,
 ) -> dict[str, Any]:
-    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        return handlers.get_application(
-            db, user, application_id=application_id, include_cv_text=include_cv_text
-        )
+    args = get_tool_spec("get_application").validate(
+        {"application_id": application_id, "include_cv_text": include_cv_text}
+    )
+    with _open_session(ctx, get_tool_spec("get_application").required_scopes) as (
+        db,
+        user,
+    ):
+        return handlers.get_application(db, user, **args)
 
 
-@mcp_app.tool(
-    name="get_candidate",
-    description=(
-        "Fetch a candidate's profile and the full list of applications they "
-        "have across every role in the org. Use this for cross-role "
-        "questions like 'has this person applied for anything else?'."
-    ),
-)
-def get_candidate(ctx: Context, candidate_id: int) -> dict[str, Any]:
-    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        return handlers.get_candidate(db, user, candidate_id=candidate_id)
+@_catalog_tool("get_candidate")
+def get_candidate(ctx: Context, candidate_id: PositiveInt) -> dict[str, Any]:
+    args = get_tool_spec("get_candidate").validate({"candidate_id": candidate_id})
+    with _open_session(ctx, get_tool_spec("get_candidate").required_scopes) as (
+        db,
+        user,
+    ):
+        return handlers.get_candidate(db, user, **args)
 
 
-@mcp_app.tool(
-    name="compare_applications",
-    description=(
-        "Side-by-side scorecard for 2-5 applications. Use this when the "
-        "user asks 'which candidate should advance' — this surfaces every "
-        "score on a common scale so the model can reason over them."
-    ),
-)
+@_catalog_tool("compare_applications")
 def compare_applications(
     ctx: Context,
-    application_ids: list[int],
+    application_ids: ComparisonApplicationIds,
 ) -> dict[str, Any]:
-    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        return handlers.compare_applications(db, user, application_ids=application_ids)
+    args = get_tool_spec("compare_applications").validate(
+        {"application_ids": application_ids}
+    )
+    with _open_session(
+        ctx, get_tool_spec("compare_applications").required_scopes
+    ) as (db, user):
+        return handlers.compare_applications(db, user, **args)
 
 
-@mcp_app.tool(
-    name="nl_search_candidates",
-    description=(
-        "Semantic / natural-language candidate search. Parses the query "
-        "(skills, locations, years of experience, soft criteria, graph "
-        "predicates), runs normalized Postgres + CV full-text filters, and "
-        "returns person-deduplicated application summaries. "
-        "This is the tool to use for questions like 'AWS Glue engineer "
-        "with 5+ years' or 'senior backend devs in EMEA who've worked at "
-        "fintechs'. Set ``role_id`` to scope to a specific role's pool. "
-        "``deep_verify=True`` opts into a bounded LLM evidence pass. Graph "
-        "retrieval is also opt-in via ``include_graph=True``."
-    ),
-)
+@_catalog_tool("nl_search_candidates")
 def nl_search_candidates(
     ctx: Context,
-    query: str,
-    role_id: Optional[int] = None,
+    query: NonEmptyString,
+    role_id: Optional[PositiveInt] = None,
     deep_verify: bool = False,
     include_graph: bool = False,
-    limit: int = 25,
-    offset: int = 0,
+    limit: PageLimit = 25,
+    offset: NonNegativeInt = 0,
 ) -> dict[str, Any]:
-    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        return handlers.nl_search_candidates(
-            db,
-            user,
-            query=query,
-            role_id=role_id,
-            deep_verify=deep_verify,
-            include_graph=include_graph,
-            limit=limit,
-            offset=offset,
-        )
+    args = get_tool_spec("nl_search_candidates").validate(
+        {
+            "query": query,
+            "role_id": role_id,
+            "deep_verify": deep_verify,
+            "include_graph": include_graph,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("nl_search_candidates").required_scopes
+    ) as (db, user):
+        return handlers.nl_search_candidates(db, user, **args)
 
 
-@mcp_app.tool(
-    name="graph_search_candidates",
-    description=(
-        "Knowledge-graph search across the org's temporal subgraph "
-        "(Graphiti / Neo4j). Returns candidates whose stored facts "
-        "mention the query plus the matching fact strings so you can "
-        "cite specifics. Use this for graph-shaped questions: "
-        "'colleagues of X', 'people who worked at startups before "
-        "joining Big Tech', 'engineers whose CVs mention tool Y'. "
-        "Returns ``warnings: [{code: 'neo4j_unavailable'}]`` when the "
-        "graph is not configured for this deployment — fall back to "
-        "``nl_search_candidates`` in that case."
-    ),
-)
+@_catalog_tool("graph_search_candidates")
 def graph_search_candidates(
     ctx: Context,
-    query: str,
-    limit: int = 25,
+    query: NonEmptyString,
+    limit: PageLimit = 25,
 ) -> dict[str, Any]:
-    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        return handlers.graph_search_candidates(db, user, query=query, limit=limit)
+    args = get_tool_spec("graph_search_candidates").validate(
+        {"query": query, "limit": limit}
+    )
+    with _open_session(
+        ctx, get_tool_spec("graph_search_candidates").required_scopes
+    ) as (db, user):
+        return handlers.graph_search_candidates(db, user, **args)
 
 
-@mcp_app.tool(
-    name="get_candidate_cv",
-    description=(
-        "Parsed CV sections (work history, education, skills) plus the raw "
-        "extracted CV text for one candidate. Use this when you need to "
-        "quote a candidate's CV verbatim or check specific experience "
-        "details — much cheaper than embedding the full CV in every "
-        "search response."
-    ),
-)
-def get_candidate_cv(ctx: Context, candidate_id: int) -> dict[str, Any]:
-    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        return handlers.get_candidate_cv(db, user, candidate_id=candidate_id)
+@_catalog_tool("get_candidate_cv")
+def get_candidate_cv(ctx: Context, candidate_id: PositiveInt) -> dict[str, Any]:
+    args = get_tool_spec("get_candidate_cv").validate(
+        {"candidate_id": candidate_id}
+    )
+    with _open_session(ctx, get_tool_spec("get_candidate_cv").required_scopes) as (
+        db,
+        user,
+    ):
+        return handlers.get_candidate_cv(db, user, **args)
+
+
+@_catalog_tool("get_recruiting_overview")
+def get_recruiting_overview(
+    ctx: Context,
+    role_id: Optional[PositiveInt] = None,
+) -> dict[str, Any]:
+    args = get_tool_spec("get_recruiting_overview").validate(
+        {"role_id": role_id}
+    )
+    with _open_session(
+        ctx, get_tool_spec("get_recruiting_overview").required_scopes
+    ) as (db, user):
+        return operations.get_recruiting_overview(db, user, **args)
+
+
+@_catalog_tool("list_assessments")
+def list_assessments(
+    ctx: Context,
+    status: Optional[AssessmentStatus] = None,
+    role_id: Optional[PositiveInt] = None,
+    attention: AssessmentAttention = "any",
+    limit: PageLimit = 25,
+    offset: NonNegativeInt = 0,
+) -> dict[str, Any]:
+    args = get_tool_spec("list_assessments").validate(
+        {
+            "status": status,
+            "role_id": role_id,
+            "attention": attention,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    with _open_session(ctx, get_tool_spec("list_assessments").required_scopes) as (
+        db,
+        user,
+    ):
+        return operations.list_assessments(db, user, **args)
+
+
 
 
 # ---------------------------------------------------------------------------

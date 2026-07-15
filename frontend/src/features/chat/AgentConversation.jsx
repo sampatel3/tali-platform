@@ -5,15 +5,25 @@
 // this panel self-contained (its own timeline fetch + send) rather than lifting
 // the dock's internals so the Home page stays untouched.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { MessageSquare, PanelLeft, Sparkles } from 'lucide-react';
 
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
-import { ChatComposer, ChatEmptyState, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
+import {
+  ChatComposer,
+  ChatEmptyState,
+  ChatMarkdown,
+  ChatMessage,
+  NewMessageNotice,
+  ThinkingDots,
+  useAgentUpdateAwareness,
+} from '../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from '../home/agentchat/cards.jsx';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
-import { AgentLoop } from '../../shared/motion';
+import { AgentLoop, MotionList, MotionListItem } from '../../shared/motion';
+import { AgentDecisionTimelineCard } from '../../shared/decisions/AgentDecisionTimelineCard';
+import { useRoleDecisionDetails } from '../../shared/decisions/useRoleDecisionDetails';
 
 const ON_SUGGESTIONS = [
   'Who in the pool is based in MENA?',
@@ -26,6 +36,7 @@ const OFF_SUGGESTIONS = [
   'What would you screen for on this role?',
   'Show me who is waiting on a decision',
 ];
+const READ_ACK_DELAY_MS = 1000;
 
 const AgentConversation = ({
   roleId,
@@ -47,30 +58,14 @@ const AgentConversation = ({
   // Durable "agent is working…" — driven by the server (the turn runs in a
   // worker), so it survives navigation / an agent switch and resumes on return.
   const [agentWorking, setAgentWorking] = useState(false);
+  const [loadedRoleId, setLoadedRoleId] = useState(null);
   const scrollRef = useRef(null);
+  const composerRef = useRef(null);
+  const timelineRegionId = useId();
+  const [composerAnnouncement, setComposerAnnouncement] = useState('');
   // Guards async results against an agent switch (see AgentChatDock).
   const activeRoleRef = useRef(roleId);
   useEffect(() => { activeRoleRef.current = roleId; }, [roleId]);
-
-  // Whether the user was at the bottom *before* the latest timeline update —
-  // tracked on scroll so a recruiter reading back through evidence cards
-  // mid-turn keeps their position instead of being yanked down on every
-  // 2.5s poll tick, while someone at the bottom keeps following the turn.
-  const pinnedRef = useRef(true);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return undefined;
-    const onScroll = () => {
-      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, []);
 
   const load = useCallback(async (opts = {}) => {
     if (!roleId) return;
@@ -87,10 +82,19 @@ const AgentConversation = ({
       // cards attach), so the signature covers its text + action count too.
       const sig = (t) => {
         const last = t[t.length - 1];
-        return `${t.length}|${last?.id ?? ''}|${last?.text?.length ?? 0}|${last?.actions?.length ?? 0}`;
+        const decisions = t
+          .filter((item) => item?.kind === 'decision')
+          .map((item) => `${item.decision_id ?? item.id}:${item.status ?? ''}:${item.resolved_at ?? ''}`)
+          .join(',');
+        const recruiterInputs = t
+          .filter((item) => item?.kind === 'needs_input')
+          .map((item) => `${item.needs_input_id ?? item.id}:${item.status ?? ''}:${item.resolved_at ?? ''}:${JSON.stringify(item.response ?? null)}`)
+          .join(',');
+        return `${t.length}|${last?.id ?? ''}|${last?.text?.length ?? 0}|${last?.actions?.length ?? 0}|${decisions}|${recruiterInputs}`;
       };
       setTimeline((prev) => (sig(prev) === sig(next) ? prev : next));
       setAgentWorking(Boolean(data.agent_working));
+      setLoadedRoleId(forRole);
       if (activeRoleRef.current === forRole) setLoadError(false);
     } catch {
       // Keep whatever we last had on screen — clearing to [] would drop a
@@ -105,13 +109,44 @@ const AgentConversation = ({
   useEffect(() => {
     setTimeline([]);
     setAgentWorking(false);
+    setLoadedRoleId(null);
     setLoadError(false);
     load();
   }, [load]);
 
+  // Timeline refresh and read acknowledgement are intentionally separate. A
+  // successful load must remain selected in a visible tab for a short dwell
+  // before we consume the role's unread agent-message badge.
   useEffect(() => {
-    scrollToBottom();
-  }, [timeline, sending, scrollToBottom]);
+    if (!roleId || loadedRoleId !== roleId) return undefined;
+    let timer = null;
+    let acknowledged = false;
+    const clear = () => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = null;
+    };
+    const schedule = () => {
+      clear();
+      if (acknowledged || (typeof document !== 'undefined' && document.visibilityState !== 'visible')) return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        if (activeRoleRef.current !== roleId
+            || (typeof document !== 'undefined' && document.visibilityState !== 'visible')) return;
+        acknowledged = true;
+        void Promise.resolve(agentChat.markRead(roleId)).catch(() => {});
+      }, READ_ACK_DELAY_MS);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') schedule();
+      else clear();
+    };
+    schedule();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clear();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [loadedRoleId, roleId]);
 
   const send = useCallback(
     async (text) => {
@@ -155,15 +190,20 @@ const AgentConversation = ({
   const answer = useCallback(
     async (needsInputId, response, expectedVersion) => {
       try {
-        await agentChat.answerNeedsInput(needsInputId, response, expectedVersion);
+        const answerArgs = expectedVersion == null
+          ? [needsInputId, response]
+          : [needsInputId, response, expectedVersion];
+        await agentChat.answerNeedsInput(...answerArgs);
         load();
         onAfterSend?.();
+        return true;
       } catch (err) {
         showToast?.(
           err?.response?.data?.detail?.message || 'Couldn’t record that answer.',
           err?.response?.status === 409 ? 'info' : 'error',
         );
         load();
+        return false;
       }
     },
     [load, onAfterSend, showToast]
@@ -226,11 +266,53 @@ const AgentConversation = ({
     [roleId, sending, onAfterSend, showToast, load]
   );
 
-  // Chat + questions only — decisions live on the Home feed, same as the dock.
+  const prefillPrompt = useCallback((prompt) => {
+    const next = String(prompt || '').trim();
+    if (!next) return;
+    setInput(next);
+    composerRef.current?.focus();
+    setComposerAnnouncement('Added to composer');
+  }, []);
+
+  useEffect(() => {
+    if (!composerAnnouncement) return undefined;
+    const timer = window.setTimeout(() => setComposerAnnouncement(''), 1600);
+    return () => window.clearTimeout(timer);
+  }, [composerAnnouncement]);
+
+  const {
+    byId: decisionDetails,
+    loading: decisionDetailsLoading,
+    error: decisionDetailsError,
+    refresh: refreshDecisionDetails,
+  } = useRoleDecisionDetails(roleId, timeline);
+
+  const refreshAfterDecision = useCallback(async () => {
+    await Promise.all([
+      load({ silent: true }),
+      refreshDecisionDetails(),
+    ]);
+    onAfterSend?.();
+  }, [load, onAfterSend, refreshDecisionDetails]);
+
+  // The role thread is the complete chronological work surface: conversation,
+  // open questions, and the agent's HITL decisions.
   const items = useMemo(
-    () => timeline.filter((it) => it.kind === 'message' || it.kind === 'needs_input'),
+    () => timeline.filter(
+      (it) => it.kind === 'message' || it.kind === 'needs_input' || it.kind === 'decision',
+    ),
     [timeline]
   );
+
+  const {
+    hasNewAgentUpdate,
+    jumpToLatest,
+  } = useAgentUpdateAwareness({
+    items,
+    ready: Boolean(roleId) && loadedRoleId === roleId,
+    scopeKey: roleId,
+    scrollRef,
+  });
 
   // Mirror the dock's "re-screen in flight" affordance so a constraint edit's
   // follow-up impact lands without a manual refresh.
@@ -258,6 +340,25 @@ const AgentConversation = ({
     const stop = window.setTimeout(() => window.clearInterval(poll), 6 * 60 * 1000);
     return () => { window.clearInterval(poll); window.clearTimeout(stop); };
   }, [livePoll, agentWorking, load]);
+
+  // Autonomous cycles and teammate actions can add decisions while no chat
+  // turn is running. Keep an open transcript eventually consistent so those
+  // cards appear without navigation; the faster in-flight poll above takes
+  // over whenever work is active.
+  useEffect(() => {
+    if (!roleId || livePoll) return undefined;
+    const refresh = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        void load({ silent: true });
+      }
+    };
+    const poll = window.setInterval(refresh, 30000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(poll);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [roleId, livePoll, load]);
 
   // Toast when the reply lands while you're not looking at this thread (tab
   // hidden); only on a real same-thread working→idle transition.
@@ -313,7 +414,7 @@ const AgentConversation = ({
         <span className="cp-head-lead"><MessageSquare size={15} /> Ask the agent</span>
         {roleName ? <span className="cp-head-role">{roleName}</span> : null}
       </header>
-      <div className="cp-scroll" ref={scrollRef}>
+      <div className="cp-scroll" id={timelineRegionId} ref={scrollRef}>
         {loading && items.length === 0 ? (
           <div className="cp-thread">
             <ChatMessage role="assistant"><ThinkingDots label="Loading the conversation…" /></ChatMessage>
@@ -338,64 +439,118 @@ const AgentConversation = ({
             onPick={(t) => send(t)}
           />
         ) : (
-          <div className="cp-thread">
+          <MotionList className="cp-thread" aria-label="Agent conversation" layout={false}>
             {loadError ? (
               // A refresh blipped but we kept the last good thread on screen.
-              <div className="cp-refresh-row">Couldn’t refresh — retrying.</div>
+              <MotionListItem key="refresh-error" className="tk-motion-row" layout={false}>
+                <div className="cp-refresh-row">Couldn’t refresh — retrying.</div>
+              </MotionListItem>
             ) : null}
-            {items.map((it) =>
-              it.kind === 'needs_input' ? (
-                <NeedsInputCard key={it.id} item={it} onAnswer={answer} onDismiss={dismiss} />
-              ) : (
-                <ChatMessage
-                  key={it.id}
-                  role={it.author === 'agent' ? 'assistant' : 'user'}
-                  text={it.author === 'agent' ? undefined : it.text}
-                  time={it.created_at}
-                >
-                  {/* Agent replies carry the mono "AGENT" kicker above the prose
-                      (home dock `.ac-agent-say` / `.ac-who`); the shared
-                      <ChatMarkdown> keeps the prose identical to every other
-                      chat surface. User messages stay the plain ink pill. */}
-                  {it.author === 'agent' ? (
-                    <div className="cp-agent-say">
-                      <span className="cp-who">Agent</span>
-                      {it.text ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
-                    </div>
-                  ) : null}
-                  {(it.actions || []).map((card, i) =>
-                    card.type === 'candidate_evidence' ? (
-                      <CandidateEvidenceCard key={i} data={card} />
-                    ) : card.type === 'draft_task_review' ? (
-                      <DraftTaskCard
-                        key={i}
-                        card={card}
-                        onApprove={approveDraft}
-                        onRevise={reviseDraft}
-                        busy={sending}
-                      />
-                    ) : (
-                      <ImpactCard key={i} card={card} onApply={(t) => send(`Set the score cut-off to ${t}.`)} busy={sending} />
-                    )
-                  )}
-                </ChatMessage>
-              )
-            )}
+            {items.map((it, index) => {
+              let content;
+              if (it.kind === 'needs_input') {
+                content = (
+                  <NeedsInputCard
+                    item={it}
+                    onAnswer={answer}
+                    onDismiss={dismiss}
+                    onPrompt={prefillPrompt}
+                  />
+                );
+              } else if (it.kind === 'decision') {
+                const decisionId = Number(it.decision_id);
+                content = (
+                  <AgentDecisionTimelineCard
+                    item={it}
+                    detail={decisionDetails[decisionId]}
+                    roleId={roleId}
+                    roleName={roleName}
+                    detailsLoading={decisionDetailsLoading}
+                    detailsError={decisionDetailsError}
+                    onRetryDetails={refreshDecisionDetails}
+                    onChanged={refreshAfterDecision}
+                  />
+                );
+              } else {
+                const suppressStructuredCopy = (it.message_kind === 'proactive'
+                  && (it.actions || []).some((card) => card.type === 'helper_prompt'))
+                  || (it.message_kind === 'event'
+                    && (it.actions || []).some((card) => card.type === 'agent_event'));
+                content = (
+                  <ChatMessage
+                    role={it.author === 'agent' ? 'assistant' : 'user'}
+                    text={it.author === 'agent' ? undefined : it.text}
+                    time={it.created_at}
+                  >
+                    {/* Agent replies carry the mono "AGENT" kicker above the prose.
+                        User messages stay the plain ink pill. */}
+                    {it.author === 'agent' ? (
+                      <div className="cp-agent-say">
+                        <span className="cp-who">Agent</span>
+                        {it.text && !suppressStructuredCopy ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
+                      </div>
+                    ) : null}
+                    {(it.actions || []).map((card, i) =>
+                      card.type === 'candidate_evidence' ? (
+                        <CandidateEvidenceCard key={i} data={card} />
+                      ) : card.type === 'draft_task_review' ? (
+                        <DraftTaskCard
+                          key={i}
+                          card={card}
+                          onApprove={approveDraft}
+                          onRevise={reviseDraft}
+                          busy={sending}
+                        />
+                      ) : (
+                        <ImpactCard
+                          key={i}
+                          card={card}
+                          onApply={(t) => send(`Set the score cut-off to ${t}.`)}
+                          onPrompt={prefillPrompt}
+                          busy={sending}
+                        />
+                      )
+                    )}
+                  </ChatMessage>
+                );
+              }
+              return (
+                <MotionListItem key={it.id} index={index} className="tk-motion-row" layout={false}>
+                  {content}
+                </MotionListItem>
+              );
+            })}
             {(sending || agentWorking) && (
-              <ChatMessage role="assistant">
-                <ThinkingDots label="Working…" />
-              </ChatMessage>
+              <MotionListItem key="agent-working" className="tk-motion-row" layout={false}>
+                <ChatMessage role="assistant">
+                  <ThinkingDots label="Working…" />
+                </ChatMessage>
+              </MotionListItem>
             )}
             {rescreenPending && !sending && !agentWorking && (
-              <div className="ac-rescreen-live">
-                <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
-              </div>
+              <MotionListItem key="agent-rescreening" className="tk-motion-row" layout={false}>
+                <div className="ac-rescreen-live">
+                  <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+                </div>
+              </MotionListItem>
             )}
-          </div>
+          </MotionList>
         )}
       </div>
       <div className="cp-composer-wrap">
+        <NewMessageNotice
+          visible={hasNewAgentUpdate}
+          onClick={jumpToLatest}
+          controls={timelineRegionId}
+          className="cp-new-update"
+        />
+        {composerAnnouncement ? (
+          <span className="tk-composer-status" role="status" aria-live="polite" aria-atomic="true">
+            {composerAnnouncement}
+          </span>
+        ) : null}
         <ChatComposer
+          ref={composerRef}
           value={input}
           onChange={setInput}
           onSubmit={send}

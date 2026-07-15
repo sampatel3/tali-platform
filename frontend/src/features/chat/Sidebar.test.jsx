@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 
 import Sidebar from './Sidebar';
 
@@ -47,5 +47,41 @@ describe('Chat Sidebar conversation actions', () => {
     fireEvent.click(deleteButton);
     expect(onDelete).toHaveBeenCalledWith(7);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe('Chat Sidebar agent workspace hold', () => {
+  it('shows the workspace actor and does not animate a held agent as ON', () => {
+    render(
+      <Sidebar
+        mode="agents"
+        onModeChange={vi.fn()}
+        conversations={[]}
+        activeId={null}
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+        agents={[{
+          role_id: 41,
+          role_name: 'Platform Engineer',
+          group: 'on_paused',
+          agent_enabled: true,
+          agent_effective_paused: true,
+          agent_paused: true,
+          agent_pause_scope: 'workspace',
+          role_paused: false,
+          workspace_paused: true,
+          workspace_paused_by: { name: 'Jade Smith', is_current_user: false },
+        }]}
+        activeRoleId={null}
+        onSelectAgent={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByText('Platform Engineer').closest('button');
+    expect(row).toHaveAttribute('data-agent-state', 'held');
+    expect(within(row).getByText('Held · Workspace paused by Jade Smith')).toBeInTheDocument();
+    expect(row.querySelector('.cp-agent-stat-on')).toBeNull();
+    expect(row.querySelector('.cp-agent-stat-paused')).not.toBeNull();
   });
 });

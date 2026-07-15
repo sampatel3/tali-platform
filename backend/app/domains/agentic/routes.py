@@ -35,6 +35,7 @@ from ...domains.assessments_runtime.pipeline_service import (
 )
 from ...domains.assessments_runtime.job_authorization import (
     JobPermission,
+    has_job_permission_for_role,
     require_job_permission,
 )
 from ...domains.assessments_runtime.role_support import is_resolved
@@ -299,6 +300,10 @@ class AgentStatusPendingBreakdown(BaseModel):
 class AgentStatusPayload(BaseModel):
     role_id: int
     enabled: bool
+    # Viewer-specific capability from the same hiring-team policy enforced by
+    # every role agent mutation. Clients use it only to render controls as
+    # read-only; the mutation endpoints remain the authority.
+    can_control_agent: bool = False
     # Effective state follows workspace > role precedence. The legacy
     # paused_at/reason/by fields remain the effective display contract so old
     # clients stop immediately on a workspace hold; the explicit role_* fields
@@ -1748,6 +1753,12 @@ def agent_status(
     return AgentStatusPayload(
         role_id=role_id,
         enabled=enabled,
+        can_control_agent=has_job_permission_for_role(
+            db,
+            current_user=current_user,
+            role=role,
+            permission=JobPermission.CONTROL_AGENT,
+        ),
         paused=effective_paused,
         pause_scope=pause_scope,
         paused_at=effective_paused_at,

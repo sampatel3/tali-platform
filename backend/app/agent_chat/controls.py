@@ -92,6 +92,23 @@ def _state(
     }
 
 
+def _workspace_pause_state(
+    db: Session,
+    role: Role,
+    *,
+    user_id: int,
+) -> dict[str, Any]:
+    """Resolve the effective workspace overlay for a control response."""
+
+    from ..services.workspace_agent_control import workspace_agent_pause_state
+
+    return workspace_agent_pause_state(
+        db,
+        organization_id=int(role.organization_id),
+        current_user_id=int(user_id),
+    )
+
+
 def _commit_audited_role_change(
     db: Session,
     role: Role,
@@ -472,13 +489,7 @@ def set_agent_state(
             action=audit_action,
             actor_user_id=int(user_id),
         )
-        from ..services.workspace_agent_control import workspace_agent_pause_state
-
-        workspace_pause = workspace_agent_pause_state(
-            db,
-            organization_id=int(role.organization_id),
-            current_user_id=int(user_id),
-        )
+        workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))
         workspace_held = bool(workspace_pause["paused"])
         # Immutable compare-and-compensate token for this exact dispatch. A
         # newer role revision must never be overwritten if the broker rejects
@@ -574,11 +585,14 @@ def set_agent_state(
 
     if act in _PAUSE:
         if role.agent_paused_at is not None:
+            workspace_pause = _workspace_pause_state(
+                db, role, user_id=int(user_id)
+            )
             return {
                 "type": "agent_state",
                 "ok": True,
                 "action": "paused",
-                "agent": _state(role),
+                "agent": _state(role, workspace_pause=workspace_pause),
             }
         audit_before = capture_role_change_snapshot(role)
         audit_from = int(role.version or 1)
@@ -593,7 +607,13 @@ def set_agent_state(
             actor_user_id=int(user_id),
             reason="paused by recruiter via agent chat",
         )
-        return {"type": "agent_state", "ok": True, "action": "paused", "agent": _state(role)}
+        workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))
+        return {
+            "type": "agent_state",
+            "ok": True,
+            "action": "paused",
+            "agent": _state(role, workspace_pause=workspace_pause),
+        }
 
     return {
         "type": "agent_state", "ok": False, "reason": "unknown_action",
@@ -753,6 +773,8 @@ def adjust_agent_settings(
     # The budget-resume dispatch owns only this committed revision. Keep this
     # token stable across follow-up reconciliation and broker I/O.
     dispatched_version = int(role.version or 1)
+    workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))
+    workspace_held = bool(workspace_pause["paused"])
     # An assessment-stage flip re-flows already-pending send/advance cards
     # right away — same reconcile the settings-UI PATCH runs (Codex #866).
     if skip_changed:
@@ -769,7 +791,7 @@ def adjust_agent_settings(
             )
     resume_error = None
     compensation_skipped = False
-    if resumed and not _kick_cycle(role):
+    if resumed and not workspace_held and not _kick_cycle(role):
         # The shared readiness gate proved the runtime healthy immediately
         # before resume, but the broker can still reject this specific handoff.
         # Restore the pause and persist a durable failed acknowledgement rather
@@ -802,10 +824,27 @@ def adjust_agent_settings(
                 "worker queue unavailable; newer job settings were preserved"
             )
         resumed = False
+    # Refresh after any dispatch compensation so the response always describes
+    # effective authority (workspace overlay first, then the role's local hold).
+    workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))
+    workspace_held = bool(workspace_pause["paused"])
     result = {
         "type": "agent_settings", "ok": True, "changed": changed,
-        "resumed": resumed, "resume_error": resume_error, "agent": _state(role),
+        "resumed": resumed,
+        "resume_error": resume_error,
+        "agent": _state(role, workspace_pause=workspace_pause),
     }
+    if resumed and workspace_held:
+        result.update(
+            {
+                "deferred": True,
+                "pause_scope": "workspace",
+                "message": (
+                    "The role's local budget hold is cleared, but the workspace "
+                    "agent is paused. It will not run until the workspace is resumed."
+                ),
+            }
+        )
     if compensation_skipped:
         result["compensation_skipped"] = True
     return result

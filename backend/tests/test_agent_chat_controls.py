@@ -369,6 +369,26 @@ def test_pause_sets_paused_state(kick, db):
 
 
 @patch.object(_controls, "_kick_cycle")
+def test_chat_pause_reports_workspace_as_effective_scope(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True)
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    res = _run(db, role, user, "set_agent_state", {"action": "pause"})
+
+    assert res["ok"] is True
+    assert res["agent"]["paused"] is True
+    assert res["agent"]["pause_scope"] == "workspace"
+    assert res["agent"]["workspace_paused"] is True
+    assert res["agent"]["role_paused"] is True
+    assert res["agent"]["paused_reason"] == "workspace paused by recruiter"
+    kick.assert_not_called()
+
+
+@patch.object(_controls, "_kick_cycle")
 def test_adjust_agent_settings_updates_fields(kick, db):
     org = _org(db)
     user = _user(db, org)
@@ -439,6 +459,39 @@ def test_budget_edit_does_not_undo_manual_pause(kick, db):
     assert role.agent_paused_at is not None
     assert role.agent_paused_reason == "paused by recruiter"
     assert not kick.called
+
+
+@patch.object(_controls, "_kick_cycle")
+def test_budget_resume_saves_local_intent_but_defers_under_workspace_pause(
+    kick, db
+):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True, budget=100)
+    role.agent_paused_at = datetime.now(timezone.utc)
+    role.agent_paused_reason = "monthly USD cap reached"
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    res = _run(
+        db,
+        role,
+        user,
+        "adjust_agent_settings",
+        {"monthly_budget_cents": 7500},
+    )
+
+    assert res["resumed"] is True
+    assert res["deferred"] is True
+    assert res["pause_scope"] == "workspace"
+    assert res["agent"]["paused"] is True
+    assert res["agent"]["pause_scope"] == "workspace"
+    assert res["agent"]["workspace_paused"] is True
+    assert res["agent"]["role_paused"] is False
+    assert role.agent_paused_at is None
+    assert role.agent_paused_reason is None
+    kick.assert_not_called()
 
 
 @patch.object(_controls, "_kick_cycle", return_value=False)

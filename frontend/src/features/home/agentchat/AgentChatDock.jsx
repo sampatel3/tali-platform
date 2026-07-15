@@ -1,17 +1,27 @@
 // The chat dock (Option C) — converse with one role's agent. Fetches the
-// merged timeline, renders chat + the agent's questions + impact cards, and
-// posts messages that run the agent turn. Decisions live in the main feed, so
-// the dock filters them out and stays focused on steering.
+// merged timeline, renders chat + the agent's questions + decisions + impact
+// cards, and posts messages that run the agent turn. It is the same complete
+// role thread exposed by Chat > Agents.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
 
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
-import { ChatComposer, ChatEmptyState, ChatMarkdown, ChatMessage, ThinkingDots } from '../../../shared/chat';
+import {
+  ChatComposer,
+  ChatEmptyState,
+  ChatMarkdown,
+  ChatMessage,
+  NewMessageNotice,
+  ThinkingDots,
+  useAgentUpdateAwareness,
+} from '../../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from './cards.jsx';
 import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
-import { AgentLoop } from '../../../shared/motion';
+import { AgentLoop, MotionList, MotionListItem } from '../../../shared/motion';
+import { AgentDecisionTimelineCard } from '../../../shared/decisions/AgentDecisionTimelineCard';
+import { useRoleDecisionDetails } from '../../../shared/decisions/useRoleDecisionDetails';
 
 // Role-scoped empty-state prompts. Off roles get an activation suggestion that
 // drives the agent's set_agent_state tool, so you can light one up from Home.
@@ -26,6 +36,7 @@ const OFF_SUGGESTIONS = [
   'What would you screen for on this role?',
   'Show me who is waiting on a decision',
 ];
+const READ_ACK_DELAY_MS = 1000;
 
 export function AgentChatDock({
   roleId,
@@ -49,22 +60,35 @@ export function AgentChatDock({
   // driven by the server and survives navigation / an agent switch, resuming
   // when you reopen the thread.
   const [agentWorking, setAgentWorking] = useState(false);
+  // A timeline fetch and a read acknowledgement are deliberately separate:
+  // fetching keeps the thread live, while this marker lets us wait until the
+  // selected thread has actually been visible for a moment before acknowledging
+  // it through the explicit read endpoint.
+  const [loadedRoleId, setLoadedRoleId] = useState(null);
   // Set when the in-flight poll hits its time cap without the reply landing —
   // rather than freezing "Working…" forever with a locked composer, we surface
   // a "taking longer than expected" notice, unlock the composer, and keep
   // polling at a slower cadence so a late reply still lands.
   const [stalled, setStalled] = useState(false);
   const scrollRef = useRef(null);
+  const composerRef = useRef(null);
+  const timelineRegionId = useId();
+  const [composerAnnouncement, setComposerAnnouncement] = useState('');
   // Guards async results against an agent switch: a slow turn or fetch that
   // resolves after you've moved to another agent must not clobber the new
   // thread (the message itself is safe — it's already persisted server-side).
   const activeRoleRef = useRef(roleId);
-  useEffect(() => { activeRoleRef.current = roleId; }, [roleId]);
-
-  const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, []);
+  useEffect(() => {
+    activeRoleRef.current = roleId;
+    // This component is reused as the recruiter switches the Home rail. Clear
+    // the old role synchronously so its messages/questions never render under
+    // the newly selected role heading while the next request is in flight.
+    setTimeline([]);
+    setAgentWorking(false);
+    setStalled(false);
+    setLoadedRoleId(null);
+    setLoading(Boolean(roleId));
+  }, [roleId]);
 
   const load = useCallback(async (opts = {}) => {
     if (!roleId) return;
@@ -75,6 +99,7 @@ export function AgentChatDock({
       if (activeRoleRef.current !== forRole) return; // switched away mid-fetch
       setTimeline(data.timeline || []);
       setAgentWorking(Boolean(data.agent_working));
+      setLoadedRoleId(forRole);
       // A successful timeline read means the poll is healthy again — clear any
       // stalled notice (the reply either landed, or work is genuinely ongoing).
       setStalled(false);
@@ -89,9 +114,39 @@ export function AgentChatDock({
     load();
   }, [load]);
 
+  // Acknowledge only after a successful load has remained selected in a
+  // visible tab for a short dwell. Bulk mode does not show this role's thread,
+  // so it must not consume its unread state.
   useEffect(() => {
-    scrollToBottom();
-  }, [timeline, sending, scrollToBottom]);
+    if (!roleId || loadedRoleId !== roleId || isBulk) return undefined;
+    let timer = null;
+    let acknowledged = false;
+    const clear = () => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = null;
+    };
+    const schedule = () => {
+      clear();
+      if (acknowledged || (typeof document !== 'undefined' && document.visibilityState !== 'visible')) return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        if (activeRoleRef.current !== roleId
+            || (typeof document !== 'undefined' && document.visibilityState !== 'visible')) return;
+        acknowledged = true;
+        void Promise.resolve(agentChat.markRead(roleId)).catch(() => {});
+      }, READ_ACK_DELAY_MS);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') schedule();
+      else clear();
+    };
+    schedule();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clear();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [isBulk, loadedRoleId, roleId]);
 
   const send = useCallback(
     async (text) => {
@@ -142,15 +197,20 @@ export function AgentChatDock({
   const answer = useCallback(
     async (needsInputId, response, expectedVersion) => {
       try {
-        await agentChat.answerNeedsInput(needsInputId, response, expectedVersion);
+        const answerArgs = expectedVersion == null
+          ? [needsInputId, response]
+          : [needsInputId, response, expectedVersion];
+        await agentChat.answerNeedsInput(...answerArgs);
         load();
         onReload?.();
+        return true;
       } catch (err) {
         showToast?.(
           err?.response?.data?.detail?.message || 'Couldn’t record that answer.',
           err?.response?.status === 409 ? 'info' : 'error',
         );
         load();
+        return false;
       }
     },
     [load, onReload, showToast]
@@ -231,8 +291,58 @@ export function AgentChatDock({
     [isBulk, onSendBulk, send]
   );
 
-  // Option C: show chat + questions only; decisions are in the feed.
-  const items = timeline.filter((it) => it.kind === 'message' || it.kind === 'needs_input');
+  const prefillPrompt = useCallback((prompt) => {
+    const next = String(prompt || '').trim();
+    if (!next) return;
+    setInput(next);
+    composerRef.current?.focus();
+    setComposerAnnouncement('Added to composer');
+  }, []);
+
+  useEffect(() => {
+    if (!composerAnnouncement) return undefined;
+    const timer = window.setTimeout(() => setComposerAnnouncement(''), 1600);
+    return () => window.clearTimeout(timer);
+  }, [composerAnnouncement]);
+
+  // Effects clear state after a role change, but effects run after paint. Gate
+  // the render source too, so the previous role cannot flash for even one frame
+  // under the new role heading.
+  const visibleTimeline = loadedRoleId === roleId ? timeline : [];
+
+  const {
+    byId: decisionDetails,
+    loading: decisionDetailsLoading,
+    error: decisionDetailsError,
+    refresh: refreshDecisionDetails,
+  } = useRoleDecisionDetails(roleId, isBulk ? [] : visibleTimeline);
+
+  const refreshAfterDecision = useCallback(async () => {
+    await Promise.all([
+      load({ silent: true }),
+      refreshDecisionDetails(),
+    ]);
+    onReload?.();
+  }, [load, onReload, refreshDecisionDetails]);
+
+  // The dock mirrors the role's full chronological thread, including the HITL
+  // decisions that need recruiter action.
+  const items = useMemo(
+    () => visibleTimeline.filter(
+      (it) => it.kind === 'message' || it.kind === 'needs_input' || it.kind === 'decision',
+    ),
+    [visibleTimeline],
+  );
+
+  const {
+    hasNewAgentUpdate,
+    jumpToLatest,
+  } = useAgentUpdateAwareness({
+    items,
+    ready: !isBulk && loadedRoleId === roleId,
+    scopeKey: `${isBulk ? 'bulk' : 'role'}:${roleId || ''}`,
+    scrollRef,
+  });
 
   // A constraint edit's re-screen is "in flight" when the latest agent message
   // is a constraint change that kicked a re-screen, with no follow-up message
@@ -271,6 +381,24 @@ export function AgentChatDock({
     }, 6 * 60 * 1000);
     return () => { window.clearInterval(poll); window.clearTimeout(stop); };
   }, [livePoll, agentWorking, load]);
+
+  // Decisions can arrive from autonomous cycles or another teammate even
+  // when this dock has no turn in flight. A low-frequency visible-tab refresh
+  // keeps the open timeline current; live work uses the faster poll above.
+  useEffect(() => {
+    if (!roleId || isBulk || livePoll) return undefined;
+    const refresh = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        void load({ silent: true });
+      }
+    };
+    const poll = window.setInterval(refresh, 30000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(poll);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [roleId, isBulk, livePoll, load]);
 
   // A stalled turn re-checks once when the recruiter returns to the tab, so a
   // reply that landed while backgrounded surfaces without waiting for the poll.
@@ -321,7 +449,7 @@ export function AgentChatDock({
         )}
       </div>
 
-      <div className="ac-stream" ref={scrollRef}>
+      <div className="ac-stream" id={timelineRegionId} ref={scrollRef}>
         {isBulk ? (
           <div className="ac-bulk-panel">
             <div className="ac-bulk-title">One message → {bulkSelectedRoles.length} agents</div>
@@ -346,46 +474,81 @@ export function AgentChatDock({
             onPick={(t) => submitComposer(t)}
           />
         ) : (
-          items.map((it) => {
-            if (it.kind === 'needs_input') {
-              return <NeedsInputCard key={it.id} item={it} onAnswer={answer} onDismiss={dismiss} />;
-            }
-            const isAgent = it.author === 'agent';
-            const cards = (it.actions || []).map((card, i) =>
-              card.type === 'candidate_evidence' ? (
-                <CandidateEvidenceCard key={i} data={card} />
-              ) : card.type === 'draft_task_review' ? (
-                <DraftTaskCard
-                  key={i}
-                  card={card}
-                  onApprove={approveDraft}
-                  onRevise={reviseDraft}
-                  busy={sending}
-                />
-              ) : (
-                <ImpactCard key={i} card={card} onApply={(t) => send(`Set the score cut-off to ${t}.`)} busy={sending} />
-              )
-            );
-            // Agent replies carry a mono "Agent" attribution label above the
-            // text (home-preview `.msg.bot .who`). We render the label + markdown
-            // as children (no `text` prop) so the label sits above the bubble
-            // body; the shared <ChatMarkdown> keeps the prose styling identical
-            // to every other chat surface. User messages stay the plain ink pill.
-            if (isAgent) {
+          <MotionList className="ac-timeline" aria-label="Agent conversation" layout={false}>
+            {items.map((it, index) => {
+              let content;
+              if (it.kind === 'needs_input') {
+                content = (
+                  <NeedsInputCard
+                    item={it}
+                    onAnswer={answer}
+                    onDismiss={dismiss}
+                    onPrompt={prefillPrompt}
+                  />
+                );
+              } else if (it.kind === 'decision') {
+                const decisionId = Number(it.decision_id);
+                content = (
+                  <AgentDecisionTimelineCard
+                    item={it}
+                    detail={decisionDetails[decisionId]}
+                    roleId={roleId}
+                    roleName={roleName}
+                    detailsLoading={decisionDetailsLoading}
+                    detailsError={decisionDetailsError}
+                    onRetryDetails={refreshDecisionDetails}
+                    onChanged={refreshAfterDecision}
+                  />
+                );
+              } else {
+                const isAgent = it.author === 'agent';
+                const suppressStructuredCopy = (it.message_kind === 'proactive'
+                  && (it.actions || []).some((card) => card.type === 'helper_prompt'))
+                  || (it.message_kind === 'event'
+                    && (it.actions || []).some((card) => card.type === 'agent_event'));
+                const cards = (it.actions || []).map((card, i) =>
+                  card.type === 'candidate_evidence' ? (
+                    <CandidateEvidenceCard key={i} data={card} />
+                  ) : card.type === 'draft_task_review' ? (
+                    <DraftTaskCard
+                      key={i}
+                      card={card}
+                      onApprove={approveDraft}
+                      onRevise={reviseDraft}
+                      busy={sending}
+                    />
+                  ) : (
+                    <ImpactCard
+                      key={i}
+                      card={card}
+                      onApply={(t) => send(`Set the score cut-off to ${t}.`)}
+                      onPrompt={prefillPrompt}
+                      busy={sending}
+                    />
+                  )
+                );
+                // Agent replies carry a mono "Agent" attribution label above the
+                // text (home-preview `.msg.bot .who`). User messages stay the
+                // plain ink pill on the opposite edge.
+                content = isAgent ? (
+                  <ChatMessage role="assistant" time={it.created_at}>
+                    <div className="ac-agent-say">
+                      <span className="ac-who">Agent</span>
+                      {it.text && !suppressStructuredCopy ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
+                    </div>
+                    {cards}
+                  </ChatMessage>
+                ) : (
+                  <ChatMessage role="user" text={it.text} time={it.created_at} />
+                );
+              }
               return (
-                <ChatMessage key={it.id} role="assistant" time={it.created_at}>
-                  <div className="ac-agent-say">
-                    <span className="ac-who">Agent</span>
-                    {it.text ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
-                  </div>
-                  {cards}
-                </ChatMessage>
+                <MotionListItem key={it.id} index={index} className="tk-motion-row" layout={false}>
+                  {content}
+                </MotionListItem>
               );
-            }
-            return (
-              <ChatMessage key={it.id} role="user" text={it.text} time={it.created_at} />
-            );
-          })
+            })}
+          </MotionList>
         )}
         {(sending || agentWorking) && !stalled && (
           <ChatMessage role="assistant">
@@ -405,7 +568,19 @@ export function AgentChatDock({
       </div>
 
       <div className="ac-dock-composer">
+        <NewMessageNotice
+          visible={hasNewAgentUpdate}
+          onClick={jumpToLatest}
+          controls={timelineRegionId}
+          className="ac-new-update"
+        />
+        {composerAnnouncement ? (
+          <span className="tk-composer-status" role="status" aria-live="polite" aria-atomic="true">
+            {composerAnnouncement}
+          </span>
+        ) : null}
         <ChatComposer
+          ref={composerRef}
           value={input}
           onChange={setInput}
           onSubmit={submitComposer}

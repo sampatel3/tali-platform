@@ -193,6 +193,7 @@ describe('JobPipelinePage', () => {
       data: { status: 'completed', progress_percent: 100, counts: { done: 2 } },
     });
     apiClient.agent.listDecisions.mockResolvedValue({ data: [] });
+    apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: true } });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
@@ -1430,6 +1431,71 @@ Banking transformation experience
     expect(screen.getByLabelText('Paused by you · Saving…')).toBeInTheDocument();
     expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
     expect(apiClient.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('renders role controls and agent settings read-only without CONTROL_AGENT', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        can_control_agent: false,
+        enabled: true,
+        paused: false,
+        paused_at: null,
+        monthly_spent_cents: 100,
+        monthly_budget_cents: 10000,
+        pending_decisions: 0,
+      },
+    });
+
+    renderPipeline();
+
+    const pause = await screen.findByRole('button', { name: /^pause$/i });
+    expect(pause).toBeDisabled();
+    expect(pause.getAttribute('title')).toContain('hiring managers');
+    fireEvent.click(pause);
+    expect(apiClient.agent.pause).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Configure agent' }));
+    expect(await screen.findByText('Agent settings are read-only')).toBeInTheDocument();
+    expect(screen.getByText(/recruiters assigned to this role/i)).toBeInTheDocument();
+  });
+
+  it('keeps a budget-blocked 200 Resume no-op visibly paused and explains it', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const pausedAt = '2026-07-15T15:00:00Z';
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        can_control_agent: true,
+        enabled: true,
+        paused: true,
+        pause_scope: 'role',
+        paused_at: pausedAt,
+        paused_reason: 'monthly USD cap reached',
+        role_paused_at: pausedAt,
+        role_paused_reason: 'monthly USD cap reached',
+        monthly_spent_cents: 10000,
+        monthly_budget_cents: 10000,
+        pending_decisions: 0,
+      },
+    });
+    apiClient.agent.resume.mockResolvedValue({
+      data: { resumed: false, paused: true, reason: 'monthly USD cap reached' },
+    });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('button', { name: /^resume$/i }));
+
+    await waitFor(() => expect(apiClient.agent.resume).toHaveBeenCalledWith(101, 7));
+    expect(await screen.findByRole('button', { name: /^resume$/i })).toBeInTheDocument();
+    expect(screen.getByLabelText('Auto-paused')).toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith(
+      'Monthly budget reached. Resolve the hold, then try Resume again.',
+      'info',
+    );
   });
 
   it('keeps Pause optimistic over a pre-click poll and reads authoritative status on success', async () => {

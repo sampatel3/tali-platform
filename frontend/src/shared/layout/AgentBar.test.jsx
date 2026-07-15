@@ -209,6 +209,83 @@ describe('AgentBar — org rollup', () => {
     });
   });
 
+  it('does not issue an opposite role mutation while the first control is saving', async () => {
+    agent.status
+      .mockResolvedValueOnce({ data: { paused: false, paused_at: null } })
+      .mockResolvedValueOnce({ data: { paused: true, paused_at: '2026-07-15T15:00:00Z' } });
+    let resolvePause;
+    const pauseRequest = vi.fn(() => new Promise((resolve) => { resolvePause = resolve; }));
+    const resumeRequest = vi.fn();
+    const { result } = renderHook(() => useAgentStatus(45));
+    await waitFor(() => expect(result.current.status?.paused).toBe(false));
+
+    let pausePromise;
+    act(() => {
+      pausePromise = result.current.mutateStatus({
+        optimistic: (current) => ({ ...current, paused: true, paused_at: 'saving' }),
+        request: pauseRequest,
+      });
+    });
+
+    let overlappingResult;
+    await act(async () => {
+      overlappingResult = await result.current.mutateStatus({
+        optimistic: (current) => ({ ...current, paused: false, paused_at: null }),
+        request: resumeRequest,
+      });
+    });
+    expect(overlappingResult).toBeNull();
+    expect(resumeRequest).not.toHaveBeenCalled();
+    expect(result.current.status).toMatchObject({ paused: true, paused_at: 'saving' });
+
+    await act(async () => {
+      resolvePause({ data: { version: 8 } });
+      await pausePromise;
+    });
+    expect(pauseRequest).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toMatchObject({
+      paused: true,
+      paused_at: '2026-07-15T15:00:00Z',
+    });
+  });
+
+  it('does not reuse viewer-specific attribution after switching users in one org', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 1, organization_id: 10 }));
+    agent.orgStatus.mockResolvedValueOnce({ data: {
+      active_role_count: 0,
+      paused_role_count: 1,
+      workspace_paused: true,
+      workspace_control_version: 3,
+      workspace_paused_by: { user_id: 1, name: 'Sam', is_current_user: true },
+    } });
+    const first = renderHook(() => useAgentStatusOrg(true));
+    await waitFor(() => expect(first.result.current.status?.workspace_paused_by).toMatchObject({
+      name: 'Sam',
+      is_current_user: true,
+    }));
+    first.unmount();
+
+    let resolveNext;
+    agent.orgStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve; }));
+    localStorage.setItem('taali_user', JSON.stringify({ id: 2, organization_id: 10 }));
+    const second = renderHook(() => useAgentStatusOrg(true));
+    expect(second.result.current.status).toBeNull();
+
+    await act(async () => {
+      resolveNext({ data: {
+        active_role_count: 0,
+        paused_role_count: 1,
+        workspace_paused: true,
+        workspace_control_version: 3,
+        workspace_paused_by: { user_id: 1, name: 'Sam', is_current_user: false },
+      } });
+    });
+    await waitFor(() => expect(second.result.current.status?.workspace_paused_by).toMatchObject({
+      name: 'Sam',
+      is_current_user: false,
+    }));
+  });
+
   it('does not reveal a warm snapshot after the signed-in org changes', async () => {
     localStorage.setItem('taali_user', JSON.stringify({ id: 1, organization_id: 10 }));
     agent.orgStatus.mockResolvedValueOnce({ data: {

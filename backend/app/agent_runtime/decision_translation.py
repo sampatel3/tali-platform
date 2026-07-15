@@ -16,12 +16,16 @@ _ENGINE_TO_PERSISTED: dict[str, str] = {
     "queue_advance_decision": "advance_to_interview",
     "queue_reject_decision": "reject",
     "queue_skip_assessment_reject_decision": "skip_assessment_reject",
+    # The abstention overlay emits the persisted noun directly. It is still a
+    # queueable decision: the whole point is to put the uncertain verdict in
+    # front of a recruiter rather than silently dropping the candidate.
+    "escalate_low_confidence": "escalate_low_confidence",
     "auto_reject": "reject",
 }
 
-# Verdicts that should produce a queued decision. ``skip`` / ``no_action``
-# / ``escalate_low_confidence`` are deliberately excluded — the bulk pass
-# leaves those to the LLM agent / recruiter.
+# Verdicts that should produce a queued decision. ``skip`` / ``no_action`` are
+# deliberately excluded. Low-confidence escalation is included because it is
+# itself a recruiter-facing HITL decision, never an executable side effect.
 QUEUEABLE_VERDICTS = frozenset(_ENGINE_TO_PERSISTED)
 
 

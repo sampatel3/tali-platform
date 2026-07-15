@@ -384,7 +384,18 @@ describe('JobsPage Workable sync states', () => {
     apiClient.agent.orgStatus
       .mockResolvedValueOnce({ data: initial })
       .mockResolvedValue({ data: latest });
-    apiClient.agent.pauseAll.mockRejectedValue({ response: { status: 409 } });
+    apiClient.agent.pauseAll.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            current: {
+              changed_by: { action: 'paused', name: 'Aisha Khan', is_current_user: false },
+            },
+          },
+        },
+      },
+    });
 
     render(
       <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
@@ -394,7 +405,7 @@ describe('JobsPage Workable sync states', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Pause workspace' }));
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(4));
-    expect(await screen.findByText(/workspace agent changed while this page was open/i)).toBeInTheDocument();
+    expect(await screen.findByText(/workspace agent was paused by Aisha Khan/i)).toBeInTheDocument();
     expect(await screen.findByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
   });
