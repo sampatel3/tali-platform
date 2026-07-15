@@ -11,7 +11,12 @@ export const agentChat = {
 
   // Merged timeline for one role's agent. Reading is acknowledged separately
   // after the selected thread has remained visible for a short dwell.
-  getTimeline: (roleId) => api.get(`/agent-chat/conversations/${roleId}/timeline`),
+  // Timeline reads are UI-critical and should always be quick. A worker may be
+  // active for minutes, but that must not leave the dock on an endless loader.
+  getTimeline: (roleId) => api.get(
+    `/agent-chat/conversations/${roleId}/timeline`,
+    { timeout: 10000 },
+  ),
 
   // Send a message → runs the agent turn. Returns { messages, timeline, agent }.
   sendMessage: (roleId, message) =>

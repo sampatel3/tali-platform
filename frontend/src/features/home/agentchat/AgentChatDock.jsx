@@ -59,6 +59,7 @@ export function AgentChatDock({
   const isBulk = (bulkSelectedRoles?.length || 0) > 0;
   const [timeline, setTimeline] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState('');
   // Durable "agent is working…" — the turn now runs in a worker, so this is
@@ -89,6 +90,7 @@ export function AgentChatDock({
     // the old role synchronously so its messages/questions never render under
     // the newly selected role heading while the next request is in flight.
     setTimeline([]);
+    setLoadError(false);
     setAgentWorking(false);
     setStalled(false);
     setLoadedRoleId(null);
@@ -99,17 +101,22 @@ export function AgentChatDock({
     if (!roleId) return;
     const forRole = roleId;
     if (!opts.silent) setLoading(true);
+    if (!opts.silent) setLoadError(false);
     try {
       const { data } = await agentChat.getTimeline(roleId);
       if (activeRoleRef.current !== forRole) return; // switched away mid-fetch
       setTimeline(data.timeline || []);
+      setLoadError(false);
       setAgentWorking(Boolean(data.agent_working));
       setLoadedRoleId(forRole);
       // A successful timeline read means the poll is healthy again — clear any
       // stalled notice (the reply either landed, or work is genuinely ongoing).
       setStalled(false);
     } catch {
-      if (!opts.silent && activeRoleRef.current === forRole) setTimeline([]);
+      if (!opts.silent && activeRoleRef.current === forRole) {
+        setTimeline([]);
+        setLoadError(true);
+      }
     } finally {
       if (!opts.silent && activeRoleRef.current === forRole) setLoading(false);
     }
@@ -512,6 +519,11 @@ export function AgentChatDock({
           </div>
         ) : loading && items.length === 0 ? (
           <div className="ac-empty">Loading the conversation…</div>
+        ) : loadError && items.length === 0 ? (
+          <div className="ac-empty ac-load-error" role="alert">
+            <span>This conversation took too long to load.</span>
+            <button type="button" onClick={() => load()}>Try again</button>
+          </div>
         ) : items.length === 0 && !sending && !agentWorking ? (
           <ChatEmptyState
             compact
