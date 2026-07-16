@@ -1,4 +1,4 @@
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 
 // Mock the API module so the dock's getTimeline/sendMessage hit our stubs.
@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   answerNeedsInput: vi.fn().mockResolvedValue({ data: {} }),
   dismissNeedsInput: vi.fn().mockResolvedValue({ data: {} }),
+  approveDraftTask: vi.fn().mockResolvedValue({ data: { timeline: [] } }),
+  reviseDraftTask: vi.fn().mockResolvedValue({ data: { timeline: [] } }),
   markRead: vi.fn(),
   listDecisions: vi.fn(),
   approveDecision: vi.fn(),
@@ -22,6 +24,8 @@ vi.mock('../../../shared/api', () => ({
     sendMessage: mocks.sendMessage,
     answerNeedsInput: mocks.answerNeedsInput,
     dismissNeedsInput: mocks.dismissNeedsInput,
+    approveDraftTask: mocks.approveDraftTask,
+    reviseDraftTask: mocks.reviseDraftTask,
     markRead: mocks.markRead,
     listConversations: vi.fn().mockResolvedValue({ data: { agents: [] } }),
   },
@@ -51,6 +55,7 @@ const TIMELINE = [
   },
   {
     kind: 'needs_input', id: 'q1', needs_input_id: 9, question_kind: 'candidate_tie_break',
+    role_version: 7,
     prompt: 'Marcus or Lena?', options: [{ value: 'marcus', label: 'Marcus' }, { value: 'lena', label: 'Lena' }],
     status: 'open', created_at: '2026-06-03T09:01:00Z',
   },
@@ -86,9 +91,20 @@ const renderDock = (props = {}) =>
     </ToastProvider>
   );
 
+const openAgentFeed = () => {
+  fireEvent.click(screen.getByRole('tab', { name: /Agent feed/ }));
+};
+
+const expandFeedRow = (title) => {
+  fireEvent.click(screen.getByText(title).closest('button'));
+};
+
 beforeEach(() => {
   mocks.getTimeline.mockReset();
   mocks.sendMessage.mockReset();
+  mocks.answerNeedsInput.mockReset();
+  mocks.approveDraftTask.mockClear();
+  mocks.reviseDraftTask.mockClear();
   mocks.markRead.mockReset();
   mocks.listDecisions.mockReset();
   mocks.approveDecision.mockReset();
@@ -104,10 +120,95 @@ beforeEach(() => {
   mocks.snoozeDecision.mockResolvedValue({ data: {} });
   mocks.sendFeedback.mockResolvedValue({ data: {} });
   mocks.getWorkableStages.mockResolvedValue({ data: { stages: [] } });
+  mocks.answerNeedsInput.mockResolvedValue({ data: {} });
   mocks.markRead.mockResolvedValue({ data: {} });
 });
 
 describe('AgentChatDock', () => {
+  it('renders the same grounded report affordance in the Home agent dock', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message',
+          id: 'grounded-shortlist',
+          author: 'agent',
+          text: 'Here is the evidence-backed shortlist.',
+          actions: [{
+            type: 'candidate_evidence',
+            shown: 1,
+            evidence_model: 'grounder-v1',
+            database_matches: 1,
+            criteria_requested: ['Data platform delivery'],
+            criteria_checked: ['Data platform delivery'],
+            criteria_unchecked: [],
+            deep_checked: 1,
+            evidence_succeeded: 1,
+            qualified: 1,
+            capped: false,
+            report_url: '/report/home-grounded',
+            candidates: [{
+              application_id: 55,
+              rank: 1,
+              candidate_name: 'Tom Hale',
+              criteria: [{
+                criterion: 'Data platform delivery',
+                status: 'met',
+                grounded: true,
+                evidence: [{ quote: 'Delivered the data platform migration.', source: 'cv' }],
+              }],
+            }],
+          }],
+        }],
+        agent_working: false,
+      },
+    });
+    renderDock();
+
+    expect(await screen.findByText(/Delivered the data platform migration/)).toBeInTheDocument();
+    expect(screen.getByText(/grounded vs CV \+ notes/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Open shareable grounded candidate report' }),
+    ).toHaveAttribute('href', '/report/home-grounded');
+  });
+
+  it('answers a free-form request through reply mode and restores the saved draft', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'needs_input',
+          id: 'request-32',
+          needs_input_id: 32,
+          status: 'open',
+          prompt: 'What should I optimise for?',
+          input_mode: 'string',
+          can_answer: true,
+          can_dismiss: false,
+        }],
+        agent_working: false,
+      },
+    });
+    renderDock();
+
+    const composer = await screen.findByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(composer, { target: { value: 'Keep this role draft' } });
+    openAgentFeed();
+    expandFeedRow('Choose the next step');
+    fireEvent.click(screen.getByRole('button', { name: 'Reply in chat' }));
+
+    const answerBox = screen.getByRole('textbox', { name: 'Answer the agent' });
+    expect(answerBox).toHaveFocus();
+    expect(answerBox).toHaveValue('');
+    fireEvent.change(answerBox, { target: { value: 'Optimise for quality' } });
+    fireEvent.keyDown(answerBox, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(mocks.answerNeedsInput).toHaveBeenCalledWith(32, { value: 'Optimise for quality' });
+    });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' }))
+      .toHaveValue('Keep this role draft');
+  });
+
   it('puts a helper quick reply in the composer without sending it', async () => {
     mocks.getTimeline.mockResolvedValue({
       data: {
@@ -129,7 +230,10 @@ describe('AgentChatDock', () => {
     });
     renderDock();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show me' }));
+    await screen.findByRole('tab', { name: /Agent feed/ });
+    openAgentFeed();
+    expandFeedRow('Review the close calls');
+    fireEvent.click(screen.getByRole('button', { name: 'Show me' }));
 
     expect(screen.getAllByText('Five candidates are close to the cut-off.')).toHaveLength(1);
     expect(screen.getAllByText('Would you like to review them?')).toHaveLength(1);
@@ -192,6 +296,11 @@ describe('AgentChatDock', () => {
     });
     renderDock();
 
+    await screen.findByRole('tab', { name: /Agent feed/ });
+    expect(within(screen.getByRole('tabpanel', { name: 'Chat' }))
+      .queryByText('The scheduled review did not finish')).not.toBeInTheDocument();
+    openAgentFeed();
+    expandFeedRow('The scheduled review did not finish');
     expect(await screen.findByRole('article', {
       name: 'Error agent event: The scheduled review did not finish',
     })).toBeInTheDocument();
@@ -267,41 +376,77 @@ describe('AgentChatDock', () => {
     });
   });
 
-  it('renders chat, impact, question, and decision items in timeline order', async () => {
+  it('replaces a failed initial load with a retry control', async () => {
+    mocks.getTimeline
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce({
+        data: {
+          timeline: [{ kind: 'message', id: 'recovered', author: 'agent', text: 'Back online.' }],
+          agent_working: false,
+        },
+      });
+    renderDock();
+
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.queryByText('Loading the conversation…')).not.toBeInTheDocument();
+    fireEvent.click(retry);
+
+    expect(await screen.findByText('Back online.')).toBeInTheDocument();
+    expect(mocks.getTimeline).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps dialogue in Chat and moves steers plus decisions into Agent feed', async () => {
     mocks.getTimeline.mockResolvedValue({ data: { timeline: TIMELINE } });
     renderDock();
 
     expect(await screen.findByText('Updated and re-screening.')).toBeInTheDocument();
-    // Impact card from the agent message.
     expect(screen.getByText('Salary ≤ AED 25,000')).toBeInTheDocument();
     expect(screen.getByText(/re-screening 47/)).toBeInTheDocument();
-    // The agent's question + its options.
+    const chatPanel = screen.getByRole('tabpanel', { name: 'Chat' });
+    expect(within(chatPanel).queryByText('Marcus or Lena?')).not.toBeInTheDocument();
+    expect(within(chatPanel).queryByText('Tom Hale · Reject recommended')).not.toBeInTheDocument();
+
+    openAgentFeed();
+    expect(await screen.findByText('Choose who to prioritise')).toBeInTheDocument();
+    expect(screen.getByText('1 candidate decision ready')).toBeInTheDocument();
+
+    expandFeedRow('Choose who to prioritise');
     expect(screen.getByText('Marcus or Lena?')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Marcus' })).toBeInTheDocument();
-    const questionShortcut = screen.getByRole('button', { name: '1 question needs your input' });
-    expect(questionShortcut).toBeInTheDocument();
-    const questionCard = screen.getByRole('article', { name: 'Choose who to prioritise' });
-    questionCard.scrollIntoView = vi.fn();
-    const focusQuestion = vi.spyOn(questionCard, 'focus');
-    fireEvent.click(questionShortcut);
-    expect(questionCard.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
-    expect(focusQuestion).toHaveBeenCalledWith({ preventScroll: true });
-    // HITL decisions now stay in the same role thread.
-    expect(await screen.findByText('Tom Hale')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Candidate report' })).toHaveAttribute('href', '/candidates/55?from=home');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Decisions' }));
+    expandFeedRow('Tom Hale · Reject recommended');
+    expect(screen.getByText('below cut-off')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review in queue' })).toHaveAttribute(
+      'href',
+      '/home?role=1&pending=5',
+    );
+    expect(document.querySelector('.rq-hybrid-detail')).not.toBeInTheDocument();
+    expect(mocks.listDecisions).not.toHaveBeenCalled();
   });
 
-  it('approves an embedded decision through the canonical decision API', async () => {
-    mocks.getTimeline.mockResolvedValue({ data: { timeline: [TIMELINE[3]] } });
-    renderDock();
-
-    const approve = await screen.findByRole('button', { name: 'Reject' });
-    await waitFor(() => expect(approve).toBeEnabled());
-    fireEvent.click(approve);
-
-    await waitFor(() => {
-      expect(mocks.approveDecision).toHaveBeenCalledWith(5, {}, { force: false });
+  it('returns to Chat when the recruiter submits while browsing Agent feed', async () => {
+    mocks.getTimeline.mockResolvedValue({ data: { timeline: TIMELINE } });
+    mocks.sendMessage.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message',
+          id: 'sent-from-feed',
+          author: 'recruiter',
+          text: 'Follow up on the queue',
+        }],
+        agent_working: true,
+      },
     });
+    renderDock();
+    await screen.findByText('Updated and re-screening.');
+    openAgentFeed();
+    const composer = screen.getByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(composer, { target: { value: 'Follow up on the queue' } });
+    fireEvent.click(screen.getByRole('button', { name: 'send' }));
+
+    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledWith(1, 'Follow up on the queue'));
   });
 
   it('sends a message and renders the agent reply', async () => {
@@ -347,7 +492,8 @@ describe('AgentChatDock', () => {
 
     expect(await screen.findByText('Existing history')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'New agent update' })).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    const updateStatus = document.querySelector('.tk-new-update-status');
+    expect(updateStatus).toBeEmptyDOMElement();
 
     const stream = document.querySelector('.ac-stream');
     Object.defineProperties(stream, {
@@ -364,12 +510,12 @@ describe('AgentChatDock', () => {
     expect(await screen.findByText('Three candidates moved forward.')).toBeInTheDocument();
     const notice = await screen.findByRole('button', { name: 'New agent update' });
     expect(stream.scrollTop).toBe(200);
-    expect(screen.getByRole('status')).toHaveTextContent('New agent update');
+    expect(updateStatus).toHaveTextContent('New agent update');
     expect(notice).toHaveAttribute('aria-controls', stream.id);
 
     fireEvent.click(notice);
     expect(stream.scrollTop).toBe(1200);
-    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    expect(updateStatus).toBeEmptyDOMElement();
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'New agent update' })).not.toBeInTheDocument();
     });
@@ -379,9 +525,16 @@ describe('AgentChatDock', () => {
     mocks.getTimeline.mockResolvedValue({ data: { timeline: [TIMELINE[2]] } });
     renderDock();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Marcus' }));
+    await screen.findByRole('tab', { name: /Agent feed/ });
+    openAgentFeed();
+    expandFeedRow('Choose who to prioritise');
+    fireEvent.click(screen.getByRole('button', { name: 'Marcus' }));
     await waitFor(() =>
-      expect(mocks.answerNeedsInput).toHaveBeenCalledWith(9, { value: 'marcus', label: 'Marcus' })
+      expect(mocks.answerNeedsInput).toHaveBeenCalledWith(
+        9,
+        { value: 'marcus', label: 'Marcus' },
+        7,
+      )
     );
   });
 
@@ -416,6 +569,55 @@ describe('AgentChatDock', () => {
     expect(screen.getByText(/no second click is needed/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Reject & revise/i })).not.toBeInTheDocument();
+  });
+
+  it('sends the rendered job revision when approving a draft', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message', id: 'draft-approve', author: 'agent', text: 'Review this.',
+          actions: [{
+            type: 'draft_task_review', role_version: 12, reject_questions: [],
+            drafts: [{ task_id: 17, name: 'Reliability exercise', decisions: [], rubric: [], repo_file_count: 2 }],
+          }],
+        }],
+      },
+    });
+    renderDock();
+
+    expect(await screen.findByText('Job revision 12')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() => expect(mocks.approveDraftTask).toHaveBeenCalledWith(1, 17, 12));
+  });
+
+  it('sends the rendered job revision with structured revision feedback', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message', id: 'draft-revise', author: 'agent', text: 'Review this.',
+          actions: [{
+            type: 'draft_task_review', role_version: 13,
+            reject_questions: [{
+              key: 'issues', prompt: 'What is off?', multi: true,
+              options: [{ value: 'scope', label: 'Scope' }],
+            }],
+            drafts: [{ task_id: 18, name: 'Incident exercise', decisions: [], rubric: [], repo_file_count: 1 }],
+          }],
+        }],
+      },
+    });
+    renderDock();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Reject & revise/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Scope' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Revise draft$/i }));
+
+    await waitFor(() => expect(mocks.reviseDraftTask).toHaveBeenCalledWith(
+      1,
+      18,
+      { answers: { issues: ['scope'] }, note: '', expectedVersion: 13 },
+    ));
   });
 
   it('bulk mode: composer fans out to onSendBulk, not the single-role send', async () => {

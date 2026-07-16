@@ -443,18 +443,34 @@ def nl_search_candidates(
     )
     by_id = {a.id: a for a in apps}
     ordered = [by_id[aid] for aid in capped_ids if aid in by_id]
+    verification_payload = [
+        item.model_dump(mode="json") for item in result.verification_results
+    ]
+    verification_by_id = {
+        int(item["application_id"]): item for item in verification_payload
+    }
+    application_rows: list[dict[str, Any]] = []
+    for app in ordered:
+        row = application_summary(app)
+        verification = verification_by_id.get(int(app.id))
+        if verification is not None:
+            row["deep_verification"] = verification
+        application_rows.append(row)
     database_matches = (
         int(result.database_matches)
         if result.database_matches is not None
         else len(result.application_ids)
     )
     return {
-        "applications": [application_summary(a) for a in ordered],
+        "applications": application_rows,
         # Backward-compatible name plus the explicit coverage vocabulary.
         "total_matched": database_matches,
         "database_matches": database_matches,
         "deep_checked": int(result.deep_checked),
+        "evidence_succeeded": int(result.evidence_succeeded),
+        "evidence_failed": int(result.evidence_failed),
         "qualified": result.qualified,
+        "verification_results": verification_payload,
         "returned": len(ordered),
         "offset": safe_offset,
         "capped": bool(result.capped),
@@ -475,16 +491,14 @@ def find_top_candidates(
     rank_by: str = "taali",
     role_id: int | None = None,
 ) -> dict[str, Any]:
-    """Grounded "top N candidates with X and Y".
+    """Evidence-aware bounded candidate discovery and top-N ranking.
 
     Ranks the structured-match set by ``rank_by`` (taali by default) and
-    returns the top ``limit`` candidates, each carrying per-criterion
-    verdicts backed by *verbatim CV evidence* (Anthropic Citations, or a
-    reused stored requirement assessment). Use for "best/top N <role/skill>
-    with <qualities>" requests — it does the ranking and the grounding so
-    the answer is defensible rather than free-form. Returns a ``spec`` echo
-    of how the query was interpreted, ``total_matched``, the grounded
-    ``candidates``, and any ``warnings``.
+    returns the top ``limit`` candidates with available per-criterion verdicts
+    and cited CV/stored evidence. Coverage and warnings explicitly identify
+    degraded or unchecked results; callers must not treat unavailable evidence
+    as grounded. This handler is a pure read: publishing a bearer report is a
+    separate, explicitly confirmed chat command.
     """
     from ..candidate_search.top_candidates import find_top_candidates as _engine
 
@@ -561,11 +575,12 @@ def screen_pool_against_requirement(
     Where ``find_top_candidates`` returns a shortlist of the CURRENT pipeline
     ranked by each candidate's existing score, this casts a new requirement
     across the org's entire scored history — reusing each candidate's stored
-    per-criterion evidence for free where it overlaps, grounding the most
-    promising with verbatim CV citations, and ranking by fit to THIS
-    requirement (not the stale score). Returns the same grounded
-    ``candidates`` payload plus ``screened`` / ``capped`` / per-candidate
-    ``coverage`` and ``rescore_candidate_ids`` (those a full re-score clarifies).
+    per-criterion evidence where it overlaps, optionally grounding a bounded
+    subset with verbatim CV citations, and ranking by fit to THIS requirement
+    (not the stale score). Returns candidates plus ``screened`` / ``capped`` /
+    per-candidate ``coverage`` and ``rescore_candidate_ids`` (those a full
+    re-score clarifies). This handler is a pure read and never publishes a
+    report or bearer link.
     """
     from ..candidate_search.top_candidates import (
         screen_pool_against_requirement as _engine,
@@ -602,13 +617,25 @@ def screen_pool_against_requirement(
     )
     if hired_candidate_ids:
         base = base.filter(CandidateApplication.candidate_id.notin_(hired_candidate_ids))
+    scoped_role: Role | None = None
     if role_id is not None:
-        base = base.filter(CandidateApplication.role_id == int(role_id))
+        scoped_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == user.organization_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if scoped_role is None:
+            raise ValueError(f"role {role_id} not found")
+        base = base.filter(CandidateApplication.role_id == int(scoped_role.id))
 
     engine_kwargs = dict(
         db=db,
         organization_id=int(user.organization_id),
-        role_id=int(role_id) if role_id is not None else None,
+        role_id=int(scoped_role.id) if scoped_role is not None else None,
         requirement=text,
         base_query=base,
         limit=int(limit),
@@ -617,7 +644,13 @@ def screen_pool_against_requirement(
         engine_kwargs["deep_verify"] = True
     if offset:
         engine_kwargs["offset"] = max(0, int(offset))
-    return _engine(**engine_kwargs)
+    result = _engine(**engine_kwargs)
+    if scoped_role is not None:
+        result["role_name"] = scoped_role.name
+        result["role_id"] = int(scoped_role.id)
+    # Discovery remains a pure read. A public bearer snapshot is created only
+    # by the explicit, later-turn confirmed report command.
+    return result
 
 
 def graph_search_candidates(

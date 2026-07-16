@@ -20,6 +20,51 @@ const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
 // you're steering sit first.
 const GROUP_ORDER = ['on_paused', 'previously_on', 'starred', 'active'];
 
+const agentPresentation = (agent) => {
+  const enabled = Boolean(agent.agent_enabled);
+  const hasEffectiveState = Object.prototype.hasOwnProperty.call(agent, 'agent_effective_paused');
+  const workspaceHeld = enabled && Boolean(
+    agent.workspace_paused || agent.agent_pause_scope === 'workspace',
+  );
+  const rolePaused = Object.prototype.hasOwnProperty.call(agent, 'role_paused')
+    ? Boolean(agent.role_paused)
+    : Boolean(agent.agent_pause_scope === 'role' || (!workspaceHeld && agent.agent_paused));
+  const effectivePaused = enabled && (hasEffectiveState
+    ? Boolean(agent.agent_effective_paused)
+    : Boolean(agent.agent_paused || workspaceHeld || rolePaused));
+  const state = workspaceHeld && effectivePaused
+    ? 'held'
+    : effectivePaused
+      ? 'paused'
+      : enabled
+        ? 'on'
+        : 'off';
+
+  if (state === 'held') {
+    const actor = agent.workspace_paused_by;
+    const heldCopy = actor?.name
+      ? `Held · Workspace paused by ${actor.name}${actor.is_current_user ? ' (you)' : ''}`
+      : 'Held by workspace pause';
+    return {
+      state,
+      rolePaused,
+      preview: rolePaused
+        ? `${heldCopy} · Role stays paused after resume`
+        : heldCopy,
+    };
+  }
+  if (state === 'paused') {
+    return {
+      state,
+      rolePaused,
+      preview: formatAgentPauseStatus(
+        agent.role_paused_reason || agent.agent_paused_reason,
+      ),
+    };
+  }
+  return { state, rolePaused, preview: null };
+};
+
 export function AgentSidebar({
   agents = [],
   activeRoleId,
@@ -29,7 +74,8 @@ export function AgentSidebar({
   onToggleBulkMode,
   onToggleSelected,
 }) {
-  const activeCount = agents.filter((a) => a.agent_enabled).length;
+  const runningCount = agents.filter((a) => agentPresentation(a).state === 'on').length;
+  const heldCount = agents.filter((a) => agentPresentation(a).state === 'held').length;
   const selectedCount = bulkSelected ? bulkSelected.size : 0;
 
   // One flat list. Order the agents by their backend group bucket
@@ -43,7 +89,7 @@ export function AgentSidebar({
   const orderedAgents = agents
     .map((a, i) => ({ a, i }))
     .sort((x, y) => {
-      const running = (z) => (z.agent_enabled && !z.agent_paused ? 0 : 1);
+      const running = (z) => (agentPresentation(z).state === 'on' ? 0 : 1);
       return (running(x.a) - running(y.a)) || (groupRank(x.a) - groupRank(y.a)) || (x.i - y.i);
     })
     .map(({ a }) => a);
@@ -56,14 +102,14 @@ export function AgentSidebar({
     //    the feed's "Pending N").
     const questions = (a.unread_messages || 0) + (a.open_questions || 0);
     const decisions = a.pending_decisions || 0;
-    const rowStatus = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
+    const presentation = agentPresentation(a);
+    const rowStatus = presentation.state === 'held' ? 'paused' : presentation.state;
     const selected = bulkMode && bulkSelected?.has(a.role_id);
     // Preview line (home-preview `.aprev`): paused reason → the agent's last
     // activity → a "{n} decisions waiting" summary when it has a queue but no
     // fresher message → an idle/off fallback. All real fields — no fabrication.
-    const preview = a.agent_paused
-      ? formatAgentPauseStatus(a.agent_paused_reason)
-      : a.last_message_preview
+    const preview = presentation.preview
+      || a.last_message_preview
         || (decisions > 0
           ? `${fmtCount(decisions)} decision${decisions === 1 ? '' : 's'} waiting`
           : a.agent_enabled
@@ -73,10 +119,13 @@ export function AgentSidebar({
       <button
         key={a.role_id}
         type="button"
-        className={`ac-agent ac-${rowStatus} ${!bulkMode && a.role_id === activeRoleId ? 'is-active' : ''} ${selected ? 'is-selected' : ''}`}
+        className={`ac-agent ac-${rowStatus} ${presentation.state === 'held' ? 'is-workspace-held' : ''} ${!bulkMode && a.role_id === activeRoleId ? 'is-active' : ''} ${selected ? 'is-selected' : ''}`}
+        data-agent-state={presentation.state}
         aria-pressed={bulkMode ? Boolean(selected) : a.role_id === activeRoleId}
         onClick={() => (bulkMode ? onToggleSelected?.(a.role_id) : onSelect?.(a.role_id))}
-        title={!bulkMode && a.role_id === activeRoleId ? `${a.role_name} — click to deselect (view all roles)` : a.role_name}
+        title={!bulkMode && a.role_id === activeRoleId
+          ? `${a.role_name} — click to deselect (view all roles)`
+          : `${a.role_name} — ${preview}`}
       >
         {/* Top row: status glyph + role name (home-preview `.arow`). */}
         <span className="ac-agent-top">
@@ -138,7 +187,11 @@ export function AgentSidebar({
       <div className="ac-sidebar-head">
         <div className="ac-sidebar-head-l">
           <span className="ac-kicker">Your agents</span>
-          <span className="ac-sidebar-count">{activeCount} active</span>
+          <span className="ac-sidebar-count">
+            {heldCount > 0
+              ? `${runningCount} running · ${heldCount} held`
+              : `${runningCount} active`}
+          </span>
         </div>
         {agents.length > 0 && onToggleBulkMode && (
           <button

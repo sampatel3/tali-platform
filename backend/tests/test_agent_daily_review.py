@@ -86,10 +86,13 @@ def test_daily_review_sweep_enqueues_per_eligible_role(db):
     assert mock_delay.call_count == 2
 
 
-def test_daily_review_sweep_includes_paused_roles_and_lets_per_role_skip(db):
-    """Paused roles still get enqueued — the per-role task is the
-    authoritative skip point. Keeps the sweep simple + idempotent
-    against state changes between sweep and per-role run."""
+def test_daily_review_sweep_excludes_locally_paused_roles(db):
+    """A local role hold prevents autonomous work at the fan-out boundary.
+
+    The per-role task still rechecks authority to close the race between this
+    read and worker execution, but the sweep must not knowingly dispatch work
+    for a paused role.
+    """
     from app.tasks import agent_tasks
 
     org = _make_org(db)
@@ -100,13 +103,38 @@ def test_daily_review_sweep_includes_paused_roles_and_lets_per_role_skip(db):
         agent_tasks.agent_daily_review_sweep.run()
 
     enqueued_role_ids = {call.args[0] for call in mock_delay.call_args_list}
-    assert enqueued_role_ids == {role_on.id, role_paused.id}
+    assert enqueued_role_ids == {role_on.id}
+    assert role_paused.id not in enqueued_role_ids
+
+
+def test_daily_review_sweep_excludes_workspace_held_roles(db):
+    """The workspace overlay blocks fan-out without rewriting role intent."""
+    from datetime import datetime, timezone
+
+    from app.tasks import agent_tasks
+
+    org = _make_org(db)
+    role_on = _make_role(db, org, name="Held by workspace", agentic=True)
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by owner"
+    db.commit()
+
+    with patch.object(agent_tasks.agent_daily_review_role, "delay") as mock_delay:
+        result = agent_tasks.agent_daily_review_sweep.run()
+
+    assert result == {"status": "ok", "enqueued_count": 0, "role_ids": []}
+    assert role_on.agentic_mode_enabled is True
+    assert role_on.agent_paused_at is None
+    mock_delay.assert_not_called()
 
 
 def test_daily_review_sweep_returns_ok_with_zero_enqueued_when_no_roles(db):
     from app.tasks import agent_tasks
 
     _make_org(db)  # org exists, no roles
+    # The task opens its own session. Commit so SQLite's table-level write lock
+    # does not obscure the production (Postgres MVCC) behavior under test.
+    db.commit()
 
     with patch.object(agent_tasks.agent_daily_review_role, "delay") as mock_delay:
         result = agent_tasks.agent_daily_review_sweep.run()
@@ -251,6 +279,23 @@ def test_daily_review_role_returns_skip_when_role_missing(db):
 
     assert result["status"] == "skipped"
     assert result["reason"] == "role_not_found"
+
+
+def test_daily_review_role_treats_soft_deleted_role_as_missing(db):
+    from app.tasks import agent_tasks
+    from tests.conftest import TestingSessionLocal
+
+    org = _make_org(db)
+    role = _make_role(db, org, agentic=True, deleted=True)
+
+    with patch(
+        "app.platform.database.SessionLocal", new=TestingSessionLocal
+    ), patch("app.agent_runtime.orchestrator.run_cycle") as run_cycle:
+        result = agent_tasks.agent_daily_review_role.run(role_id=int(role.id))
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "role_not_found"
+    run_cycle.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

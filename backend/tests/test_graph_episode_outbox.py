@@ -255,6 +255,26 @@ def test_drain_defers_paused_role_without_attempt_or_provider_call(db):
     resumed_dispatch.assert_called_once()
 
 
+def test_drain_defers_workspace_paused_role_without_provider_call(db):
+    org, _role, _, _ = _enqueue_pending(db)
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    org.agent_workspace_control_version = 2
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    row = db.query(GraphEpisodeOutbox).one()
+    assert summary["sent"] == 0
+    assert summary["role_deferred"] == 1
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 0
+    dispatch.assert_not_called()
+
+
 def test_drain_defers_turned_off_role_without_attempt_or_provider_call(db):
     _, role, _, _ = _enqueue_pending(db)
     role.agentic_mode_enabled = False

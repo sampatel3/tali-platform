@@ -87,7 +87,10 @@ def test_endpoints_create_list_and_isolate_by_org(client):
     # Recruiter A authors a note.
     create = client.post(
         f"/api/v1/roles/{role_id}/feedback-notes",
-        json={"note": "Cohort skews too senior — bias the agent toward mid-level applicants."},
+        json={
+            "note": "Cohort skews too senior — bias the agent toward mid-level applicants.",
+            "expected_version": role_resp.json()["version"],
+        },
         headers=headers_a,
     )
     assert create.status_code == 201, create.text
@@ -95,6 +98,7 @@ def test_endpoints_create_list_and_isolate_by_org(client):
     assert body["note"].startswith("Cohort skews too senior")
     assert body["author_user_id"] is not None
     assert body["role_id"] == role_id
+    assert body["role_version"] == 2
 
     # Listed back to the same recruiter.
     listed = client.get(f"/api/v1/roles/{role_id}/feedback-notes", headers=headers_a)
@@ -108,10 +112,10 @@ def test_endpoints_create_list_and_isolate_by_org(client):
     assert forbidden_list.status_code == 404
     forbidden_post = client.post(
         f"/api/v1/roles/{role_id}/feedback-notes",
-        json={"note": "shouldn't work"},
+        json={"note": "shouldn't work", "expected_version": 1},
         headers=headers_b,
     )
-    assert forbidden_post.status_code == 404
+    assert forbidden_post.status_code == 403
 
 
 def test_endpoint_rejects_blank_note(client):
@@ -125,10 +129,55 @@ def test_endpoint_rejects_blank_note(client):
     role_id = role_resp.json()["id"]
     resp = client.post(
         f"/api/v1/roles/{role_id}/feedback-notes",
-        json={"note": ""},
+        json={"note": "", "expected_version": role_resp.json()["version"]},
         headers=headers,
     )
     assert resp.status_code == 422
+
+
+def test_feedback_note_rejects_stale_role_revision_and_audits_material_write(client):
+    headers, _ = auth_headers(
+        client,
+        email="feedback-version@example.com",
+        organization_name="FeedbackVersionOrg",
+    )
+    role_resp = client.post(
+        "/api/v1/roles",
+        json={"name": "Versioned feedback", "description": "d"},
+        headers=headers,
+    )
+    assert role_resp.status_code == 201
+    role = role_resp.json()
+
+    first = client.post(
+        f"/api/v1/roles/{role['id']}/feedback-notes",
+        json={"note": "Prefer product judgment.", "expected_version": role["version"]},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["role_version"] == role["version"] + 1
+
+    stale = client.post(
+        f"/api/v1/roles/{role['id']}/feedback-notes",
+        json={"note": "This stale note must not land.", "expected_version": role["version"]},
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "ROLE_VERSION_CONFLICT"
+
+    listed = client.get(
+        f"/api/v1/roles/{role['id']}/feedback-notes",
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    assert [row["note"] for row in listed.json()] == ["Prefer product judgment."]
+
+    events = client.get(
+        f"/api/v1/roles/{role['id']}/change-events",
+        headers=headers,
+    )
+    assert events.status_code == 200
+    assert events.json()[0]["action"] == "role_feedback_note_added"
 
 
 def test_model_persists_with_created_at_default(db):

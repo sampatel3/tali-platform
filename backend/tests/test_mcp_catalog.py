@@ -148,6 +148,36 @@ def test_related_role_contracts_are_chat_only_and_describe_the_paid_mutation():
     assert create.execution == "queued"
 
 
+def test_candidate_report_contracts_are_explicit_chat_only_writes():
+    top = get_tool_spec("create_top_candidates_report")
+    screen = get_tool_spec("create_screen_pool_report")
+
+    for spec in (top, screen):
+        assert spec.exposures == frozenset({TAALI_CHAT})
+        assert spec.effect == "external_write"
+        assert spec.cost == "paid"
+        assert spec.confirmation == "explicit"
+        assert spec.persistence == "sensitive"
+        assert spec.required_scopes == frozenset(
+            {SCOPE_ROLES_READ, SCOPE_APPLICATIONS_READ}
+        )
+
+    assert top.validate(
+        {"role_id": 1, "query": "banking", "limit": 5}
+    ) == {"role_id": 1, "query": "banking", "limit": 5}
+    assert screen.validate(
+        {"role_id": 1, "requirement_text": "payments", "deep_verify": True}
+    ) == {
+        "role_id": 1,
+        "requirement_text": "payments",
+        "deep_verify": True,
+    }
+    with pytest.raises(ValueError, match="invalid arguments"):
+        top.validate({"query": "missing role"})
+    with pytest.raises(ValueError, match="invalid arguments"):
+        screen.validate({"role_id": 1, "requirement_text": "x" * 2001})
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 
 import Sidebar from './Sidebar';
 
@@ -47,5 +47,83 @@ describe('Chat Sidebar conversation actions', () => {
     fireEvent.click(deleteButton);
     expect(onDelete).toHaveBeenCalledWith(7);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('exposes mobile drawer semantics without changing the desktop sidebar contract', () => {
+    const { rerender } = render(
+      <Sidebar
+        id="chat-navigation-drawer"
+        mobileDrawer
+        mobileDrawerOpen={false}
+        onRequestClose={vi.fn()}
+        mode="ask"
+        onModeChange={vi.fn()}
+        conversations={[]}
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    const drawer = document.getElementById('chat-navigation-drawer');
+    expect(drawer).toHaveAttribute('role', 'dialog');
+    expect(drawer).toHaveAttribute('aria-hidden', 'true');
+    expect(drawer).toHaveAttribute('inert');
+
+    rerender(
+      <Sidebar
+        id="chat-navigation-drawer"
+        mobileDrawer
+        mobileDrawerOpen
+        onRequestClose={vi.fn()}
+        mode="ask"
+        onModeChange={vi.fn()}
+        conversations={[]}
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(drawer).not.toHaveAttribute('aria-hidden');
+    expect(drawer).not.toHaveAttribute('inert');
+    expect(drawer).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('button', { name: 'Close chat navigation' })).toBeInTheDocument();
+  });
+});
+
+describe('Chat Sidebar agent workspace hold', () => {
+  it('shows the workspace actor and does not animate a held agent as ON', () => {
+    render(
+      <Sidebar
+        mode="agents"
+        onModeChange={vi.fn()}
+        conversations={[]}
+        activeId={null}
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+        agents={[{
+          role_id: 41,
+          role_name: 'Platform Engineer',
+          group: 'on_paused',
+          agent_enabled: true,
+          agent_effective_paused: true,
+          agent_paused: true,
+          agent_pause_scope: 'workspace',
+          role_paused: false,
+          workspace_paused: true,
+          workspace_paused_by: { name: 'Jade Smith', is_current_user: false },
+        }]}
+        activeRoleId={null}
+        onSelectAgent={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByText('Platform Engineer').closest('button');
+    expect(row).toHaveAttribute('data-agent-state', 'held');
+    expect(within(row).getByText('Held · Workspace paused by Jade Smith')).toBeInTheDocument();
+    expect(row.querySelector('.cp-agent-stat-on')).toBeNull();
+    expect(row.querySelector('.cp-agent-stat-paused')).not.toBeNull();
   });
 });

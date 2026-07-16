@@ -38,6 +38,7 @@ from ...agent_runtime import budget_guard
 from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
+from ...models.organization import Organization
 from ...models.role import Role
 from ...models.user import User
 from ...platform.database import get_db
@@ -45,8 +46,6 @@ from ..assessments_runtime.pipeline_service import role_pipeline_counts_bulk
 
 
 router = APIRouter(tags=["agentic-hub"])
-
-
 # ---------------------------------------------------------------------------
 # KPI computation — shared between /agent/org-status and /agent/kpis
 # ---------------------------------------------------------------------------
@@ -181,9 +180,24 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     active_role_count = sum(
         1 for r in role_rows if bool(r.agentic_mode_enabled) and r.agent_paused_at is None
     )
-    paused_role_count = sum(
+    local_paused_role_count = sum(
         1 for r in role_rows if bool(r.agentic_mode_enabled) and r.agent_paused_at is not None
     )
+    enabled_role_count = int(active_role_count) + int(local_paused_role_count)
+    workspace_paused = (
+        db.query(Organization.id)
+        .filter(
+            Organization.id == int(organization_id),
+            Organization.agent_workspace_paused_at.isnot(None),
+        )
+        .first()
+        is not None
+    )
+    if workspace_paused:
+        active_role_count = 0
+        paused_role_count = enabled_role_count
+    else:
+        paused_role_count = local_paused_role_count
 
     # Customer-facing org spend = Tali charged credits (raw Anthropic cost ×
     # per-feature markup). Canonical helper EXCLUDES role_id IS NULL so the org
@@ -207,6 +221,7 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
         teach_rate_pct=round(teach_pct, 1),
         paused_role_count=int(paused_role_count),
         active_role_count=int(active_role_count),
+        local_paused_role_count=int(local_paused_role_count),
         oldest_pending_age_seconds=oldest_pending_age,
     )
 
@@ -238,7 +253,11 @@ def org_status(
     # Additive header fields (current_run / last_activity / paused_reason) for
     # the global AgentBar — all org-scoped aggregates so the bar can drop its
     # /roles + per-role /agent/status fan-out. Computed in _hub_shared.
-    extras = org_header_extras(db, organization_id=org_id)
+    extras = org_header_extras(
+        db,
+        organization_id=org_id,
+        current_user_id=int(current_user.id),
+    )
 
     return OrgStatusPayload(
         **base.model_dump(),
@@ -369,6 +388,11 @@ def roles_breakdown(
         for rid, total, ovr, tch in disposition_rows
     }
 
+    workspace_pause = db.query(Organization).filter(
+        Organization.id == int(current_user.organization_id)
+    ).one()
+    workspace_held = workspace_pause.agent_workspace_paused_at is not None
+
     rows: list[RoleBreakdownRow] = []
     for role in roles:
         rid = int(role.id)
@@ -389,8 +413,23 @@ def roles_breakdown(
                 cap_cents=int(role.monthly_usd_budget_cents or 0),
                 override_rate_pct=round(ovr_pct, 1),
                 teach_rate_pct=round(tch_pct, 1),
-                paused=role.agent_paused_at is not None,
-                paused_reason=role.agent_paused_reason,
+                paused=bool(role.agentic_mode_enabled)
+                and (workspace_held or role.agent_paused_at is not None),
+                paused_reason=(
+                    workspace_pause.agent_workspace_paused_reason
+                    if workspace_held
+                    else role.agent_paused_reason
+                ),
+                pause_scope=(
+                    "workspace"
+                    if bool(role.agentic_mode_enabled) and workspace_held
+                    else (
+                        "role"
+                        if bool(role.agentic_mode_enabled) and role.agent_paused_at is not None
+                        else None
+                    )
+                ),
+                role_paused=role.agent_paused_at is not None,
                 agentic_mode_enabled=bool(role.agentic_mode_enabled),
                 stage_counts=stage_counts_by_role.get(rid, {}),
                 pending_decisions_by_type=pending_by_type_by_role.get(rid, {}),

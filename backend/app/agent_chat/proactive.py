@@ -419,8 +419,10 @@ def maybe_post_helper_briefing(
 ) -> AgentConversationMessage | None:
     """Post one fresh/materially-changed helper prompt, with anti-nagging rails."""
 
-    # Serialize with interactive sends in production. SQLite ignores
-    # FOR UPDATE, but its test connection is already single-writer.
+    # Serialize with interactive sends in production, but never make a
+    # timeline read wait for a worker that already owns the conversation row.
+    # The helper is optional; if the row is busy, the next poll can try again.
+    # SQLite ignores FOR UPDATE, but its test connection is single-writer.
     locked = (
         db.query(AgentConversation)
         .filter(
@@ -428,7 +430,7 @@ def maybe_post_helper_briefing(
             AgentConversation.organization_id == int(role.organization_id),
             AgentConversation.role_id == int(role.id),
         )
-        .with_for_update()
+        .with_for_update(skip_locked=True)
         .one_or_none()
     )
     if locked is None or conversation_agent_working(db, locked):

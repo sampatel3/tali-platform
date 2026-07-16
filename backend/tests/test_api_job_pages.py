@@ -7,14 +7,25 @@ client / rate / margin. A closed (or unknown) page 404s. The requisition
 serializer gains a ``job_page`` block once published, and the brief stays
 editable (status unchanged) so it can be re-published.
 
-No Anthropic is needed for any of this (publish + serialize only touch DB state).
+Provider-backed edit coverage uses a monkeypatched structured response; tests
+make no external Anthropic call.
 """
 import pytest
 
+from app.llm.structured import StructuredResult
+from app.models.job_hiring_team import (
+    TEAM_ROLE_INTERVIEWER,
+    JobHiringTeam,
+)
 from app.models.job_page import JobPage
 from app.models.organization import Organization
 from app.models.role import JOB_STATUS_OPEN, Role
+from app.models.role_brief import RoleBrief
+from app.models.role_change_event import RoleChangeEvent
+from app.models.user import User
 from app.platform.config import settings
+from app.services import requisition_chat_service as requisition_chat
+from app.services.requisition_chat_service import ChatCapture
 from tests.conftest import auth_headers
 
 
@@ -138,7 +149,10 @@ def test_republish_reuses_same_job_page_and_refreshes_jd(client, db):
     # Re-publish the same brief with a new JD body.
     second = client.post(
         f"/api/v1/requisitions/{brief_id}/publish",
-        json={"jd_markdown": "second draft"},
+        json={
+            "jd_markdown": "second draft",
+            "expected_version": first["version"],
+        },
         headers=headers,
     ).json()
 
@@ -150,29 +164,180 @@ def test_republish_reuses_same_job_page_and_refreshes_jd(client, db):
     assert pages[0].jd_markdown == "second draft"
 
 
-def test_publish_leaves_brief_editable_status_unchanged(client):
+def test_publish_leaves_brief_editable_versioned_and_republishable(client, db):
     headers, _ = auth_headers(client)
     brief_id = _make_requisition(client, headers, title="Eng")
     before = client.get(f"/api/v1/requisitions/{brief_id}", headers=headers).json()
     assert before["status"] == "draft"
 
-    client.post(
+    published = client.post(
         f"/api/v1/requisitions/{brief_id}/publish",
         json={"jd_markdown": "JD"},
         headers=headers,
-    )
+    ).json()
 
     after = client.get(f"/api/v1/requisitions/{brief_id}", headers=headers).json()
     # Brief stays editable (NOT 'applied') so it can be re-published.
     assert after["status"] == "draft"
-    # And the patch endpoint still accepts edits.
-    edit = client.patch(
+    # A linked write must identify the Role revision the recruiter reviewed.
+    missing_version = client.patch(
         f"/api/v1/requisitions/{brief_id}",
         json={"title": "Eng II"},
         headers=headers,
     )
+    assert missing_version.status_code == 422, missing_version.text
+
+    # The versioned patch remains editable and advances Role.version once.
+    edit = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Eng II", "expected_version": published["version"]},
+        headers=headers,
+    )
     assert edit.status_code == 200, edit.text
     assert edit.json()["title"] == "Eng II"
+    assert edit.json()["job"]["version"] == published["version"] + 1
+
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == published["role_id"])
+        .order_by(RoleChangeEvent.id.desc())
+        .first()
+    )
+    assert event is not None
+    assert event.action == "requisition_brief_updated"
+    assert event.from_version == published["version"]
+    assert event.to_version == edit.json()["job"]["version"]
+
+    # An identical retry is a true no-op: no revision or audit noise.
+    event_count = db.query(RoleChangeEvent).filter(
+        RoleChangeEvent.role_id == published["role_id"]
+    ).count()
+    no_op = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={
+            "title": "Eng II",
+            "expected_version": edit.json()["job"]["version"],
+        },
+        headers=headers,
+    )
+    assert no_op.status_code == 200, no_op.text
+    assert no_op.json()["job"]["version"] == edit.json()["job"]["version"]
+    assert db.query(RoleChangeEvent).filter(
+        RoleChangeEvent.role_id == published["role_id"]
+    ).count() == event_count
+
+    # A stale tab cannot overwrite that edit.
+    stale = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Stale title", "expected_version": published["version"]},
+        headers=headers,
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == "ROLE_VERSION_CONFLICT"
+    assert client.get(
+        f"/api/v1/requisitions/{brief_id}", headers=headers
+    ).json()["title"] == "Eng II"
+
+    # The edited brief is still the source for a subsequent re-publish.
+    republished = client.post(
+        f"/api/v1/requisitions/{brief_id}/publish",
+        json={
+            "jd_markdown": "# Eng II\n\nUpdated role",
+            "expected_version": edit.json()["job"]["version"],
+        },
+        headers=headers,
+    )
+    assert republished.status_code == 200, republished.text
+    assert republished.json()["role_id"] == published["role_id"]
+    db.expire_all()
+    assert db.get(Role, published["role_id"]).name == "Eng II"
+
+
+def test_linked_requisition_edit_denies_non_editing_team_member(client, db):
+    headers, email = auth_headers(client)
+    brief_id = _make_requisition(client, headers, title="Controlled Brief")
+    published = client.post(
+        f"/api/v1/requisitions/{brief_id}/publish",
+        json={"jd_markdown": "# Controlled Brief\n\nShared role"},
+        headers=headers,
+    ).json()
+
+    user = db.query(User).filter(User.email == email).one()
+    membership = (
+        db.query(JobHiringTeam)
+        .filter(
+            JobHiringTeam.role_id == published["role_id"],
+            JobHiringTeam.user_id == user.id,
+        )
+        .one()
+    )
+    user.role = "member"
+    membership.team_role = TEAM_ROLE_INTERVIEWER
+    db.commit()
+
+    denied = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={
+            "title": "Unauthorized edit",
+            "expected_version": published["version"],
+        },
+        headers=headers,
+    )
+
+    assert denied.status_code == 403, denied.text
+    db.expire_all()
+    assert db.get(RoleBrief, brief_id).title == "Controlled Brief"
+    assert db.get(Role, published["role_id"]).version == published["version"]
+
+
+def test_linked_requisition_chat_advances_one_shared_revision(
+    client, db, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    brief_id = _make_requisition(client, headers, title="Chat Editable Brief")
+    published = client.post(
+        f"/api/v1/requisitions/{brief_id}/publish",
+        json={"jd_markdown": "# Chat Editable Brief\n\nShared role"},
+        headers=headers,
+    ).json()
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    def fake_generate_structured(_client, **_kwargs):
+        return StructuredResult(
+            value=ChatCapture(
+                assistant_reply="Updated the success profile.",
+                success_profile="Owns reliable delivery across the platform.",
+            ),
+            ok=True,
+        )
+
+    monkeypatch.setattr(
+        requisition_chat,
+        "generate_structured",
+        fake_generate_structured,
+    )
+
+    response = client.post(
+        f"/api/v1/requisitions/{brief_id}/chat",
+        data={
+            "message": "Great means owning reliable delivery.",
+            "expected_version": str(published["version"]),
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()["brief"]
+    assert body["success_profile"] == "Owns reliable delivery across the platform."
+    assert body["job"]["version"] == published["version"] + 1
+    db.expire_all()
+    events = db.query(RoleChangeEvent).filter(
+        RoleChangeEvent.role_id == published["role_id"],
+        RoleChangeEvent.action == "requisition_brief_updated",
+    ).all()
+    assert len(events) == 1
+    assert events[0].from_version == published["version"]
+    assert events[0].to_version == body["job"]["version"]
 
 
 # --------------------------------------------------------------------------- #

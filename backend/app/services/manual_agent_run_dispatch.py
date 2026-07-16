@@ -209,7 +209,12 @@ def publish_manual_run(
             return {
                 "type": "manual_agent_run",
                 "status": intent_status,
-                "queued": True,
+                # This request replayed a terminal receipt; it did not publish
+                # another broker message.
+                "queued": False,
+                "broker_accepted": None,
+                "dispatch_pending": False,
+                "intent_persisted": True,
                 "replayed": True,
                 "role_id": int(role.id),
                 "application_id": _normalise_application_id(application_id),
@@ -220,7 +225,13 @@ def publish_manual_run(
             return {
                 "type": "manual_agent_run",
                 "status": "queued",
-                "queued": True,
+                # A prior request owns the current publish window. It may have
+                # reached the broker or may be awaiting the recovery sweep, so
+                # never claim broker acceptance on this replay.
+                "queued": False,
+                "broker_accepted": None,
+                "dispatch_pending": True,
+                "intent_persisted": True,
                 "replayed": True,
                 "role_id": int(role.id),
                 "application_id": _normalise_application_id(application_id),
@@ -240,8 +251,11 @@ def publish_manual_run(
         return {
             "type": "manual_agent_run",
             "status": "dispatch_pending",
-            "queued": True,
+            "queued": False,
+            "broker_accepted": False,
             "dispatch_pending": True,
+            "intent_persisted": True,
+            "replayed": False,
             "role_id": int(role.id),
             "application_id": _normalise_application_id(application_id),
             "agent_run_id": intent_id,
@@ -252,6 +266,10 @@ def publish_manual_run(
         "type": "manual_agent_run",
         "status": "queued",
         "queued": True,
+        "broker_accepted": True,
+        "dispatch_pending": False,
+        "intent_persisted": key is not None,
+        "replayed": False,
         "role_id": int(role.id),
         "application_id": _normalise_application_id(application_id),
         "agent_run_id": intent_id,

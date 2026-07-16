@@ -1,7 +1,7 @@
 """Grandfather active workspace owners before enforcing verified login.
 
 Revision ID: 172_verify_legacy_active_owners
-Revises: 171_agent_chat_event_source_key
+Revises: 172_workspace_agent_control
 Create Date: 2026-07-15
 
 Historically the auth router allowed unverified login and the UI treated owners
@@ -16,7 +16,7 @@ from alembic import op
 
 
 revision = "172_verify_legacy_active_owners"
-down_revision = "171_agent_chat_event_source_key"
+down_revision = "172_workspace_agent_control"
 branch_labels = None
 depends_on = None
 

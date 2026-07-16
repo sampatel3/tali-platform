@@ -11,7 +11,12 @@ export const agentChat = {
 
   // Merged timeline for one role's agent. Reading is acknowledged separately
   // after the selected thread has remained visible for a short dwell.
-  getTimeline: (roleId) => api.get(`/agent-chat/conversations/${roleId}/timeline`),
+  // Timeline reads are UI-critical and should always be quick. A worker may be
+  // active for minutes, but that must not leave the dock on an endless loader.
+  getTimeline: (roleId) => api.get(
+    `/agent-chat/conversations/${roleId}/timeline`,
+    { timeout: 10000 },
+  ),
 
   // Send a message → runs the agent turn. Returns { messages, timeline, agent }.
   sendMessage: (roleId, message) =>
@@ -26,18 +31,24 @@ export const agentChat = {
   markRead: (roleId) => api.post(`/agent-chat/conversations/${roleId}/read`),
 
   // The agent's clarifying questions (kind === 'needs_input' in the timeline).
-  answerNeedsInput: (needsInputId, response) =>
-    api.post(`/agent-needs-input/${needsInputId}/answer`, { response }),
+  answerNeedsInput: (needsInputId, response, expectedVersion) =>
+    api.post(`/agent-needs-input/${needsInputId}/answer`, {
+      response,
+      expected_version: expectedVersion,
+    }),
   dismissNeedsInput: (needsInputId) =>
     api.post(`/agent-needs-input/${needsInputId}/dismiss`),
 
   // Draft-task review (the draft_task_review card). Approve activates the
   // draft; revise re-authors it from structured reject feedback (no delete).
   // Both return { ok, timeline } so the dock can refresh in place.
-  approveDraftTask: (roleId, taskId) =>
-    api.post(`/agent-chat/conversations/${roleId}/draft-tasks/${taskId}/approve`),
-  reviseDraftTask: (roleId, taskId, { answers, note } = {}) =>
+  approveDraftTask: (roleId, taskId, expectedVersion) =>
+    api.post(`/agent-chat/conversations/${roleId}/draft-tasks/${taskId}/approve`, {
+      expected_version: expectedVersion,
+    }),
+  reviseDraftTask: (roleId, taskId, { answers, note, expectedVersion } = {}) =>
     api.post(`/agent-chat/conversations/${roleId}/draft-tasks/${taskId}/revise`, {
+      expected_version: expectedVersion,
       answers: answers || {},
       note: note || null,
     }),

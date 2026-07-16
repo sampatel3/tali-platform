@@ -14,7 +14,7 @@
     "test:ci": "node scripts/run-vitest-clean.mjs",
     "test:watch": "vitest",
     "lint:js": "eslint . --max-warnings=0",
-    "check:architecture": "node scripts/check-architecture.mjs && node scripts/check-motion-system.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs && node scripts/check-motion-system.mjs && node scripts/check-chat-system.mjs",
     "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "generate:landing-fixtures": "node scripts/generate-data-engineer-fixtures.mjs",
     "typecheck": "tsc --noEmit",

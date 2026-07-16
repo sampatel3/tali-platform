@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import TEAM_ROLE_HIRING_MANAGER, JobHiringTeam
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
@@ -128,6 +129,15 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     assert sister["applications_count"] == 2
     assert body["evaluation_counts"] == {"total": 2, "pending": 1, "unscorable": 1}
     dispatch.assert_called_once()
+    fallback_membership = (
+        db.query(JobHiringTeam)
+        .filter(
+            JobHiringTeam.role_id == sister["id"],
+            JobHiringTeam.user_id == user.id,
+        )
+        .one()
+    )
+    assert fallback_membership.team_role == TEAM_ROLE_HIRING_MANAGER
 
     source_detail = client.get(f"/api/v1/roles/{source.id}", headers=headers)
     assert source_detail.status_code == 200
@@ -248,7 +258,7 @@ def test_sister_role_cannot_enable_candidate_automation(client, db):
 
     response = client.patch(
         f"/api/v1/roles/{sister.id}",
-        json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+        json={"expected_version": int(sister.version or 1), "agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
         headers=headers,
     )
     assert response.status_code == 409

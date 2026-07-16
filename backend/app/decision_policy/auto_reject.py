@@ -90,16 +90,27 @@ def evaluate_auto_reject_decision(
     role_paused = bool(
         role is not None and getattr(role, "agent_paused_at", None) is not None
     )
+    workspace_paused = False
+    if db is not None and role is not None:
+        from ..services.workspace_agent_control import workspace_agent_is_paused
+
+        workspace_paused = workspace_agent_is_paused(
+            db,
+            organization_id=int(role.organization_id),
+        )
     agentic_eligible = bool(
         role is not None
         and getattr(role, "agentic_mode_enabled", False)
         and not role_paused
+        and not workspace_paused
     )
     # Pause is a role-wide execution stop, including the legacy org-level
     # Workable switch. The deterministic verdict still exists and is surfaced
     # as a HITL card; only the irreversible provider/native write is withheld.
     auto_disqualify_eligible = bool(
-        (bool(config["enabled"]) or agentic_eligible) and not role_paused
+        (bool(config["enabled"]) or agentic_eligible)
+        and not role_paused
+        and not workspace_paused
     )
     # HARD RAIL: irreversible rejection fails closed across every ATS.  A
     # normalized post-handover state means a recruiter already advanced the

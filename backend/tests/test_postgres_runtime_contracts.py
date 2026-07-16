@@ -53,7 +53,7 @@ def postgres_runtime_engine() -> Iterator[Engine]:
             with engine.connect() as connection:
                 assert connection.execute(
                     text("SELECT version_num FROM alembic_version")
-                ).scalar_one() == "176_restore_application_timestamp_defaults"
+                ).scalar_one() == "177_agent_chat_turn_role_version"
             yield engine
         finally:
             engine.dispose()

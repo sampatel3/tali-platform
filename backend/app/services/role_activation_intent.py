@@ -431,7 +431,7 @@ def _record_retry(
     db.rollback()
     role = (
         db.query(Role)
-        .filter(Role.id == int(role_id))
+        .filter(Role.id == int(role_id), Role.deleted_at.is_(None))
         .with_for_update()
         .one_or_none()
     )
@@ -603,6 +603,14 @@ def complete_role_activation_intent(
                 now=current_time,
             )
 
+        from .role_change_audit import (
+            ROLE_CHANGE_ACTION_AGENT_ENABLED,
+            add_role_change_event,
+            capture_role_change_snapshot,
+        )
+
+        audit_before = capture_role_change_snapshot(role)
+        audit_from_version = int(getattr(role, "version", 1) or 1)
         role.agentic_mode_enabled = True
         role.agent_paused_at = None
         role.agent_paused_reason = None
@@ -662,6 +670,41 @@ def complete_role_activation_intent(
             "updated_at": _iso(current_time),
         }
         role.assessment_task_provisioning = provisioning
+        # The deferred worker performs a real shared-state transition after
+        # the recruiter's original request returned.  Advance the optimistic
+        # concurrency token so any still-open browser snapshot becomes stale.
+        from ..models.user import User
+        from .role_concurrency import bump_role_version
+
+        audit_to_version = bump_role_version(role)
+        requested_actor_id = (
+            int(intent["requested_by_user_id"])
+            if intent.get("requested_by_user_id") is not None
+            else None
+        )
+        actor_user_id = None
+        if requested_actor_id is not None:
+            actor_user_id = (
+                db.query(User.id)
+                .filter(
+                    User.id == requested_actor_id,
+                    User.organization_id == int(role.organization_id),
+                )
+                .scalar()
+            )
+        add_role_change_event(
+            db,
+            role=role,
+            before=audit_before,
+            action=ROLE_CHANGE_ACTION_AGENT_ENABLED,
+            actor_user_id=(
+                int(actor_user_id) if actor_user_id is not None else None
+            ),
+            from_version=audit_from_version,
+            to_version=audit_to_version,
+            reason="deferred activation completed after assessment provisioning",
+            request_id=str(request_id),
+        )
         db.add(role)
         db.commit()
     except Exception:
@@ -672,7 +715,7 @@ def complete_role_activation_intent(
         )
         return _record_retry(
             db,
-            role_id=int(role.id),
+            role_id=int(role_id),
             request_id=request_id,
             error="activation_failed",
             now=current_time,

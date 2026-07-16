@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.agent_chat.tools import dispatch_tool
 from app.models.agent_conversation import (
@@ -14,6 +16,7 @@ from app.models.agent_conversation import (
     AgentConversation,
     AgentConversationMessage,
 )
+from app.models.job_hiring_team import JobHiringTeam, TEAM_ROLE_RECRUITER
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.top_candidates_report import TopCandidatesReport
@@ -34,6 +37,15 @@ def _world(db, *, suffix: str = "main"):
     )
     role = Role(organization_id=int(org.id), name="Backend", source="manual")
     db.add_all([user, role])
+    db.flush()
+    db.add(
+        JobHiringTeam(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            user_id=int(user.id),
+            team_role=TEAM_ROLE_RECRUITER,
+        )
+    )
     db.flush()
     conversation = AgentConversation(
         organization_id=int(org.id), role_id=int(role.id)
@@ -141,6 +153,14 @@ def test_report_requires_later_confirmation_and_publishes_scrubbed_snapshot(db):
             user=user,
             conversation=conversation,
         )
+        replayed = dispatch_tool(
+            "create_top_candidates_report",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
 
     assert search.call_count == 2  # fresh server recomputation at confirmation
     report = db.query(TopCandidatesReport).one()
@@ -159,6 +179,14 @@ def test_report_requires_later_confirmation_and_publishes_scrubbed_snapshot(db):
     assert result["report_url"].endswith(f"/report/{report.token}")
     assert result["_confirmation_consumed"]
     assert "candidate_email" not in result["candidates"][0]
+    assert replayed == result
+    assert db.query(TopCandidatesReport).count() == 1
+    expires_at = report.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    assert timedelta(days=29) < expires_at - datetime.now(timezone.utc) <= timedelta(
+        days=30
+    )
 
 
 def test_changed_shortlist_requires_a_fresh_confirmation(db):
@@ -191,7 +219,7 @@ def test_report_action_rejects_cross_tenant_role(db):
         db, suffix="foreign"
     )
     with patch("app.mcp.handlers.find_top_candidates") as search:
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(HTTPException) as exc_info:
             dispatch_tool(
                 "create_top_candidates_report",
                 {"query": "banking experience"},
@@ -200,4 +228,39 @@ def test_report_action_rejects_cross_tenant_role(db):
                 user=user,
                 conversation=conversation,
             )
+    assert exc_info.value.status_code == 403
     search.assert_not_called()
+
+
+def test_report_reauthorizes_after_preview_and_fails_closed_on_revocation(db):
+    _org, user, role, conversation = _world(db, suffix="revoked")
+    arguments = {"query": "banking experience", "limit": 5}
+    with patch("app.mcp.handlers.find_top_candidates", return_value=_snapshot()):
+        preview = dispatch_tool(
+            "create_top_candidates_report",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        _persist_preview(db, conversation=conversation, preview=preview)
+        _confirm(db, conversation=conversation, user=user)
+        db.query(JobHiringTeam).filter(
+            JobHiringTeam.role_id == role.id,
+            JobHiringTeam.user_id == user.id,
+        ).delete(synchronize_session=False)
+        db.flush()
+
+        with pytest.raises(HTTPException) as exc_info:
+            dispatch_tool(
+                "create_top_candidates_report",
+                arguments,
+                db=db,
+                role=role,
+                user=user,
+                conversation=conversation,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert db.query(TopCandidatesReport).count() == 0

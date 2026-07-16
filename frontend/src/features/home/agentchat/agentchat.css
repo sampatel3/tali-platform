@@ -109,6 +109,9 @@
 .ac-agent-time { font-size: 0.6875rem; color: var(--mute); }
 .ac-badge-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--purple); color: #fff; font-size: 0.6875rem; font-weight: 700; display: grid; place-items: center; }
 .ac-empty { padding: 24px 16px; font-size: 0.78125rem; color: var(--mute); text-align: center; line-height: 1.5; }
+.ac-load-error { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.ac-load-error button { border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-2); color: var(--purple-2); padding: 6px 10px; font: inherit; font-weight: 600; cursor: pointer; }
+.ac-load-error button:hover { background: var(--purple-soft); border-color: var(--purple-lav); }
 
 /* ---- Dock -------------------------------------------------------------- */
 /* Dock header (home-preview `.chead2 .r`): a chat glyph + "Ask the agent" + the
@@ -130,10 +133,16 @@
 .ac-dock-role { font-size: 0.6875rem; font-weight: 500; color: var(--purple-2); background: var(--purple-soft); padding: 2px 9px; border-radius: 999px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-dock-collapse { margin-left: auto; background: transparent; border: none; cursor: pointer; color: var(--mute); padding: 4px; border-radius: 6px; display: grid; place-items: center; }
 .ac-dock-collapse:hover { background: var(--bg-3); color: var(--ink); }
-/* White conversation surface (home-preview `.cbody` on the white `.chat`
-   card), with the preview's tighter 11px inter-message rhythm. */
-.ac-stream { flex: 1; overflow-y: auto; min-height: 0; padding: 14px; display: flex; flex-direction: column; gap: 11px; background: var(--bg-2); }
-.ac-timeline { display: flex; flex-direction: column; gap: 11px; width: 100%; min-width: 0; }
+.ac-dock-head .tk-agent-question-shortcut + .ac-dock-collapse { margin-left: 0; }
+.ac-dock-head .tk-agent-question-shortcut-label { display: none; }
+/* Chat and Agent feed are independent scroll lanes. Keeping both panels mounted
+   preserves the reader's position and any open disclosure while switching; a
+   background event can never steal the conversation scroll. */
+.ac-stream-stack { position: relative; flex: 1; min-height: 0; background: var(--chat-surface); }
+.ac-stream { position: absolute; inset: 0; overflow-y: auto; min-height: 0; padding: var(--chat-gutter); display: flex; flex-direction: column; gap: var(--chat-row-gap); background: var(--chat-surface); }
+.ac-stream[hidden] { display: none; }
+.ac-feed-stream { padding-top: 10px; }
+.ac-timeline { display: flex; flex-direction: column; gap: var(--chat-row-gap); width: 100%; min-width: 0; }
 /* Wraps the shared <ChatComposer> at the bottom of the dock. */
 .ac-dock-composer { position: relative; padding: 12px 16px 16px; flex-shrink: 0; background: var(--bg-2); }
 .ac-new-update { top: -30px; }
@@ -183,132 +192,7 @@
 .ac-reopen:hover .ac-badge-count { background: #fff; color: var(--purple); }
 
 /* ---- Chat messages ----------------------------------------------------- */
-/* Messages come from the shared kit (<ChatMessage>): user = right-aligned ink
-   pill (`.tk-msg-user`), agent = borderless markdown on the LEFT. The dock's
-   only addition is the mono "AGENT" kicker above the agent prose (home-preview
-   `.msg.bot .who`). The label + markdown wrap in one tight column (.ac-agent-say)
-   so the shared assistant column's 14px gap only separates the prose from any
-   impact/evidence cards beneath it. */
-.ac-agent-say { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.ac-who { font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; color: var(--purple); }
-/* Trim the shared assistant text/markdown to the dock's tighter scale (the kit
-   defaults to the roomier Search-page size). */
-.ac-stream .tk-msg-assistant, .ac-stream .tk-md, .ac-stream .tk-msg-user { font-size: 0.8125rem; line-height: 1.5; }
-.ac-rescreen-live { display: flex; align-items: center; gap: 8px; font-size: 0.71875rem; color: var(--purple-2); background: var(--purple-soft); padding: 9px 12px; border-radius: 10px; }
-
-/* ---- Compact threshold-impact box (home-preview `.impact`) -------------- */
-/* A purple-tint bordered card with an inline "Threshold old → new · +N clear"
-   line + an Apply button — the steering surface the recruiter acts on when the
-   agent proposes a cut-off change. Distinct from the heavier applied/constraint
-   .ac-card chrome below. */
-.ac-impact { border: 1px solid var(--purple-soft); background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); border-radius: 12px; padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
-.ac-impact-line { font-size: 0.8125rem; line-height: 1.5; color: var(--ink-2); display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
-.ac-impact-label { color: var(--ink-2); }
-.ac-impact-old { font-family: var(--font-display); font-weight: 600; color: var(--mute); text-decoration: line-through; text-decoration-color: var(--line-2); }
-.ac-impact-arrow { color: var(--mute); }
-.ac-impact-new { font-family: var(--font-display); font-size: 1.0625rem; font-weight: 700; color: var(--purple-2); }
-.ac-impact-gain { color: var(--purple-2); font-weight: 500; }
-.ac-impact-actions { display: flex; }
-.ac-impact-apply { display: inline-flex; align-items: center; gap: 6px; font-size: 0.6875rem; font-weight: 600; color: var(--purple-2); background: var(--bg-2); border: 1px solid var(--purple-lav); border-radius: 9px; padding: 5px 11px; cursor: pointer; font-family: var(--font-sans); }
-.ac-impact-apply:hover:not(:disabled) { background: var(--purple-soft); }
-.ac-impact-apply:disabled { opacity: 0.5; cursor: default; }
-
-/* ---- Impact cards ------------------------------------------------------ */
-/* Heavier action cards (constraint / job-spec / applied-threshold) the agent
-   slots beneath its reply. Kept lighter and flatter to sit cleanly in the white
-   thread — purple = positive/applied, grey = neutral. No green anywhere. */
-.ac-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); padding: 12px 14px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 9px; }
-.ac-card-head { display: flex; align-items: center; gap: 7px; font-size: 0.71875rem; font-weight: 600; color: var(--ink); }
-.ac-card-head svg { color: var(--purple); flex-shrink: 0; }
-.ac-card-live { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: 0.65625rem; color: var(--purple-2); }
-.ac-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--purple); }
-.ac-card-constraint { background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); border-color: var(--purple-soft); }
-.ac-rescreen-estimate { font-size: 0.71875rem; color: var(--ink-2); background: var(--bg-3); border: 1px dashed var(--line-2); border-radius: 8px; padding: 6px 9px; line-height: 1.4; }
-.ac-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.ac-constraint-chip { font-size: 0.75rem; font-weight: 500; color: var(--purple-2); background: var(--bg-2); border: 1px solid var(--purple-soft); padding: 5px 10px; border-radius: 999px; }
-/* Job-spec re-derive diff — added = standard purple chip, removed = struck-through. */
-.ac-spec-diff { display: flex; flex-direction: column; gap: 4px; }
-.ac-spec-diff-label { font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
-.ac-spec-diff-label.add { color: var(--purple-2); }
-.ac-spec-diff-label.remove { color: var(--mute); }
-.ac-chip-remove { color: var(--mute); border-color: var(--line); text-decoration: line-through; text-decoration-color: var(--mute); opacity: 0.8; }
-.ac-name-chip { font-size: 0.6875rem; font-weight: 500; color: var(--ink-2); background: var(--bg-3); padding: 4px 9px; border-radius: 999px; }
-.ac-thresh-line { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.ac-arrow { color: var(--mute); font-size: 1rem; }
-.ac-thresh-old { font-family: var(--font-display); font-size: 1.3125rem; font-weight: 700; color: var(--mute); text-decoration: line-through; text-decoration-color: var(--line-2); }
-.ac-thresh-new { font-family: var(--font-display); font-size: 1.6875rem; font-weight: 700; color: var(--purple); }
-/* An applied change is positive → it reads in purple, not green. */
-.ac-thresh-applied { color: var(--purple-2); }
-.ac-thresh-gain { font-size: 0.71875rem; font-weight: 500; color: var(--purple-2); background: var(--purple-soft); padding: 4px 9px; border-radius: 999px; }
-.ac-thresh-loss { font-size: 0.71875rem; font-weight: 500; color: var(--mute); background: var(--bg-3); border: 1px solid var(--line); padding: 3px 9px; border-radius: 999px; }
-.ac-thresh-flat { font-size: 0.71875rem; font-weight: 500; color: var(--mute); background: var(--bg-3); padding: 3px 9px; border-radius: 999px; }
-.ac-statrow { display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.6875rem; color: var(--mute); }
-.ac-statrow b { color: var(--ink); font-weight: 600; }
-.ac-card-applied { border-color: var(--purple-soft); }
-.ac-card-applied .ac-card-head svg { color: var(--purple); }
-.ac-card-actions { display: flex; gap: 7px; flex-wrap: wrap; }
-
-/* ---- Durable agent events --------------------------------------------- */
-/* Event cards are transcript history, not ephemeral toasts: severity is
-   written as text as well as colour, and the card deliberately has no live
-   region that would re-announce old failures whenever a thread is opened. */
-.ac-card-event { border-left: 3px solid var(--purple); box-shadow: none; }
-.ac-card-event[data-severity="warning"] { border-left-color: var(--amber); background: var(--taali-warning-soft); }
-.ac-card-event[data-severity="error"] { border-left-color: var(--red); background: var(--taali-danger-soft); }
-.ac-event-head { min-width: 0; }
-.ac-card-event[data-severity="warning"] .ac-event-head svg,
-.ac-card-event[data-severity="warning"] .ac-event-severity { color: var(--amber-ink); }
-.ac-card-event[data-severity="error"] .ac-event-head svg,
-.ac-card-event[data-severity="error"] .ac-event-severity { color: var(--red-deep, var(--red)); }
-.ac-event-severity { color: var(--purple-2); }
-.ac-event-type { margin-left: auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mute); }
-.ac-event-title { margin: 0; font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.35; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
-.ac-event-summary { margin: 0; font-size: 0.75rem; line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
-.ac-event-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 12px; font-family: var(--font-mono); font-size: 0.625rem; color: var(--mute); }
-.ac-event-source { display: inline-flex; align-items: center; gap: 3px; color: var(--purple-2); overflow-wrap: anywhere; }
-a.ac-event-source { text-decoration: underline; text-underline-offset: 2px; }
-a.ac-event-source:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; border-radius: 3px; }
-.ac-event-details { border-top: 1px solid color-mix(in oklab, var(--line) 80%, transparent); padding-top: 7px; }
-.ac-event-details summary { width: fit-content; cursor: pointer; font-size: 0.6875rem; font-weight: 600; color: var(--ink-2); }
-.ac-event-details summary:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; border-radius: 3px; }
-.ac-event-details dl { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 0; }
-.ac-event-details dl > div { display: grid; grid-template-columns: minmax(80px, 0.36fr) minmax(0, 1fr); gap: 9px; }
-.ac-event-details dt { font-size: 0.6875rem; font-weight: 600; color: var(--mute); overflow-wrap: anywhere; }
-.ac-event-details dd { margin: 0; font-size: 0.6875rem; color: var(--ink-2); overflow-wrap: anywhere; }
-.ac-card-event .ac-btn:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
-
-/* ---- Draft-task review card -------------------------------------------- */
-.ac-card-draft { background: var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))); border-color: var(--purple-soft); }
-.ac-draft { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 11px; }
-.ac-draft + .ac-draft { margin-top: 2px; }
-.ac-draft-title { font-size: 0.8125rem; font-weight: 600; color: var(--ink); line-height: 1.3; }
-.ac-draft-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; font-size: 0.65625rem; color: var(--mute); }
-.ac-draft-tag { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--purple-2); background: var(--purple-soft); padding: 2px 7px; border-radius: 5px; }
-.ac-draft-decisions { margin: 1px 0 2px; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
-.ac-draft-decisions li { font-size: 0.71875rem; color: var(--ink-2); line-height: 1.4; }
-.ac-draft-auto { padding: 8px 9px; border-radius: 8px; background: var(--purple-soft); color: var(--ink-2); font-size: 0.71875rem; line-height: 1.45; }
-
-/* ---- Structured reject questionnaire ----------------------------------- */
-.ac-reject { display: flex; flex-direction: column; gap: 10px; padding: 11px; background: var(--bg-3); border: 1px solid var(--purple-soft); border-radius: 10px; }
-.ac-reject-q { display: flex; flex-direction: column; gap: 6px; }
-.ac-reject-prompt { font-size: 0.71875rem; font-weight: 600; color: var(--ink); }
-.ac-reject-opts { display: flex; flex-wrap: wrap; gap: 6px; }
-.ac-chip-toggle { font-size: 0.6875rem; font-weight: 500; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line-2); padding: 5px 10px; border-radius: 999px; cursor: pointer; transition: all 0.12s ease; font-family: var(--font-sans); }
-.ac-chip-toggle:hover:not(:disabled) { border-color: var(--purple-lav); }
-.ac-chip-toggle.on { color: #fff; background: var(--purple); border-color: transparent; }
-.ac-chip-toggle:disabled { opacity: 0.6; cursor: default; }
-.ac-reject-note { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2); padding: 7px 9px; font-family: var(--font-sans); font-size: 0.75rem; color: var(--ink); resize: none; outline: none; }
-.ac-reject-note:focus { border-color: var(--purple-lav); }
-.ac-reject-note::placeholder { color: var(--mute); }
-
-/* ---- Buttons ----------------------------------------------------------- */
-.ac-btn { display: inline-flex; align-items: center; gap: 6px; justify-content: center; padding: 7px 12px; border-radius: 9px; font-size: 0.75rem; font-weight: 500; cursor: pointer; border: 1px solid transparent; font-family: var(--font-sans); transition: all 0.13s ease; white-space: nowrap; }
-.ac-btn:disabled { opacity: 0.5; cursor: default; }
-.ac-btn-primary { background: var(--purple); color: #fff; }
-.ac-btn-primary:hover:not(:disabled) { background: var(--purple-2); }
-.ac-btn-ghost { background: var(--bg-2); border-color: var(--line-2); color: var(--mute); }
-.ac-btn-ghost:hover:not(:disabled) { border-color: var(--ink-soft); color: var(--ink); }
-.ac-btn-soft { background: var(--purple-soft); color: var(--purple-2); }
+/* Turn anatomy and compact density come from ChatSurface + ChatMessage. */
 
 /* The composer is the shared <ChatComposer> (`.tk-composer`), wrapped by
    `.ac-dock-composer` above — no dock-local composer styles needed. */

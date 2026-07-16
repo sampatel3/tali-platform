@@ -1,4 +1,7 @@
 import React, { useState } from 'react';
+import { FileSearch } from 'lucide-react';
+
+import { ChatArtifact } from '../../shared/chat';
 import './CandidateEvidenceCard.css';
 import PoolRescore from './PoolRescore';
 
@@ -10,7 +13,7 @@ const MAX_QUOTES = 3;
 const SOURCE_LABEL = {
   cv: 'CV',
   notes: 'notes',
-  role_requirement: 'role criteria',
+  role_requirement: 'scored evidence',
   taali_score: 'Taali score',
 };
 
@@ -75,7 +78,13 @@ function Quote({ text, source }) {
       {source ? <span className="ev-src">{SOURCE_LABEL[source] || source}</span> : null}
       “{shown}”
       {long ? (
-        <button type="button" className="ev-more" onClick={() => setOpen((o) => !o)}>
+        <button
+          type="button"
+          className="ev-more"
+          aria-expanded={open}
+          aria-label={open ? 'Show less of this evidence quote' : 'Show the full evidence quote'}
+          onClick={() => setOpen((o) => !o)}
+        >
           {open ? 'less' : 'more'}
         </button>
       ) : null}
@@ -169,12 +178,193 @@ function CriterionRow({ c }) {
   );
 }
 
+const cleanTextList = (value) =>
+  Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+
+const countValue = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0 ? count : null;
+};
+
+const criterionKey = (value) => String(value || '').trim().toLowerCase();
+
+function candidateCoversCheckedCriteria(candidate, checkedCriteria) {
+  const rows = Array.isArray(candidate?.criteria) ? candidate.criteria : [];
+  if (!rows.length) return false;
+  if (rows.some((row) => row?.status === 'error')) return false;
+  if (!checkedCriteria.length) return true;
+
+  const verdicts = new Map(rows.map((row) => [criterionKey(row?.criterion), row]));
+  return checkedCriteria.every((criterion) => {
+    const verdict = verdicts.get(criterionKey(criterion));
+    return verdict && verdict.status !== 'error';
+  });
+}
+
+function candidateHasCitation(candidate) {
+  const rows = Array.isArray(candidate?.criteria) ? candidate.criteria : [];
+  return rows.some((criterion) =>
+    criterion?.grounded
+      && Array.isArray(criterion.evidence)
+      && criterion.evidence.some((source) => Boolean(source?.quote)),
+  );
+}
+
+// The engine exposes separate population, criterion and provider-success
+// counts. Keep them separate: one cited row is useful evidence, but it does not
+// make an otherwise capped, failed or unchecked shortlist fully grounded.
+function evidenceCoverage(data, candidates, rankLabel) {
+  const requested = cleanTextList(data.criteria_requested);
+  const checked = cleanTextList(data.criteria_checked);
+  const unchecked = cleanTextList(data.criteria_unchecked);
+  const hasExplicitCriteriaCoverage =
+    Array.isArray(data.criteria_requested) && Array.isArray(data.criteria_checked);
+  const requestedCount = requested.length;
+  const checkedCount = checked.length;
+  const deepChecked = countValue(data.deep_checked) ?? countValue(data.screened) ?? 0;
+  const evidenceSucceeded = countValue(data.evidence_succeeded);
+  const qualified = countValue(data.qualified);
+  const databaseMatches = countValue(data.database_matches ?? data.total_matched);
+  const shownCount = countValue(data.shown) ?? candidates.length;
+  const evidenceReused = countValue(data.evidence_reused);
+  const citedCandidates = candidates.filter(candidateHasCitation).length;
+  const coveredCandidates = candidates.filter((candidate) =>
+    candidateCoversCheckedCriteria(candidate, checked),
+  ).length;
+  const displayedVerdictsComplete =
+    candidates.length === 0 || coveredCandidates === candidates.length;
+  const criteriaComplete =
+    hasExplicitCriteriaCoverage
+      && requestedCount > 0
+      && checkedCount === requestedCount
+      && unchecked.length === 0;
+  const populationComplete =
+    databaseMatches !== null
+      ? deepChecked >= databaseMatches && data.capped !== true
+      : data.capped === false;
+  const providerComplete =
+    evidenceSucceeded !== null
+      && deepChecked > 0
+      && evidenceSucceeded >= deepChecked;
+  const freshComplete =
+    deepChecked > 0
+      && providerComplete
+      && criteriaComplete
+      && populationComplete
+      && displayedVerdictsComplete;
+
+  const usesStoredEvidence = data.evidence_basis === 'stored_role_requirements';
+  const storedComplete =
+    usesStoredEvidence
+      && shownCount > 0
+      && candidates.length === shownCount
+      && evidenceReused !== null
+      && evidenceReused >= shownCount
+      && citedCandidates >= candidates.length
+      && displayedVerdictsComplete;
+  const hasAnyEvidence =
+    deepChecked > 0
+      || (evidenceSucceeded !== null && evidenceSucceeded > 0)
+      || (evidenceReused !== null && evidenceReused > 0)
+      || citedCandidates > 0;
+  const scoreOnly =
+    data.evidence_basis === 'score_only'
+      || (!requestedCount && !checkedCount && !unchecked.length && !hasAnyEvidence);
+
+  let kind;
+  if (freshComplete) kind = 'complete';
+  else if (storedComplete) kind = 'stored';
+  else if (hasAnyEvidence) kind = 'partial';
+  else if (scoreOnly) kind = 'score_only';
+  else kind = 'unavailable';
+
+  const parts = [];
+  if (usesStoredEvidence) {
+    parts.push(`${evidenceReused ?? citedCandidates}/${shownCount} candidates with stored role evidence`);
+  } else if (deepChecked > 0) {
+    parts.push(
+      databaseMatches !== null
+        ? `${deepChecked}/${databaseMatches} candidates deep-checked`
+        : `${deepChecked} candidates deep-checked`,
+    );
+    if (evidenceSucceeded !== null && evidenceSucceeded < deepChecked) {
+      parts.push(`${evidenceSucceeded}/${deepChecked} evidence checks succeeded`);
+    }
+    if (requestedCount > 0) {
+      parts.push(`${checkedCount}/${requestedCount} criteria checked`);
+    }
+    if (!displayedVerdictsComplete && candidates.length > 0) {
+      parts.push(`${coveredCandidates}/${candidates.length} shown candidates have complete verdicts`);
+    }
+    if (qualified !== null) {
+      parts.push(`${qualified} fully met checked criteria`);
+    }
+  } else if (hasAnyEvidence) {
+    parts.push(`${citedCandidates}/${shownCount} candidates include cited evidence`);
+    parts.push('overall evidence coverage unavailable');
+  } else if (scoreOnly) {
+    parts.push(`Ranked by ${rankLabel}; no qualitative evidence check`);
+  } else {
+    const population = databaseMatches ?? shownCount;
+    parts.push(`0/${population} candidates deep-checked`);
+    if (requestedCount > 0) {
+      parts.push(`evidence unavailable for ${requestedCount} ${requestedCount === 1 ? 'criterion' : 'criteria'}`);
+    } else {
+      parts.push('evidence not verified');
+    }
+  }
+
+  const labels = {
+    complete: {
+      status: 'Evidence complete',
+      report: 'Grounded report',
+      meta: 'grounded vs CV + notes',
+      aria: 'Open shareable grounded candidate report',
+    },
+    stored: {
+      status: 'Stored evidence',
+      report: 'Evidence-backed report',
+      meta: 'grounded with stored role evidence',
+      aria: 'Open shareable evidence-backed candidate report',
+    },
+    partial: {
+      status: 'Partial evidence',
+      report: 'Partially grounded report',
+      meta: 'partial evidence coverage',
+      aria: 'Open shareable partially grounded candidate report',
+    },
+    score_only: {
+      status: 'Score only',
+      report: 'Score-ranked shortlist',
+      meta: 'not evidence checked',
+      aria: 'Open shareable score-ranked candidate report',
+    },
+    unavailable: {
+      status: 'Evidence unavailable',
+      report: 'Unverified shortlist',
+      meta: 'evidence check unavailable',
+      aria: 'Open shareable candidate report with unverified evidence',
+    },
+  };
+
+  return {
+    kind,
+    ...labels[kind],
+    summary: parts.join(' · '),
+    unchecked,
+  };
+}
+
 export default function CandidateEvidenceCard({ data, detailed = false, showReportLink = true }) {
   if (!data || !Array.isArray(data.candidates)) return null;
   const spec = data.spec || {};
   const candidates = data.candidates;
   const warnings = Array.isArray(data.warnings) ? data.warnings : [];
   const rankLabel = RANK_LABELS[data.rank_by || spec.ranking_key] || 'score';
+  const coverage = evidenceCoverage(data, candidates, rankLabel);
   const shown = data.shown ?? candidates.length;
   const excluded = data.excluded || {};
   const hidden = excluded.not_met_total || 0;
@@ -183,34 +373,58 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
   // history against a NEW requirement, ranked by fit to THAT (not the role
   // score) — the header says so, and a bounded window was deep-checked.
   const isRediscovery = data.mode === 'rediscovery';
-  const screened = data.screened;
-  const capped = !!data.capped;
+  const population = data.database_matches ?? data.total_matched;
+  const rankingMeta = isRediscovery
+    ? `ranked by fit to your requirement${
+      typeof population === 'number'
+        ? ` · ${population} database matches${
+          typeof data.pool_size === 'number' ? ` across ${data.pool_size} scored applications` : ''
+        }`
+        : ''
+    }`
+    : `ranked by ${rankLabel}${typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''} · ${coverage.meta}`;
+  const statusTone = coverage.kind === 'complete'
+    ? 'success'
+    : coverage.kind === 'partial' || coverage.kind === 'unavailable'
+      ? 'warning'
+      : coverage.kind === 'score_only'
+        ? 'neutral'
+        : 'info';
+  const reportFooter = showReportLink && data.report_url ? (
+    <>
+      <div className="ev-report-copy">
+        <span className="ev-report-label">{coverage.report}</span>
+        <span className="ev-report-note">{coverage.summary}</span>
+      </div>
+      <a
+        className="ev-report-link"
+        href={data.report_url}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={coverage.aria}
+      >
+        Open shareable report <span aria-hidden="true">↗</span>
+      </a>
+    </>
+  ) : null;
 
   return (
-    <div className="ev-card">
-      <div className="ev-head">
-        <div className="ev-title">
-          {isRediscovery ? `Rediscovery · ${shown} shown` : `Top ${shown}`}
-          {spec.echo ? <span className="ev-echo"> · {spec.echo}</span> : null}
+    <ChatArtifact
+      className="ev-card"
+      icon={FileSearch}
+      eyebrow={isRediscovery ? 'Rediscovery' : 'Candidate shortlist'}
+      title={isRediscovery ? `${shown} shown` : `Top ${shown}`}
+      summary={spec.echo || (isRediscovery ? spec.query : null)}
+      meta={rankingMeta}
+      status={{ label: coverage.status, detail: coverage.summary, tone: statusTone }}
+      footer={reportFooter}
+      flush
+    >
+      {coverage.unchecked.length ? (
+        <div className="ev-unchecked">
+          <strong>Unchecked criteria:</strong> {coverage.unchecked.join(', ')}
         </div>
-        <div className="ev-meta">
-          {isRediscovery ? 'ranked by fit to your requirement' : `ranked by ${rankLabel}`}
-          {isRediscovery
-            ? screened
-              ? ` · deep-checked ${screened} of ${data.database_matches ?? data.total_matched} database matches${
-                  capped ? ', partial verification' : ''
-                }`
-              : typeof (data.database_matches ?? data.total_matched) === 'number'
-              ? ` · ${data.database_matches ?? data.total_matched} database matches · no deep verification${
-                  typeof data.pool_size === 'number' ? ` across ${data.pool_size} scored applications` : ''
-                }`
-              : ''
-            : typeof data.total_matched === 'number'
-            ? ` · ${data.total_matched} in pool`
-            : ''}
-          {data.evidence_model ? ' · grounded vs CV + notes' : ''}
-        </div>
-      </div>
+      ) : null}
 
       {hidden > 0 ? (
         <div className="ev-filtered">
@@ -224,7 +438,9 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
       {warnings.length ? (
         <div className="ev-warn">
           {warnings.map((w, i) => (
-            <span key={i}>{w.message || 'Some results may be incomplete.'}</span>
+            <span key={w?.code || i}>
+              {(typeof w === 'string' ? w : w?.message) || 'Some results may be incomplete.'}
+            </span>
           ))}
         </div>
       ) : null}
@@ -235,7 +451,12 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
             <div className="ev-cand-head">
               <span className="ev-rank">#{c.rank || i + 1}</span>
               {c.frontend_url ? (
-                <a className="ev-name" href={c.frontend_url} target="_blank" rel="noreferrer">
+                <a
+                  className="ev-name"
+                  href={c.frontend_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {c.candidate_name || 'Candidate'}
                   <span className="ev-name-ext" aria-hidden="true"> ↗</span>
                 </a>
@@ -298,13 +519,6 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
         />
       ) : null}
 
-      {showReportLink && data.report_url ? (
-        <div className="ev-foot">
-          <a className="ev-report-link" href={data.report_url} target="_blank" rel="noreferrer">
-            Open shareable report ↗
-          </a>
-        </div>
-      ) : null}
-    </div>
+    </ChatArtifact>
   );
 }

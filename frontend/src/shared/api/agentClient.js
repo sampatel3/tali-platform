@@ -16,7 +16,10 @@ export const agent = {
   // A4: discard a stale decision and re-run the agent on fresh inputs.
   // Surfaced by the "Re-evaluate" button when a decision is_stale.
   reEvaluateDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/re-evaluate`, {}),
-  discardPending: (roleId) => api.post('/agent-decisions/discard', { role_id: roleId }),
+  discardPending: (roleId, expectedVersion) => api.post('/agent-decisions/discard', {
+    role_id: roleId,
+    expected_version: expectedVersion,
+  }),
   // Approve a batch of pending decisions in one request. Each is
   // executed independently server-side; the response carries a
   // per-failure summary so the UI can surface partial successes.
@@ -50,20 +53,28 @@ export const agent = {
   // Manual trigger
   runNow: (roleId, body = {}) => api.post(`/roles/${roleId}/agent/run-now`, body),
 
-  // Org-wide soft pause / resume. pauseAll sets the pause flag on every
-  // agent-enabled role WITHOUT disabling it, so pending review items are
-  // kept (unlike the per-role toggle-off). resumeAll clears the pause for
-  // roles back under their monthly cap. Both are one round-trip.
-  pauseAll: () => api.post('/agent/pause-all', {}),
-  resumeAll: () => api.post('/agent/resume-all', {}),
+  // Workspace-wide pause overlay. It gates every role without rewriting any
+  // role's own ON / locally-paused / OFF choice; resumeAll clears only that
+  // overlay. Both commands use the viewed workspace version so concurrent
+  // recruiters cannot silently overwrite one another.
+  pauseAll: (expectedControlVersion) => api.post('/agent/pause-all', {
+    expected_control_version: expectedControlVersion,
+  }),
+  resumeAll: (expectedControlVersion) => api.post('/agent/resume-all', {
+    expected_control_version: expectedControlVersion,
+  }),
 
   // Per-role soft pause / resume — the per-role twin of pauseAll/resumeAll.
   // pause sets agent_paused_at WITHOUT disabling the agent, so the role's
   // pending decisions are KEPT; resume clears it when back under the monthly
   // cap and kicks an immediate cycle. Distinct from the role PATCH
   // agentic_mode_enabled toggle, which turns the agent fully off.
-  pause: (roleId) => api.post(`/roles/${roleId}/agent/pause`, {}),
-  resume: (roleId) => api.post(`/roles/${roleId}/agent/resume`, {}),
+  pause: (roleId, expectedVersion) => api.post(`/roles/${roleId}/agent/pause`, {
+    expected_version: expectedVersion,
+  }),
+  resume: (roleId, expectedVersion) => api.post(`/roles/${roleId}/agent/resume`, {
+    expected_version: expectedVersion,
+  }),
 
   // Per-role agent status
   status: (roleId) => api.get(`/roles/${roleId}/agent/status`),
@@ -79,7 +90,10 @@ export const agent = {
 
   // ---- Hub (org-wide) ----
   // 30-second poll target for the live tab badge + Hub KPI strip.
-  orgStatus: () => api.get('/agent/org-status'),
+  // This request gates the workspace pause/resume control. Keep its failure
+  // bound short so a dropped connection cannot leave the control looking
+  // permanently disabled behind the global 60-second API timeout.
+  orgStatus: () => api.get('/agent/org-status', { timeout: 10000 }),
   // Time-windowed KPIs (range = '24h' | '7d' | '30d').
   kpis: (params = {}) => api.get('/agent/kpis', { params }),
   // Per-role table on the Hub.

@@ -43,4 +43,8 @@ class User(SQLAlchemyBaseUserTable[int], Base):
         DateTime(timezone=True), onupdate=func.now(), nullable=True
     )
 
-    organization = relationship("Organization", back_populates="users")
+    organization = relationship(
+        "Organization",
+        back_populates="users",
+        foreign_keys=[organization_id],
+    )

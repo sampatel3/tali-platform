@@ -36,6 +36,7 @@ from ..platform.database import SessionLocal
 from .metered_anthropic_client import _extract_cache_creation_1h
 from .pricing_service import Feature, raw_cost_usd_micro
 from .provider_usage_admission import (
+    AutomaticProviderAuthorityError,
     mark_provider_attempt_started,
     mark_provider_usage_succeeded,
     release_provider_usage,
@@ -118,21 +119,27 @@ class _AsyncMeteredMessages:
                 raise GraphProviderAdmissionError(
                     "hard-admitted Graphiti call requires role attribution"
                 )
-            reservation = reserve_provider_usage(
-                organization_id=int(ctx.organization_id),
-                role_id=int(ctx.role_id) if ctx.role_id is not None else None,
-                feature=Feature.GRAPH_SYNC,
-                trace_id=ctx.trace_id or ctx.episode_name or "graphiti-anthropic",
-                entity_id=(
-                    str(ctx.candidate_id) if ctx.candidate_id is not None else None
-                ),
-                sub_feature="graphiti_anthropic",
-                metadata={
-                    "provider": "anthropic",
-                    "model": model,
-                    "episode_name": ctx.episode_name,
-                },
-            )
+            try:
+                reservation = reserve_provider_usage(
+                    organization_id=int(ctx.organization_id),
+                    role_id=int(ctx.role_id) if ctx.role_id is not None else None,
+                    feature=Feature.GRAPH_SYNC,
+                    trace_id=ctx.trace_id or ctx.episode_name or "graphiti-anthropic",
+                    entity_id=(
+                        str(ctx.candidate_id)
+                        if ctx.candidate_id is not None
+                        else None
+                    ),
+                    sub_feature="graphiti_anthropic",
+                    metadata={
+                        "provider": "anthropic",
+                        "model": model,
+                        "episode_name": ctx.episode_name,
+                    },
+                    require_role_authority=bool(ctx.require_role_admission),
+                )
+            except AutomaticProviderAuthorityError as exc:
+                raise GraphProviderAdmissionError(str(exc)) from exc
             if not mark_provider_attempt_started(
                 reservation,
                 provider="anthropic",

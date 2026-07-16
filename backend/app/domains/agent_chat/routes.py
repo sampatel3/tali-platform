@@ -16,78 +16,56 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...agent_chat.draft_tasks import (
-    REJECT_QUESTIONS,
+    apply_prepared_draft_revision,
     approve_draft,
-    revise_draft,
+    generate_prepared_draft_revision,
+    prepare_draft_revision,
 )
 from ...agent_chat.engine import persist_user_message
 from ...agent_chat.proactive import maybe_post_helper_briefing
 from ...agent_chat.service import (
     conversation_agent_working,
     ensure_conversation,
-    get_owned_role,
     list_agent_conversations,
     mark_read,
     post_agent_message,
 )
 from ...agent_chat.timeline import build_timeline, serialize_message
 from ...deps import get_current_user
+from ...domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ...models.organization import Organization
 from ...models.agent_conversation import AgentConversation
 from ...models.role import Role
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...services.role_change_audit import (
+    add_role_change_event,
+    capture_role_change_snapshot,
+)
+from ...services.role_concurrency import bump_role_version
+from .route_support import (
+    ApproveDraftRequest,
+    BulkMessageRequest,
+    ReviseDraftRequest,
+    SendMessageRequest,
+    agent_meta as _agent_meta,
+    assert_draft_role_version as _assert_draft_role_version,
+    draft_conflict as _draft_conflict,
+    draft_review_card as _draft_review_card,
+    require_org as _require_org,
+    require_role as _require_role,
+)
 
 logger = logging.getLogger("taali.agent_chat.routes")
 
 router = APIRouter(prefix="/agent-chat", tags=["agent-chat"])
-
-
-class SendMessageRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=8000)
-
-
-class BulkMessageRequest(BaseModel):
-    # Explicit role ids (the recruiter's multi-selection) — no implicit
-    # "all roles of type X", same deliberate choice as bulk-approve.
-    role_ids: list[int] = Field(..., min_length=1, max_length=100)
-    message: str = Field(..., min_length=1, max_length=8000)
-
-
-class ReviseDraftRequest(BaseModel):
-    # Structured reject answers keyed by question (e.g. {"issues": [...],
-    # "direction": "harder"}) + an optional free-text note. Interpreted by
-    # ``draft_tasks._build_feedback``.
-    answers: dict = Field(default_factory=dict)
-    note: str | None = Field(default=None, max_length=2000)
-
-
-def _require_org(current_user: User) -> int:
-    if current_user.organization_id is None:
-        raise HTTPException(status_code=400, detail="User has no organization")
-    return int(current_user.organization_id)
-
-
-def _require_role(db: Session, role_id: int, organization_id: int) -> Role:
-    role = get_owned_role(db, role_id=role_id, organization_id=organization_id)
-    if role is None:
-        raise HTTPException(status_code=404, detail="Role not found")
-    return role
-
-
-def _agent_meta(role: Role) -> dict:
-    return {
-        "enabled": bool(role.agentic_mode_enabled),
-        "paused": role.agent_paused_at is not None,
-        "paused_reason": role.agent_paused_reason,
-        "monthly_budget_cents": role.monthly_usd_budget_cents,
-        "score_threshold": role.score_threshold,
-    }
 
 
 @router.get("/conversations")
@@ -115,6 +93,10 @@ def bulk_message(
     """
     org_id = _require_org(current_user)
     role_ids = list(dict.fromkeys(int(x) for x in body.role_ids))  # de-dupe, keep order
+    # Lock every selected role first, in deterministic order, then lock its
+    # conversation. The accepted Role revision and pending turn receipt below
+    # therefore commit atomically, while overlapping bulk/single sends share a
+    # consistent Role -> conversation lock order.
     owned_roles = {
         int(r.id): r
         for r in db.query(Role)
@@ -123,6 +105,8 @@ def bulk_message(
             Role.id.in_(role_ids),
             Role.deleted_at.is_(None),
         )
+        .order_by(Role.id.asc())
+        .with_for_update(of=Role)
         .all()
     }
     owned_ids = [rid for rid in role_ids if rid in owned_roles]
@@ -131,6 +115,7 @@ def bulk_message(
 
     accepted_ids: set[int] = set()
     busy_ids: set[int] = set()
+    accepted_role_versions: dict[str, int] = {}
     # Every request acquires conversation row locks in the same order. Two
     # overlapping bulk sends with reversed UI selection order therefore cannot
     # deadlock each other in PostgreSQL.
@@ -154,11 +139,14 @@ def bulk_message(
         )
         mark_read(db, conversation=conversation, user=current_user)
         conversation.turn_message_id = int(user_row.id)
+        accepted_role_version = int(role.version or 1)
+        conversation.turn_accepted_role_version = accepted_role_version
         conversation.turn_status = "pending"
         conversation.turn_next_attempt_at = None
         conversation.turn_lease_until = None
         conversation.turn_error = None
         accepted_ids.add(rid)
+        accepted_role_versions[str(rid)] = accepted_role_version
     # Preserve recruiter-provided ordering in the response and worker pacing.
     accepted = [rid for rid in owned_ids if rid in accepted_ids]
     busy = [rid for rid in owned_ids if rid in busy_ids]
@@ -173,7 +161,13 @@ def bulk_message(
         # The text is already durable in each conversation. Empty marks the new
         # receipt-aware contract and prevents compatibility fallback from
         # appending it again on an ambiguous duplicate publish.
-        bulk_agent_message.delay(org_id, int(current_user.id), accepted, "")
+        bulk_agent_message.delay(
+            org_id,
+            int(current_user.id),
+            accepted,
+            "",
+            accepted_role_versions,
+        )
     except Exception:
         # Every per-role user message + pending receipt is already committed.
         # Beat recovers them individually, whether this publish failed before or
@@ -250,7 +244,22 @@ def send_message(
     current_user: User = Depends(get_current_user),
 ):
     org_id = _require_org(current_user)
-    role = _require_role(db, role_id, org_id)
+    # Acquire the Role lock before the conversation lock. The exact revision
+    # accepted for this turn is persisted in the same transaction as the user
+    # message and pending receipt, so post-commit edits cannot be silently
+    # adopted by the asynchronous worker.
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(org_id),
+            Role.deleted_at.is_(None),
+        )
+        .with_for_update(of=Role)
+        .one_or_none()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
     organization = (
         db.query(Organization).filter(Organization.id == org_id).first()
     )
@@ -290,7 +299,9 @@ def send_message(
     # the worker, later) then counts as unread → drives the reply notification.
     mark_read(db, conversation=conversation, user=current_user)
     user_payload = serialize_message(user_row)
+    accepted_role_version = int(role.version or 1)
     conversation.turn_message_id = int(user_row.id)
+    conversation.turn_accepted_role_version = accepted_role_version
     conversation.turn_status = "pending"
     conversation.turn_next_attempt_at = None
     conversation.turn_lease_until = None
@@ -321,6 +332,7 @@ def send_message(
             user_id=int(current_user.id),
             organization_id=int(org_id),
             turn_message_id=int(user_row.id),
+            accepted_role_version=accepted_role_version,
         )
     except Exception:
         response["dispatch_pending"] = True
@@ -331,40 +343,62 @@ def send_message(
     return response
 
 
-def _draft_review_card(role: Role, summary: dict) -> dict:
-    """A ``draft_task_review`` card focused on one (just-revised) draft."""
-    return {
-        "type": "draft_task_review",
-        "role_id": int(role.id),
-        "drafts": [summary],
-        "reject_questions": REJECT_QUESTIONS,
-    }
-
-
 @router.post("/conversations/{role_id}/draft-tasks/{task_id}/approve")
 def approve_draft_task(
     role_id: int,
     task_id: int,
+    body: ApproveDraftRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Approve (activate) a generated draft from the chat. Narrates the outcome
     into the timeline so the recruiter sees the confirmation in-thread."""
     org_id = _require_org(current_user)
-    role = _require_role(db, role_id, org_id)
-    conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
+    db.refresh(role)
+    _assert_draft_role_version(db, role, body.expected_version)
+    from_version = int(role.version or 1)
+    before = capture_role_change_snapshot(role)
     result = approve_draft(db, role, task_id, user_id=int(current_user.id))
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Approve failed")
     summary = result["summary"]
-    post_agent_message(
-        db,
-        conversation=conversation,
-        text=f"Approved **{summary['name']}** — it's live and assignable now.",
-    )
-    timeline = build_timeline(db, conversation=conversation, role=role)
-    db.commit()
-    return {"ok": True, "role_id": role.id, "summary": summary, "timeline": timeline}
+    try:
+        to_version = bump_role_version(role)
+        add_role_change_event(
+            db,
+            role=role,
+            before=before,
+            action="role_draft_task_approved",
+            actor_user_id=int(current_user.id),
+            from_version=from_version,
+            to_version=to_version,
+            reason=f"Draft task {int(task_id)} approved from agent chat",
+            allow_empty_changes=True,
+        )
+        conversation = ensure_conversation(db, organization_id=org_id, role=role)
+        post_agent_message(
+            db,
+            conversation=conversation,
+            text=f"Approved **{summary['name']}** — it's live and assignable now.",
+        )
+        timeline = build_timeline(db, conversation=conversation, role=role)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "ok": True,
+        "role_id": role.id,
+        "role_version": to_version,
+        "summary": summary,
+        "timeline": timeline,
+    }
 
 
 @router.post("/conversations/{role_id}/draft-tasks/{task_id}/revise")
@@ -379,37 +413,149 @@ def revise_draft_task(
     multiple-choice feedback (one metered call) instead of deleting it, then
     re-present the revised draft as a fresh review card in the timeline."""
     org_id = _require_org(current_user)
-    role = _require_role(db, role_id, org_id)
-    conversation = ensure_conversation(db, organization_id=org_id, role=role)
-    api_key = str(getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
-    result = revise_draft(
-        db, role, task_id, answers=body.answers or {}, note=body.note, api_key=api_key
+
+    # Preflight authorization and stale-card validation are read-only. The
+    # model call runs only after this transaction is closed, so it never holds
+    # the shared Role row lock.
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+        lock_for_update=False,
     )
-    if not result.get("ok"):
+    _assert_draft_role_version(db, role, body.expected_version)
+    api_key = str(getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
+    prepared = prepare_draft_revision(
+        db,
+        role,
+        task_id,
+        answers=body.answers or {},
+        note=body.note,
+        api_key=api_key,
+    )
+    if not prepared.get("ok"):
+        db.rollback()
+        role = require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=role_id,
+            permission=JobPermission.CONTROL_AGENT,
+            lock_for_update=False,
+        )
+        conversation = ensure_conversation(db, organization_id=org_id, role=role)
         post_agent_message(
             db,
             conversation=conversation,
-            text=f"I couldn't revise that draft — {result.get('error')} The original is unchanged.",
+            text=f"I couldn't revise that draft — {prepared.get('error')} The original is unchanged.",
         )
         timeline = build_timeline(db, conversation=conversation, role=role)
         db.commit()
         return {
             "ok": False,
             "role_id": role.id,
-            "error": result.get("error"),
-            "errors": result.get("errors"),
+            "role_version": int(role.version or 1),
+            "error": prepared.get("error"),
+            "errors": prepared.get("errors"),
             "timeline": timeline,
         }
-    summary = result["summary"]
-    post_agent_message(
+
+    preparation = prepared["preparation"]
+    db.rollback()
+    generated = generate_prepared_draft_revision(preparation, api_key=api_key)
+    if not generated.get("ok"):
+        role = require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=role_id,
+            permission=JobPermission.CONTROL_AGENT,
+            lock_for_update=False,
+        )
+        conversation = ensure_conversation(db, organization_id=org_id, role=role)
+        post_agent_message(
+            db,
+            conversation=conversation,
+            text=f"I couldn't revise that draft — {generated.get('error')} The original is unchanged.",
+        )
+        timeline = build_timeline(db, conversation=conversation, role=role)
+        db.commit()
+        return {
+            "ok": False,
+            "role_id": role.id,
+            "role_version": int(role.version or 1),
+            "error": generated.get("error"),
+            "errors": generated.get("errors"),
+            "timeline": timeline,
+        }
+
+    # Re-authorize while holding the same lock as every shared-job mutation.
+    # Membership removal or any intervening Role write wins over this prepared
+    # model output.
+    role = require_job_permission(
         db,
-        conversation=conversation,
-        text=f"Revised **{summary['name']}** from your feedback — take another look.",
-        actions=[_draft_review_card(role, summary)],
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
     )
-    timeline = build_timeline(db, conversation=conversation, role=role)
-    db.commit()
-    return {"ok": True, "role_id": role.id, "summary": summary, "timeline": timeline}
+    db.refresh(role)
+    _assert_draft_role_version(db, role, body.expected_version)
+    from_version = int(role.version or 1)
+    before = capture_role_change_snapshot(role)
+    try:
+        result = apply_prepared_draft_revision(
+            db,
+            role,
+            preparation,
+            spec=generated["spec"],
+        )
+        if result.get("conflict"):
+            raise _draft_conflict(db, role)
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail=result.get("error") or "Revise failed",
+            )
+
+        summary = result["summary"]
+        material = bool(result.get("material"))
+        if material:
+            to_version = bump_role_version(role)
+            add_role_change_event(
+                db,
+                role=role,
+                before=before,
+                action="role_draft_task_revised",
+                actor_user_id=int(current_user.id),
+                from_version=from_version,
+                to_version=to_version,
+                reason=f"Draft task {int(task_id)} revised from agent chat",
+                allow_empty_changes=True,
+            )
+            message = f"Revised **{summary['name']}** from your feedback — take another look."
+        else:
+            to_version = from_version
+            message = f"**{summary['name']}** already matches that revision — nothing changed."
+
+        conversation = ensure_conversation(db, organization_id=org_id, role=role)
+        post_agent_message(
+            db,
+            conversation=conversation,
+            text=message,
+            actions=[_draft_review_card(role, summary)],
+        )
+        timeline = build_timeline(db, conversation=conversation, role=role)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "ok": True,
+        "role_id": role.id,
+        "role_version": to_version,
+        "material": material,
+        "summary": summary,
+        "timeline": timeline,
+    }
 
 
 @router.post("/conversations/{role_id}/read")

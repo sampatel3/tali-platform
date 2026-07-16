@@ -18,6 +18,7 @@ from app.models.cv_score_job import CvScoreJob
 from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.role_change_event import RoleChangeEvent
 from app.models.usage_event import UsageEvent
 from app.services.usage_metering_service import InsufficientCreditsError
 from app.tasks.agent_tasks import (
@@ -26,6 +27,8 @@ from app.tasks.agent_tasks import (
     _mark_agent_tick_ready,
     _retry_or_fail_cohort_bootstrap,
     agent_cohort_tick_role,
+    agent_cohort_tick_sweep,
+    agent_manual_run,
 )
 
 
@@ -379,12 +382,151 @@ def test_exhausted_resume_bootstrap_is_failed_and_paused(db):
         max_retries = 3
 
     failure = RuntimeError("scoring worker unavailable")
+    dispatched_version = int(role.version or 1)
     with pytest.raises(RuntimeError, match="scoring worker unavailable"):
         _retry_or_fail_cohort_bootstrap(
-            _Task(), db=db, role=role, exc=failure, activation=True
+            _Task(),
+            db=db,
+            role=role,
+            exc=failure,
+            activation=True,
+            dispatch_role_version=dispatched_version,
         )
 
     db.refresh(role)
     assert role.agent_bootstrap_status == "failed"
     assert role.agent_paused_at is not None
     assert "after retries" in role.agent_paused_reason
+    assert role.version == dispatched_version + 1
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.action == "agent_paused"
+    assert event.actor_user_id is None
+    assert event.from_version == dispatched_version
+    assert event.to_version == dispatched_version + 1
+
+
+def test_exhausted_bootstrap_does_not_pause_newer_role_revision(db):
+    _org, role = _seed_role(db)
+    role.agent_bootstrap_status = "starting"
+    role.version = 8
+    db.commit()
+
+    class _Request:
+        retries = 3
+
+    class _Task:
+        request = _Request()
+        max_retries = 3
+
+    failure = RuntimeError("old dispatch failed")
+    with pytest.raises(RuntimeError, match="old dispatch failed"):
+        _retry_or_fail_cohort_bootstrap(
+            _Task(),
+            db=db,
+            role=role,
+            exc=failure,
+            activation=True,
+            dispatch_role_version=7,
+        )
+
+    db.expire_all()
+    current = db.query(Role).filter(Role.id == role.id).one()
+    assert current.version == 8
+    assert current.agent_bootstrap_status == "starting"
+    assert current.agent_paused_at is None
+    assert (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .count()
+        == 0
+    )
+
+
+def test_bootstrap_retry_preserves_original_dispatch_revision(db):
+    _org, role = _seed_role(db)
+    db.commit()
+
+    class _RetryRaised(Exception):
+        pass
+
+    class _Request:
+        retries = 1
+        args = (int(role.id),)
+        kwargs = {"activation": True}
+
+    class _Task:
+        request = _Request()
+        max_retries = 3
+        captured = None
+
+        def retry(self, **kwargs):
+            self.captured = kwargs
+            raise _RetryRaised()
+
+    task = _Task()
+    with pytest.raises(_RetryRaised):
+        _retry_or_fail_cohort_bootstrap(
+            task,
+            db=db,
+            role=role,
+            exc=RuntimeError("transient"),
+            activation=True,
+            dispatch_role_version=4,
+        )
+
+    assert task.captured["kwargs"] == {
+        "activation": True,
+        "dispatch_role_version": 4,
+    }
+
+
+def test_agent_cycle_workers_skip_soft_deleted_roles(db):
+    _org, role = _seed_role(db)
+    role.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    with patch("app.agent_runtime.orchestrator.run_cycle") as run_cycle:
+        cohort = agent_cohort_tick_role.run(int(role.id))
+        manual = agent_manual_run.run(int(role.id))
+
+    assert cohort == {
+        "status": "skipped",
+        "reason": "role_not_found",
+        "role_id": role.id,
+    }
+    assert manual == cohort
+    run_cycle.assert_not_called()
+
+
+def test_cohort_sweep_dispatches_the_captured_role_revision(db):
+    _org, role = _seed_role(db)
+    role.version = 6
+    db.commit()
+
+    with patch.object(agent_cohort_tick_role, "delay") as dispatch:
+        result = agent_cohort_tick_sweep.run()
+
+    assert result["role_ids"] == [role.id]
+    dispatch.assert_called_once_with(role.id, dispatch_role_version=6)
+
+
+def test_deferred_activation_worker_skips_soft_deleted_role(db):
+    _org, role = _seed_role(db, agentic_mode_enabled=False)
+    role.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    result = agent_cohort_tick_role.run(
+        int(role.id),
+        activation=True,
+        activation_intent_id="deleted-activation",
+    )
+
+    assert result == {
+        "status": "skipped",
+        "reason": "activation_missing",
+        "role_id": role.id,
+    }

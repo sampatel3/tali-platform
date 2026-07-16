@@ -23,6 +23,8 @@ import { Select } from '../../shared/ui/TaaliPrimitives';
 const RoleAgentSettingsTab = ({
   role,
   agentStatus = null,
+  canControlAgent = true,
+  controlDisabledReason = null,
   roleCriteria,
   workspaceCriteria,
   criteriaBusy,
@@ -54,7 +56,10 @@ const RoleAgentSettingsTab = ({
   allTasks = [],
   onAssignAssessmentTasks,
   savingAssessmentTask = false,
+  onRoleVersionChange,
+  onRoleConflict,
 }) => {
+  const controlsReadOnly = !canControlAgent;
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
@@ -115,9 +120,27 @@ const RoleAgentSettingsTab = ({
   const externalProviderLabel = atsProviderLabel(externalProvider);
   const externalJobLive = roleExternalJobLive(role);
   const externalJobState = roleExternalJobState(role);
-  const handleAutonomyToggle = (key, value) => {
-    if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
+  // A switch save is one shared-role mutation. Keep exactly one in flight so
+  // impatient/rapid clicks cannot dispatch the same rendered role version
+  // twice (the second request would truthfully conflict with the first). The
+  // local pending value paints immediately; the parent replaces it with the
+  // authoritative response, or the freshly-refetched role after a real 409.
+  const autonomySaveInFlightRef = React.useRef(false);
+  const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
+  const handleAutonomyToggle = async (key, value) => {
+    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    autonomySaveInFlightRef.current = true;
+    setPendingAutonomy({ key, value: Boolean(value) });
+    try {
+      await onAutonomyChange(key, Boolean(value));
+    } finally {
+      autonomySaveInFlightRef.current = false;
+      setPendingAutonomy(null);
+    }
   };
+  const visibleAutonomyValue = (key, savedValue) => (
+    pendingAutonomy?.key === key ? pendingAutonomy.value : savedValue
+  );
 
   // Assessment tasks live with the rest of the agent configuration. A role may
   // have none, one, or an A/B set; the parent persists the complete ID array so
@@ -170,7 +193,7 @@ const RoleAgentSettingsTab = ({
     : assessmentTaskOptions;
   const assessmentBusy = savingAssessmentTask || assessmentChangePending;
   const handleAssessmentToggle = async (taskId) => {
-    if (assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
+    if (controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
     const id = Number(taskId);
     if (!Number.isFinite(id)) return;
     const previous = selectedAssessmentTaskIds;
@@ -198,6 +221,7 @@ const RoleAgentSettingsTab = ({
   const [budgetSaving, setBudgetSaving] = React.useState(false);
   const monthlyBudgetDollars = Math.round(monthlyBudgetCents / 100);
   const startBudgetEdit = () => {
+    if (controlsReadOnly) return;
     setBudgetDraftDollars(String(monthlyBudgetDollars));
     setBudgetEditing(true);
   };
@@ -206,7 +230,7 @@ const RoleAgentSettingsTab = ({
     setBudgetDraftDollars('');
   };
   const submitBudgetEdit = async () => {
-    if (!onSaveBudget) {
+    if (controlsReadOnly || !onSaveBudget) {
       setBudgetEditing(false);
       return;
     }
@@ -237,6 +261,15 @@ const RoleAgentSettingsTab = ({
           </p>
         </section>
 
+        {controlsReadOnly ? (
+          <div className="mc-agent-warn" role="status" title={controlDisabledReason || undefined}>
+            <div>
+              <div className="mc-agent-warn-title">Agent settings are read-only</div>
+              <div className="mc-agent-warn-body">{controlDisabledReason}</div>
+            </div>
+          </div>
+        ) : null}
+
         {/* Recruiter intent for this role */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
@@ -254,7 +287,7 @@ const RoleAgentSettingsTab = ({
             criteria={roleCriteria}
             workspaceCriteria={workspaceCriteria}
             suppressedIds={Array.isArray(role?.suppressed_org_criterion_ids) ? role.suppressed_org_criterion_ids : []}
-            busy={criteriaBusy}
+            busy={criteriaBusy || controlsReadOnly}
             syncing={criteriaSyncing}
             resetting={criteriaResetting}
             onCreate={onCreateCriterion}
@@ -268,14 +301,29 @@ const RoleAgentSettingsTab = ({
 
         {/* Standing recruiter feedback to the agent — append-only log;
             recent entries inline into the agent's system prompt. */}
-        <RoleFeedbackNotes roleId={role?.id} />
+        <RoleFeedbackNotes
+          roleId={role?.id}
+          roleVersion={role?.version}
+          onRoleVersionChange={onRoleVersionChange}
+          onRoleConflict={onRoleConflict}
+          readOnly={controlsReadOnly}
+          readOnlyReason={controlDisabledReason}
+        />
 
         {/* Q&A history with the agent — recent answers to the agent's
             role-config questions (must-haves, threshold, budget). Hidden
             entirely when there's no history. */}
         <RecruiterAnswersLog roleId={role?.id} />
 
-        {role?.id ? <RoleScreeningQuestions roleId={role.id} /> : null}
+        {role?.id ? (
+          <RoleScreeningQuestions
+            roleId={role.id}
+            roleVersion={role.version}
+            onRoleVersionChange={onRoleVersionChange}
+            readOnly={controlsReadOnly}
+            readOnlyReason={controlDisabledReason}
+          />
+        ) : null}
 
         {/* Screening threshold */}
         <section className="mc-agent-settings-card">
@@ -300,7 +348,7 @@ const RoleAgentSettingsTab = ({
                 value={thresholdMode}
                 onChange={(event) => onThresholdModeChange?.(event.target.value)}
                 aria-label="Threshold mode"
-                disabled={savingThresholdMode}
+                disabled={savingThresholdMode || controlsReadOnly}
               >
                 <option value="manual">Manual</option>
                 <option value="auto">Agent-managed (dynamic)</option>
@@ -333,6 +381,7 @@ const RoleAgentSettingsTab = ({
                 aria-label="Screening threshold percent"
                 className="ce-range mc-agent-settings-slider-input"
                 style={{ '--ce-range-val': thresholdDisplay }}
+                disabled={controlsReadOnly}
               />
               <div className="mc-agent-settings-slider-scale">
                 <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
@@ -476,7 +525,7 @@ const RoleAgentSettingsTab = ({
                           type="checkbox"
                           checked={checked}
                           onChange={() => handleAssessmentToggle(taskId)}
-                          disabled={assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
+                          disabled={controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
                         />
                         <span className="mc-agent-settings-task-option-copy">
                           <strong>{task.name}</strong>
@@ -519,7 +568,9 @@ const RoleAgentSettingsTab = ({
                 Choose what the agent can do without asking you.
               </p>
             </div>
-            <span className="mc-kicker is-mute">SAVES INSTANTLY</span>
+            <span className="mc-kicker is-mute" role="status" aria-live="polite">
+              {pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
+            </span>
           </div>
           {externalProvider && externalJobLive === false && (
             <div className="mc-agent-warn" role="alert">
@@ -550,25 +601,25 @@ const RoleAgentSettingsTab = ({
           {[
             {
               key: 'deterministic_pre_screen_reject',
-              value: deterministicReject,
+              value: visibleAutonomyValue('deterministic_pre_screen_reject', deterministicReject),
               title: 'Auto-reject pre-screen failures',
               sub: 'Reject candidates who fail a required screening question or fall below the pre-screen threshold. Full CV-score and assessment rejections still need approval.',
             },
             {
               key: 'auto_send_assessment',
-              value: autoSendAssessment,
+              value: visibleAutonomyValue('auto_send_assessment', autoSendAssessment),
               title: 'Auto-send assessments',
               sub: 'Send the approved assessment when a candidate passes pre-screen.',
             },
             {
               key: 'auto_resend_assessment',
-              value: autoResendAssessment,
+              value: visibleAutonomyValue('auto_resend_assessment', autoResendAssessment),
               title: 'Auto-retry assessment invites',
               sub: 'Retry an assessment invite when the delivery policy allows it.',
             },
             {
               key: 'auto_skip_assessment',
-              value: autoSkipAssessment,
+              value: visibleAutonomyValue('auto_skip_assessment', autoSkipAssessment),
               title: 'Skip assessment for strong candidates',
               disabled: Boolean(
                 role?.agentic_mode_enabled
@@ -585,19 +636,23 @@ const RoleAgentSettingsTab = ({
             },
             {
               key: 'auto_advance',
-              value: autoAdvance,
+              value: visibleAutonomyValue('auto_advance', autoAdvance),
               title: 'Auto-advance qualified candidates',
               sub: 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
           ].map((rule, idx) => (
-            <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
+            <label
+              key={rule.key}
+              className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}
+              aria-busy={pendingAutonomy?.key === rule.key ? 'true' : undefined}
+            >
               <button
                 type="button"
                 className={`mc-switch ${rule.value ? 'on' : ''}`}
                 onClick={() => {
                   if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
                 }}
-                disabled={Boolean(rule.disabled)}
+                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
               />
@@ -615,7 +670,7 @@ const RoleAgentSettingsTab = ({
             Automation switches save instantly. Threshold changes apply to this role only —{' '}
             <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
           </span>
-          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={savingRoleConfig}>
+          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
             {savingRoleConfig ? 'Saving…' : 'Save threshold'}
           </button>
         </div>
@@ -684,8 +739,9 @@ const RoleAgentSettingsTab = ({
                     step={5}
                     value={budgetDraftDollars}
                     onChange={(event) => setBudgetDraftDollars(event.target.value)}
-                    aria-label="Monthly budget in dollars"
-                    autoFocus
+                  aria-label="Monthly budget in dollars"
+                  autoFocus
+                  disabled={controlsReadOnly}
                   />
                 </div>
               </label>
@@ -704,7 +760,8 @@ const RoleAgentSettingsTab = ({
                   className="btn btn-purple btn-xs"
                   onClick={submitBudgetEdit}
                   disabled={
-                    budgetSaving
+                    controlsReadOnly
+                    || budgetSaving
                     || budgetDraftDollars === ''
                     || !Number.isFinite(Number(budgetDraftDollars))
                     || Number(budgetDraftDollars) <= 0
@@ -722,6 +779,8 @@ const RoleAgentSettingsTab = ({
                 type="button"
                 className="taali-text-btn mc-agent-settings-budget-edit-link"
                 onClick={startBudgetEdit}
+                disabled={controlsReadOnly}
+                title={controlsReadOnly ? controlDisabledReason : undefined}
               >
                 <Edit3 size={11} />
                 Edit

@@ -26,6 +26,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..llm import CallUsage, MeteringContext, one_call
@@ -54,6 +55,7 @@ from .tools import (
     CARD_TYPES,
     MUTATING_TOOL_NAMES,
     MUTATION_CARD_TYPES,
+    MUTATION_TOOL_NAMES,
     dispatch_tool,
 )
 
@@ -190,6 +192,7 @@ def run_agent_response(
     user: User,
     organization: Organization,
     conversation: AgentConversation,
+    accepted_role_version: int | None = None,
 ) -> AgentConversationMessage:
     """Run the tool-use loop for a turn whose user message is ALREADY in history,
     then persist + return the final assistant message. The slow, credit-spending,
@@ -208,6 +211,14 @@ def run_agent_response(
         excerpt_chars=settings.CHAT_HISTORY_EXCERPT_CHARS,
     )
     messages = model_history_messages(history_window)
+    # Immutable-at-enqueue baseline, advanced only after this turn completes one
+    # of its own successful mutation tools. Read-only tools deliberately ignore
+    # this cursor so a stale turn can still answer using the latest role state.
+    expected_role_version = int(
+        accepted_role_version
+        if accepted_role_version is not None
+        else (role.version or 1)
+    )
 
     usage = CallUsage()
     trace_id = uuid.uuid4().hex
@@ -345,12 +356,35 @@ def run_agent_response(
                         role=role,
                         user=user,
                         conversation=conversation,
+                        expected_role_version=expected_role_version,
                     )
                     is_error = False
+                    if name in MUTATION_TOOL_NAMES:
+                        # A successful role mutation may have advanced the
+                        # revision. Carry that turn-owned revision into a
+                        # deliberate follow-up mutation in a later round.
+                        expected_role_version = int(
+                            role.version or expected_role_version
+                        )
                     if isinstance(result, dict) and result.get("type") in CARD_TYPES:
                         collected_cards.append(result)
                     if isinstance(result, dict) and result.get("_terminal_message"):
                         terminal_receipt_message = str(result["_terminal_message"])
+            except HTTPException as exc:
+                # Preserve the same structured 409 contract used by direct UI
+                # writes so the model can truthfully tell the recruiter to
+                # review the newer job instead of retrying a stale mutation.
+                logger.info(
+                    "agent_chat tool %s rejected with HTTP %s",
+                    name,
+                    exc.status_code,
+                )
+                result = {
+                    "error": exc.detail,
+                    "status_code": int(exc.status_code),
+                    "tool": name,
+                }
+                is_error = True
             except Exception as exc:
                 logger.exception("agent_chat tool %s failed: %s", name, exc)
                 # Provider/SDK/database exceptions can contain credentials,
@@ -438,6 +472,7 @@ def run_agent_turn(
     organization: Organization,
     conversation: AgentConversation,
     user_message: str,
+    accepted_role_version: int | None = None,
 ) -> list[AgentConversationMessage]:
     """Persist the user message then run the response in one synchronous call —
     returns the new VISIBLE messages (user + final assistant). Used by the bulk
@@ -448,7 +483,12 @@ def run_agent_turn(
         db=db, conversation=conversation, user=user, user_message=user_message
     )
     assistant_row = run_agent_response(
-        db=db, role=role, user=user, organization=organization, conversation=conversation
+        db=db,
+        role=role,
+        user=user,
+        organization=organization,
+        conversation=conversation,
+        accepted_role_version=accepted_role_version,
     )
     return [user_row, assistant_row]
 

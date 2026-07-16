@@ -122,6 +122,17 @@ def _resolve_brief(db: Session, token: str) -> RoleBrief:
     return brief
 
 
+def _require_open_intake(brief: RoleBrief) -> None:
+    # Publication/materialization freezes this source brief. The live Role is
+    # now authoritative and protected by its hiring team + revision contract;
+    # an old public token must not remain a second, unauthenticated editor.
+    if brief.role_id is not None or str(brief.status or "").lower() == "applied":
+        raise HTTPException(
+            status_code=409,
+            detail="This intake is closed because the requisition was published.",
+        )
+
+
 def _ensure_client_opening(
     db: Session, brief: RoleBrief, client_template: dict[str, Any]
 ) -> list:
@@ -171,8 +182,22 @@ def view_client_intake(
     client_template = client_scoped_template(resolve_template(org))
     # The hiring manager sees their OWN transcript (seeded with a fresh opener on
     # first view), never the recruiter's ``messages``.
-    needs_seed = not (brief.client_messages or [])
-    client_messages = _ensure_client_opening(db, brief, client_template)
+    needs_seed = not (brief.client_messages or []) and brief.role_id is None
+    client_messages = (
+        _ensure_client_opening(db, brief, client_template)
+        if brief.role_id is None
+        else (
+            brief.client_messages
+            or [
+                {
+                    "role": "assistant",
+                    "content": opening_message(client_template),
+                    "attachments": [],
+                    "suggested_replies": [],
+                }
+            ]
+        )
+    )
     if needs_seed:
         db.commit()
     return {
@@ -199,6 +224,7 @@ async def chat_client_intake(
     metered under ``requisition_client_intake``. Returns ROLE-safe progress.
     """
     brief = _resolve_brief(db, token)
+    _require_open_intake(brief)
 
     # Anti-abuse: cap total user turns on an open link.
     if _user_turn_count(brief) >= _MAX_USER_TURNS:
@@ -293,6 +319,7 @@ def submit_client_intake(
     """The client signals they're done: mark the brief submitted. Idempotent —
     an already-submitted (or applied) brief is left as-is."""
     brief = _resolve_brief(db, token)
+    _require_open_intake(brief)
     if brief.status not in ("submitted", "applied"):
         brief.status = "submitted"
         db.add(brief)

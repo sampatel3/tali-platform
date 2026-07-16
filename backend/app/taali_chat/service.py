@@ -69,6 +69,8 @@ _ROLE_SCOPED_TOOLS = frozenset(
         "search_applications",
         "find_top_candidates",
         "screen_pool_against_requirement",
+        "create_top_candidates_report",
+        "create_screen_pool_report",
         "nl_search_candidates",
         "list_recent_agent_decisions",
         "list_recent_agent_runs",

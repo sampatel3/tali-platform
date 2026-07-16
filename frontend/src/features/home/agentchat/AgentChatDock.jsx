@@ -4,31 +4,32 @@
 // role thread exposed by Chat > Agents.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { CircleHelp, MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
+import { CircleAlert, MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
 
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
 import {
-  AgentPromptCard,
   ChatComposer,
+  ChatActivity,
+  AgentFeedTimeline,
+  AgentStreamTabs,
   ChatEmptyState,
-  ChatMarkdown,
   ChatMessage,
+  ChatSurface,
   NewMessageNotice,
+  RoleAgentTimeline,
   ThinkingDots,
+  agentFeedAttentionCount,
+  splitAgentTimeline,
+  useAgentRequestReply,
   useAgentUpdateAwareness,
 } from '../../../shared/chat';
 import { DraftTaskCard, ImpactCard } from './cards.jsx';
 import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
 import {
   AgentLoop,
-  MotionAttentionBadge,
   MotionChatItem,
-  MotionList,
-  motionSafeScrollBehavior,
 } from '../../../shared/motion';
-import { AgentDecisionTimelineCard } from '../../../shared/decisions/AgentDecisionTimelineCard';
-import { useRoleDecisionDetails } from '../../../shared/decisions/useRoleDecisionDetails';
 
 // Role-scoped empty-state prompts. Off roles get an activation suggestion that
 // drives the agent's set_agent_state tool, so you can light one up from Home.
@@ -61,12 +62,14 @@ export function AgentChatDock({
   const isBulk = (bulkSelectedRoles?.length || 0) > 0;
   const [timeline, setTimeline] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState('');
   // Durable "agent is working…" — the turn now runs in a worker, so this is
   // driven by the server and survives navigation / an agent switch, resuming
   // when you reopen the thread.
   const [agentWorking, setAgentWorking] = useState(false);
+  const [streamView, setStreamView] = useState('chat');
   // A timeline fetch and a read acknowledgement are deliberately separate:
   // fetching keeps the thread live, while this marker lets us wait until the
   // selected thread has actually been visible for a moment before acknowledging
@@ -77,9 +80,11 @@ export function AgentChatDock({
   // a "taking longer than expected" notice, unlock the composer, and keep
   // polling at a slower cadence so a late reply still lands.
   const [stalled, setStalled] = useState(false);
-  const scrollRef = useRef(null);
+  const chatScrollRef = useRef(null);
+  const feedScrollRef = useRef(null);
   const composerRef = useRef(null);
-  const timelineRegionId = useId();
+  const chatPanelId = useId();
+  const feedPanelId = useId();
   const [composerAnnouncement, setComposerAnnouncement] = useState('');
   // Guards async results against an agent switch: a slow turn or fetch that
   // resolves after you've moved to another agent must not clobber the new
@@ -94,6 +99,8 @@ export function AgentChatDock({
     setAgentWorking(false);
     setStalled(false);
     setLoadedRoleId(null);
+    setLoadError(false);
+    setStreamView('chat');
     setLoading(Boolean(roleId));
   }, [roleId]);
 
@@ -101,17 +108,22 @@ export function AgentChatDock({
     if (!roleId) return;
     const forRole = roleId;
     if (!opts.silent) setLoading(true);
+    if (!opts.silent) setLoadError(false);
     try {
       const { data } = await agentChat.getTimeline(roleId);
       if (activeRoleRef.current !== forRole) return; // switched away mid-fetch
       setTimeline(data.timeline || []);
       setAgentWorking(Boolean(data.agent_working));
       setLoadedRoleId(forRole);
+      setLoadError(false);
       // A successful timeline read means the poll is healthy again — clear any
       // stalled notice (the reply either landed, or work is genuinely ongoing).
       setStalled(false);
     } catch {
-      if (!opts.silent && activeRoleRef.current === forRole) setTimeline([]);
+      if (activeRoleRef.current === forRole) {
+        setLoadError(true);
+        if (!opts.silent) setTimeline([]);
+      }
     } finally {
       if (!opts.silent && activeRoleRef.current === forRole) setLoading(false);
     }
@@ -162,6 +174,10 @@ export function AgentChatDock({
       // (the previous turn keeps running server-side and its reply still lands).
       if (!msg || sending || (agentWorking && !stalled) || !roleId) return;
       const forRole = roleId;
+      // A composer submit is intentional conversation activity. Return to Chat
+      // before the optimistic turn lands so confirmation is never hidden
+      // behind Agent Feed.
+      setStreamView('chat');
       setInput('');
       setSending(true);
       setStalled(false);
@@ -202,19 +218,51 @@ export function AgentChatDock({
   );
 
   const answer = useCallback(
-    async (needsInputId, response) => {
+    async (needsInputId, response, expectedVersion) => {
       try {
-        await agentChat.answerNeedsInput(needsInputId, response);
+        const answerArgs = expectedVersion == null
+          ? [needsInputId, response]
+          : [needsInputId, response, expectedVersion];
+        await agentChat.answerNeedsInput(...answerArgs);
         load();
         onReload?.();
         return true;
-      } catch {
-        showToast?.('Couldn’t record that answer.', 'error');
+      } catch (err) {
+        showToast?.(
+          err?.response?.data?.detail?.message || 'Couldn’t record that answer.',
+          err?.response?.status === 409 ? 'info' : 'error',
+        );
+        load();
         return false;
       }
     },
     [load, onReload, showToast]
   );
+
+  const {
+    beginReply,
+    cancelReply,
+    replyTo,
+    replying,
+    submitReply,
+    submitting: replySubmitting,
+  } = useAgentRequestReply({
+    value: input,
+    onChange: setInput,
+    onAnswer: answer,
+  });
+  const replyScopeRef = useRef(`${isBulk ? 'bulk' : 'role'}:${roleId || ''}`);
+
+  useEffect(() => {
+    if (replying) composerRef.current?.focus();
+  }, [replying]);
+
+  useEffect(() => {
+    const scope = `${isBulk ? 'bulk' : 'role'}:${roleId || ''}`;
+    if (scope === replyScopeRef.current) return;
+    replyScopeRef.current = scope;
+    if (replying) cancelReply();
+  }, [cancelReply, isBulk, replying, roleId]);
 
   const dismiss = useCallback(
     async (needsInputId) => {
@@ -231,34 +279,44 @@ export function AgentChatDock({
   );
 
   const approveDraft = useCallback(
-    async (taskId) => {
+    async (taskId, expectedVersion) => {
       if (!roleId || sending) return;
       setSending(true);
       try {
-        const { data } = await agentChat.approveDraftTask(roleId, taskId);
+        const { data } = await agentChat.approveDraftTask(roleId, taskId, expectedVersion);
         setTimeline(data.timeline || []);
         onReload?.();
       } catch (err) {
-        showToast?.(err?.response?.data?.detail || 'Couldn’t approve that draft.', 'error');
+        showToast?.(
+          err?.response?.data?.detail?.message || err?.response?.data?.detail || 'Couldn’t approve that draft.',
+          err?.response?.status === 409 ? 'info' : 'error',
+        );
+        load();
       } finally {
         setSending(false);
       }
     },
-    [roleId, sending, onReload, showToast]
+    [roleId, sending, onReload, showToast, load]
   );
 
   const reviseDraft = useCallback(
-    async (taskId, feedback) => {
+    async (taskId, feedback, expectedVersion) => {
       if (!roleId || sending) return;
       // Revising re-authors the task (one model call) — show the thinking
       // bubble while it runs, then drop in the revised review card.
       setSending(true);
       try {
-        const { data } = await agentChat.reviseDraftTask(roleId, taskId, feedback);
+        const { data } = await agentChat.reviseDraftTask(roleId, taskId, {
+          ...feedback,
+          expectedVersion,
+        });
         setTimeline(data.timeline || []);
         onReload?.();
       } catch (err) {
-        showToast?.(err?.response?.data?.detail || 'Couldn’t revise that draft.', 'error');
+        showToast?.(
+          err?.response?.data?.detail?.message || err?.response?.data?.detail || 'Couldn’t revise that draft.',
+          err?.response?.status === 409 ? 'info' : 'error',
+        );
         load();
       } finally {
         setSending(false);
@@ -274,6 +332,7 @@ export function AgentChatDock({
       const msg = (text || '').trim();
       if (!msg) return;
       if (isBulk) {
+        setStreamView('chat');
         onSendBulk?.(msg);
         setInput('');
       } else {
@@ -291,6 +350,16 @@ export function AgentChatDock({
     setComposerAnnouncement('Added to composer');
   }, []);
 
+  const prefillFromFeed = useCallback((prompt) => {
+    setStreamView('chat');
+    prefillPrompt(prompt);
+  }, [prefillPrompt]);
+
+  const replyFromFeed = useCallback((request) => {
+    setStreamView('chat');
+    beginReply(request);
+  }, [beginReply]);
+
   useEffect(() => {
     if (!composerAnnouncement) return undefined;
     const timer = window.setTimeout(() => setComposerAnnouncement(''), 1600);
@@ -305,55 +374,38 @@ export function AgentChatDock({
     [loadedRoleId, roleId, timeline],
   );
 
-  const {
-    byId: decisionDetails,
-    loading: decisionDetailsLoading,
-    error: decisionDetailsError,
-    refresh: refreshDecisionDetails,
-  } = useRoleDecisionDetails(roleId, isBulk ? [] : visibleTimeline);
-
-  const refreshAfterDecision = useCallback(async () => {
-    await Promise.all([
-      load({ silent: true }),
-      refreshDecisionDetails(),
-    ]);
-    onReload?.();
-  }, [load, onReload, refreshDecisionDetails]);
-
-  // The dock mirrors the role's full chronological thread, including the HITL
-  // decisions that need recruiter action.
+  // The API deliberately returns one chronological audit projection. The UI
+  // presents it through two stable lanes so autonomous work never interrupts a
+  // direct conversation: chat/action messages stay in Chat; events, proactive
+  // suggestions, steers, and decision references live in Agent feed.
   const items = useMemo(
     () => visibleTimeline.filter(
       (it) => it.kind === 'message' || it.kind === 'needs_input' || it.kind === 'decision',
     ),
     [visibleTimeline],
   );
-  const openQuestions = useMemo(
-    () => items.filter((item) => item.kind === 'needs_input' && item.status === 'open'),
+  const { conversation: conversationItems, feed: feedItems } = useMemo(
+    () => splitAgentTimeline(items),
     [items],
+  );
+  const openQuestions = useMemo(
+    () => feedItems.filter((item) => item.kind === 'needs_input' && item.status === 'open'),
+    [feedItems],
   );
   const openQuestionPositions = useMemo(
     () => new Map(openQuestions.map((item, index) => [item.needs_input_id ?? item.id, index + 1])),
     [openQuestions],
   );
-  const jumpToOldestQuestion = useCallback(() => {
-    const target = scrollRef.current?.querySelector('.tk-agent-prompt[data-status="open"]');
-    if (!target) return;
-    target.scrollIntoView({
-      behavior: motionSafeScrollBehavior('smooth'),
-      block: 'center',
-    });
-    target.focus({ preventScroll: true });
-  }, []);
+  const feedAttention = useMemo(() => agentFeedAttentionCount(feedItems), [feedItems]);
 
   const {
     hasNewAgentUpdate,
     jumpToLatest,
   } = useAgentUpdateAwareness({
-    items,
+    items: conversationItems,
     ready: !isBulk && loadedRoleId === roleId,
     scopeKey: `${isBulk ? 'bulk' : 'role'}:${roleId || ''}`,
-    scrollRef,
+    scrollRef: chatScrollRef,
   });
 
   // A constraint edit's re-screen is "in flight" when the latest agent message
@@ -362,7 +414,7 @@ export function AgentChatDock({
   // impact message lands without a manual refresh.
   let lastAgentIdx = -1;
   let lastRescreenIdx = -1;
-  items.forEach((it, i) => {
+  conversationItems.forEach((it, i) => {
     if (it.kind === 'message' && it.author === 'agent') {
       lastAgentIdx = i;
       if ((it.actions || []).some((c) => c.type === 'constraint_change' && (c.rescreening_count || 0) > 0)) {
@@ -440,8 +492,29 @@ export function AgentChatDock({
     workSnapRef.current = { working: agentWorking, role: roleId };
   }, [agentWorking, roleId, roleName, showToast]);
 
+  const renderTimelineAction = (card, _actionIndex, _item, options = {}) => (
+    (card.type === 'candidate_evidence' || card.type === 'candidate_report') ? (
+      <CandidateEvidenceCard data={card} />
+    ) : card.type === 'draft_task_review' ? (
+      <DraftTaskCard
+        card={card}
+        onApprove={approveDraft}
+        onRevise={reviseDraft}
+        busy={sending}
+      />
+    ) : (
+      <ImpactCard
+        card={card}
+        detailOnly={Boolean(options.detailOnly)}
+        onApply={(threshold) => send(`Set the score cut-off to ${threshold}.`)}
+        onPrompt={streamView === 'feed' ? prefillFromFeed : prefillPrompt}
+        busy={sending}
+      />
+    )
+  );
+
   return (
-    <aside className="ac-dock">
+    <ChatSurface as="aside" className="ac-dock" density="compact" tone="agent">
       <div className="ac-dock-head">
         {isBulk ? <Users size={15} /> : <MessageSquare size={15} />}
         {isBulk ? (
@@ -457,21 +530,6 @@ export function AgentChatDock({
           <>
             <span>Ask the agent</span>
             {roleName && <span className="ac-dock-role">{roleName}</span>}
-            {openQuestions.length > 0 ? (
-              <button
-                type="button"
-                className="tk-agent-question-shortcut"
-                aria-label={`${openQuestions.length} ${openQuestions.length === 1 ? 'question needs' : 'questions need'} your input`}
-                onClick={jumpToOldestQuestion}
-              >
-                <CircleHelp size={13} />
-                <MotionAttentionBadge
-                  value={openQuestions.length}
-                  className="tk-agent-question-shortcut-count"
-                />
-                <span className="tk-agent-question-shortcut-label">need input</span>
-              </button>
-            ) : null}
             {onCollapse && (
               <button className="ac-dock-collapse" title="Collapse" onClick={onCollapse}>
                 <PanelRightClose size={16} />
@@ -481,131 +539,138 @@ export function AgentChatDock({
         )}
       </div>
 
-      <div className="ac-stream" id={timelineRegionId} ref={scrollRef}>
-        {isBulk ? (
-          <div className="ac-bulk-panel">
-            <div className="ac-bulk-title">One message → {bulkSelectedRoles.length} agents</div>
-            <p className="ac-bulk-note">
-              Runs on each role's own agent, in its own thread — the audit stays per role. Replies land in
-              each thread; re-screens still ask before spending, role by role.
-            </p>
-            <div className="ac-bulk-roles">
-              {bulkSelectedRoles.map((r) => (
-                <span key={r.role_id} className="ac-bulk-role-chip">{r.role_name}</span>
-              ))}
+      {!isBulk ? (
+        <AgentStreamTabs
+          value={streamView}
+          onChange={setStreamView}
+          attentionCount={feedAttention}
+          chatPanelId={chatPanelId}
+          feedPanelId={feedPanelId}
+        />
+      ) : null}
+
+      <div className="ac-stream-stack">
+        <div
+          className="ac-stream"
+          id={chatPanelId}
+          ref={chatScrollRef}
+          role="tabpanel"
+          aria-label="Chat"
+          hidden={!isBulk && streamView !== 'chat'}
+        >
+          {isBulk ? (
+            <div className="ac-bulk-panel">
+              <div className="ac-bulk-title">One message → {bulkSelectedRoles.length} agents</div>
+              <p className="ac-bulk-note">
+                Runs on each role's own agent, in its own thread — the audit stays per role. Replies land in
+                each thread; re-screens still ask before spending, role by role.
+              </p>
+              <div className="ac-bulk-roles">
+                {bulkSelectedRoles.map((r) => (
+                  <span key={r.role_id} className="ac-bulk-role-chip">{r.role_name}</span>
+                ))}
+              </div>
             </div>
-          </div>
-        ) : loading && items.length === 0 ? (
-          <div className="ac-empty">Loading the conversation…</div>
-        ) : items.length === 0 && !sending && !agentWorking ? (
-          <ChatEmptyState
-            compact
-            title={<>What should this agent do<em>?</em></>}
-            sub={<>Ask about <b>{roleName || 'this role'}</b>’s pool, or tell the agent to change something — it acts and shows the impact.</>}
-            suggestions={agentEnabled === false ? OFF_SUGGESTIONS : ON_SUGGESTIONS}
-            onPick={(t) => submitComposer(t)}
-          />
-        ) : (
-          <MotionList className="ac-timeline" aria-label="Agent conversation" layout={false}>
-            {items.map((it) => {
-              let content;
-              if (it.kind === 'needs_input') {
-                content = (
-                  <AgentPromptCard
-                    item={it}
-                    onAnswer={answer}
-                    onDismiss={dismiss}
-                    onPrompt={prefillPrompt}
-                    position={openQuestionPositions.get(it.needs_input_id ?? it.id)}
-                    total={openQuestions.length}
+          ) : loading && items.length === 0 ? (
+            <ChatMessage role="assistant">
+              <ThinkingDots label="Loading the conversation…" />
+            </ChatMessage>
+          ) : loadError && items.length === 0 ? (
+            <ChatActivity
+              role="alert"
+              severity="error"
+              severityLabel="Error"
+              typeLabel="Conversation"
+              title="Couldn’t load the conversation"
+              summary="The thread is still saved. Try loading it again."
+              icon={CircleAlert}
+              actions={[{ label: 'Try again', onClick: () => load() }]}
+            />
+          ) : conversationItems.length === 0 && !sending && !agentWorking ? (
+            <ChatEmptyState
+              compact
+              title={<>What should this agent do<em>?</em></>}
+              sub={<>Ask about <b>{roleName || 'this role'}</b>’s pool, or tell the agent to change something — direct replies stay here; background work goes to Agent feed.</>}
+              suggestions={agentEnabled === false ? OFF_SUGGESTIONS : ON_SUGGESTIONS}
+              onPick={(t) => submitComposer(t)}
+            />
+          ) : (
+            <RoleAgentTimeline
+              items={conversationItems}
+              className="ac-timeline"
+              roleId={roleId}
+              roleName={roleName}
+              onPrompt={prefillPrompt}
+              renderAction={renderTimelineAction}
+              before={loadError ? (
+                <MotionChatItem key="refresh-error" className="tk-motion-row">
+                  <ChatActivity
+                    severity="warning"
+                    severityLabel="Retrying"
+                    typeLabel="Conversation sync"
+                    title="Refresh interrupted"
+                    summary="Showing the last saved conversation while Taali reconnects."
+                    icon={CircleAlert}
+                    actions={[{ label: 'Retry now', onClick: () => load({ silent: true }) }]}
                   />
-                );
-              } else if (it.kind === 'decision') {
-                const decisionId = Number(it.decision_id);
-                content = (
-                  <AgentDecisionTimelineCard
-                    item={it}
-                    detail={decisionDetails[decisionId]}
-                    roleId={roleId}
-                    roleName={roleName}
-                    detailsLoading={decisionDetailsLoading}
-                    detailsError={decisionDetailsError}
-                    onRetryDetails={refreshDecisionDetails}
-                    onChanged={refreshAfterDecision}
-                  />
-                );
-              } else {
-                const isAgent = it.author === 'agent';
-                const suppressStructuredCopy = (it.message_kind === 'proactive'
-                  && (it.actions || []).some((card) => card.type === 'helper_prompt'))
-                  || (it.message_kind === 'event'
-                    && (it.actions || []).some((card) => card.type === 'agent_event'));
-                const cards = (it.actions || []).map((card, i) =>
-                  (card.type === 'candidate_evidence' || card.type === 'candidate_report') ? (
-                    <CandidateEvidenceCard key={i} data={card} />
-                  ) : card.type === 'draft_task_review' ? (
-                    <DraftTaskCard
-                      key={i}
-                      card={card}
-                      onApprove={approveDraft}
-                      onRevise={reviseDraft}
-                      busy={sending}
-                    />
-                  ) : (
-                    <ImpactCard
-                      key={i}
-                      card={card}
-                      onApply={(t) => send(`Set the score cut-off to ${t}.`)}
-                      onPrompt={prefillPrompt}
-                      busy={sending}
-                    />
-                  )
-                );
-                // Agent replies carry a mono "Agent" attribution label above the
-                // text (home-preview `.msg.bot .who`). User messages stay the
-                // plain ink pill on the opposite edge.
-                content = isAgent ? (
-                  <ChatMessage role="assistant" time={it.created_at}>
-                    <div className="ac-agent-say">
-                      <span className="ac-who">Agent</span>
-                      {it.text && !suppressStructuredCopy ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
-                    </div>
-                    {cards}
-                  </ChatMessage>
-                ) : (
-                  <ChatMessage role="user" text={it.text} time={it.created_at} />
-                );
-              }
-              return (
-                <MotionChatItem key={it.id} className="tk-motion-row">
-                  {content}
                 </MotionChatItem>
-              );
-            })}
-          </MotionList>
-        )}
-        {(sending || agentWorking) && !stalled && (
-          <ChatMessage role="assistant">
-            <ThinkingDots label="Working…" />
-          </ChatMessage>
-        )}
-        {stalled && !sending && (
-          <div className="ac-rescreen-live">
-            <AgentLoop kind="pulse" className="ac-pulse" /> This is taking longer than expected — still running. You can send another message, or check back shortly.
+              ) : null}
+            />
+          )}
+          {(sending || agentWorking) && !stalled && (
+            <ChatMessage role="assistant">
+              <ThinkingDots label="Working…" />
+            </ChatMessage>
+          )}
+          {stalled && !sending && (
+            <ChatActivity
+              severity="warning"
+              severityLabel="Still running"
+              typeLabel="Agent turn"
+              title="This is taking longer than expected"
+              summary="You can send another message or check again; the reply will still land in this thread."
+              icon={CircleAlert}
+              actions={[{ label: 'Check now', onClick: () => load({ silent: true }) }]}
+            />
+          )}
+          {rescreenPending && !sending && (
+            <div className="tk-agent-working">
+              <AgentLoop kind="pulse" className="tk-agent-working-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+            </div>
+          )}
+        </div>
+
+        {!isBulk ? (
+          <div
+            className="ac-stream ac-feed-stream"
+            id={feedPanelId}
+            ref={feedScrollRef}
+            role="tabpanel"
+            aria-label="Agent feed"
+            hidden={streamView !== 'feed'}
+          >
+            <AgentFeedTimeline
+              key={`feed-${roleId}`}
+              items={feedItems}
+              roleId={roleId}
+              roleName={roleName}
+              openQuestionPositions={openQuestionPositions}
+              openQuestionCount={openQuestions.length}
+              onAnswer={answer}
+              onDismiss={dismiss}
+              onPrompt={prefillFromFeed}
+              onReply={replyFromFeed}
+              renderAction={renderTimelineAction}
+            />
           </div>
-        )}
-        {rescreenPending && !sending && (
-          <div className="ac-rescreen-live">
-            <AgentLoop kind="pulse" className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
-          </div>
-        )}
+        ) : null}
       </div>
 
       <div className="ac-dock-composer">
         <NewMessageNotice
-          visible={hasNewAgentUpdate}
+          visible={streamView === 'chat' && hasNewAgentUpdate}
           onClick={jumpToLatest}
-          controls={timelineRegionId}
+          controls={chatPanelId}
           className="ac-new-update"
         />
         {composerAnnouncement ? (
@@ -617,7 +682,9 @@ export function AgentChatDock({
           ref={composerRef}
           value={input}
           onChange={setInput}
-          onSubmit={submitComposer}
+          onSubmit={replying ? submitReply : submitComposer}
+          replyTo={replyTo}
+          onCancelReply={cancelReply}
           placeholder={
             isBulk
               ? `Message ${bulkSelectedRoles.length} agents at once…`
@@ -629,9 +696,9 @@ export function AgentChatDock({
                   ? `Message the ${roleName} agent…`
                   : "Message this role's agent…"
           }
-          busy={(sending || (agentWorking && !stalled)) && !isBulk}
+          busy={replySubmitting || ((sending || (agentWorking && !stalled)) && !isBulk)}
         />
       </div>
-    </aside>
+    </ChatSurface>
   );
 }

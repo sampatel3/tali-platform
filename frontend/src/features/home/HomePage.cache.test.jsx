@@ -41,6 +41,7 @@ vi.mock('../../shared/layout/AgentHeader', () => ({
   AgentHeader: ({ kicker, className }) => (
     <div data-testid="kicker" className={className}>{kicker}</div>
   ),
+  buildAgentPropFromStatus: () => ({}),
 }));
 vi.mock('./HomeNow', () => ({
   HomeNow: ({ loading, staleCount, rolesBreakdown: roles, pendingOrdered }) => (

@@ -63,13 +63,16 @@ describe('Agent Chat operation cards', () => {
     })).toHaveAttribute('data-severity', 'error');
     expect(screen.getByText('Error')).toBeInTheDocument();
     expect(screen.getByText('Run failed')).toBeInTheDocument();
-    expect(screen.getByText('Provider timeout')).toBeInTheDocument();
     expect(screen.queryByText('Dropped malformed detail')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Scheduled run 42' })).toHaveAttribute(
       'href',
       '/settings/background-jobs?run=run-42',
     );
-    expect(screen.getByText('Details').closest('details')).not.toHaveAttribute('open');
+    const details = screen.getByRole('button', { name: 'Details' });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(details);
+    expect(details).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Provider timeout')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Investigate/ }));
     expect(prompts).toEqual(['Investigate why the scheduled review failed.']);
@@ -103,6 +106,7 @@ describe('Agent Chat operation cards', () => {
   });
 
   it('renders an application-operation preview as unexecuted', () => {
+    const prompts = [];
     render(
       <ImpactCard
         card={{
@@ -114,6 +118,7 @@ describe('Agent Chat operation cards', () => {
             body_preview: 'Please review the salary context.',
           },
         }}
+        onPrompt={(prompt) => prompts.push(prompt)}
       />,
     );
 
@@ -121,6 +126,8 @@ describe('Agent Chat operation cards', () => {
     expect(screen.getByText('Post Workable note')).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText(/No action has run/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review in composer' }));
+    expect(prompts).toEqual(['Confirm post workable note for Ada Lovelace.']);
   });
 
   it('renders decision previews and committed operation receipts distinctly', () => {
@@ -152,6 +159,24 @@ describe('Agent Chat operation cards', () => {
     );
     expect(screen.getByTestId('operation-receipt')).toHaveTextContent('queued');
     expect(screen.getByText('Decision 7 was accepted for processing.')).toBeInTheDocument();
+  });
+
+  it('uses the shared activity receipt language for completed actions', () => {
+    const { container } = render(
+      <ImpactCard
+        card={{
+          type: 'related_role_created',
+          role_name: 'Senior Data Engineer',
+          frontend_url: '/jobs/42',
+          evaluation_counts: { pending: 4, unscorable: 1 },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('article')).toHaveAttribute('data-severity', 'success');
+    expect(container.querySelector('[class*="ac-"]')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open Senior Data Engineer/ }))
+      .toHaveAttribute('href', '/jobs/42');
   });
 });
 

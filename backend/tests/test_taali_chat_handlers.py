@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from app.candidate_search.schemas import (
+    CandidateDeepVerification,
     GraphPayload,
     ParsedFilter,
     SearchOutput,
@@ -87,6 +88,24 @@ def test_nl_search_candidates_passes_through_run_search(db):
         parsed_filter=ParsedFilter(skills_all=["aws"], free_text="aws engineers"),
         warnings=[],
         rerank_applied=True,
+        deep_checked=2,
+        evidence_succeeded=1,
+        evidence_failed=1,
+        qualified=1,
+        capped=True,
+        exhaustive=False,
+        verification_results=[
+            CandidateDeepVerification(
+                application_id=app2.id,
+                status="qualified",
+                reason="AWS delivery evidence",
+            ),
+            CandidateDeepVerification(
+                application_id=app1.id,
+                status="error",
+                error_code="invalid_model_response",
+            ),
+        ],
         subgraph=None,
     )
 
@@ -106,8 +125,20 @@ def test_nl_search_candidates_passes_through_run_search(db):
     assert out["database_matches"] == 2
     assert out["returned"] == 2
     assert out["rerank_applied"] is True
+    assert out["deep_checked"] == 2
+    assert out["evidence_succeeded"] == 1
+    assert out["evidence_failed"] == 1
+    assert out["qualified"] == 1
+    assert out["capped"] is True
+    assert out["exhaustive"] is False
+    assert [item["status"] for item in out["verification_results"]] == [
+        "qualified",
+        "error",
+    ]
     # Order from run_search must be preserved.
     assert [a["application_id"] for a in out["applications"]] == [app2.id, app1.id]
+    assert out["applications"][0]["deep_verification"]["status"] == "qualified"
+    assert out["applications"][1]["deep_verification"]["status"] == "error"
     assert out["parsed_filter"]["skills_all"] == ["aws"]
 
 
@@ -227,7 +258,7 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
     assert captured["rank_by"] == "taali"
 
 
-def test_find_top_candidates_rejects_a_foreign_role_before_search(db):
+def test_find_top_candidates_rejects_a_foreign_role_before_search_or_report(db):
     user, _org = _make_user_and_org(db)
     other_org = Organization(name="Foreign Org", slug=f"foreign-{id(db)}")
     db.add(other_org)
@@ -240,9 +271,11 @@ def test_find_top_candidates_rejects_a_foreign_role_before_search(db):
     db.add(foreign_role)
     db.commit()
 
-    with patch(
-        "app.candidate_search.top_candidates.find_top_candidates"
-    ) as engine, pytest.raises(ValueError, match="not found"):
+    with (
+        patch("app.candidate_search.top_candidates.find_top_candidates") as engine,
+        patch("app.domains.top_reports.service.create_report") as create_report,
+        pytest.raises(ValueError, match="not found"),
+    ):
         handlers.find_top_candidates(
             db,
             user,
@@ -250,21 +283,105 @@ def test_find_top_candidates_rejects_a_foreign_role_before_search(db):
             role_id=foreign_role.id,
         )
     engine.assert_not_called()
+    create_report.assert_not_called()
 
 
-def test_find_top_candidates_is_read_only_and_does_not_mint_public_report(db):
+def test_find_top_candidates_is_a_pure_authenticated_read(db):
     from app.models.top_candidates_report import TopCandidatesReport
 
-    user, _org = _make_user_and_org(db)
+    user, org = _make_user_and_org(db)
+    role = Role(organization_id=org.id, name="Backend", source="manual")
+    db.add(role)
+    db.commit()
+    grounded = {
+        "candidates": [
+            {
+                "candidate_name": "Ada Lovelace",
+                "candidate_email": "ada@example.com",
+                "candidate_phone": "+971500000000",
+                "criteria": [
+                    {
+                        "label": "Python",
+                        "status": "met",
+                        "evidence": [{"source": "cv", "quote": "Built Python systems"}],
+                    }
+                ],
+            }
+        ],
+        "shown": 1,
+        "total_matched": 1,
+    }
     with patch(
         "app.candidate_search.top_candidates.find_top_candidates",
-        return_value={"candidates": [], "shown": 0, "total_matched": 0},
+        return_value=grounded,
+    ):
+        result = handlers.find_top_candidates(
+            db,
+            user,
+            query="Python platform experience",
+            limit=5,
+            role_id=role.id,
+        )
+
+    assert db.query(TopCandidatesReport).count() == 0
+    assert "report_token" not in result
+    assert "report_url" not in result
+    assert result["role_id"] == role.id
+    assert result["role_name"] == "Backend"
+    assert result["candidates"][0]["candidate_name"] == "Ada Lovelace"
+    assert (
+        result["candidates"][0]["criteria"][0]["evidence"][0]["quote"]
+        == "Built Python systems"
+    )
+    # The authenticated search result retains contact fields. Publishing is a
+    # separate, confirmed command that creates a scrubbed public snapshot.
+    assert result["candidates"][0]["candidate_email"] == "ada@example.com"
+    assert result["candidates"][0]["candidate_phone"] == "+971500000000"
+
+
+def test_find_top_candidates_never_calls_report_persistence(db):
+    user, _org = _make_user_and_org(db)
+    grounded = {"candidates": [], "shown": 0, "total_matched": 0}
+
+    with (
+        patch(
+            "app.candidate_search.top_candidates.find_top_candidates",
+            return_value=grounded,
+        ),
+        patch(
+            "app.domains.top_reports.service.create_report",
+            side_effect=RuntimeError("report store unavailable"),
+        ) as create_report,
+        patch.object(db, "rollback", wraps=db.rollback) as rollback,
     ):
         result = handlers.find_top_candidates(db, user, query="top engineers")
 
+    assert result == grounded
     assert "report_token" not in result
     assert "report_url" not in result
-    assert db.query(TopCandidatesReport).count() == 0
+    create_report.assert_not_called()
+    rollback.assert_not_called()
+    # The session remains usable by the rest of the chat request.
+    assert db.query(Organization).filter(Organization.id == user.organization_id).one()
+
+
+def test_find_top_candidates_does_not_flush_the_caller_transaction(db):
+    user, _org = _make_user_and_org(db)
+    result = {"candidates": [], "shown": 0, "total_matched": 0}
+
+    with (
+        patch(
+            "app.candidate_search.top_candidates.find_top_candidates",
+            return_value=result,
+        ),
+        patch("app.domains.top_reports.service.create_report") as create_report,
+        patch.object(db, "flush", side_effect=RuntimeError("chat flush failed")) as flush,
+    ):
+        actual = handlers.find_top_candidates(db, user, query="top engineers")
+
+    create_report.assert_not_called()
+    flush.assert_not_called()
+    assert actual == result
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +430,80 @@ def test_screen_pool_handler_scopes_scored_nonhired(db):
     assert captured["role_id"] == role.id
     assert unscored.id not in captured["ids"]  # not scored → excluded
     assert hired.id not in captured["ids"]      # already placed → excluded
+
+
+def test_screen_pool_is_a_pure_read_with_database_only_coverage(db):
+    from app.models.top_candidates_report import TopCandidatesReport
+
+    user, org = _make_user_and_org(db)
+    role = Role(organization_id=org.id, name="Data", source="manual")
+    db.add(role)
+    db.commit()
+    database_only = {
+        "mode": "rediscovery",
+        "candidates": [{"candidate_name": "Grace Hopper", "criteria": []}],
+        "database_matches": 18,
+        "deep_checked": 0,
+        "qualified": None,
+        "returned": 1,
+        "capped": False,
+        "evidence_model": None,
+        "warnings": [{"code": "deep_verification_not_requested"}],
+    }
+
+    with patch(
+        "app.candidate_search.top_candidates.screen_pool_against_requirement",
+        return_value=database_only,
+    ):
+        result = handlers.screen_pool_against_requirement(
+            db,
+            user,
+            requirement_text="banking platform experience",
+            role_id=role.id,
+        )
+
+    assert db.query(TopCandidatesReport).count() == 0
+    assert "report_token" not in result
+    assert "report_url" not in result
+    assert result["role_id"] == role.id
+    assert result["role_name"] == "Data"
+    assert result["database_matches"] == 18
+    assert result["deep_checked"] == 0
+    assert result["qualified"] is None
+    assert result["evidence_model"] is None
+    assert result["warnings"] == [
+        {"code": "deep_verification_not_requested"}
+    ]
+
+
+def test_screen_pool_rejects_foreign_role_before_search_or_report(db):
+    user, _org = _make_user_and_org(db)
+    other_org = Organization(name="Foreign Org", slug=f"foreign-screen-{id(db)}")
+    db.add(other_org)
+    db.flush()
+    foreign_role = Role(
+        organization_id=other_org.id,
+        name="Confidential Foreign Role",
+        source="manual",
+    )
+    db.add(foreign_role)
+    db.commit()
+
+    with (
+        patch(
+            "app.candidate_search.top_candidates.screen_pool_against_requirement"
+        ) as engine,
+        patch("app.domains.top_reports.service.create_report") as create_report,
+        pytest.raises(ValueError, match="not found"),
+    ):
+        handlers.screen_pool_against_requirement(
+            db,
+            user,
+            requirement_text="banking",
+            role_id=foreign_role.id,
+        )
+    engine.assert_not_called()
+    create_report.assert_not_called()
 
 
 def test_screen_pool_handler_excludes_candidate_hired_elsewhere(db):

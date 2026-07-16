@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from app.agent_chat.service import list_agent_conversations
+from app.models.agent_conversation import AgentConversation
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
@@ -141,6 +142,65 @@ def test_bulk_endpoint_enqueues_owned_only(client, db):
     assert mock_delay.called
     enqueued_ids = mock_delay.call_args.args[2]
     assert sorted(enqueued_ids) == sorted([r1.id, r2.id])
+
+
+def test_bulk_send_fences_post_commit_role_edits_per_durable_turn(db):
+    org = _org(db, name="Bulk race")
+    user = _user(db, org)
+    r1 = _role(db, org, name="R1", agentic=True)
+    r2 = _role(db, org, name="R2", agentic=True)
+    db.commit()
+    role_ids = [int(r1.id), int(r2.id)]
+    accepted_versions = {
+        str(int(r1.id)): int(r1.version or 1),
+        str(int(r2.id)): int(r2.version or 1),
+    }
+
+    from app.domains.agent_chat.route_support import BulkMessageRequest
+    from app.domains.agent_chat.routes import bulk_message
+
+    real_commit = db.commit
+    raced = False
+
+    def _commit_then_edit_roles():
+        nonlocal raced
+        real_commit()
+        if raced:
+            return
+        raced = True
+        with TestingSessionLocal() as concurrent:
+            for rid in role_ids:
+                current = concurrent.get(Role, rid)
+                current.version = accepted_versions[str(rid)] + 1
+            concurrent.commit()
+
+    with patch.object(db, "commit", side_effect=_commit_then_edit_roles), patch(
+        "app.tasks.agent_chat_tasks.bulk_agent_message.delay"
+    ) as delay:
+        result = bulk_message(
+            BulkMessageRequest(role_ids=role_ids, message="Review each shortlist"),
+            db=db,
+            current_user=user,
+        )
+
+    assert result["accepted"] == 2
+    assert delay.call_args.args[4] == accepted_versions
+    db.expire_all()
+    conversations = (
+        db.query(AgentConversation)
+        .filter(AgentConversation.role_id.in_(role_ids))
+        .all()
+    )
+    assert {
+        str(int(row.role_id)): int(row.turn_accepted_role_version)
+        for row in conversations
+    } == accepted_versions
+    assert {
+        str(rid): int(db.get(Role, rid).version)
+        for rid in role_ids
+    } == {
+        key: version + 1 for key, version in accepted_versions.items()
+    }
 
 
 # --- agent-first grouping ---------------------------------------------------

@@ -1,372 +1,391 @@
-/* Grounded candidate-evidence card. Purple family only (no red/amber/green),
-   styled against global design tokens so it renders identically in the
-   taali-chat thread and the per-role agent-chat dock. */
-
-/* search-preview `.evcard`: a purple-soft outline with a tinted header band;
-   the candidate rows below are full-bleed with their own padding + hairline
-   separators (so the card reads as a contained "report", not a list). */
+/* Grounded candidate evidence uses the shared ChatArtifact shell. This file is
+   deliberately limited to the report's domain body: rankings, verdicts,
+   citations, and the shareable-report footer. */
 .ev-card {
-  border: 1px solid var(--purple-soft, #ece7fb);
-  border-radius: 14px;
-  background: var(--bg-2, #faf9fe);
-  margin: 8px 0;
-  font-size: 13px;
-  color: var(--ink, #1c1830);
-  overflow: hidden;
+  color: var(--chat-text);
+  font-size: var(--chat-body-size);
 }
 
-.ev-head {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--line, #e8e2ee);
-  background: linear-gradient(
-    180deg,
-    var(--taali-info-soft, color-mix(in oklab, var(--purple) 8%, var(--bg-2))),
-    var(--bg-2, #fff)
-  );
-}
-.ev-title {
-  font-weight: 600;
-  font-size: 15px;
-}
-.ev-echo {
-  font-weight: 400;
-  color: var(--mute, #8b8595);
-}
-.ev-meta {
-  font-size: 11.5px;
-  color: var(--mute, #8b8595);
+.ev-unchecked,
+.ev-filtered {
+  padding: var(--chat-space-3, 12px) var(--chat-artifact-pad-x, 14px) 0;
+  color: var(--chat-muted);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  line-height: 1.45;
 }
 
 .ev-warn {
-  font-size: 11.5px;
-  color: var(--purple, #6d28d9);
-  background: var(--purple-soft, #ece7fb);
-  border-radius: 8px;
-  padding: 4px 8px;
-  margin: 10px 16px 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-.ev-filtered {
-  font-size: 11.5px;
-  color: var(--mute, #8b8595);
-  padding: 10px 16px 0;
-}
-.ev-ext {
-  color: var(--purple-2, #4a2d80);
-  text-decoration: none;
-  font-weight: 500;
-}
-.ev-ext:hover {
-  text-decoration: underline;
-}
-.ev-summary {
-  font-size: 12px;
+  gap: 3px;
+  margin: var(--chat-space-3, 12px) var(--chat-artifact-pad-x, 14px) 0;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in oklab, var(--chat-attention) 22%, var(--chat-line));
+  border-radius: 8px;
+  color: var(--chat-attention);
+  background: color-mix(in oklab, var(--chat-attention-soft) 58%, var(--chat-surface));
+  font-size: var(--chat-meta-size, var(--fs-caption));
   line-height: 1.45;
-  color: var(--ink-2, #3a3343);
-  margin: 0 0 8px;
-}
-.ev-summary-headline {
-  font-weight: 650;
-  color: var(--ink, #1c1830);
-  margin-bottom: 2px;
-}
-.ev-years {
-  display: inline-block;
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--purple, #6d28d9);
-  background: var(--purple-soft, #ece7fb);
-  border-radius: 6px;
-  padding: 0 6px;
-  margin-right: 7px;
-  vertical-align: middle;
-  letter-spacing: 0.01em;
-}
-.ev-summary-body {
-  color: var(--muted, #6b6480);
-}
-/* search-preview `.evfoot`: a padded footer band with a top hairline; the link
-   is purple-2, medium weight. */
-.ev-foot {
-  padding: 12px 16px;
-  border-top: 1px solid var(--line, #e8e2ee);
-  font-size: 12px;
-}
-.ev-report-link {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--purple-2, #4a2d80);
-  text-decoration: none;
-}
-.ev-report-link:hover {
-  text-decoration: underline;
 }
 
 .ev-list {
-  list-style: none;
   margin: 0;
   padding: 0;
+  list-style: none;
 }
-/* search-preview `.evcand{padding:14px 16px;border-top:1px solid var(--line)}`
-   — full-bleed rows separated by hairlines, first row borderless. */
+
 .ev-cand {
-  border-top: 1px solid var(--line, #e8e2ee);
-  padding: 14px 16px;
+  padding: var(--chat-artifact-pad-y, 12px) var(--chat-artifact-pad-x, 14px);
+  border-top: 1px solid var(--chat-line);
 }
+
 .ev-cand:first-child {
-  border-top: none;
+  border-top: 0;
 }
+
+.ev-unchecked + .ev-filtered,
+.ev-unchecked + .ev-warn,
+.ev-unchecked + .ev-list,
+.ev-filtered + .ev-warn,
+.ev-filtered + .ev-list,
+.ev-warn + .ev-list {
+  margin-top: var(--chat-space-3, 12px);
+}
+
 .ev-cand-head {
   display: flex;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
+  gap: 7px 10px;
 }
+
 .ev-rank {
+  color: var(--chat-agent);
+  font-family: var(--font-mono);
+  font-size: var(--chat-title-size, var(--fs-subtitle));
   font-weight: 700;
-  color: var(--purple-2, #4a2d80);
-  font-size: 14px;
 }
+
 .ev-name {
-  font-weight: 600;
-  font-size: 14.5px;
-  color: var(--ink, #1c1830);
+  color: var(--chat-text);
+  font-size: var(--chat-title-size, var(--fs-subtitle));
+  font-weight: 650;
   text-decoration: none;
 }
-.ev-name:hover {
+
+a.ev-name:hover,
+.ev-ext:hover,
+.ev-report-link:hover {
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
+
 .ev-name-ext {
-  color: var(--mute-2, #9a93ad);
+  color: var(--chat-muted);
   font-weight: 400;
 }
+
 .ev-sub {
-  font-size: 12px;
-  color: var(--mute, #8b8595);
-  margin: 5px 0 11px;
+  margin: 5px 0 10px;
+  color: var(--chat-muted);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  line-height: 1.45;
 }
 
-/* search-preview `.evpill`: a rounded-RECT score badge (radius 7px), not a
-   full pill, with tabular figures so scores line up. */
+.ev-ext,
+.ev-report-link {
+  color: var(--chat-agent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ev-summary {
+  margin: 0 0 9px;
+  color: var(--chat-text-secondary);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  line-height: 1.5;
+}
+
+.ev-summary-headline {
+  margin-bottom: 3px;
+  color: var(--chat-text);
+  font-weight: 650;
+}
+
+.ev-years {
+  display: inline-block;
+  margin-right: 7px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--chat-agent);
+  background: var(--chat-agent-soft);
+  font-size: var(--chat-eyebrow-size, var(--fs-eyebrow));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  vertical-align: middle;
+}
+
+.ev-summary-body {
+  color: var(--chat-text-secondary);
+}
+
 .ev-pill {
-  font-size: 12px;
-  font-weight: 600;
-  border-radius: 7px;
   padding: 3px 9px;
+  border-radius: 7px;
+  font-family: var(--font-mono);
+  font-size: var(--chat-meta-size, var(--fs-caption));
   font-variant-numeric: tabular-nums;
-}
-.ev-score-high {
-  background: var(--purple, #6d28d9);
-  color: #fff;
-}
-.ev-score-mid {
-  background: var(--purple-soft, #ece7fb);
-  color: var(--purple-2, #4a2d80);
-}
-.ev-score-low {
-  background: var(--bg-3, #efe8f7);
-  color: var(--mute, #8b8595);
-}
-.ev-score-none {
-  background: var(--bg-3, #efe8f7);
-  color: var(--mute-2, #9a93ad);
-}
-.ev-allmet {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--purple-2, #4a2d80);
-  border: 1px solid var(--purple-lav, #c4a5fd);
-  border-radius: 999px;
-  padding: 2px 9px;
+  font-weight: 650;
 }
 
-/* search-preview indents nothing here — chips/quotes start at the row's left
-   edge; each criterion is divided by a dashed hairline (first one borderless),
-   no inter-row gap. */
+.ev-score-high {
+  color: white;
+  background: var(--chat-agent);
+}
+
+.ev-score-mid {
+  color: var(--chat-agent);
+  background: var(--chat-agent-soft);
+}
+
+.ev-score-low,
+.ev-score-none {
+  color: var(--chat-muted);
+  background: var(--chat-surface-subtle);
+}
+
+.ev-allmet {
+  padding: 2px 8px;
+  border: 1px solid color-mix(in oklab, var(--chat-agent) 22%, var(--chat-line));
+  border-radius: 999px;
+  color: var(--chat-agent);
+  font-size: var(--chat-eyebrow-size, var(--fs-eyebrow));
+  font-weight: 650;
+}
+
 .ev-crits {
   display: flex;
   flex-direction: column;
 }
+
 .ev-crit {
   padding: 9px 0;
-  border-top: 1px dashed var(--line, #e8e2ee);
+  border-top: 1px dashed var(--chat-line);
 }
+
 .ev-crit:first-child {
-  border-top: none;
   padding-top: 0;
+  border-top: 0;
 }
+
 .ev-crit-head {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
   flex-wrap: wrap;
+  gap: 8px;
 }
+
 .ev-chip {
-  font-size: 10px;
-  font-weight: 600;
-  border-radius: 6px;
-  padding: 3px 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
   flex: none;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: var(--chat-eyebrow-size, var(--fs-eyebrow));
+  font-weight: 650;
+  letter-spacing: 0.025em;
+  line-height: 1.25;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
+
 .ev-chip-met {
-  background: var(--purple, #6d28d9);
-  color: #fff;
+  color: white;
+  background: var(--chat-agent);
 }
+
 .ev-chip-partial {
-  background: var(--purple-soft, #ece7fb);
-  color: var(--purple-2, #4a2d80);
+  color: var(--chat-agent);
+  background: var(--chat-agent-soft);
 }
-.ev-chip-notmet {
-  background: #f3f1f8;
-  color: var(--mute, #8b8595);
-  border: 1px solid var(--line-2, #d8d0e4);
+
+.ev-chip-notmet,
+.ev-chip-missing {
+  border: 1px solid var(--chat-line);
+  color: var(--chat-muted);
+  background: var(--chat-surface-subtle);
 }
+
 .ev-chip-missing {
   background: transparent;
-  color: var(--mute, #8b8595);
-  border: 1px solid var(--line-2, #d8d0e4);
 }
-/* Check couldn't complete (transient failure / timeout) — a "retrying" state,
-   not a verdict. search-preview's "unver" chip: purple-soft fill, purple-2 ink,
-   a DASHED purple-lav border to set it apart from the solid-grey "missing". */
+
 .ev-chip-error {
-  background: var(--purple-soft, #ece7fb);
-  color: var(--purple-2, #4a2d80);
-  border: 1px dashed var(--purple-lav, #c4a5fd);
+  border: 1px dashed color-mix(in oklab, var(--chat-attention) 32%, var(--chat-line));
+  color: var(--chat-attention);
+  background: color-mix(in oklab, var(--chat-attention-soft) 55%, var(--chat-surface));
 }
+
 .ev-crit-text {
-  font-size: 12.5px;
-  color: var(--ink-2, #3a3343);
-  line-height: 1.45;
   padding-top: 1px;
+  color: var(--chat-text-secondary);
+  font-size: var(--chat-body-size);
+  line-height: 1.45;
 }
-.ev-reason {
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--mute, #8b8595);
+
+.ev-reason,
+.ev-noquote {
   margin: 5px 0 0;
+  color: var(--chat-muted);
+  font-size: var(--chat-meta-size, var(--fs-caption));
   font-style: italic;
+  line-height: 1.45;
 }
-.ev-more-src {
-  font-size: 11px;
-  color: var(--mute-2, #9a93ad);
-  font-style: italic;
-  margin-top: 1px;
-}
-.ev-src {
-  font-size: 9px;
-  font-style: normal;
-  color: var(--purple-2, #4a2d80);
-  background: var(--purple-soft, #ece7fb);
-  border-radius: 4px;
-  padding: 1px 6px;
-  margin-right: 7px;
-  vertical-align: middle;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
+
 .ev-quotes {
-  margin: 7px 0 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
+  margin: 7px 0 0;
 }
+
 .ev-quote {
   margin: 0;
   padding: 3px 0 3px 11px;
-  border-left: 2px solid var(--purple-lav, #c4a5fd);
-  color: var(--ink-2, #3a3343);
+  border-left: 2px solid color-mix(in oklab, var(--chat-agent) 30%, var(--chat-line));
+  color: var(--chat-text-secondary);
+  font-size: var(--chat-meta-size, var(--fs-caption));
   font-style: italic;
-  font-size: 12px;
   line-height: 1.5;
 }
+
+.ev-src {
+  margin-right: 7px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--chat-agent);
+  background: var(--chat-agent-soft);
+  font-size: var(--chat-eyebrow-size, var(--fs-eyebrow));
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
 .ev-more {
   margin-left: 6px;
   padding: 0;
-  border: none;
-  background: none;
-  color: var(--purple, #6d28d9);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 600;
+  border: 0;
+  color: var(--chat-agent);
+  background: transparent;
   cursor: pointer;
+  font: inherit;
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  font-style: normal;
+  font-weight: 650;
 }
+
 .ev-more:hover {
   text-decoration: underline;
 }
-.ev-noquote {
-  font-size: 11.5px;
-  color: var(--mute, #8b8595);
-  margin-top: 6px;
+
+.ev-more-src {
+  margin-top: 1px;
+  color: var(--chat-muted);
+  font-size: var(--chat-meta-size, var(--fs-caption));
   font-style: italic;
 }
 
-/* Rediscovery re-score (Phase B): opt-in true-score action on the card. Padded
-   like the footer band now the card body is flush (no card padding). */
-.ev-rescore {
-  padding: 12px 16px;
-  border-top: 1px solid var(--line, #e8e2ee);
+.ev-report-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
 }
-.ev-rescore-btn {
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--purple, #6d28d9);
-  border: none;
-  border-radius: 8px;
-  padding: 6px 12px;
-  cursor: pointer;
-}
-.ev-rescore-btn:hover {
-  filter: brightness(1.06);
-}
-.ev-rescore-status {
-  font-size: 12px;
-  color: var(--muted, #6b6480);
-}
-.ev-rescore-err {
-  font-size: 12px;
-  color: var(--purple, #6d28d9);
-  background: var(--purple-soft, #ece7fb);
-  border-radius: 8px;
-  padding: 4px 8px;
-}
-.ev-rescore-title {
+
+.ev-report-label {
+  color: var(--chat-text);
+  font-size: var(--chat-meta-size, var(--fs-caption));
   font-weight: 650;
-  font-size: 12.5px;
-  margin-bottom: 4px;
 }
+
+.ev-report-note {
+  color: var(--chat-muted);
+  font-size: var(--chat-eyebrow-size, var(--fs-eyebrow));
+  line-height: 1.4;
+}
+
+.ev-report-link {
+  flex: none;
+  font-size: var(--chat-meta-size, var(--fs-caption));
+}
+
+.ev-more:focus-visible,
+.ev-name:focus-visible,
+.ev-ext:focus-visible,
+.ev-report-link:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--chat-focus);
+  outline-offset: 2px;
+}
+
+.ev-rescore {
+  padding: var(--chat-artifact-pad-y, 12px) var(--chat-artifact-pad-x, 14px);
+  border-top: 1px solid var(--chat-line);
+}
+
+.ev-rescore-status,
+.ev-rescore-err {
+  color: var(--chat-text-secondary);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+}
+
+.ev-rescore-err {
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--chat-danger);
+  background: color-mix(in oklab, var(--chat-danger-soft) 58%, var(--chat-surface));
+}
+
+.ev-rescore-title {
+  margin-bottom: 4px;
+  color: var(--chat-text);
+  font-size: var(--chat-body-size);
+  font-weight: 650;
+}
+
 .ev-rescore-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
+
 .ev-rescore-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  font-size: 12.5px;
+  color: var(--chat-text);
+  font-size: var(--chat-body-size);
 }
-.ev-rescore-name {
-  color: var(--ink, #1c1830);
-}
+
 .ev-rescore-score {
-  font-weight: 700;
-  color: var(--purple, #6d28d9);
-  background: var(--purple-soft, #ece7fb);
-  border-radius: 999px;
   padding: 1px 9px;
-  font-size: 11.5px;
+  border-radius: 999px;
+  color: var(--chat-agent);
+  background: var(--chat-agent-soft);
+  font-family: var(--font-mono);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  font-weight: 700;
+}
+
+@container (max-width: 520px) {
+  .ev-cand-head {
+    align-items: flex-start;
+  }
+
+  .ev-report-link {
+    white-space: normal;
+  }
 }

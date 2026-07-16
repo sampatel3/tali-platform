@@ -1,23 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
-  Building2,
   Globe,
-  Inbox,
-  Pause,
   RefreshCw,
-  Sparkles,
-  Star,
-  Zap,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { useAuth } from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
-  PIPELINE_FUNNEL_STAGES,
-  invitedStageValue,
-  funnelStageTone,
   formatCount,
   budgetTile,
   inPipelineFromStageCounts,
@@ -25,6 +16,10 @@ import {
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
+import {
+  resolveWorkspaceControlVersion,
+  workspaceControlConflictMessage,
+} from '../../shared/workspaceAgentControl';
 import {
   EmptyState,
   Select,
@@ -39,65 +34,21 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import {
   atsProviderLabel,
-  AtsTypeTag,
   organizationAtsProvider,
   roleAtsProvider,
-  roleExternalJobLive,
-  roleExternalJobState,
 } from './atsType';
 import {
-  AnimatePresence,
-  AgentLoop,
-  LayoutGroup,
   MOTION_DURATION,
   MotionLoop,
-  MotionNumber,
   Reveal,
   cappedStaggerDelay,
-  fadeVariants,
-  m,
-  motionTransition,
-  reducedFadeVariants,
   useReducedMotionSync,
 } from '../../shared/motion';
-
-// Canonical funnel for the role-card stat row — shared with the home
-// "Pipeline" strip and the job-detail funnel via src/shared/metrics.
-const STAGES = PIPELINE_FUNNEL_STAGES;
-
-// Role-card counts interpolate only when a previous value changes. First paint
-// and reduced motion are already settled, avoiding repeated zero-to-value runs.
-const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
-
-// Non-live ATS roles keep the longstanding settled opacity. Agent state is an
-// independent signal carried by the ON / PAUSED / OFF pill and must never dim
-// an otherwise active posting. Motion owns the reveal opacity, so the inactive
-// lifecycle target must be explicit here.
-const ROLE_CARD_DIMMED_OPACITY = 0.55;
-const LIVE_EXTERNAL_STATES = new Set(['published', 'open', 'accepting candidates', 'accepting_candidates']);
-const NON_LIVE_EXTERNAL_STATES = new Set(['draft', 'archived', 'closed', 'filled', 'cancelled', 'inactive']);
-const roleCardFadeVariants = Object.freeze({
-  hidden: fadeVariants.hidden,
-  visible: ({ index = 0, stagger = false } = {}) => ({
-    opacity: 1,
-    transition: {
-      ...motionTransition.reveal,
-      delay: stagger ? cappedStaggerDelay(index, 'dense') : 0,
-    },
-  }),
-  dimmed: ({ index = 0, stagger = false } = {}) => ({
-    opacity: ROLE_CARD_DIMMED_OPACITY,
-    transition: {
-      ...motionTransition.reveal,
-      delay: stagger ? cappedStaggerDelay(index, 'dense') : 0,
-    },
-  }),
-  exit: fadeVariants.exit,
-});
-const reducedRoleCardFadeVariants = Object.freeze({
-  ...reducedFadeVariants,
-  dimmed: Object.freeze({ opacity: ROLE_CARD_DIMMED_OPACITY, transition: motionTransition.instant }),
-});
+import {
+  isRoleDraft,
+  isRoleLive,
+  JobsRoleGrid,
+} from './JobsRoleGrid';
 
 // Paint active/recently synced roles first; additional pages stay explicit so
 // large tenants avoid long-tail query/serialization until requested.
@@ -113,17 +64,6 @@ const SOURCE_FILTERS = [
   { key: 'draft', label: 'Draft' },
 ];
 
-// Requisition->Workable job lifecycle (role.job_status). Null for legacy /
-// Workable-only roles (their state reads off the Workable pill). The badge shows
-// only when a status is set.
-const JOB_STATUS_META = {
-  draft: { label: 'Draft', tone: 'draft' },
-  open: { label: 'Open', tone: 'open' },
-  filled: { label: 'Filled', tone: 'filled' },
-  filled_external: { label: 'Filled · external', tone: 'ext' },
-  cancelled: { label: 'Cancelled', tone: 'cancelled' },
-};
-
 // Roll a set of roles up by job_status for the per-client summary strip:
 // active (draft+open / "waiting to fill"), filled (us), filled (external).
 const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role) => {
@@ -135,47 +75,6 @@ const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role
   acc.total += 1;
   return acc;
 }, { active: 0, filled: 0, filled_external: 0, cancelled: 0, total: 0 });
-
-const roleJobStatus = (role) => String(role?.job_status || '').trim().toLowerCase();
-const hasNativeLifecycle = (role) => Object.prototype.hasOwnProperty.call(JOB_STATUS_META, roleJobStatus(role));
-
-const isRoleDraft = (role) => {
-  if (hasNativeLifecycle(role)) return roleJobStatus(role) === 'draft';
-  // Compatibility fallback for old manual roles created before job_status was
-  // persisted. Once a canonical lifecycle exists, it is always authoritative.
-  return roleAtsProvider(role) == null
-    && !role?.job_spec_present
-    && Number(role?.applications_count || 0) === 0;
-};
-
-// A Workable-backed role follows the provider's authoritative publish state.
-// A native role is Live only while its intake lifecycle is open; when the API
-// supplies `is_published`, that readiness signal prevents a preview page or a
-// paused/off agent from being presented as accepting applications.
-const isRoleLive = (role) => {
-  const provider = roleAtsProvider(role);
-  if (provider) {
-    const live = roleExternalJobLive(role);
-    if (live != null) return live;
-    return LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
-  }
-  if (!hasNativeLifecycle(role)) return false;
-  if (roleJobStatus(role) !== 'open') return false;
-  return role?.is_published == null ? true : role.is_published === true;
-};
-
-// Dimming represents the posting lifecycle, independently of whether the
-// agent is on, paused, or off. Explicit ATS state remains authoritative for
-// Workable and sister roles; native roles follow their persisted job status.
-const isRoleDimmed = (role) => {
-  const provider = roleAtsProvider(role);
-  if (provider) {
-    const live = roleExternalJobLive(role);
-    if (live != null) return !live;
-    return NON_LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
-  }
-  return hasNativeLifecycle(role) ? roleJobStatus(role) !== 'open' : false;
-};
 
 const filterRoleBySource = (role, sourceFilter) => {
   if (sourceFilter === 'live') return isRoleLive(role);
@@ -268,8 +167,9 @@ const getSyncSummaryValue = (summary, keys, fallback = 0) => {
 // Maps the org-aggregate /agent/status payload (or the showcase fixture) into
 // the shape AgentHeader's right-side panel expects. Activation on the Jobs
 // list is intentionally per-role (each role has its own budget cap), so the
-// OFF state on this page guides the user to open a role rather than firing
-// a single org-wide activate.
+// OFF state on this page guides the user to open a role. Pause/Resume here is
+// a workspace override: it gates every enabled role without rewriting any
+// role's own ON/PAUSED/OFF choice.
 const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
   const { status, refetch } = orgStatusResult;
   const agent = useMemo(() => {
@@ -282,6 +182,7 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
         budgetCents: 5000,
         tick: 'Scoring 14 new candidates · just now',
         inFlight: true,
+        controlScope: 'workspace',
       };
     }
     const anyEnabled = roles.some((role) => role?.agentic_mode_enabled);
@@ -295,9 +196,13 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
         budgetCents: anyEnabled ? 5000 : 0,
         tick: null,
         inFlight: false,
+        controlScope: 'workspace',
       };
     }
-    return buildAgentPropFromStatus(status, { isEnabled: status.active_role_count > 0 });
+    return buildAgentPropFromStatus(status, {
+      isEnabled: status.active_role_count > 0,
+      controlScope: 'workspace',
+    });
   }, [status, roles, isShowcase]);
   return { agent, refetch };
 };
@@ -308,6 +213,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
   const orgApi = apiClient.organizations;
   const isShowcase = showcase;
   const isOwner = String(user?.role || '') === 'owner';
+  const canControlWorkspaceAgent = isOwner;
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
   const orgStatusResult = useAgentStatusOrg(!isShowcase);
   const {
@@ -325,6 +231,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
+  const [agentControlError, setAgentControlError] = useState('');
   // HANDOFF v2 §4 — Live agent spend across roles for the BUDGET USED tile.
   // Fan-out to /roles/{id}/agent/status for every agent-enabled role. Capped
   // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
@@ -655,10 +562,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
       item.id === role.id ? { ...item, starred_for_auto_sync: !isStarred } : item
     )));
     try {
+      let response;
       if (isStarred) {
-        await rolesApi.unstar(role.id);
+        response = await rolesApi.unstar(role.id, role.version);
       } else {
-        await rolesApi.star(role.id);
+        response = await rolesApi.star(role.id, role.version);
+      }
+      if (response?.data) {
+        setRoles((current) => current.map((item) => (
+          item.id === role.id ? { ...item, ...response.data } : item
+        )));
       }
     } catch {
       setRoles((current) => current.map((item) => (
@@ -673,56 +586,56 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
     orgStatusResult,
   );
 
-  // Org-wide soft pause / resume driven from the header's Agent panel.
-  // Pause flips every agent-enabled role's pause flag (keeping its pending
-  // review items); resume clears it for roles back under their cap. A ref
-  // guard blocks double-fire while the request is in flight; on success we
-  // reload roles + re-poll the org-aggregate so the panel flips Pause⇄Resume
-  // immediately instead of waiting for the 30s poll.
+  // Workspace pause / resume driven from the header's Agent panel. This is an
+  // overlay, not a bulk role edit: each role retains its own desired state and
+  // resumes accordingly when the workspace hold is cleared.
   const agentBulkBusyRef = useRef(false);
   const [agentBulkAction, setAgentBulkAction] = useState(null);
   const runAgentBulk = useCallback(async (actionName, action, failMsg) => {
     if (isShowcase || agentBulkBusyRef.current) return;
     agentBulkBusyRef.current = true;
     setAgentBulkAction(actionName);
-    setError('');
+    setAgentControlError('');
     try {
       await action();
       // Release the mutation guard before the heavier jobs refresh. The org
       // status request is enough to reconcile the header immediately.
-      await refetchAgentStatus();
+      await refetchAgentStatus({ force: true });
       void loadJobsHub();
-    } catch {
-      setError(failMsg);
+    } catch (error) {
+      await refetchAgentStatus({ force: true });
+      if (Number(error?.response?.status) === 409) {
+        setAgentControlError(workspaceControlConflictMessage(error));
+      } else {
+        setAgentControlError(failMsg);
+      }
     } finally {
       agentBulkBusyRef.current = false;
       setAgentBulkAction(null);
     }
   }, [isShowcase, loadJobsHub, refetchAgentStatus]);
   const handlePauseAllAgents = useCallback(
-    () => runAgentBulk('pause', () => apiClient.agent.pauseAll(), 'Could not pause agents.'),
-    [runAgentBulk],
+    () => runAgentBulk(
+      'pause',
+      async () => apiClient.agent.pauseAll(await resolveWorkspaceControlVersion(
+        headerAgent?.workspaceControlVersion,
+        refetchAgentStatus,
+      )),
+      'Could not pause the workspace agent.',
+    ),
+    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
   );
   const handleResumeAllAgents = useCallback(
-    () => runAgentBulk('resume', () => apiClient.agent.resumeAll(), 'Could not resume agents.'),
-    [runAgentBulk],
+    () => runAgentBulk(
+      'resume',
+      async () => apiClient.agent.resumeAll(await resolveWorkspaceControlVersion(
+        headerAgent?.workspaceControlVersion,
+        refetchAgentStatus,
+      )),
+      'Could not resume the workspace agent.',
+    ),
+    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
   );
-  // Running vs paused split across agent-enabled roles. In a mixed org the
-  // panel shows BOTH "Pause" and "Resume" (and states the split in its tick);
-  // when every agent is on (or every one paused) only the relevant button
-  // shows. Derived from the same role list the cards use, so the badges and
-  // buttons agree.
-  const { agentRunningCount, agentPausedCount } = useMemo(() => {
-    let running = 0;
-    let pausedCount = 0;
-    roles.forEach((role) => {
-      if (!role?.agentic_mode_enabled) return;
-      if (role?.agent_paused_at) pausedCount += 1;
-      else running += 1;
-    });
-    return { agentRunningCount: running, agentPausedCount: pausedCount };
-  }, [roles]);
-
   return (
     <>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
@@ -776,16 +689,29 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
           </>
         )}
         agent={headerAgent ? { ...headerAgent, controlAction: agentBulkAction } : headerAgent}
-        onPauseAgent={isShowcase ? undefined : handlePauseAllAgents}
-        onResumeAgent={isShowcase ? undefined : handleResumeAllAgents}
-        pauseAllCount={isShowcase ? null : agentRunningCount}
-        resumeAllCount={isShowcase ? null : agentPausedCount}
+        onPauseAgent={!isShowcase && canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
+        onResumeAgent={!isShowcase && canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
+        pauseLabel="Pause workspace"
+        resumeLabel="Resume workspace"
         offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
       <div className="mc-page">
         {/* HANDOFF v2 §4 / canvas jobs-list — search lives in the global
             ⌘K palette in Shell. The local "Search jobs by name" input was
             redundant chrome and is gone per the canvas spec. */}
+
+        {agentControlError ? (
+          <div className="card flat mb-3 flex flex-wrap items-center justify-between gap-3 p-3 text-sm text-[var(--red)]" role="alert">
+            <span>{agentControlError}</span>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => setAgentControlError('')}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
 
         {activeAts ? (
           <Reveal className="wk-strip">
@@ -995,240 +921,17 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
             )}
           />
         ) : (
-          <LayoutGroup id="jobs-role-grid">
-            <div
-              className="jobs-grid"
-              data-motion-stagger={gridStaggerDone ? 'settled' : 'entering'}
-              style={{ position: 'relative' }}
-            >
-              <AnimatePresence initial={false} mode={reduced ? 'sync' : 'popLayout'}>
-                {filtered.map((role, roleIndex) => {
-                  const stageCounts = role?.stage_counts || {};
-                  const roleProvider = roleAtsProvider(role);
-                  const roleProviderLabel = atsProviderLabel(roleProvider);
-                  const workableRole = roleProvider === 'workable';
-                  const roleLive = isRoleLive(role);
-                  const lifecycleDimmed = isRoleDimmed(role);
-                  const lastRoleActivity = role?.last_candidate_activity_at
-                    || role?.updated_at
-                    || (roleProvider === activeAts ? activeAtsLastSyncAt : null)
-                    || null;
-                  const agentEnabled = Boolean(role?.agentic_mode_enabled);
-                  // Soft pause keeps agentic_mode_enabled=true but stamps
-                  // agent_paused_at, so an enabled-but-paused role must read
-                  // "AGENT PAUSED", not "AGENT ON".
-                  const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
-                  const agentActive = agentEnabled && !agentPaused;
-                  const activationIntent = role?.assessment_task_provisioning?.activation_intent;
-                  const activationStatus = String(activationIntent?.status || '');
-                  const activationQueued = !agentEnabled
-                    && ['pending', 'retry_wait'].includes(activationStatus);
-                  const activationBlocked = !agentEnabled && activationStatus === 'blocked';
-                  // Live agent status from the /roles/{id}/agent/status fan-out.
-                  // When loaded, the indicator shows the canvas-spec
-                  // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
-                  const agentLive = agentSpendByRole?.[role.id] || null;
-                  const agentBudget = Number(
-                    agentLive?.monthly_budget_cents
-                    ?? role?.monthly_usd_budget_cents
-                    ?? 0,
-                  ) / 100;
-                  const agentSpent = agentLive
-                    ? Number(agentLive.monthly_spent_cents || 0) / 100
-                    : null;
-                  const pendingCount = Number(agentLive?.pending_decisions || 0);
-                  const roleLoc = String(role?.location || role?.workable_location || '').trim();
-                  const roleDept = String(role?.department || role?.workable_department || '').trim();
-                  return (
-                    <m.div
-                      key={role.id}
-                      layout={reduced || filtered.length > 40 ? false : 'position'}
-                      custom={{ index: roleIndex, stagger: !gridStaggerDone }}
-                      variants={reduced ? reducedRoleCardFadeVariants : roleCardFadeVariants}
-                      initial={reduced ? false : 'hidden'}
-                      animate={lifecycleDimmed ? 'dimmed' : 'visible'}
-                      exit="exit"
-                      transition={{
-                        layout: reduced ? motionTransition.instant : motionTransition.layout,
-                      }}
-                      data-motion-index={roleIndex}
-                      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
-                      onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          onNavigate('job-pipeline', { roleId: role.id });
-                        }
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      {/* Card header — canvas jobs-list role-card:
-                          ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
-                          dept · loc · updated ago */}
-                      <div className="job-head">
-                        {roleLive ? (
-                          <span
-                            className="job-star is-locked"
-                            aria-label={roleProvider ? `Live ${roleProviderLabel} role · always in continuous sync` : 'Live native role · monitored continuously'}
-                            title={roleProvider ? `Live ${roleProviderLabel} role · always in continuous sync (auto-starred)` : 'Live native role · monitored continuously (auto-starred)'}
-                            style={{
-                              padding: 2,
-                              marginTop: 2,
-                              flexShrink: 0,
-                              color: 'var(--purple)',
-                              cursor: 'default',
-                              display: 'inline-flex',
-                            }}
-                          >
-                            <Star size={16} strokeWidth={1.5} fill="currentColor" />
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            className="job-star"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleToggleStar(role);
-                            }}
-                            aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
-                            aria-pressed={Boolean(role.starred_for_auto_sync)}
-                            title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : `Star to auto-sync${roleProvider ? ` from ${roleProviderLabel}` : ''} and score in real-time`}
-                            style={{
-                              background: 'transparent',
-                              border: 'none',
-                              padding: 2,
-                              marginTop: 2,
-                              cursor: 'pointer',
-                              flexShrink: 0,
-                              color: role.starred_for_auto_sync ? 'var(--purple)' : 'var(--ink-soft)',
-                            }}
-                          >
-                            <Star
-                              size={16}
-                              strokeWidth={1.5}
-                              fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
-                            />
-                          </button>
-                        )}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-                            <h3 className="role-name">{role.name}</h3>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)' }}>#{role.id}</span>
-                            {/* Every role reads as exactly one mode: Workable /
-                                Bullhorn (synced from an external ATS) or Full ATS
-                                (Taali runs the whole pipeline natively). The
-                                Draft/Open/Filled lifecycle chip is separate. */}
-                            <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
-                            {role?.job_status && JOB_STATUS_META[role.job_status] ? (
-                              <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
-                                {JOB_STATUS_META[role.job_status].label}
-                              </span>
-                            ) : null}
-                            {role?.is_published && roleLive ? (
-                              <span
-                                className="job-live-badge"
-                                title="Public job page is live — candidates can apply"
-                              >
-                                <Globe size={10} strokeWidth={2} /> Live
-                              </span>
-                            ) : null}
-                            {role?.client_name ? (
-                              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
-                                <Building2 size={10} strokeWidth={2} /> {role.client_name}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="role-meta">
-                            {[
-                              role?.role_kind === 'sister' && role?.ats_owner_role_name
-                                ? `Coupled to ${role.ats_owner_role_name} in ${roleProviderLabel}`
-                                : null,
-                              role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
-                                ? `${role.sister_role_count} related role${role.sister_role_count === 1 ? '' : 's'}`
-                                : null,
-                              roleDept || null,
-                              roleLoc || null,
-                              lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-                            ].filter(Boolean).join(' · ') || 'No details yet'}
-                          </div>
-                        </div>
-                        {agentPaused ? (
-                          <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
-                            <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                            PAUSED
-                          </span>
-                        ) : agentEnabled ? (
-                          <AgentLoop
-                            kind="flow"
-                            className="job-agent-pill is-on"
-                            title="Agent on for this role"
-                          >
-                            <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
-                            {agentSpent != null && agentBudget > 0
-                              ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
-                              : agentBudget > 0
-                                ? `ON · cap $${Math.round(agentBudget)}`
-                                : 'ON'}
-                          </AgentLoop>
-                        ) : activationQueued ? (
-                          <span
-                            className="job-agent-pill is-queued"
-                            title="Turn on is saved; the backend is validating and preparing this role"
-                          >
-                            <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
-                            TURN-ON QUEUED
-                          </span>
-                        ) : activationBlocked ? (
-                          <span
-                            className="job-agent-pill is-needs-input"
-                            title={activationIntent?.last_error || 'Turn on needs recruiter input'}
-                          >
-                            NEEDS INPUT
-                          </span>
-                        ) : (
-                          <span className="job-agent-pill is-off" title="Agent off">OFF</span>
-                        )}
-      </div>
-                      <div className="job-stats">
-                        {STAGES.map((stage) => {
-                          const value = stage.key === 'invited'
-                            ? invitedStageValue(stageCounts)
-                            : Number(stageCounts?.[stage.key] || 0);
-                          const tone = funnelStageTone(stage.key, value);
-                          return (
-                            <div key={stage.key} className={`js-cell${tone === 'term' ? ' is-term' : ''}`}>
-                              <div className="k">{stage.label}</div>
-                              <div
-                                className="v"
-                                style={tone === 'term' ? { color: 'var(--mute)' } : undefined}
-                              >
-                                <StageCount value={value} reduced={reduced} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="job-foot">
-                        {pendingCount > 0 ? (
-                          <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
-                        ) : agentPaused ? (
-                          <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
-                        ) : !agentEnabled ? (
-                          <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
-                        ) : (
-                          <span />
-                        )}
-                        <span className="job-foot-open">Open pipeline →</span>
-                      </div>
-                    </m.div>
-                  );
-                })}
-              </AnimatePresence>
-            </div>
-          </LayoutGroup>
+          <JobsRoleGrid
+            activeAts={activeAts}
+            activeAtsLastSyncAt={activeAtsLastSyncAt}
+            agentSpendByRole={agentSpendByRole}
+            gridStaggerDone={gridStaggerDone}
+            onNavigate={onNavigate}
+            onToggleStar={handleToggleStar}
+            reduced={reduced}
+            roles={filtered}
+            workspacePaused={Boolean(headerAgent?.workspacePaused)}
+          />
         )}
 
         {!loading && filtered.length > 0 ? (

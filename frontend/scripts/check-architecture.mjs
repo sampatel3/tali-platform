@@ -16,16 +16,16 @@ const PAGE_FILE_PATTERN = /Page(Content)?\.(js|jsx|ts|tsx)$/;
 // the baseline to be lowered whenever a file shrinks makes this a ratchet:
 // a later change cannot quietly spend the lines that a refactor removed.
 const MAX_NEW_PAGE_LINES = 500;
-const APP_SHELL_BASELINE = 1173;
+const APP_SHELL_BASELINE = 1168;
 const OVERSIZED_PAGE_BASELINES = new Map([
   ['src/features/assessment_runtime/AssessmentPageContent.jsx', 1152],
   ['src/features/candidates/CandidateStandingReportPage.jsx', 2263],
   ['src/features/clientintake/ClientIntakePage.jsx', 630],
   ['src/features/dashboard/DashboardPageContent.jsx', 650],
   ['src/features/dev/ButtonShowcasePage.jsx', 685],
-  ['src/features/home/HomePage.jsx', 786],
+  ['src/features/home/HomePage.jsx', 686],
   ['src/features/jobs/JobPipelinePage.jsx', 2666],
-  ['src/features/jobs/JobsPage.jsx', 1260],
+  ['src/features/jobs/JobsPage.jsx', 963],
   ['src/features/requisitions/RequisitionsPage.jsx', 1281],
   ['src/features/settings/RecruiterSettingsPage.jsx', 2496],
   ['src/features/settings/RequisitionTemplatePage.jsx', 537],

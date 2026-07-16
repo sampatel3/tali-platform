@@ -1,7 +1,13 @@
 import React, { Suspense, lazy, useEffect, useRef } from 'react';
-import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
-import { MotionChatItem, MotionList, motionSafeScrollBehavior } from '../../shared/motion';
-import { Button } from '../../shared/ui/TaaliPrimitives';
+import { CircleAlert, Database } from 'lucide-react';
+
+import { ChatActivity, ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
+import {
+  MotionChatItem,
+  MotionDisclosure,
+  MotionList,
+  motionSafeScrollBehavior,
+} from '../../shared/motion';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
@@ -18,22 +24,53 @@ export const SearchCoverage = ({ data }) => {
   if (typeof databaseMatches !== 'number') return null;
   const returned = data.returned ?? data.applications?.length ?? 0;
   const deepChecked = Number(data.deep_checked || 0);
+  const hasEvidenceSplit =
+    typeof data.evidence_succeeded === 'number'
+    || typeof data.evidence_failed === 'number';
+  const evidenceSucceeded = Number(data.evidence_succeeded || 0);
+  const evidenceFailed = Number(data.evidence_failed || 0);
+  const warnings = Array.isArray(data.warnings)
+    ? data.warnings
+      .map((warning) => (typeof warning === 'string' ? warning : warning?.message))
+      .filter(Boolean)
+    : [];
+  const isPartial = Boolean(data.capped || evidenceFailed > 0 || warnings.length);
   return (
-    <div className={['cp-search-coverage', data.capped ? 'is-capped' : ''].join(' ')}>
-      <span>{returned} shown</span>
-      <span>{databaseMatches} database matches</span>
-      {deepChecked > 0 ? (
-        <span>
-          {deepChecked} deep-checked{data.capped ? ' · partial verification' : ''}
+    <ChatActivity
+      severity={isPartial ? 'warning' : 'info'}
+      severityLabel={isPartial ? 'Partial' : 'Covered'}
+      typeLabel="Search coverage"
+      title={`${returned} shown`}
+      icon={Database}
+      summary={(
+        <span className="cp-search-coverage-summary">
+          <span>{databaseMatches} database matches</span>
+          {deepChecked > 0 ? (
+            <span>
+              {deepChecked} deep-checked{data.capped ? ' · partial verification' : ''}
+            </span>
+          ) : (
+            <span>full database search · no deep verification</span>
+          )}
+          {hasEvidenceSplit ? (
+            <span>
+              {evidenceSucceeded} evidence {evidenceSucceeded === 1 ? 'check' : 'checks'} completed
+              {evidenceFailed > 0 ? ` · ${evidenceFailed} failed` : ''}
+            </span>
+          ) : null}
+          {warnings.map((warning, index) => (
+            <span className="cp-search-coverage-warning" key={`${warning}-${index}`}>
+              {warning}
+            </span>
+          ))}
         </span>
-      ) : (
-        <span>full database search · no deep verification</span>
       )}
-    </div>
+      aria-label={`${isPartial ? 'Partial' : 'Complete'} candidate search coverage`}
+    />
   );
 };
 
-const ToolResultRender = ({ part }) => {
+export const ToolResultRender = ({ part }) => {
   // Decide which custom renderer(s) to show for this tool's payload. A
   // graph_search_candidates result can render BOTH a candidate grid (the
   // hydrated applications) and an inline graph (the underlying nodes +
@@ -97,9 +134,7 @@ const Message = React.memo(({ msg, isStreaming }) => {
 
   const isEmpty = !msg.parts.length;
   return (
-    <ChatMessage role="assistant" time={msg.createdAt}>
-      {/* search-preview tags each assistant turn with a mono "TAALI" kicker. */}
-      <div className="cp-who">Taali</div>
+    <ChatMessage role="assistant" time={msg.createdAt} label="Taali">
       {isEmpty && isStreaming ? <ThinkingDots label="thinking…" /> : null}
       {msg.parts.map((part, idx) => {
         if (part.type === 'text') {
@@ -110,7 +145,9 @@ const Message = React.memo(({ msg, isStreaming }) => {
           return (
             <React.Fragment key={part.toolCallId || idx}>
               <ToolCallCard part={part} />
-              <ToolResultRender part={part} />
+              <MotionDisclosure open={part.result != null} className="cp-tool-result">
+                <ToolResultRender part={part} />
+              </MotionDisclosure>
             </React.Fragment>
           );
         }
@@ -245,15 +282,16 @@ const Thread = ({
         ))}
         {fr ? (
           <MotionChatItem key="thread-error" className="tk-motion-row">
-            <div className="cp-error">
-              <div className="cp-error-title">{fr.title}</div>
-              <div className="cp-error-detail">{fr.detail}</div>
-              {onRetry ? (
-                <Button size="xs" variant="secondary" className="cp-error-retry" onClick={onRetry}>
-                  Try again
-                </Button>
-              ) : null}
-            </div>
+            <ChatActivity
+              role="alert"
+              severity="error"
+              severityLabel="Error"
+              typeLabel="Conversation"
+              title={fr.title}
+              summary={fr.detail}
+              icon={CircleAlert}
+              actions={onRetry ? [{ label: 'Try again', onClick: onRetry }] : []}
+            />
           </MotionChatItem>
         ) : null}
       </MotionList>

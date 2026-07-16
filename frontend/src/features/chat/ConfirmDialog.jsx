@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 
-import { Dialog } from '../../shared/ui/TaaliPrimitives';
+import { Button, Dialog } from '../../shared/ui/TaaliPrimitives';
 
 // Lightweight modal-confirm. Replaces ``window.confirm`` so the dialog
 // matches the app's design tokens (no Chrome-style native chrome) and
@@ -31,17 +31,17 @@ const ConfirmDialog = ({
       panelClassName="max-w-[26.25rem]"
       footer={(
         <div className="cp-modal-actions">
-          <button ref={cancelRef} type="button" className="cp-btn-ghost" onClick={onCancel}>
+          <Button ref={cancelRef} type="button" variant="ghost" onClick={onCancel}>
             {cancelLabel}
-          </button>
-          <button
+          </Button>
+          <Button
             ref={confirmRef}
             type="button"
-            className={destructive ? 'cp-btn-danger' : 'cp-btn-primary'}
+            variant={destructive ? 'danger' : 'primary'}
             onClick={onConfirm}
           >
             {confirmLabel}
-          </button>
+          </Button>
         </div>
       )}
     >

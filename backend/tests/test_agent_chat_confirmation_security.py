@@ -150,4 +150,3 @@ def test_expired_preview_cannot_authorize_an_operation(db):
     )
     assert check.ok is False
     assert "expired" in check.reason
-

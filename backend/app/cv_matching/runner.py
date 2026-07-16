@@ -22,6 +22,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from functools import partial
+from typing import Callable
 
 from ..llm import MeteringContext, generate_structured
 from ..platform.config import settings
@@ -149,11 +150,14 @@ def run_cv_match(
     skip_cache: bool = False,
     metering_context: dict | None = None,
     workable_context: str | None = None,
+    before_provider_call: Callable[[str], None] | None = None,
 ) -> CVMatchOutput:
     """Run a CV match end-to-end. Returns ``CVMatchOutput``.
 
-    Never raises to the caller. On any failure the output carries
-    ``scoring_status=FAILED`` and a populated ``error_reason``.
+    Provider failures never raise to the caller; the output carries
+    ``scoring_status=FAILED`` and a populated ``error_reason``.  An optional
+    authority callback is deliberately allowed to raise before a new paid
+    phase so a worker can defer the surrounding transaction.
 
     ``workable_context`` is the candidate's per-application Workable evidence
     (questionnaire answers, recruiter comments, activity log) rendered by
@@ -208,6 +212,21 @@ def run_cv_match(
     # 3. Synthesize / fetch archetype rubric (cached; cheap on hit, ~$0.05 on miss)
     archetype = None
     archetype_weights = None
+    archetype_authority_failure: Exception | None = None
+
+    def authorize_archetype_provider() -> None:
+        nonlocal archetype_authority_failure
+        if before_provider_call is None:
+            return
+        try:
+            before_provider_call("full_score.archetype")
+        except Exception as exc:
+            # ``synthesize_archetype`` is intentionally best-effort, so retain
+            # the exact callback exception and distinguish it from an ordinary
+            # synthesis/cache failure in the catch below.
+            archetype_authority_failure = exc
+            raise
+
     try:
         # Function-level import preserved so test ``monkeypatch.setattr``
         # against ``app.cv_matching.archetype_synthesizer.synthesize_archetype``
@@ -224,10 +243,17 @@ def run_cv_match(
             requirements,
             client=client,
             metering=archetype_metering,
+            before_provider_call=(
+                authorize_archetype_provider
+                if before_provider_call is not None
+                else None
+            ),
         )
         if archetype is not None:
             archetype_weights = archetype.normalised_dimension_weights()
     except Exception as exc:  # pragma: no cover — defensive
+        if exc is archetype_authority_failure:
+            raise
         logger.warning("Archetype synthesis failed; proceeding without: %s", exc)
         archetype = None
 
@@ -306,6 +332,17 @@ def run_cv_match(
         ],
         retry_message_builder=_retry_append_to_cv_block,
         use_tool_use=True,
+        before_provider_call=(
+            (
+                lambda attempt: before_provider_call(
+                    "full_score.main"
+                    if attempt == 0
+                    else f"full_score.main.retry_{attempt}"
+                )
+            )
+            if before_provider_call is not None
+            else None
+        ),
     )
 
     # Mirror the gateway's token + retry accounting onto the run context so
@@ -343,6 +380,7 @@ def run_cv_match(
             workable_context=workable_context,
             metering_context=metering_context,
             trace_id=ctx.trace_id,
+            before_provider_call=before_provider_call,
         )
         if graded_enabled
         else {}

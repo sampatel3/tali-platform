@@ -1,0 +1,280 @@
+/* Flat, durable activity history for chat. The rail carries severity without
+   turning an operational update into a large tinted notification card. */
+.tk-activity {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--chat-activity-rail-size) minmax(0, 1fr);
+  gap: var(--chat-activity-gap);
+  width: 100%;
+  min-width: 0;
+  padding: var(--chat-activity-padding) 0;
+  border-block: 1px solid var(--chat-line);
+  color: var(--chat-text);
+  background: transparent;
+}
+
+.tk-activity::before {
+  position: absolute;
+  top: calc(var(--chat-activity-rail-size) + var(--chat-activity-gap));
+  bottom: 0;
+  left: calc((var(--chat-activity-rail-size) - 1px) / 2);
+  width: 1px;
+  background: var(--chat-line);
+  content: "";
+}
+
+.tk-activity.is-detail-only {
+  display: block;
+  padding: 0;
+  border: 0;
+}
+
+.tk-activity.is-detail-only::before {
+  display: none;
+}
+
+.tk-activity-rail {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: var(--chat-activity-rail-size);
+  height: var(--chat-activity-rail-size);
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--chat-agent) 22%, var(--chat-line));
+  border-radius: var(--chat-radius-pill);
+  background: var(--chat-surface);
+  color: var(--chat-link);
+}
+
+.tk-activity[data-severity="success"] .tk-activity-rail {
+  border-color: color-mix(in oklab, var(--chat-success) 28%, var(--chat-line));
+  background: color-mix(in oklab, var(--chat-success-soft) 52%, var(--chat-surface));
+  color: var(--chat-success-text);
+}
+
+.tk-activity[data-severity="warning"] .tk-activity-rail {
+  border-color: color-mix(in oklab, var(--chat-attention) 30%, var(--chat-line));
+  background: color-mix(in oklab, var(--chat-attention-soft) 52%, var(--chat-surface));
+  color: var(--chat-attention-text);
+}
+
+.tk-activity[data-severity="error"] .tk-activity-rail {
+  border-color: color-mix(in oklab, var(--chat-danger) 26%, var(--chat-line));
+  background: color-mix(in oklab, var(--chat-danger-soft) 52%, var(--chat-surface));
+  color: var(--chat-danger-text);
+}
+
+.tk-activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--chat-radius-pill);
+  background: currentColor;
+}
+
+.tk-activity-main {
+  min-width: 0;
+}
+
+.tk-activity-kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--chat-space-2);
+  min-width: 0;
+  margin-bottom: 3px;
+  color: var(--chat-muted);
+  font-family: var(--font-mono);
+  font-size: var(--chat-eyebrow-size);
+  font-weight: 600;
+  letter-spacing: 0.055em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.tk-activity-severity {
+  color: var(--chat-link);
+}
+
+.tk-activity[data-severity="success"] .tk-activity-severity {
+  color: var(--chat-success-text);
+}
+
+.tk-activity[data-severity="warning"] .tk-activity-severity {
+  color: var(--chat-attention-text);
+}
+
+.tk-activity[data-severity="error"] .tk-activity-severity {
+  color: var(--chat-danger-text);
+}
+
+.tk-activity-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tk-activity-type::before {
+  margin-right: 6px;
+  color: var(--chat-line-subtle);
+  content: "·";
+}
+
+.tk-activity-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tk-activity-title {
+  min-width: 0;
+  margin: 0;
+  color: var(--chat-text);
+  font-family: var(--font-sans);
+  font-size: var(--chat-title-size);
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tk-activity-time {
+  flex: none;
+  color: var(--chat-muted);
+  font-family: var(--font-mono);
+  font-size: var(--chat-eyebrow-size);
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.tk-activity-summary {
+  margin: 4px 0 0;
+  color: var(--chat-text-secondary);
+  font-size: var(--chat-meta-size);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.tk-activity-meta {
+  margin-top: 5px;
+  color: var(--chat-muted);
+  font-family: var(--font-mono);
+  font-size: var(--chat-eyebrow-size);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.tk-activity-meta a {
+  color: var(--chat-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.tk-activity-meta a:focus-visible,
+.tk-activity-actions button:focus-visible,
+.tk-activity-details-trigger:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--chat-focus);
+  outline-offset: 2px;
+}
+
+.tk-activity-actions {
+  display: flex;
+  min-height: var(--chat-control-h);
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 16px;
+  margin-top: 5px;
+}
+
+.tk-activity-actions button {
+  display: inline-flex;
+  min-height: var(--chat-control-h);
+  align-items: center;
+  padding: 4px 0;
+  border: 0;
+  color: var(--chat-link);
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--chat-eyebrow-size);
+  font-weight: 650;
+  text-align: left;
+}
+
+.tk-activity-actions button:hover {
+  color: var(--chat-agent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.tk-activity-details {
+  margin-top: 3px;
+}
+
+.tk-activity-details-trigger {
+  display: inline-flex;
+  min-height: var(--chat-control-h);
+  align-items: center;
+  gap: 3px;
+  padding: 3px 0;
+  color: var(--chat-muted);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--chat-eyebrow-size);
+  font-weight: 600;
+}
+
+.tk-activity-details-chevron {
+  display: inline-flex;
+}
+
+.tk-activity-details dl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 7px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--chat-line);
+}
+
+.tk-activity-details dl > div {
+  display: grid;
+  grid-template-columns: minmax(76px, 0.36fr) minmax(0, 1fr);
+  gap: 9px;
+}
+
+.tk-activity-details dt,
+.tk-activity-details dd {
+  font-size: var(--chat-eyebrow-size);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.tk-activity-raw {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  color: var(--chat-text-secondary);
+  font: 500 var(--chat-meta-size)/1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.tk-activity-details dt {
+  color: var(--chat-muted);
+  font-weight: 600;
+}
+
+.tk-activity-details dd {
+  margin: 0;
+  color: var(--chat-text-secondary);
+}
+
+@media (max-width: 430px) {
+  .tk-activity-title-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+}

@@ -22,10 +22,18 @@ from ..agent_chat.command_receipts import (
     begin_command,
     complete_command,
 )
+from ..domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ..mcp import handlers, operations
 from ..mcp.catalog import TAALI_CHAT, ToolSpec, get_tool_spec, tools_for
 from ..models.taali_chat_conversation import TaaliChatConversation
 from ..models.user import User
+from ..services.candidate_report_command import (
+    CandidateReportKind,
+    execute_confirmed_candidate_report,
+)
 from ..services import related_role_service as _related_roles
 from ..services.sister_role_service import text_fingerprint
 from .confirmations import require_later_turn_confirmation
@@ -47,6 +55,16 @@ def _preview_with_receipt(
     job_spec_text: str,
     message: str | None = None,
 ) -> dict[str, Any]:
+    # Global chat can reference any role ID in the workspace. Apply the same
+    # per-job edit policy used by the role page before disclosing a creation
+    # preview, without retaining a write lock for this read-only operation.
+    require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(role_id),
+        permission=JobPermission.EDIT_ROLE,
+        lock_for_update=False,
+    )
     clean_name = str(name or "").strip()
     clean_spec = str(job_spec_text or "").strip()
     if not clean_name:
@@ -113,6 +131,14 @@ def _create_with_confirmation(
             "create_related_role",
             "The preview belongs to a different role conversation.",
         )
+    # Re-check at the mutation boundary under the canonical source-role lock.
+    # Hiring-team membership may have changed while confirmation was pending.
+    require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(role_id),
+        permission=JobPermission.EDIT_ROLE,
+    )
     current = _related_roles.preview_related_role(
         db,
         role_id=role_id,
@@ -162,6 +188,7 @@ def _create_with_confirmation(
             db,
             role_id=role_id,
             organization_id=int(user.organization_id),
+            creator_user_id=int(user.id),
             name=clean_name,
             job_spec_text=clean_spec,
             commit=False,
@@ -174,12 +201,131 @@ def _create_with_confirmation(
     return complete_command(db, claim, result)
 
 
+def _create_candidate_report_with_confirmation(
+    db: Session,
+    *,
+    kind: CandidateReportKind,
+    user: User,
+    conversation: TaaliChatConversation | None,
+    role_id: int,
+    confirmation_token: str | None,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    operation_name = (
+        "create_top_candidates_report"
+        if kind == "top_candidates"
+        else "create_screen_pool_report"
+    )
+    if conversation is None:
+        return blocked_confirmation_result(
+            operation_name, "No persisted chat confirmation is available."
+        )
+    if (
+        int(conversation.user_id) != int(user.id)
+        or int(conversation.organization_id) != int(user.organization_id)
+    ):
+        return blocked_confirmation_result(
+            operation_name,
+            "The preview belongs to a different recruiter or organization.",
+        )
+    if conversation.role_id is not None and int(conversation.role_id) != int(role_id):
+        return blocked_confirmation_result(
+            operation_name,
+            "The preview belongs to a different role conversation.",
+        )
+
+    # Report publication is role-scoped. Re-run the canonical permission check
+    # on both preview and confirmed calls; on confirmation it takes the shared
+    # role lock so a concurrent hiring-team revocation cannot race the write.
+    role = require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(role_id),
+        permission=JobPermission.CONTROL_AGENT,
+    )
+    binding = {
+        "conversation_id": int(conversation.id),
+        "organization_id": int(conversation.organization_id),
+        "requested_by_user_id": int(user.id),
+    }
+    token = str(confirmation_token or "").strip() or None
+    return execute_confirmed_candidate_report(
+        db,
+        kind=kind,
+        role=role,
+        user=user,
+        conversation_kind="taali",
+        conversation_id=int(conversation.id),
+        binding=binding,
+        arguments=arguments,
+        resolve_confirmation=lambda operation: require_later_turn_confirmation(
+            db,
+            conversation=conversation,
+            operation=operation,
+            token=token,
+            user=user,
+        ),
+    )
+
+
+def _create_top_candidates_report(
+    db: Session,
+    *,
+    user: User,
+    conversation: TaaliChatConversation | None,
+    role_id: int,
+    query: str,
+    limit: int = 10,
+    rank_by: str = "taali",
+    confirmation_token: str | None = None,
+) -> dict[str, Any]:
+    return _create_candidate_report_with_confirmation(
+        db,
+        kind="top_candidates",
+        user=user,
+        conversation=conversation,
+        role_id=role_id,
+        confirmation_token=confirmation_token,
+        arguments={"query": query, "limit": limit, "rank_by": rank_by},
+    )
+
+
+def _create_screen_pool_report(
+    db: Session,
+    *,
+    user: User,
+    conversation: TaaliChatConversation | None,
+    role_id: int,
+    requirement_text: str,
+    limit: int = 20,
+    offset: int = 0,
+    deep_verify: bool = False,
+    confirmation_token: str | None = None,
+) -> dict[str, Any]:
+    return _create_candidate_report_with_confirmation(
+        db,
+        kind="screen_pool",
+        user=user,
+        conversation=conversation,
+        role_id=role_id,
+        confirmation_token=confirmation_token,
+        arguments={
+            "requirement_text": requirement_text,
+            "limit": limit,
+            "offset": offset,
+            "deep_verify": deep_verify,
+        },
+    )
+
+
 def _resolve_handlers() -> dict[str, Callable[..., Any]]:
     """Resolve every chat catalog entry to exactly one callable handler."""
 
     special_handlers: dict[str, Callable[..., Any]] = {
         "preview_related_role": _preview_with_receipt,
         "create_related_role": _create_with_confirmation,
+        "create_top_candidates_report": _create_top_candidates_report,
+        "create_screen_pool_report": _create_screen_pool_report,
     }
     result: dict[str, Callable[..., Any]] = {}
     modules = (handlers, operations)
@@ -232,7 +378,11 @@ def dispatch_tool(
             conversation=conversation,
             **safe_args,
         )
-    if name == "create_related_role":
+    if name in {
+        "create_related_role",
+        "create_top_candidates_report",
+        "create_screen_pool_report",
+    }:
         return handler(db, user=user, conversation=conversation, **safe_args)
     return handler(db, user, **safe_args)
 

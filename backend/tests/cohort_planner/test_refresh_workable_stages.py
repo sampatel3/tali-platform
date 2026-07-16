@@ -14,6 +14,7 @@ def _user(db, org) -> User:
         hashed_password="x",
         full_name="RS",
         organization_id=org.id,
+        role="owner",
         is_active=True,
         is_verified=True,
     )

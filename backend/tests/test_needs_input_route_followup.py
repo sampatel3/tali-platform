@@ -81,7 +81,10 @@ def test_answer_enqueues_one_followup_for_enabled_unpaused_role(client, db):
         response = client.post(
             f"/api/v1/agent-needs-input/{int(row.id)}/answer",
             headers=headers,
-            json={"response": {"value": "Prioritize platform reliability"}},
+            json={
+                "response": {"value": "Prioritize platform reliability"},
+                "expected_version": int(role.version or 1),
+            },
         )
 
     assert response.status_code == 200, response.text
@@ -103,7 +106,10 @@ def test_http_answer_rejects_external_setup_questions(client, db, kind):
         response = client.post(
             f"/api/v1/agent-needs-input/{int(row.id)}/answer",
             headers=headers,
-            json={"response": {"value": "done"}},
+            json={
+                "response": {"value": "done"},
+                "expected_version": int(role.version or 1),
+            },
         )
 
     assert response.status_code == 422, response.text
@@ -136,7 +142,10 @@ def test_linking_active_task_auto_resolves_prompt_and_reduces_open_count(client,
     linked = client.post(
         f"/api/v1/roles/{int(role.id)}/tasks",
         headers=headers,
-        json={"task_id": int(task.id)},
+        json={
+            "task_id": int(task.id),
+            "expected_version": int(role.version or 1),
+        },
     )
 
     assert linked.status_code == 200, linked.text
@@ -183,7 +192,10 @@ def test_followup_dispatch_failure_does_not_undo_recorded_answer(client, db):
         response = client.post(
             f"/api/v1/agent-needs-input/{int(row.id)}/answer",
             headers=headers,
-            json={"response": {"value": "Keep the current bar"}},
+            json={
+                "response": {"value": "Keep the current bar"},
+                "expected_version": int(role.version or 1),
+            },
         )
 
     assert response.status_code == 200, response.text
@@ -208,7 +220,10 @@ def test_answer_does_not_enqueue_for_inactive_role(client, db, enabled, paused):
         response = client.post(
             f"/api/v1/agent-needs-input/{int(row.id)}/answer",
             headers=headers,
-            json={"response": {"value": "Noted"}},
+            json={
+                "response": {"value": "Noted"},
+                "expected_version": int(role.version or 1),
+            },
         )
 
     assert response.status_code == 200, response.text

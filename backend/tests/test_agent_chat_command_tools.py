@@ -35,6 +35,7 @@ def _world(db):
         hashed_password="x",
         full_name="Recruiter",
         organization_id=int(org.id),
+        role="owner",
         is_active=True,
         is_verified=True,
         is_superuser=False,

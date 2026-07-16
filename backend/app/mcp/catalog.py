@@ -57,6 +57,9 @@ RelatedRoleJobSpec = Annotated[
 ConfirmationToken = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
 ]
+CandidateReportQuery = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
+]
 
 
 class ListRolesInput(ToolInput):
@@ -135,6 +138,36 @@ class ScreenPoolInput(ToolInput):
     role_id: PositiveInt | None = None
     deep_verify: bool = Field(
         default=False, description="Opt in to bounded per-candidate CV evidence checks."
+    )
+
+
+class CreateTopCandidatesReportInput(ToolInput):
+    role_id: PositiveInt = Field(
+        description="Role whose exact candidate shortlist will be published."
+    )
+    query: CandidateReportQuery
+    limit: TopCandidateLimit = 10
+    rank_by: ScoreType = "taali"
+    confirmation_token: ConfirmationToken | None = Field(
+        default=None,
+        description="Opaque token from the exact server preview, when available.",
+    )
+
+
+class CreateScreenPoolReportInput(ToolInput):
+    role_id: PositiveInt = Field(
+        description="Role whose exact rediscovery result will be published."
+    )
+    requirement_text: CandidateReportQuery
+    limit: PoolCandidateLimit = 20
+    offset: NonNegativeInt = 0
+    deep_verify: bool = Field(
+        default=False,
+        description="Re-run bounded CV evidence checks for the published snapshot.",
+    )
+    confirmation_token: ConfirmationToken | None = Field(
+        default=None,
+        description="Opaque token from the exact server preview, when available.",
     )
 
 
@@ -352,7 +385,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "find_top_candidates",
-        "Return a grounded top-N shortlist for qualitative requirements, with per-criterion verdicts and verbatim evidence.",
+        "Default for bounded qualitative candidate discovery, even without top/best wording. Returns a score-ranked shortlist (default 10) with available criterion verdicts/evidence, explicit criteria and grounding coverage. This is a pure read and never publishes a report; use create_top_candidates_report only after an explicit sharing request. Use query='candidates' for a bare top-N result; role scorecard evidence is reused when available.",
         FindTopCandidatesInput,
         "find_top_candidates",
         _CHAT,
@@ -363,7 +396,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "screen_pool_against_requirement",
-        "Search the scored candidate history against a new requirement. Deep verification is optional and bounded.",
+        "Search the scored candidate history against a new requirement. Deep verification is optional and bounded. This is a pure read and never publishes a report; use create_screen_pool_report only after an explicit sharing request.",
         ScreenPoolInput,
         "screen_pool_against_requirement",
         _CHAT,
@@ -373,8 +406,34 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         renderer="candidate_evidence",
     ),
     ToolSpec(
+        "create_top_candidates_report",
+        "Publish a previously reviewed role-scoped top-candidate shortlist as a PII-scrubbed, read-only 30-day bearer report. The first call only recomputes and previews the exact snapshot; creation requires explicit recruiter confirmation in a later message and revalidation at execution.",
+        CreateTopCandidatesReportInput,
+        "create_top_candidates_report",
+        _CHAT,
+        _RELATED_ROLE_ACCESS,
+        effect="external_write",
+        cost="paid",
+        confirmation="explicit",
+        persistence="sensitive",
+        renderer="candidate_report",
+    ),
+    ToolSpec(
+        "create_screen_pool_report",
+        "Publish a previously reviewed, role-scoped rediscovery result as a PII-scrubbed, read-only 30-day bearer report. The first call only recomputes and previews the exact snapshot; creation requires explicit recruiter confirmation in a later message and revalidation at execution.",
+        CreateScreenPoolReportInput,
+        "create_screen_pool_report",
+        _CHAT,
+        _RELATED_ROLE_ACCESS,
+        effect="external_write",
+        cost="paid",
+        confirmation="explicit",
+        persistence="sensitive",
+        renderer="candidate_report",
+    ),
+    ToolSpec(
         "nl_search_candidates",
-        "Exhaustive, person-deduplicated natural-language search over normalized profile fields and indexed CV text; optional bounded verification and graph context.",
+        "Exhaustive, person-deduplicated retrieval for explicit all/every requests over normalized fields and indexed CV text. Reports database vs verification coverage; unchecked qualitative matches must not be described as passed or failed. Optional bounded verification and graph context.",
         NaturalLanguageSearchInput,
         "nl_search_candidates",
         _BOTH,

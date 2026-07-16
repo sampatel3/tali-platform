@@ -16,6 +16,10 @@ from sqlalchemy.orm import Session
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
+from ..models.job_hiring_team import (
+    TEAM_ROLE_HIRING_MANAGER,
+    JobHiringTeam,
+)
 from ..models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
 from ..tasks.sister_role_tasks import score_sister_role
 from .ats_role_lifecycle import ats_job_lifecycle
@@ -32,17 +36,22 @@ class RelatedRoleError(ValueError):
 
 
 def get_related_role_source(
-    db: Session, *, role_id: int, organization_id: int
+    db: Session,
+    *,
+    role_id: int,
+    organization_id: int,
+    lock_for_update: bool = False,
 ) -> Role:
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == int(role_id),
-            Role.organization_id == int(organization_id),
-            Role.deleted_at.is_(None),
-        )
-        .first()
+    query = db.query(Role).filter(
+        Role.id == int(role_id),
+        Role.organization_id == int(organization_id),
+        Role.deleted_at.is_(None),
     )
+    if lock_for_update:
+        # Hiring-team mutations acquire the same Role lock first. This keeps
+        # the copied membership set stable until the related role commits.
+        query = query.with_for_update(of=Role)
+    role = query.first()
     if role is None:
         raise RelatedRoleError("Role not found.")
     if str(role.role_kind or ROLE_KIND_STANDARD) == ROLE_KIND_SISTER:
@@ -117,6 +126,7 @@ def create_related_role(
     *,
     role_id: int,
     organization_id: int,
+    creator_user_id: int,
     name: str,
     job_spec_text: str,
     commit: bool = True,
@@ -129,9 +139,16 @@ def create_related_role(
     consumed-confirmation transcript commit atomically. Their initial task has
     a short countdown; the existing evaluation recovery sweep remains the
     durable fallback if the queue is unavailable or wins the commit race.
+
+    The new role's hiring team is written before the same caller-owned commit,
+    so no caller can expose an inaccessible role or dispatch work for one after
+    a crash.
     """
     source = get_related_role_source(
-        db, role_id=role_id, organization_id=organization_id
+        db,
+        role_id=role_id,
+        organization_id=organization_id,
+        lock_for_update=True,
     )
     clean_name = str(name or "").strip()
     clean_spec = str(job_spec_text or "").strip()
@@ -165,6 +182,36 @@ def create_related_role(
     db.add(related)
     try:
         db.flush()
+        source_members = (
+            db.query(JobHiringTeam)
+            .filter(
+                JobHiringTeam.organization_id == int(organization_id),
+                JobHiringTeam.role_id == int(source.id),
+            )
+            .order_by(JobHiringTeam.id.asc())
+            .all()
+        )
+        if source_members:
+            db.add_all(
+                [
+                    JobHiringTeam(
+                        organization_id=int(organization_id),
+                        role_id=int(related.id),
+                        user_id=int(member.user_id),
+                        team_role=member.team_role,
+                    )
+                    for member in source_members
+                ]
+            )
+        else:
+            db.add(
+                JobHiringTeam(
+                    organization_id=int(organization_id),
+                    role_id=int(related.id),
+                    user_id=int(creator_user_id),
+                    team_role=TEAM_ROLE_HIRING_MANAGER,
+                )
+            )
         evaluation_counts = ensure_sister_evaluations(db, related)
         if commit:
             db.commit()

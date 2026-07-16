@@ -30,6 +30,7 @@ from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.role import Role
 from ..models.user import User
+from ..services.workspace_agent_control import workspace_agent_pause_state
 
 _VISIBLE_MESSAGE_KINDS = (
     MESSAGE_KIND_CHAT,
@@ -345,6 +346,17 @@ def list_agent_conversations(
                 unread[cid] = unread.get(cid, 0) + 1
 
     pending_by_role, questions_by_role = _counts_by_role(db, role_ids)
+    # The workspace switch is an execution overlay, not a bulk edit of every
+    # role. Resolve it once for the whole sidebar response, then expose both
+    # the effective state and the untouched role-local desired state on each
+    # row. This prevents chat surfaces from animating an agent as running while
+    # the workspace has denied autonomous work.
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(organization_id),
+        current_user_id=int(user.id),
+    )
+    workspace_paused = bool(workspace_pause["paused"])
 
     items: list[dict[str, Any]] = []
     for rid, role in role_by_id.items():
@@ -355,14 +367,48 @@ def list_agent_conversations(
         open_q = questions_by_role.get(rid, 0)
         pending_d = pending_by_role.get(rid, 0)
         last_at = (convo.last_message_at if convo else None) or preview_at
+        agent_enabled = bool(role.agentic_mode_enabled)
+        role_paused = role.agent_paused_at is not None
+        effective_paused = agent_enabled and (workspace_paused or role_paused)
+        pause_scope = (
+            "workspace"
+            if effective_paused and workspace_paused
+            else ("role" if effective_paused and role_paused else None)
+        )
+        effective_paused_at = (
+            workspace_pause["paused_at"]
+            if pause_scope == "workspace"
+            else (role.agent_paused_at if pause_scope == "role" else None)
+        )
+        effective_paused_reason = (
+            workspace_pause["reason"]
+            if pause_scope == "workspace"
+            else (role.agent_paused_reason if pause_scope == "role" else None)
+        )
         items.append(
             {
                 "role_id": rid,
                 "role_name": role.name,
                 "conversation_id": cid,
-                "agent_enabled": bool(role.agentic_mode_enabled),
-                "agent_paused": role.agent_paused_at is not None,
-                "agent_paused_reason": role.agent_paused_reason,
+                # ``agent_enabled`` remains the role's desired state. Legacy
+                # ``agent_paused*`` fields are effective (workspace > role),
+                # matching the role status API, while explicit local fields
+                # preserve what will happen after the workspace resumes.
+                "agent_enabled": agent_enabled,
+                "agent_running": agent_enabled and not effective_paused,
+                "agent_paused": effective_paused,
+                "agent_effective_paused": effective_paused,
+                "agent_pause_scope": pause_scope,
+                "agent_paused_at": effective_paused_at,
+                "agent_paused_reason": effective_paused_reason,
+                "role_paused": role_paused,
+                "role_paused_at": role.agent_paused_at,
+                "role_paused_reason": role.agent_paused_reason,
+                "workspace_paused": workspace_paused,
+                "workspace_paused_at": workspace_pause["paused_at"],
+                "workspace_paused_reason": workspace_pause["reason"],
+                "workspace_paused_by": workspace_pause["paused_by"],
+                "workspace_control_version": int(workspace_pause["version"]),
                 # Grouping signals (agent-first sections, computed once here).
                 "group": _agent_group(role),
                 "starred": bool(getattr(role, "starred_for_auto_sync", False)),

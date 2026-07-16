@@ -10,7 +10,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 RAILWAY_DIR = ROOT / "scripts" / "railway"
+RELEASE_DIR = ROOT / "scripts" / "release"
 SHELL_FILES = [
+    ROOT / "scripts" / "deploy_production.sh",
+    RELEASE_DIR / "assert_canonical_release.sh",
+    RELEASE_DIR / "assert_provider_preflight.sh",
     RAILWAY_DIR / "lib.sh",
     RAILWAY_DIR / "check_status.sh",
     RAILWAY_DIR / "prepare_production.sh",
@@ -39,6 +43,158 @@ def test_coordinated_rollout_order_is_prepare_workers_then_web():
 
     assert script.index("prepare_production.sh") < script.index("deploy_worker.sh")
     assert script.index("deploy_worker.sh") < script.index("deploy_backend.sh")
+
+
+def test_root_rollout_preflights_both_providers_before_any_deploy():
+    script = (ROOT / "scripts" / "deploy_production.sh").read_text()
+
+    assert script.index("assert_canonical_release.sh") < script.index(
+        "assert_provider_preflight.sh"
+    )
+    assert script.index("assert_provider_preflight.sh") < script.index(
+        "scripts/railway/deploy_production.sh"
+    )
+    assert script.index("scripts/railway/deploy_production.sh") < script.index(
+        "vercel --prod --yes"
+    )
+    assert "git status --porcelain" in script
+
+
+def _provider_preflight_fixture(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "provider-calls.log"
+    railway_user = tmp_path / "railway-user.json"
+    railway_status = tmp_path / "railway-status.json"
+    vercel_user = tmp_path / "vercel-user.json"
+    vercel_link = tmp_path / "vercel-project.json"
+
+    railway_user.write_text(json.dumps({"email": "release@example.test"}))
+    railway_status.write_text(
+        json.dumps(
+            {
+                "id": "railway-project-test",
+                "name": "tali-test",
+                "environments": {
+                    "edges": [
+                        {
+                            "node": {
+                                "name": "production",
+                                "serviceInstances": {
+                                    "edges": [
+                                        {"node": {"serviceName": "web"}},
+                                        {"node": {"serviceName": "worker"}},
+                                        {"node": {"serviceName": "scoring"}},
+                                    ]
+                                },
+                            }
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    vercel_user.write_text(json.dumps({"username": "release-user"}))
+    vercel_link.write_text(
+        json.dumps(
+            {
+                "projectId": "vercel-project-test",
+                "orgId": "vercel-org-test",
+                "projectName": "frontend-test",
+            }
+        )
+    )
+
+    fake_railway = fake_bin / "railway"
+    fake_railway.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'railway %s\\n' "$*" >> "$PROVIDER_CALL_LOG"
+case "$*" in
+  "whoami --json") cat "$FAKE_RAILWAY_USER" ;;
+  "status --json") cat "$FAKE_RAILWAY_STATUS" ;;
+  *) echo "unexpected Railway command: $*" >&2; exit 97 ;;
+esac
+"""
+    )
+    fake_railway.chmod(0o755)
+
+    fake_vercel = fake_bin / "vercel"
+    fake_vercel.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'vercel %s\\n' "$*" >> "$PROVIDER_CALL_LOG"
+case "$1 $2" in
+  "whoami --format=json") cat "$FAKE_VERCEL_USER" ;;
+  "project inspect") exit 0 ;;
+  *) echo "unexpected Vercel command: $*" >&2; exit 98 ;;
+esac
+"""
+    )
+    fake_vercel.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+        "PROVIDER_CALL_LOG": str(call_log),
+        "FAKE_RAILWAY_USER": str(railway_user),
+        "FAKE_RAILWAY_STATUS": str(railway_status),
+        "FAKE_VERCEL_USER": str(vercel_user),
+        "TALI_VERCEL_LINK_FILE": str(vercel_link),
+        "TALI_RAILWAY_PROJECT_ID": "railway-project-test",
+        "TALI_RAILWAY_PROJECT_NAME": "tali-test",
+        "RAILWAY_BACKEND_SERVICE": "web",
+        "RAILWAY_WORKER_SERVICE": "worker",
+        "RAILWAY_SCORING_WORKER_SERVICE": "scoring",
+        "TALI_VERCEL_PROJECT_ID": "vercel-project-test",
+        "TALI_VERCEL_ORG_ID": "vercel-org-test",
+        "TALI_VERCEL_PROJECT_NAME": "frontend-test",
+    }
+    return env, call_log
+
+
+def test_provider_preflight_is_read_only_and_validates_both_links(tmp_path: Path):
+    env, call_log = _provider_preflight_fixture(tmp_path)
+
+    result = subprocess.run(
+        ["bash", str(RELEASE_DIR / "assert_provider_preflight.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = call_log.read_text().splitlines()
+    assert calls == [
+        "railway whoami --json",
+        "railway status --json",
+        "vercel whoami --format=json --non-interactive",
+        f"vercel project inspect --cwd {ROOT / 'frontend'} --non-interactive --no-color",
+    ]
+    assert not any(" up " in f" {call} " for call in calls)
+    assert not any(" deploy " in f" {call} " for call in calls)
+    assert not any(" variable set " in f" {call} " for call in calls)
+
+
+def test_provider_preflight_fails_before_vercel_when_railway_link_is_wrong(
+    tmp_path: Path,
+):
+    env, call_log = _provider_preflight_fixture(tmp_path)
+    env["TALI_RAILWAY_PROJECT_ID"] = "different-production-project"
+
+    result = subprocess.run(
+        ["bash", str(RELEASE_DIR / "assert_provider_preflight.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "wrong Railway project" in result.stderr
+    assert call_log.read_text().splitlines() == [
+        "railway whoami --json",
+        "railway status --json",
+    ]
 
 
 def test_predeploy_pins_metering_and_runs_separate_migrations():

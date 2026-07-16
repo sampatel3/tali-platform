@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 import { roles as rolesApi } from '../../shared/api/rolesClient';
+import { Button } from '../../shared/ui/TaaliPrimitives';
 import ConfirmDialog from './ConfirmDialog';
 
 // Talent-pool rediscovery, Phase B — the opt-in re-score action on a rediscovery
@@ -76,9 +77,9 @@ export default function PoolRescore({ requirementText, candidates }) {
   return (
     <div className="ev-rescore">
       {phase === 'idle' ? (
-        <button type="button" className="ev-rescore-btn" onClick={() => setConfirming(true)}>
+        <Button variant="primary" size="xs" onClick={() => setConfirming(true)}>
           Re-score top {ids.length} against this requirement · est ${est}
-        </button>
+        </Button>
       ) : null}
       <ConfirmDialog
         open={confirming}

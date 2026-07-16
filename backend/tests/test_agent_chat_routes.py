@@ -21,9 +21,10 @@ from app.models.agent_conversation import AgentConversation
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
-from tests.conftest import auth_headers
+from tests.conftest import TestingSessionLocal, auth_headers
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +198,9 @@ def test_send_persists_user_message_and_reads_as_working(client, db):
     assert data["agent_working"] is True
     assert data["messages"][-1]["author"] == "recruiter"
     delay.assert_called_once()
+    assert delay.call_args.kwargs["accepted_role_version"] == int(role.version or 1)
+    conversation = db.get(AgentConversation, int(data["conversation_id"]))
+    assert conversation.turn_accepted_role_version == int(role.version or 1)
 
     # The message is already persisted and the turn reads as "working" on a fresh
     # load, even though no reply exists yet — this is what survives navigation.
@@ -206,6 +210,62 @@ def test_send_persists_user_message_and_reads_as_working(client, db):
     assert msgs[0]["text"] == "who is in the pool?"
     assert msgs[0]["created_at"]  # timestamp present for the UI
     assert tl["agent_working"] is True
+
+
+def test_send_fences_post_commit_role_edit_with_atomically_persisted_revision(db):
+    """A role edit after the turn commit cannot become the accepted revision."""
+    org = Organization(name="Turn race", slug=f"turn-race-{id(db)}")
+    db.add(org)
+    db.flush()
+    user = User(
+        email=f"turn-race-{id(db)}@example.test",
+        hashed_password="x",
+        full_name="Recruiter",
+        organization_id=int(org.id),
+        role="member",
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
+    )
+    role = _role(db, int(org.id), name="Revision race")
+    db.add(user)
+    db.commit()
+    role_id = int(role.id)
+    accepted_version = int(role.version or 1)
+
+    from app.domains.agent_chat.route_support import SendMessageRequest
+    from app.domains.agent_chat.routes import send_message
+
+    real_commit = db.commit
+    raced = False
+
+    def _commit_then_edit_role():
+        nonlocal raced
+        real_commit()
+        if raced:
+            return
+        raced = True
+        with TestingSessionLocal() as concurrent:
+            current = concurrent.get(Role, role_id)
+            current.version = accepted_version + 1
+            concurrent.commit()
+
+    with patch.object(db, "commit", side_effect=_commit_then_edit_role), patch(
+        "app.tasks.agent_chat_tasks.run_agent_chat_turn.delay"
+    ) as delay:
+        result = send_message(
+            role_id,
+            SendMessageRequest(message="Review the current shortlist"),
+            db=db,
+            current_user=user,
+        )
+
+    assert result["status"] == "accepted"
+    assert delay.call_args.kwargs["accepted_role_version"] == accepted_version
+    db.expire_all()
+    conversation = db.get(AgentConversation, int(result["conversation_id"]))
+    assert conversation.turn_accepted_role_version == accepted_version
+    assert db.get(Role, role_id).version == accepted_version + 1
 
 
 def test_second_message_to_same_agent_while_working_is_rejected(client, db):

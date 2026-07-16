@@ -1,21 +1,28 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { PanelLeft } from 'lucide-react';
+import { CircleAlert, PanelLeft } from 'lucide-react';
 import './chat.css';
 import EmptyState from './EmptyState';
-import { ChatComposer, ChatMessage, ThinkingDots } from '../../shared/chat';
+import {
+  ChatActivity,
+  ChatComposer,
+  ChatMessage,
+  ChatSurface,
+  NewMessageNotice,
+  ThinkingDots,
+  useAgentUpdateAwareness,
+} from '../../shared/chat';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
 import ConfirmDialog from './ConfirmDialog';
 import AgentConversation from './AgentConversation';
 import useChatStream from './useChatStream';
+import { MOBILE_NAV_ID, useChatMobileNavigation } from './useChatMobileNavigation';
+import { useConversationHistory } from './useConversationHistory';
 import { conversationsApi } from './api';
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
-import { hydrateMessage, stitchToolResults } from './conversationHistory';
 import { useDocumentVisibility } from '../../shared/motion';
-
-const HISTORY_PAGE_SIZE = 60;
 
 const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {}) => {
   const navigate = useNavigate();
@@ -30,28 +37,25 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
-  // Hydration state for the center pane while we fetch a conversation's
-  // history: ``hydrating`` shows the loading dots, ``hydrateError`` shows a
-  // small failure row. Both are cleared once a fetch resolves.
-  const [hydrating, setHydrating] = useState(false);
-  const [hydrateError, setHydrateError] = useState(false);
-  const [historyPage, setHistoryPage] = useState({ hasMore: false, before: null });
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [olderError, setOlderError] = useState(false);
   // Set when the sidebar list fetch fails so we keep the previous list on
   // screen (and show a quiet retry row) rather than collapsing to the
   // "no conversations yet" empty state for a user who has some.
   const [conversationsError, setConversationsError] = useState(false);
-  // Bumped by the hydrate-error "Try again" button to re-run the hydration
-  // effect while the route id stays the same.
-  const [hydrateNonce, setHydrateNonce] = useState(0);
 
   // Agents tab: the per-role agent list (same source the Home dock polls).
   // Kept here so the sidebar can list them and the center can resolve the
   // active agent's name/state from the route's role id.
   const [agents, setAgents] = useState([]);
-  // Mobile: the conversation/agent list is an off-canvas drawer.
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const searchScrollRef = useRef(null);
+  const searchTimelineRegionId = React.useId();
+  const {
+    closeMobileNav,
+    isMobileDrawer,
+    mobileNavOpen,
+    mobileNavRef,
+    openMobileNav,
+    rootRef,
+  } = useChatMobileNavigation({ agentRoleId, isAgents });
 
   // On error, keep the last agent list on screen — resetting to [] would
   // flash the empty two-pane shell (and yank the auto-select) on a transient
@@ -100,18 +104,18 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
 
   const onModeChange = useCallback(
     (nextMode) => {
-      setMobileNavOpen(false);
+      closeMobileNav();
       navigate(nextMode === 'agents' ? '/chat/agents' : '/chat');
     },
-    [navigate],
+    [closeMobileNav, navigate],
   );
 
   const onSelectAgent = useCallback(
     (roleId) => {
-      setMobileNavOpen(false);
+      closeMobileNav();
       navigate(`/chat/agents/${roleId}`);
     },
-    [navigate],
+    [closeMobileNav, navigate],
   );
 
   // The global search bar hands off to /chat with ?q=<query>. Seed the
@@ -155,9 +159,40 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   } =
     useChatStream({ conversationId, onConversationId });
 
-  const activeConversationIdRef = useRef(conversationId);
-  activeConversationIdRef.current = conversationId;
-  const historyGenerationRef = useRef(0);
+  const {
+    hydrateError,
+    hydrating,
+    historyPage,
+    loadOlder,
+    loadingOlder,
+    olderError,
+    retryHydration,
+  } = useConversationHistory({
+    conversationId,
+    locallyCreated,
+    prependHistory,
+    reset,
+    setHistory,
+  });
+
+  const searchAwarenessItems = useMemo(() => {
+    const items = messages.map((message) => ({
+      ...message,
+      kind: 'message',
+      author: message.role === 'assistant' ? 'agent' : 'recruiter',
+    }));
+    if (error) items.push({ id: 'search-turn-error', kind: 'message', author: 'agent' });
+    return items;
+  }, [error, messages]);
+  const {
+    hasNewAgentUpdate: hasNewSearchUpdate,
+    jumpToLatest: jumpToLatestSearchUpdate,
+  } = useAgentUpdateAwareness({
+    items: searchAwarenessItems,
+    ready: !isAgents && !hydrating,
+    scopeKey: conversationId ?? 'new-search-conversation',
+    scrollRef: searchScrollRef,
+  });
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -175,105 +210,6 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     refreshConversations();
   }, [refreshConversations]);
 
-  // When the route id changes, hydrate that conversation — UNLESS this
-  // conversation was just created by the current send() flow, in which
-  // case the chat hook's local state is the source of truth (it has the
-  // streaming assistant placeholder; the API only has the user turn).
-  //
-  // We reset() first so a *different* conversation never renders the prior
-  // thread's messages under its heading — either while the fetch is in
-  // flight or, on a 404, permanently. That also clears any error banner
-  // left over from the conversation we're leaving.
-  useEffect(() => {
-    const generation = historyGenerationRef.current + 1;
-    historyGenerationRef.current = generation;
-    let cancelled = false;
-    const run = async () => {
-      if (!conversationId) {
-        reset();
-        setHydrating(false);
-        setHydrateError(false);
-        setHistoryPage({ hasMore: false, before: null });
-        setLoadingOlder(false);
-        setOlderError(false);
-        return;
-      }
-      // Just created by send(): its history lives in the hook already; don't
-      // wipe the streaming placeholder or refetch.
-      if (locallyCreated.current.has(conversationId)) {
-        setHydrating(false);
-        setHydrateError(false);
-        setHistoryPage({ hasMore: false, before: null });
-        setLoadingOlder(false);
-        setOlderError(false);
-        return;
-      }
-      reset();
-      setHydrateError(false);
-      setHistoryPage({ hasMore: false, before: null });
-      setLoadingOlder(false);
-      setOlderError(false);
-      setHydrating(true);
-      try {
-        const data = await conversationsApi.get(conversationId, { limit: HISTORY_PAGE_SIZE });
-        if (cancelled) return;
-        const hydrated = stitchToolResults(
-          (data.messages || []).map(hydrateMessage),
-        );
-        setHistory(hydrated);
-        setHistoryPage({
-          hasMore: Boolean(data.has_more && data.next_before != null),
-          before: data.next_before ?? null,
-        });
-      } catch {
-        if (!cancelled) setHydrateError(true);
-      } finally {
-        if (!cancelled) setHydrating(false);
-      }
-    };
-    run();
-    return () => {
-      cancelled = true;
-      if (historyGenerationRef.current === generation) {
-        historyGenerationRef.current += 1;
-      }
-    };
-  }, [conversationId, reset, setHistory, hydrateNonce]);
-
-  const loadOlder = useCallback(async () => {
-    const id = conversationId;
-    const before = historyPage.before;
-    if (id == null || before == null || loadingOlder) return;
-    const generation = historyGenerationRef.current;
-    const requestIsCurrent = () =>
-      activeConversationIdRef.current === id &&
-      historyGenerationRef.current === generation;
-    setLoadingOlder(true);
-    setOlderError(false);
-    try {
-      const data = await conversationsApi.get(id, {
-        before,
-        limit: HISTORY_PAGE_SIZE,
-      });
-      // Route changes reset the thread. The generation also protects a quick
-      // leave-and-return to the same id from accepting the first visit's late
-      // response.
-      if (!requestIsCurrent()) return;
-      prependHistory(
-        (data.messages || []).map(hydrateMessage),
-        stitchToolResults,
-      );
-      setHistoryPage({
-        hasMore: Boolean(data.has_more && data.next_before != null),
-        before: data.next_before ?? null,
-      });
-    } catch {
-      if (requestIsCurrent()) setOlderError(true);
-    } finally {
-      if (requestIsCurrent()) setLoadingOlder(false);
-    }
-  }, [conversationId, historyPage.before, loadingOlder, prependHistory]);
-
   // After a streaming turn ends, refresh the sidebar so the new
   // conversation (or updated_at on the existing one) shows up, and drop the
   // conversation from ``locallyCreated`` — the API now has the full turn, so
@@ -288,17 +224,17 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   }, [conversationId, isStreaming, messages.length, refreshConversations]);
 
   const onNew = useCallback(() => {
-    setMobileNavOpen(false);
+    closeMobileNav();
     navigate('/chat');
     setComposer('');
-  }, [navigate]);
+  }, [closeMobileNav, navigate]);
 
   const onSelect = useCallback(
     (id) => {
-      setMobileNavOpen(false);
+      closeMobileNav();
       navigate(`/chat/${id}`);
     },
-    [navigate],
+    [closeMobileNav, navigate],
   );
 
   // Two-step delete: ``onDelete`` opens an in-app confirm dialog,
@@ -368,8 +304,13 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   return (
     <>
       {NavComponent ? <NavComponent currentPage="chat" onNavigate={onNavigate} /> : null}
-      <div className={`cp-root ${mobileNavOpen ? 'cp-nav-open' : ''}`}>
+      <div ref={rootRef} className={`cp-root ${mobileNavOpen ? 'cp-nav-open' : ''}`}>
       <Sidebar
+        ref={mobileNavRef}
+        id={MOBILE_NAV_ID}
+        mobileDrawer={isMobileDrawer}
+        mobileDrawerOpen={mobileNavOpen}
+        onRequestClose={closeMobileNav}
         mode={isAgents ? 'agents' : 'ask'}
         onModeChange={onModeChange}
         conversations={conversations}
@@ -388,8 +329,9 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
         type="button"
         className="cp-nav-scrim"
         aria-label="Close list"
-        tabIndex={mobileNavOpen ? 0 : -1}
-        onClick={() => setMobileNavOpen(false)}
+        aria-hidden="true"
+        tabIndex={-1}
+        onClick={closeMobileNav}
       />
       {isAgents ? (
         <AgentConversation
@@ -398,16 +340,18 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           roleName={activeAgent?.role_name}
           agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
           onAfterSend={refreshAgents}
-          onOpenList={() => setMobileNavOpen(true)}
+          onOpenList={openMobileNav}
         />
       ) : (
-      <div className="cp-center">
+      <ChatSurface className="cp-center" density="comfortable">
         <header className="cp-head">
           <button
             type="button"
             className="cp-mobile-menu"
-            onClick={() => setMobileNavOpen(true)}
+            onClick={openMobileNav}
             aria-label="Show conversations"
+            aria-controls={MOBILE_NAV_ID}
+            aria-expanded={isMobileDrawer && mobileNavOpen}
           >
             <PanelLeft size={18} />
           </button>
@@ -421,7 +365,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             Connected to your pipeline
           </span>
         </header>
-        <div className="cp-scroll">
+        <div className="cp-scroll" id={searchTimelineRegionId} ref={searchScrollRef}>
           {hydrating && messages.length === 0 ? (
             <div className="cp-thread">
               <ChatMessage role="assistant">
@@ -430,16 +374,19 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             </div>
           ) : hydrateError && messages.length === 0 ? (
             <div className="cp-thread">
-              <div className="cp-refresh-row">
-                Couldn’t load this conversation.
-                <button
-                  type="button"
-                  className="taali-text-btn cp-refresh-retry"
-                  onClick={() => setHydrateNonce((n) => n + 1)}
-                >
-                  Try again
-                </button>
-              </div>
+              <ChatActivity
+                role="alert"
+                severity="error"
+                severityLabel="Error"
+                typeLabel="Conversation"
+                title="Couldn’t load this conversation"
+                summary="Your conversation is still saved. Try loading it again."
+                icon={CircleAlert}
+                actions={[{
+                  label: 'Try again',
+                  onClick: retryHydration,
+                }]}
+              />
             </div>
           ) : messages.length === 0 ? (
             <EmptyState onPick={(t) => submit(t)} />
@@ -457,6 +404,12 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           )}
         </div>
         <div className="cp-composer-wrap">
+          <NewMessageNotice
+            visible={hasNewSearchUpdate}
+            onClick={jumpToLatestSearchUpdate}
+            controls={searchTimelineRegionId}
+            className="cp-new-update"
+          />
           <ChatComposer
             value={composer}
             onChange={setComposer}
@@ -473,7 +426,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             Every claim links back to the candidate’s CV.
           </div>
         </div>
-      </div>
+      </ChatSurface>
       )}
       <ConfirmDialog
         open={pendingDeleteId != null}

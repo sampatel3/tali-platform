@@ -17,6 +17,10 @@ from ...components.integrations.workable.service import (
 )
 from ...components.integrations.workable import error_policy as workable_error_policy
 from ...deps import get_current_user, require_org_owner
+from ...domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
@@ -26,10 +30,18 @@ from ...models.workable_sync_run import WorkableSyncRun
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...platform.admin_auth import require_admin_secret
+from ...platform.request_context import get_request_id
 from ...services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
 )
+from ...services.role_change_audit import (
+    ROLE_CHANGE_ACTION_SOFT_DELETED,
+    add_role_change_event,
+    capture_role_change_snapshot,
+)
+from ...services.role_concurrency import bump_role_version
+from ...services.role_lifecycle import stop_role_for_ats_deletion
 
 logger = logging.getLogger(__name__)
 
@@ -961,13 +973,12 @@ def refresh_role_workable_stages(
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
     _assert_workable_connected(org)
-    role = (
-        db.query(Role)
-        .filter(Role.id == int(role_id), Role.organization_id == int(org.id))
-        .one_or_none()
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
     )
-    if role is None:
-        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
     if not role.workable_job_id:
         return _StageRefreshResult(
             job_linked=False, checked=0, updated=0,
@@ -1031,11 +1042,48 @@ def clear_workable_data(
     org_id = current_user.organization_id
     now = datetime.now(timezone.utc)
 
-    roles_updated = (
-        db.query(Role)
-        .filter(Role.organization_id == org_id, Role.source == "workable", Role.deleted_at.is_(None))
-        .update({Role.deleted_at: now}, synchronize_session=False)
+    # Lock every affected role in one deterministic order before mutating any
+    # of them. This serializes Clear with per-role controls and Workable upserts
+    # without creating an A->B / B->A deadlock pattern.
+    locked_rows = (
+        db.query(Role.id, Role.version)
+        .filter(Role.organization_id == org_id, Role.source == "workable")
+        .order_by(Role.id.asc())
+        .with_for_update(of=Role)
+        .all()
     )
+    roles_updated = 0
+    request_id = get_request_id()
+    for locked in locked_rows:
+        role = db.get(Role, int(locked.id))
+        if role is None:
+            continue
+        if int(role.version or 1) != int(locked.version or 1):
+            db.refresh(role)
+        was_live = role.deleted_at is None
+        audit_before = capture_role_change_snapshot(role)
+        audit_from = int(role.version or 1)
+        changed = stop_role_for_ats_deletion(
+            role,
+            deleted_at=now,
+            provider="Workable",
+        )
+        if not changed:
+            continue
+        audit_to = bump_role_version(role)
+        add_role_change_event(
+            db,
+            role=role,
+            before=audit_before,
+            action=ROLE_CHANGE_ACTION_SOFT_DELETED,
+            actor_user_id=int(current_user.id),
+            from_version=audit_from,
+            to_version=audit_to,
+            reason="Workable data cleared; agent turned off",
+            request_id=request_id,
+        )
+        if was_live:
+            roles_updated += 1
     apps_updated = (
         db.query(CandidateApplication)
         .filter(

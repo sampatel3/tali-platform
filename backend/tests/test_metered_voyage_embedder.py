@@ -12,6 +12,7 @@ previously invisible to billing + the org budget. These tests pin:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -23,6 +24,7 @@ from app.models.role import Role
 from app.models.usage_event import UsageEvent
 from app.services.metered_async_anthropic_client import (
     GraphMeteringContext,
+    GraphProviderAdmissionError,
     graph_metering_ctx,
 )
 from app.services.metered_voyage_embedder import MeteredVoyageClient
@@ -280,6 +282,9 @@ def test_workspace_search_hard_admits_org_without_inventing_role(
         name="Voyage Search Org",
         slug=f"voy-search-{id(db)}",
         credits_balance=100_000,
+        # Workspace Pause only denies autonomous role-owned work. This query
+        # represents an explicit workspace-level operation and must continue.
+        agent_workspace_paused_at=datetime.now(timezone.utc),
     )
     db.add(org)
     db.commit()
@@ -309,6 +314,55 @@ def test_workspace_search_hard_admits_org_without_inventing_role(
         .count()
         == 1
     )
+
+
+def test_role_pause_after_first_call_blocks_next_autonomous_voyage(
+    db, monkeypatch,
+):
+    """Graphiti's later embedding calls see a role pause made mid-episode."""
+
+    _enable_live_holds(monkeypatch)
+    org = Organization(
+        name="Voyage Pause Org",
+        slug=f"voy-pause-{id(db)}",
+        credits_balance=100_000,
+    )
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=int(org.id),
+        name="Voyage Pause Role",
+        monthly_usd_budget_cents=100,
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.commit()
+
+    inner = _FakeVoyageClient(total_tokens=100)
+    wrapped = MeteredVoyageClient(inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            episode_name="pause-between-voyage-calls",
+            require_hard_admission=True,
+            require_role_admission=True,
+        )
+    )
+    try:
+        _run(wrapped.embed(["first"], model="voyage-3"))
+        role.agent_paused_at = datetime.now(timezone.utc)
+        db.commit()
+
+        with pytest.raises(
+            GraphProviderAdmissionError,
+            match="role agent is paused",
+        ):
+            _run(wrapped.embed(["second"], model="voyage-3"))
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert len(inner.calls) == 1
 
 
 def test_ambiguous_voyage_failure_retains_attempt_hold(db, monkeypatch):

@@ -1735,7 +1735,7 @@ def _auto_execute_decision(
         role_id=int(role.id),
         organization_id=int(role.organization_id),
     )
-    role_block = automatic_role_action_block_reason(live_role)
+    role_block = automatic_role_action_block_reason(live_role, db=db)
     auto_toggle = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
     if (
         role_block is None

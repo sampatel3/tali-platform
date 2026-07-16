@@ -114,6 +114,7 @@ def run_agent_chat_turn(
     user_id: int,
     organization_id: int,
     turn_message_id: int | None = None,
+    accepted_role_version: int | None = None,
 ) -> dict:
     """Run the agent's response for a single conversation turn.
 
@@ -155,6 +156,11 @@ def run_agent_chat_turn(
         if conversation is None:
             return {"status": "missing", "role_id": role_id}
         legacy_delivery = turn_message_id is None
+        durable_role_version = (
+            int(conversation.turn_accepted_role_version)
+            if conversation.turn_accepted_role_version is not None
+            else None
+        )
         expected_message_id = int(turn_message_id or conversation.turn_message_id or 0)
         if legacy_delivery and expected_message_id <= 0:
             # A task published by the pre-receipt API has only the original
@@ -338,8 +344,31 @@ def run_agent_chat_turn(
             }
 
         try:
+            # New-format turns always trust the revision stored atomically with
+            # the durable receipt, never a mutable broker argument. A NULL value
+            # can only belong to a rolling-deploy/pre-column receipt and stays
+            # fail-closed for mutations while read-only tools complete the turn.
+            # Legacy deliveries retain their original compatibility fallback.
+            effective_role_version = (
+                (
+                    int(durable_role_version)
+                    if durable_role_version is not None
+                    else (
+                        int(accepted_role_version)
+                        if accepted_role_version is not None
+                        else int(role.version or 1)
+                    )
+                )
+                if legacy_delivery
+                else int(durable_role_version or 0)
+            )
             run_agent_response(
-                db=db, role=role, user=user, organization=org, conversation=conversation
+                db=db,
+                role=role,
+                user=user,
+                organization=org,
+                conversation=conversation,
+                accepted_role_version=effective_role_version,
             )
             closed = (
                 db.query(AgentConversation)
@@ -416,6 +445,7 @@ def bulk_agent_message(
     user_id: int,
     role_ids: list[int],
     message: str,
+    accepted_role_versions: dict[str, int] | None = None,
 ) -> dict:
     """Fan one recruiter message out to each selected role's agent.
 
@@ -440,6 +470,11 @@ def bulk_agent_message(
             int(row.role_id): (
                 int(row.id),
                 int(row.turn_message_id) if row.turn_message_id is not None else None,
+                (
+                    int(row.turn_accepted_role_version)
+                    if row.turn_accepted_role_version is not None
+                    else None
+                ),
             )
             for row in db.query(AgentConversation)
             .filter(
@@ -477,6 +512,11 @@ def bulk_agent_message(
                     conversation = ensure_conversation(
                         db, organization_id=int(organization_id), role=role
                     )
+                    accepted_version = (
+                        accepted_role_versions.get(str(int(rid)))
+                        if accepted_role_versions is not None
+                        else None
+                    )
                     run_agent_turn(
                         db=db,
                         role=role,
@@ -484,6 +524,11 @@ def bulk_agent_message(
                         organization=org,
                         conversation=conversation,
                         user_message=message.strip(),
+                        accepted_role_version=(
+                            int(accepted_version)
+                            if accepted_version is not None
+                            else int(role.version or 1)
+                        ),
                     )
                     db.commit()
                     ok.append(int(rid))
@@ -502,12 +547,24 @@ def bulk_agent_message(
             failed.append({"role_id": int(rid), "error": "not_pending"})
             continue
         try:
+            accepted_version = (
+                turn[2]
+                if turn[2] is not None
+                else (
+                    accepted_role_versions.get(str(int(rid)))
+                    if accepted_role_versions is not None
+                    else None
+                )
+            )
             result = run_agent_chat_turn.run(
                 conversation_id=turn[0],
                 role_id=int(rid),
                 user_id=int(user_id),
                 organization_id=int(organization_id),
                 turn_message_id=turn[1],
+                accepted_role_version=(
+                    int(accepted_version) if accepted_version is not None else None
+                ),
             )
             if result.get("status") in ("replied", "skipped"):
                 ok.append(int(rid))
@@ -623,6 +680,11 @@ def recover_agent_chat_turns(limit: int = 100) -> dict:
                         "user_id": int(author_user_id),
                         "organization_id": int(conversation.organization_id),
                         "turn_message_id": int(conversation.turn_message_id),
+                        "accepted_role_version": (
+                            int(conversation.turn_accepted_role_version)
+                            if conversation.turn_accepted_role_version is not None
+                            else None
+                        ),
                     }
                 )
         # Commit the bounded retry reservation before broker I/O. Concurrent

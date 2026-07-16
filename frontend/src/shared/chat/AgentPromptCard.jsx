@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -58,6 +58,10 @@ const PROMPT_ASSISTS = {
   },
 };
 
+export const agentPromptTitle = (item = {}) => (
+  item.title || PROMPT_TITLES[item.question_kind || item.kind] || 'Choose the next step'
+);
+
 const promptAssistFor = (item) => PROMPT_ASSISTS[item.question_kind || item.kind] || {
   label: 'Ask agent for help',
   prompt: `Help me resolve this request: ${String(item.prompt || '').trim()}`,
@@ -81,9 +85,11 @@ export function AgentPromptCard({
   onAnswer,
   onDismiss,
   onPrompt,
+  onReply,
   position,
   total,
   extraActions = null,
+  detailOnly = false,
 }) {
   const headingId = useId();
   const promptId = useId();
@@ -105,6 +111,7 @@ export function AgentPromptCard({
   const options = Array.isArray(item.options) ? item.options : [];
   const questionKind = item.question_kind || item.kind;
   const requestId = item.needs_input_id ?? item.id;
+  const expectedVersion = item.role_version;
   const inputMode = item.input_mode
     || (['integer', 'number'].includes(valueSchema.type) ? valueSchema.type : 'string');
   const canAnswer = item.can_answer !== false;
@@ -112,7 +119,7 @@ export function AgentPromptCard({
   const acceptsTypedAnswer = canAnswer && (
     !options.length || inputMode === 'option_or_number'
   );
-  const title = item.title || PROMPT_TITLES[questionKind] || 'Choose the next step';
+  const title = agentPromptTitle(item);
   const linkHref = safeInternalRoute(schema.link_url || item.link_url);
   const linkLabel = schema.link_label || item.link_label || 'Open settings';
   const hasOptions = options.length > 0;
@@ -120,6 +127,11 @@ export function AgentPromptCard({
   const isLongForm = inputMode === 'string'
     && ['intent_slot_missing', 'intent_clarification'].includes(questionKind);
   const stateKey = answered ? 'answered' : dismissed ? 'dismissed' : 'open';
+  // Persisted history often includes requests that were resolved long before
+  // this transcript opened. Only make the receipt live when an already-mounted
+  // open request resolves; otherwise opening history would replay old status.
+  const initialStateRef = useRef(stateKey);
+  const announceReceipt = initialStateRef.current === 'open' && stateKey !== 'open';
 
   const choose = async (option) => {
     if (busy) return;
@@ -127,7 +139,12 @@ export function AgentPromptCard({
     setInlineError('');
     setPendingAction(actionKey);
     try {
-      const saved = await onAnswer?.(requestId, { value: option.value, label: option.label });
+      const answerArgs = [
+        requestId,
+        { value: option.value, label: option.label },
+      ];
+      if (expectedVersion != null) answerArgs.push(expectedVersion);
+      const saved = await onAnswer?.(...answerArgs);
       if (saved === false) setInlineError('That answer was not saved. Try again.');
     } catch {
       setInlineError('That answer was not saved. Try again.');
@@ -146,7 +163,9 @@ export function AgentPromptCard({
     setInlineError('');
     setPendingAction('typed-answer');
     try {
-      const saved = await onAnswer?.(requestId, { value });
+      const answerArgs = [requestId, { value }];
+      if (expectedVersion != null) answerArgs.push(expectedVersion);
+      const saved = await onAnswer?.(...answerArgs);
       // Never eat the recruiter's text after a transient failure.
       if (saved === false) {
         setInlineError('That answer was not saved. Try again.');
@@ -178,42 +197,47 @@ export function AgentPromptCard({
 
   return (
     <article
-      className="tk-agent-prompt"
-      aria-labelledby={headingId}
+      className={`tk-agent-prompt${detailOnly ? ' is-detail-only' : ''}`}
+      aria-labelledby={detailOnly ? undefined : headingId}
+      aria-label={detailOnly ? title : undefined}
       aria-describedby={promptId}
       aria-busy={busy}
       data-status={stateKey}
       data-needs-input-id={requestId}
       tabIndex={-1}
     >
-      <span className="tk-agent-prompt-accent" aria-hidden="true" />
-      <header className="tk-agent-prompt-head">
-        <span className="tk-agent-prompt-icon" aria-hidden="true">
-          <CircleHelp size={17} />
-        </span>
-        <span className="tk-agent-prompt-heading-copy">
-          <span className="tk-agent-prompt-eyebrow">
-            <span className="tk-agent-prompt-status-dot" aria-hidden="true" />
-            {statusText}
-          </span>
-          <h3 id={headingId} className="tk-agent-prompt-title">{title}</h3>
-        </span>
-        {!answered && !dismissed && canDismiss ? (
-          <Button
-            className="tk-agent-prompt-skip"
-            variant="ghost"
-            size="sm"
-            iconOnly
-            loading={pendingAction === 'dismiss'}
-            disabled={busy}
-            aria-label={pendingAction === 'dismiss' ? 'Dismissing request' : 'Dismiss request'}
-            title="Dismiss request"
-            onClick={dismiss}
-          >
-            {pendingAction === 'dismiss' ? null : <X size={15} />}
-          </Button>
-        ) : null}
-      </header>
+      {!detailOnly ? (
+        <>
+          <span className="tk-agent-prompt-accent" aria-hidden="true" />
+          <header className="tk-agent-prompt-head">
+            <span className="tk-agent-prompt-icon" aria-hidden="true">
+              <CircleHelp size={17} />
+            </span>
+            <span className="tk-agent-prompt-heading-copy">
+              <span className="tk-agent-prompt-eyebrow">
+                <span className="tk-agent-prompt-status-dot" aria-hidden="true" />
+                {statusText}
+              </span>
+              <h3 id={headingId} className="tk-agent-prompt-title">{title}</h3>
+            </span>
+            {!answered && !dismissed && canDismiss ? (
+              <Button
+                className="tk-agent-prompt-skip"
+                variant="ghost"
+                size="sm"
+                iconOnly
+                loading={pendingAction === 'dismiss'}
+                disabled={busy}
+                aria-label={pendingAction === 'dismiss' ? 'Dismissing request' : 'Dismiss request'}
+                title="Dismiss request"
+                onClick={dismiss}
+              >
+                {pendingAction === 'dismiss' ? null : <X size={15} />}
+              </Button>
+            ) : null}
+          </header>
+        </>
+      ) : null}
 
       <div id={promptId} className="tk-agent-prompt-copy">
         <ChatMarkdown>{item.prompt}</ChatMarkdown>
@@ -246,7 +270,11 @@ export function AgentPromptCard({
 
       <PresenceSwap presenceKey={stateKey} className="tk-agent-prompt-state">
         {answered ? (
-          <div className="tk-agent-prompt-receipt" role="status" aria-live="polite">
+          <div
+            className="tk-agent-prompt-receipt"
+            role={announceReceipt ? 'status' : undefined}
+            aria-live={announceReceipt ? 'polite' : undefined}
+          >
             <m.span
               className="tk-agent-prompt-receipt-icon"
               aria-hidden="true"
@@ -265,7 +293,11 @@ export function AgentPromptCard({
             </span>
           </div>
         ) : dismissed ? (
-          <div className="tk-agent-prompt-receipt is-muted" role="status" aria-live="polite">
+          <div
+            className="tk-agent-prompt-receipt is-muted"
+            role={announceReceipt ? 'status' : undefined}
+            aria-live={announceReceipt ? 'polite' : undefined}
+          >
             <span><strong>Request dismissed.</strong> No answer was sent.</span>
           </div>
         ) : (
@@ -292,7 +324,17 @@ export function AgentPromptCard({
                 );
               })}
 
-              {acceptsTypedAnswer ? (
+              {acceptsTypedAnswer && onReply ? (
+                <Button
+                  className="tk-agent-prompt-reply"
+                  variant={hasOptions ? 'soft' : 'primary'}
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => onReply(item)}
+                >
+                  {hasOptions ? 'Something else…' : 'Reply in chat'} <ArrowRight size={13} />
+                </Button>
+              ) : acceptsTypedAnswer ? (
                 <form className="tk-agent-prompt-answer" onSubmit={submitTypedAnswer}>
                   {isLongForm ? (
                     <Textarea
@@ -355,6 +397,19 @@ export function AgentPromptCard({
               ) : null}
 
               {extraActions}
+
+              {detailOnly && canDismiss ? (
+                <Button
+                  className="tk-agent-prompt-dismiss-detail"
+                  variant="ghost"
+                  size="sm"
+                  loading={pendingAction === 'dismiss'}
+                  disabled={busy}
+                  onClick={dismiss}
+                >
+                  Dismiss
+                </Button>
+              ) : null}
             </div>
 
             {inlineError ? (
@@ -371,28 +426,31 @@ export function AgentPromptCard({
 }
 
 /** A proactive, non-blocking prompt. Quick replies only prefill the composer. */
-export function AgentHelperPromptCard({ card, onPrompt }) {
+export function AgentHelperPromptCard({ card, onPrompt, detailOnly = false }) {
   const headingId = useId();
   const suggestions = Array.isArray(card?.suggestions) ? card.suggestions : [];
   const priorityLabel = card?.priority === 'attention' ? 'Needs attention' : 'Suggestion';
 
   return (
     <section
-      className="tk-agent-helper"
+      className={`tk-agent-helper${detailOnly ? ' is-detail-only' : ''}`}
       data-testid="helper-prompt"
       data-priority={card?.priority || 'suggestion'}
-      aria-labelledby={headingId}
+      aria-labelledby={detailOnly ? undefined : headingId}
+      aria-label={detailOnly ? (card?.title || 'Suggested next step') : undefined}
     >
-      <header className="tk-agent-helper-head">
-        <span className="tk-agent-helper-icon" aria-hidden="true"><Sparkles size={16} /></span>
-        <span className="tk-agent-helper-heading-copy">
-          <span className="tk-agent-helper-eyebrow">Agent suggestion</span>
-          <h3 id={headingId} className="tk-agent-helper-title">
-            {card?.title || 'Suggested next step'}
-          </h3>
-        </span>
-        <span className="tk-agent-helper-priority">{priorityLabel}</span>
-      </header>
+      {!detailOnly ? (
+        <header className="tk-agent-helper-head">
+          <span className="tk-agent-helper-icon" aria-hidden="true"><Sparkles size={16} /></span>
+          <span className="tk-agent-helper-heading-copy">
+            <span className="tk-agent-helper-eyebrow">Agent suggestion</span>
+            <h3 id={headingId} className="tk-agent-helper-title">
+              {card?.title || 'Suggested next step'}
+            </h3>
+          </span>
+          <span className="tk-agent-helper-priority">{priorityLabel}</span>
+        </header>
+      ) : null}
 
       {card?.summary ? <p className="tk-agent-helper-summary">{card.summary}</p> : null}
       {card?.question ? <p className="tk-agent-helper-question">{card.question}</p> : null}

@@ -1,0 +1,172 @@
+/* One density-aware shell for structured work attached to a chat turn. The
+   transcript supplies arrival motion and vertical rhythm; artifacts themselves
+   stay still and use no elevation. */
+.tk-artifact {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--chat-line);
+  border-radius: var(--chat-radius-artifact);
+  color: var(--chat-text);
+  background: var(--chat-surface);
+}
+
+.tk-artifact-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--chat-space-2, 8px) var(--chat-space-3, 12px);
+  padding: var(--chat-artifact-pad-y, 12px) var(--chat-artifact-pad-x, 14px);
+  border-bottom: 1px solid var(--chat-line);
+  background: color-mix(in oklab, var(--chat-agent-soft) 20%, var(--chat-surface));
+}
+
+.tk-artifact-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--chat-space-2, 8px);
+}
+
+.tk-artifact-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--chat-agent) 16%, var(--chat-line));
+  border-radius: 9px;
+  color: var(--chat-agent);
+  background: var(--chat-surface);
+}
+
+.tk-artifact-heading-copy {
+  min-width: 0;
+}
+
+.tk-artifact-eyebrow {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--chat-muted);
+  font-family: var(--font-mono);
+  font-size: var(--chat-eyebrow-size, var(--fs-eyebrow));
+  font-weight: 650;
+  letter-spacing: 0.065em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.tk-artifact-title {
+  margin: 0;
+  color: var(--chat-text);
+  font-family: var(--font-sans);
+  font-size: var(--chat-title-size, var(--fs-subtitle));
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tk-artifact-summary {
+  margin-top: 3px;
+  color: var(--chat-text-secondary);
+  font-size: var(--chat-body-size);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.tk-artifact-meta {
+  margin-top: 4px;
+  color: var(--chat-muted);
+  font-family: var(--font-mono);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.tk-artifact-status {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  align-self: start;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in oklab, var(--chat-agent) 16%, var(--chat-line));
+  border-radius: 999px;
+  color: var(--chat-agent);
+  background: var(--chat-surface);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.tk-artifact-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.tk-artifact[data-artifact-status="success"] .tk-artifact-status {
+  border-color: color-mix(in oklab, var(--chat-success) 22%, var(--chat-line));
+  color: var(--chat-success);
+  background: color-mix(in oklab, var(--chat-success-soft) 58%, var(--chat-surface));
+}
+
+.tk-artifact[data-artifact-status="warning"] .tk-artifact-status {
+  border-color: color-mix(in oklab, var(--chat-attention) 24%, var(--chat-line));
+  color: var(--chat-attention);
+  background: color-mix(in oklab, var(--chat-attention-soft) 58%, var(--chat-surface));
+}
+
+.tk-artifact[data-artifact-status="error"] .tk-artifact-status {
+  border-color: color-mix(in oklab, var(--chat-danger) 22%, var(--chat-line));
+  color: var(--chat-danger);
+  background: color-mix(in oklab, var(--chat-danger-soft) 58%, var(--chat-surface));
+}
+
+.tk-artifact[data-artifact-status="neutral"] .tk-artifact-status {
+  border-color: var(--chat-line);
+  color: var(--chat-muted);
+  background: var(--chat-surface-subtle);
+}
+
+.tk-artifact-status-detail {
+  grid-column: 1 / -1;
+  color: var(--chat-text-secondary);
+  font-size: var(--chat-meta-size, var(--fs-caption));
+  line-height: 1.45;
+}
+
+.tk-artifact-body {
+  padding: var(--chat-artifact-pad-y, 12px) var(--chat-artifact-pad-x, 14px);
+}
+
+.tk-artifact-body.is-flush {
+  padding: 0;
+}
+
+.tk-artifact-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--chat-space-3, 12px);
+  padding: var(--chat-artifact-pad-y, 12px) var(--chat-artifact-pad-x, 14px);
+  border-top: 1px solid var(--chat-line);
+  background: color-mix(in oklab, var(--chat-surface-subtle) 46%, var(--chat-surface));
+}
+
+@container (max-width: 520px) {
+  .tk-artifact-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tk-artifact-status {
+    justify-self: start;
+  }
+
+  .tk-artifact-foot {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

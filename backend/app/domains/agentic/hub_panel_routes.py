@@ -17,7 +17,7 @@ to keep ``hub_routes.py`` under the 500-LOC architecture gate.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, func
@@ -87,6 +87,9 @@ class AgentCard(BaseModel):
     running: bool
     paused_reason: Optional[str]
     paused_at: Optional[datetime]
+    pause_scope: Optional[Literal["workspace", "role"]] = None
+    role_paused: bool = False
+    workspace_paused: bool = False
     budget_spent_cents: int
     budget_cap_cents: int
     last_run_at: Optional[datetime]
@@ -201,6 +204,14 @@ def agent_panel(
     window_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=_TS_HOURS - 1)
 
     base = _compute_kpis(db, organization_id=org_id, range_days=7)
+    from ...services.workspace_agent_control import workspace_agent_pause_state
+
+    workspace_pause = workspace_agent_pause_state(
+        db,
+        organization_id=int(org_id),
+        current_user_id=int(current_user.id),
+    )
+    workspace_held = bool(workspace_pause["paused"])
 
     # --- per-role aggregates (single query each, no N+1) ------------------
     pending_by_role = dict(
@@ -244,15 +255,27 @@ def agent_panel(
     agents: list[AgentCard] = []
     for role in roles:
         rid = int(role.id)
-        paused = role.agent_paused_at is not None
+        role_paused = role.agent_paused_at is not None
+        paused = workspace_held or role_paused
+        paused_reason = (
+            workspace_pause["reason"] if workspace_held else role.agent_paused_reason
+        )
+        paused_at = (
+            workspace_pause["paused_at"] if workspace_held else role.agent_paused_at
+        )
         role_spent_cents = int(spend_cents_by_role.get(rid, 0) or 0)
         agents.append(
             AgentCard(
                 role_id=rid,
                 name=str(role.name or ""),
                 running=not paused,
-                paused_reason=role.agent_paused_reason,
-                paused_at=role.agent_paused_at,
+                paused_reason=paused_reason,
+                paused_at=paused_at,
+                pause_scope=(
+                    "workspace" if workspace_held else ("role" if role_paused else None)
+                ),
+                role_paused=role_paused,
+                workspace_paused=workspace_held,
                 budget_spent_cents=role_spent_cents,
                 budget_cap_cents=int(role.monthly_usd_budget_cents or 0),
                 last_run_at=role.agent_last_run_at,
@@ -260,7 +283,7 @@ def agent_panel(
                 cycles_24h=int(cycles_by_role.get(rid, 0)),
                 activity=_live_activity(
                     paused=paused,
-                    paused_reason=role.agent_paused_reason,
+                    paused_reason=paused_reason,
                     running_rounds=running_rounds_by_role.get(rid),
                     is_running_cycle=rid in running_rounds_by_role,
                     scoring_pending=int(scoring_pending_by_role.get(rid, 0)),

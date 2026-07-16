@@ -9,6 +9,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.user import User
 
 
 def _org(db):
@@ -80,6 +81,17 @@ def test_rescreen_scoped_only_marks_the_affected_subset(db):
     missing, for a widening) — not the whole pool."""
     org = _org(db)
     role = _role(db, org)
+    user = User(
+        email=f"assess-owner-{id(db)}@x.test",
+        hashed_password="x",
+        organization_id=org.id,
+        role="owner",
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
+    )
+    db.add(user)
+    db.flush()
     _app(db, org, role, name="Ada", crit_id=42, status="met", reasoning="UK")
     bo = _app(db, org, role, name="Bo", crit_id=42, status="missing", reasoning="Saudi")
     cy = _app(db, org, role, name="Cy", crit_id=42, status="missing", reasoning="India")
@@ -89,7 +101,7 @@ def test_rescreen_scoped_only_marks_the_affected_subset(db):
     ) as stale, patch("app.tasks.scoring_tasks.sweep_stale_scores"):
         result = tools.dispatch_tool(
             "rescreen_scoped", {"criterion_id": 42, "statuses": ["missing"]},
-            db=db, role=role, user=None,
+            db=db, role=role, user=user,
         )
 
     assert result["type"] == "rescreen_started" and result["scoped"] is True
@@ -110,3 +122,28 @@ def test_search_candidates_reuses_the_search_handler(db):
     assert out == {"results": ["x"]}
     _, kwargs = srch.call_args
     assert kwargs["query"] == "based in MENA" and kwargs["role_id"] == role.id
+
+
+def test_find_top_candidates_reuses_shared_handler_and_preserves_report_link(db):
+    org = _org(db)
+    role = _role(db, org)
+    payload = {
+        "candidates": [],
+        "deep_checked": 0,
+        "report_token": "rpt_secure",
+        "report_url": "https://taali.test/report/rpt_secure",
+    }
+    with patch("app.mcp.handlers.find_top_candidates", return_value=payload) as find:
+        out = tools.dispatch_tool(
+            "find_top_candidates",
+            {"query": "candidates", "limit": 10},
+            db=db,
+            role=role,
+            user=None,
+        )
+
+    assert out == {"type": "candidate_evidence", **payload}
+    _, kwargs = find.call_args
+    assert kwargs["query"] == "candidates"
+    assert kwargs["limit"] == 10
+    assert kwargs["role_id"] == role.id

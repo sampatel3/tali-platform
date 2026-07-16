@@ -283,6 +283,33 @@ def test_sweep_defers_native_parse_and_excludes_unknown_manual_rows(db, monkeypa
     assert custom_id_for(manual_app.id) not in submitted
 
 
+def test_sweep_defers_native_parse_while_workspace_agent_is_paused(db, monkeypatch):
+    org, _role, app = _seed_app(
+        db,
+        cv_text="Unique workspace-held native CV text.",
+        email="native-workspace-held@x.test",
+    )
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    fake = _FakeBatches()
+    _patch_client(monkeypatch, fake)
+
+    held = sweep_pending_applications(db)
+    assert held["batches"] == []
+    assert fake.created == []
+    assert app.cv_sections is None
+
+    org.agent_workspace_paused_at = None
+    org.agent_workspace_paused_reason = None
+    db.commit()
+
+    resumed = sweep_pending_applications(db)
+    assert len(resumed["batches"]) == 1
+    assert fake.created[0]["requests"][0]["custom_id"] == custom_id_for(app.id)
+
+
 def test_sweep_blocks_batch_submit_before_provider_when_credits_are_empty(
     db, monkeypatch
 ):

@@ -512,7 +512,7 @@ def sync_submission(
     # a lifecycle-ready, enabled, unpaused agent may launch NEW paid CV parsing
     # or first-score work. Re-syncs never re-score, and existing queued work is
     # deliberately not cancelled by this ingest-time gate.
-    paid_work_allowed = role_allows_new_paid_ats_work(role)
+    paid_work_allowed = role_allows_new_paid_ats_work(role, db=db)
     auto_score = bool(created_application and paid_work_allowed)
     on_application_created(
         app,

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { ChatComposer } from './ChatComposer';
 
@@ -14,6 +14,27 @@ function Harness({ onSubmit, submitMode }) {
   const [value, setValue] = useState('');
   return (
     <ChatComposer value={value} onChange={setValue} onSubmit={onSubmit} submitMode={submitMode} />
+  );
+}
+
+function ReplyHarness({ onCancel = () => {} }) {
+  const [value, setValue] = useState('A saved draft');
+  const [replyTo, setReplyTo] = useState({
+    id: 'request:42',
+    label: 'Reply to agent',
+    prompt: 'What screening threshold should I use?',
+  });
+  return (
+    <ChatComposer
+      value={value}
+      onChange={setValue}
+      onSubmit={() => {}}
+      replyTo={replyTo}
+      onCancelReply={() => {
+        onCancel();
+        setReplyTo(null);
+      }}
+    />
   );
 }
 
@@ -101,4 +122,32 @@ test('forwards the textarea ref so helper actions can focus the composer', () =>
   render(<FocusHarness />);
   fireEvent.click(screen.getByRole('button', { name: 'Focus composer' }));
   expect(screen.getByRole('textbox')).toHaveFocus();
+});
+
+test('Escape used by an active IME does not cancel reply mode', () => {
+  const onCancel = vi.fn();
+  render(<ReplyHarness onCancel={onCancel} />);
+  const textbox = screen.getByRole('textbox', { name: 'Answer the agent' });
+
+  fireEvent.keyDown(textbox, { key: 'Escape', isComposing: true });
+  fireEvent.keyDown(textbox, { key: 'Escape', keyCode: 229 });
+
+  expect(onCancel).not.toHaveBeenCalled();
+  expect(textbox).toHaveAttribute('aria-describedby');
+});
+
+test('cancel restores composer focus and removes its reply description link', async () => {
+  render(<ReplyHarness />);
+  const textbox = screen.getByRole('textbox', { name: 'Answer the agent' });
+  const descriptionId = textbox.getAttribute('aria-describedby');
+  const description = document.getElementById(descriptionId);
+  expect(description).toHaveTextContent('What screening threshold should I use?');
+
+  const cancel = screen.getByRole('button', { name: 'Cancel reply and restore draft' });
+  cancel.focus();
+  fireEvent.click(cancel);
+
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveFocus());
+  expect(screen.getByRole('textbox')).not.toHaveAttribute('aria-describedby');
+  expect(document.getElementById(descriptionId)).not.toBeInTheDocument();
 });

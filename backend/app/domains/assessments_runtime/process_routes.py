@@ -31,7 +31,8 @@ from .applications_routes import (
     _set_cancel_flag,
     _set_process_progress,
 )
-from .role_support import get_role, role_has_job_spec
+from .job_authorization import JobPermission, require_job_permission
+from .role_support import role_has_job_spec
 
 
 router = APIRouter(tags=["Roles"])
@@ -135,7 +136,12 @@ def process_role(
     """Preview or start a durable fetch → pre-screen → score → graph run."""
 
     organization_id = int(current_user.organization_id)
-    role = get_role(role_id, organization_id, db)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     options = _validated_options(
         role_id=role_id,
         organization_id=organization_id,
@@ -238,7 +244,13 @@ def process_role_status(
     """Return durable Process progress, with Redis/local legacy fallback."""
 
     organization_id = int(current_user.organization_id)
-    role = get_role(role_id, organization_id, db)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.VIEW,
+        lock_for_update=False,
+    )
     run = latest_process_role_run(
         db,
         role_id=role_id,
@@ -252,7 +264,8 @@ def process_role_status(
         or _empty_process_progress()
     )
     result = dict(progress)
-    result.setdefault("role_name", role.name)
+    if not result.get("role_name"):
+        result["role_name"] = role.name
     return result
 
 
@@ -263,7 +276,12 @@ def process_role_cancel(
     current_user: User = Depends(get_current_user),
 ):
     organization_id = int(current_user.organization_id)
-    get_role(role_id, organization_id, db)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     run = request_process_cancel(
         db,
         role_id=role_id,

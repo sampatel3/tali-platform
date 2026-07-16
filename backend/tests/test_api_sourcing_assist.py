@@ -24,7 +24,11 @@ def _make_role_with_must_have(client, headers, *, name="Senior Data Engineer"):
     role = client.post("/api/v1/roles", json={"name": name}, headers=headers).json()
     resp = client.post(
         f"/api/v1/roles/{role['id']}/criteria",
-        json={"text": "Apache Spark", "bucket": "must"},
+        json={
+            "text": "Apache Spark",
+            "bucket": "must",
+            "expected_version": role["version"],
+        },
         headers=headers,
     )
     assert resp.status_code in (200, 201), resp.text

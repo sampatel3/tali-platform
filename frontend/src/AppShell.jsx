@@ -11,10 +11,11 @@ import {
 } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
-import { JobStatusProvider } from './contexts/JobStatusContext';
 import { assessments as assessmentsApi } from './shared/api/assessmentsClient';
 import { pathForPage } from './app/routing';
 import { isProtectedRecruiterPath } from './app/routePolicy';
+import { RecruiterJobStatusBoundary } from './app/RecruiterJobStatusBoundary';
+import { resolveSafeNextPath } from './app/resolveSafeNextPath';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 import { Button, Panel, Spinner } from './shared/ui/TaaliPrimitives';
 import { ScrollToTop } from './shared/ui/ScrollToTop';
@@ -71,9 +72,6 @@ const AnalyticsPage = lazy(() =>
 const CandidateWelcomePage = lazy(() =>
   import('./features/assessment_runtime/CandidateWelcomePage').then((m) => ({ default: m.CandidateWelcomePage }))
 );
-const BackgroundJobsToaster = lazy(() =>
-  import('./features/candidates/BackgroundJobsToaster').then((m) => ({ default: m.BackgroundJobsToaster }))
-);
 const ToastShowcasePage = lazy(() =>
   import('./features/dev/ToastShowcasePage').then((m) => ({ default: m.ToastShowcasePage }))
 );
@@ -114,6 +112,12 @@ const ChatPage = lazy(() =>
 );
 const ChatShowcaseView = lazy(() =>
   import('./features/chat/ChatShowcaseView').then((m) => ({ default: m.ChatShowcaseView }))
+);
+const ChatDesignSystemView = lazy(() =>
+  import('./features/chat/ChatDesignSystemView').then((m) => ({ default: m.ChatDesignSystemView }))
+);
+const AgentPromptPreviewPage = lazy(() =>
+  import('./features/chat/AgentPromptPreviewPage').then((m) => ({ default: m.AgentPromptPreviewPage }))
 );
 const HomeShowcaseView = lazy(() =>
   import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
@@ -201,35 +205,6 @@ const BlogIndexPage = lazy(() =>
 const BlogPostPage = lazy(() =>
   import('./features/blog/BlogPostPage')
 );
-
-const resolveSafeNextPath = (rawValue) => {
-  if (typeof rawValue !== 'string') return '';
-  const nextPath = rawValue.trim();
-  if (!nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('://')) {
-    return '';
-  }
-  return nextPath;
-};
-
-// Batch/sync discovery is recruiter-only infrastructure. Keeping it outside
-// public, auth, candidate-share, and preview routes avoids background probes
-// and prevents the toaster chunk from loading where it can never render.
-function RecruiterJobStatusBoundary({ children }) {
-  const { isAuthenticated } = useAuth();
-  const location = useLocation();
-  const enabled = isAuthenticated
-    && isProtectedRecruiterPath(location.pathname, location.search);
-
-  if (!enabled) return children;
-  return (
-    <JobStatusProvider>
-      {children}
-      <Suspense fallback={null}>
-        <BackgroundJobsToaster />
-      </Suspense>
-    </JobStatusProvider>
-  );
-}
 
 function AppContent() {
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -561,6 +536,16 @@ function AppContent() {
           </Suspense>
         )}
       />
+      {/* Public, fixture-only comparison of four agent-prompt interaction
+          directions. `?v=a|b|c|d` makes each concept directly shareable. */}
+      <Route
+        path="/agent-prompts-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AgentPromptPreviewPage />
+          </Suspense>
+        )}
+      />
       {/* Motion previews of the rest of the app — public, no-auth, fixtures
           only. Tour: /home-preview · /jobs-preview · /report-preview ·
           /analytics-preview · /landing-preview. */}
@@ -753,6 +738,16 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <ChatShowcaseView />
+          </Suspense>
+        )}
+      />
+      {/* Public, fixture-only living reference for the complete chat design
+          language. It exercises production chat primitives without APIs. */}
+      <Route
+        path="/showcase/chat-system"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ChatDesignSystemView />
           </Suspense>
         )}
       />

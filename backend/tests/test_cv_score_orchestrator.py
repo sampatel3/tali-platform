@@ -724,6 +724,304 @@ def test_score_worker_rechecks_authority_after_claim_commit(
     assert job.status == "stale"
 
 
+def test_autonomous_pause_after_pre_screen_blocks_full_score_phase(
+    monkeypatch, session,
+) -> None:
+    db, _org, role, app = session
+    from app.services import pre_screening_service
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+    db.add(job)
+    db.flush()
+    monkeypatch.setattr(settings, "ENABLE_PRE_SCREEN_GATE", True)
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_resolve_anthropic_client",
+        lambda _organization: object(),
+    )
+    monkeypatch.setattr(
+        pre_screening_service,
+        "application_needs_pre_screen",
+        lambda _application: True,
+    )
+    pre_screen = MagicMock()
+
+    def fake_pre_screen(application, **_kwargs):
+        pre_screen(application)
+        application.pre_screen_evidence = {
+            "decision": "yes",
+            "llm_score_100": 95,
+            "summary": "strong pre-screen",
+        }
+        application.pre_screen_score_100 = 95
+
+    monkeypatch.setattr(
+        pre_screening_service,
+        "execute_pre_screen_only",
+        fake_pre_screen,
+    )
+    full_score_provider = MagicMock()
+
+    def fake_full_score(*_args, before_provider_call=None, **_kwargs):
+        assert before_provider_call is not None
+        before_provider_call("full_score.main")
+        full_score_provider()
+
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", fake_full_score)
+    phases: list[str] = []
+
+    def authorize(_db, *, application, job, phase):
+        phases.append(phase)
+        if phase == "full_score.main":
+            raise cv_score_orchestrator.AutonomousScoringDeferred(
+                phase=phase,
+                detail="workspace agent is paused",
+            )
+
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_authorize_autonomous_scoring_phase",
+        authorize,
+    )
+
+    with pytest.raises(cv_score_orchestrator.AutonomousScoringDeferred):
+        cv_score_orchestrator._execute_scoring_v3(
+            db,
+            application=app,
+            job=job,
+        )
+
+    assert phases == ["pre_screen", "full_score.main"]
+    pre_screen.assert_called_once_with(app)
+    full_score_provider.assert_not_called()
+
+
+def test_autonomous_pause_after_full_score_blocks_interview_support_phase(
+    monkeypatch, session,
+) -> None:
+    db, _org, role, app = session
+    from app.domains.assessments_runtime import role_support
+    from app.services import interview_support_service
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+    db.add(job)
+    db.flush()
+    full_score = MagicMock()
+
+    def fake_full_score(_db, *, application, job, force_full_score=False):
+        full_score(application)
+        application.cv_match_score = 88
+        application.cv_match_details = {"summary": "tentative score"}
+        job.status = SCORE_JOB_DONE
+        job.cache_hit = "miss"
+
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_execute_scoring_v3",
+        fake_full_score,
+    )
+    monkeypatch.setattr(role_support, "refresh_application_score_cache", lambda *_a, **_kw: None)
+    interview_support = MagicMock()
+    monkeypatch.setattr(
+        interview_support_service,
+        "refresh_application_interview_support",
+        interview_support,
+    )
+
+    def authorize(_db, *, application, job, phase):
+        if phase == "interview_support":
+            raise cv_score_orchestrator.AutonomousScoringDeferred(
+                phase=phase,
+                detail="workspace agent is paused",
+            )
+
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_authorize_autonomous_scoring_phase",
+        authorize,
+    )
+
+    with pytest.raises(cv_score_orchestrator.AutonomousScoringDeferred):
+        cv_score_orchestrator._execute_scoring(
+            db,
+            application=app,
+            job=job,
+        )
+
+    full_score.assert_called_once_with(app)
+    interview_support.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "detail, expected_status",
+    [
+        ("workspace agent is paused", "deferred_workspace_paused"),
+        ("role agent is paused", "deferred_agent_paused"),
+        ("role agent is disabled", "deferred_agent_off"),
+    ],
+)
+def test_score_worker_rolls_back_phase_outputs_and_defers_on_control_change(
+    monkeypatch, session, detail, expected_status,
+) -> None:
+    db, _org, role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.tasks import scoring_tasks
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+    db.add(job)
+    db.commit()
+
+    def fake_execute(_db, *, application, job, force_full_score=False):
+        application.cv_match_score = 99
+        application.cv_match_details = {"summary": "tentative provider output"}
+        raise cv_score_orchestrator.AutonomousScoringDeferred(
+            phase="full_score.graded",
+            detail=detail,
+        )
+
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
+    monkeypatch.setattr(
+        applications_routes,
+        "is_batch_score_cancelled",
+        lambda _role_id: False,
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id),
+        job_id=int(job.id),
+    )
+
+    assert result == {
+        "status": expected_status,
+        "application_id": int(app.id),
+        "role_id": int(role.id),
+        "detail": detail,
+        "phase": "full_score.graded",
+    }
+    db.expire_all()
+    persisted_job = db.query(CvScoreJob).filter(CvScoreJob.id == job.id).one()
+    persisted_app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.id == app.id)
+        .one()
+    )
+    assert persisted_job.status == "stale"
+    assert persisted_job.error_message == expected_status
+    assert persisted_app.cv_match_score is None
+    assert persisted_app.cv_match_details is None
+
+
+def test_explicit_score_phase_ignores_workspace_overlay(session) -> None:
+    db, org, role, app = session
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    db.commit()
+    autonomous_job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+    explicit_job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=False,
+    )
+
+    with pytest.raises(
+        cv_score_orchestrator.AutonomousScoringDeferred
+    ) as paused:
+        cv_score_orchestrator._authorize_autonomous_scoring_phase(
+            db,
+            application=app,
+            job=autonomous_job,
+            phase="full_score.main",
+        )
+    assert paused.value.phase == "full_score.main"
+    assert paused.value.detail == "workspace agent is paused"
+
+    cv_score_orchestrator._authorize_autonomous_scoring_phase(
+        db,
+        application=app,
+        job=explicit_job,
+        phase="full_score.main",
+    )
+
+
+@pytest.mark.parametrize(
+    "held_state, expected_detail",
+    [
+        ("paused", "role agent is paused"),
+        ("off", "role agent is disabled"),
+    ],
+)
+def test_autonomous_score_phase_rechecks_live_role_control(
+    session, held_state, expected_detail,
+) -> None:
+    db, _org, role, app = session
+    if held_state == "paused":
+        role.agent_paused_at = datetime.now(timezone.utc)
+    else:
+        role.agentic_mode_enabled = False
+    db.commit()
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+
+    with pytest.raises(
+        cv_score_orchestrator.AutonomousScoringDeferred
+    ) as deferred:
+        cv_score_orchestrator._authorize_autonomous_scoring_phase(
+            db,
+            application=app,
+            job=job,
+            phase="full_score.main",
+        )
+
+    assert deferred.value.detail == expected_detail
+
+
+def test_autonomous_score_phase_fails_closed_on_role_org_mismatch(session) -> None:
+    db, org, role, app = session
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=True,
+    )
+    app.organization_id = int(org.id) + 10_000
+
+    with pytest.raises(
+        cv_score_orchestrator.AutonomousScoringDeferred
+    ) as deferred:
+        cv_score_orchestrator._authorize_autonomous_scoring_phase(
+            db,
+            application=app,
+            job=job,
+            phase="full_score.main",
+        )
+
+    assert deferred.value.detail == "role is unavailable"
+
+
 def test_explicit_score_worker_runs_while_agent_is_paused(
     monkeypatch, session,
 ) -> None:
@@ -759,6 +1057,35 @@ def test_explicit_score_worker_runs_while_agent_is_paused(
 
     assert result["status"] == SCORE_JOB_DONE
     assert observed["force_full_score"] is True
+
+
+def test_score_worker_rejects_soft_deleted_role_before_provider_spend(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.tasks import scoring_tasks
+
+    role.deleted_at = datetime.now(timezone.utc)
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=False,
+    )
+    db.add(job)
+    db.commit()
+    execute = MagicMock()
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", execute)
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    execute.assert_not_called()
+    assert result["status"] == "error"
+    db.refresh(job)
+    assert job.status == SCORE_JOB_ERROR
+    assert job.error_message == "role_missing_or_deleted_before_scoring"
 
 
 def test_periodic_stale_sweep_does_not_cross_into_paused_autonomous_role(
@@ -884,6 +1211,8 @@ def test_explicit_stale_sweep_requires_role_scope() -> None:
     assert result["reason"] == "explicit stale-score sweeps require role_id scope"
 
 
+
+
 def test_confirmed_stale_recovery_only_dispatches_durable_recruiter_authority(
     monkeypatch, session,
 ) -> None:
@@ -987,6 +1316,44 @@ def test_confirmed_stale_recovery_is_bounded_in_beat_schedule() -> None:
         "limit": 500,
         "explicit_authorized_only": True,
     }
+
+
+def test_stale_sweep_never_enqueues_for_soft_deleted_role(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.tasks import scoring_tasks
+
+    role.deleted_at = datetime.now(timezone.utc)
+    db.add(
+        CvScoreJob(
+            application_id=app.id,
+            role_id=role.id,
+            status="stale",
+            requires_active_agent=False,
+        )
+    )
+    db.commit()
+    dispatched: list[int] = []
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "enqueue_score",
+        lambda _db, application, **_kwargs: dispatched.append(
+            int(application.id)
+        ),
+    )
+
+    result = scoring_tasks.sweep_stale_scores.run(
+        limit=10,
+        role_id=int(role.id),
+        application_ids=[int(app.id)],
+        explicit=True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["examined"] == 0
+    assert result["enqueued"] == 0
+    assert dispatched == []
 
 
 def test_score_worker_discards_result_when_role_intent_changes_mid_call(

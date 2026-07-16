@@ -23,21 +23,15 @@ const normalizePauseReason = (value) => {
 export const getAgentPauseCopy = (value) => {
   const reason = normalizePauseReason(value);
 
-  if (/\bpaused by you\b/.test(reason)) {
+  if (
+    /\bpaused by you\b/.test(reason)
+    || /\bpaused by (?:a )?(?:recruiter|team member|administrator|admin|user)\b/.test(reason)
+  ) {
     return {
       kind: 'manual',
-      status: 'Paused by you',
-      label: 'Paused by you',
-      description: 'You paused this agent.',
-    };
-  }
-
-  if (/\bpaused by (?:a )?(?:recruiter|team member|administrator|admin|user)\b/.test(reason)) {
-    return {
-      kind: 'manual',
-      status: 'Paused by you',
-      label: 'Paused by you',
-      description: 'This agent was paused manually.',
+      status: 'Paused manually',
+      label: 'Paused manually',
+      description: 'A team member paused this agent.',
     };
   }
 

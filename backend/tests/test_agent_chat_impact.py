@@ -473,7 +473,7 @@ def test_post_rescreen_impact_reports_shrink_and_recommends(db):
     assert "from 3 to 1" in msg.text
     assert "65" in msg.text  # the recommended lower cut-off
     assert msg.actions and msg.actions[0]["type"] == "threshold_recommendation"
-    assert msg.kind == "action"
+    assert msg.kind == "proactive"
 
 
 def test_post_rescreen_impact_no_change_has_no_card(db):
@@ -489,6 +489,7 @@ def test_post_rescreen_impact_no_change_has_no_card(db):
     db.commit()
     assert "No change" in msg.text
     assert not msg.actions
+    assert msg.kind == "proactive"
 
 
 def test_count_inflight_score_jobs_uses_latest_job_per_app(db):

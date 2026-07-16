@@ -32,7 +32,7 @@ from ...platform.config import settings
 from ...platform.database import get_db
 from ...platform.middleware import resolve_client_ip
 from ...services.rate_limit import check_rate_limit
-from ...services.job_page_lifecycle import role_accepts_native_applications
+from ...services.job_page_lifecycle import lock_native_intake_authority, role_accepts_native_applications
 from .apply_service import submit_application
 from .public_apply_support import (
     APPLY_EMAIL_REQUIRED_MESSAGE as _APPLY_EMAIL_REQUIRED_MESSAGE,
@@ -90,7 +90,11 @@ def _resolve_role_for_page(db: Session, page: JobPage) -> Role | None:
     )
 
 
-def _role_accepts_public_applications(role: Role | None) -> bool:
+def _role_accepts_public_applications(
+    role: Role | None,
+    *,
+    db: Session | None = None,
+) -> bool:
     """Whether the materialized role is live for native public intake.
 
     Requisition publish deliberately creates a DRAFT role; Turn on is the
@@ -99,7 +103,7 @@ def _role_accepts_public_applications(role: Role | None) -> bool:
     ``job_status`` rather than ``source`` because Workable adoption changes the
     latter while retaining the same requisition page.
     """
-    return role_accepts_native_applications(role)
+    return role_accepts_native_applications(role, db=db)
 
 
 def _role_requires_resume(role: Role | None) -> bool:
@@ -171,7 +175,7 @@ def view_job_page(
     accepts_applications = bool(
         settings.ATS_PUBLIC_APPLY_ENABLED
         and page.status == JOB_PAGE_STATUS_OPEN
-        and _role_accepts_public_applications(role)
+        and _role_accepts_public_applications(role, db=db)
     )
     resume_required = bool(
         accepts_applications
@@ -305,7 +309,7 @@ def apply_to_job_page(
     role = _resolve_role_for_page(db, page)
     if role is None:
         raise HTTPException(status_code=404, detail=_APPLY_CLOSED_MESSAGE)
-    if not _role_accepts_public_applications(role):
+    if not _role_accepts_public_applications(role, db=db):
         raise HTTPException(status_code=404, detail=_APPLY_CLOSED_MESSAGE)
     usable_email = _usable_email(email)
     if _role_requires_email(role) and usable_email is None:
@@ -350,6 +354,10 @@ def apply_to_job_page(
             )
             if attached_resume:
                 _attach_resume(db, result.application, page.organization_id, resume)
+        # Resume extraction may overlap Pause/Turn off; re-authorize under the
+        # shared org -> role locks immediately before accepting the application.
+        if lock_native_intake_authority(db, role=role) is None:
+            raise HTTPException(status_code=404, detail=_APPLY_CLOSED_MESSAGE)
         db.commit()
     except HTTPException:
         # In particular, unreadable resume extraction happens after the

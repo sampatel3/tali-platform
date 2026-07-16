@@ -1,5 +1,6 @@
-import { ArrowUpRight, CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
+import { CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
 
+import { ChatActivity } from '../../../shared/chat';
 import { safeInternalRoute } from '../../../shared/chat/safeInternalRoute';
 
 const EVENT_SEVERITIES = {
@@ -27,7 +28,7 @@ const formatEventTime = (value) => {
   });
 };
 
-export function AgentEventCard({ card, onPrompt }) {
+export function AgentEventCard({ card, onPrompt, detailOnly = false }) {
   const severity = Object.hasOwn(EVENT_SEVERITIES, card?.severity)
     ? card.severity
     : 'info';
@@ -56,61 +57,34 @@ export function AgentEventCard({ card, onPrompt }) {
     .filter((suggestion) => suggestion.label && suggestion.prompt);
 
   return (
-    <article
-      className="ac-card ac-card-event"
+    <ChatActivity
       data-severity={severity}
       data-testid="agent-event"
       aria-label={`${severityLabel} agent event: ${title}`}
-    >
-      <div className="ac-card-head ac-event-head">
-        <Icon size={14} aria-hidden="true" />
-        <span className="ac-event-severity">{severityLabel}</span>
-        {card?.event_type ? <span className="ac-event-type">{humanize(card.event_type)}</span> : null}
-      </div>
-      <h3 className="ac-event-title">{title}</h3>
-      {summary ? <p className="ac-event-summary">{summary}</p> : null}
-      {(sourceLabel || occurredAt) ? (
-        <div className="ac-event-meta">
-          {sourceLabel ? (
-            sourceHref ? (
-              <a className="ac-event-source" href={sourceHref} aria-label={`Open ${sourceLabel}`}>
-                {sourceLabel} <ArrowUpRight size={12} aria-hidden="true" />
-              </a>
-            ) : <span className="ac-event-source">{sourceLabel}</span>
-          ) : null}
-          {occurredAt ? <time dateTime={String(card.occurred_at)}>{occurredAt}</time> : null}
-        </div>
-      ) : null}
-      {details.length > 0 ? (
-        <details className="ac-event-details">
-          <summary>Details</summary>
-          <dl>
-            {details.map((detail, index) => (
-              <div key={`${detail.label}-${index}`}>
-                <dt>{detail.label}</dt>
-                <dd>{detail.value}</dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      ) : null}
-      {suggestions.length > 0 ? (
-        <div className="ac-card-actions">
-          {suggestions.map((suggestion, index) => (
-            <button
-              key={`${suggestion.label}-${index}`}
-              type="button"
-              className="ac-btn ac-btn-soft"
-              aria-label={`${suggestion.label} — edit in composer`}
-              title="Add to the composer for editing"
-              onClick={() => onPrompt?.(suggestion.prompt)}
-            >
-              {suggestion.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </article>
+      severity={severity}
+      severityLabel={severityLabel}
+      typeLabel={card?.event_type ? humanize(card.event_type) : null}
+      title={title}
+      summary={summary}
+      icon={Icon}
+      source={sourceLabel ? {
+        label: sourceLabel,
+        href: sourceHref,
+        ariaLabel: `Open ${sourceLabel}`,
+      } : null}
+      timestamp={occurredAt ? {
+        label: occurredAt,
+        dateTime: String(card.occurred_at),
+      } : null}
+      details={details}
+      detailOnly={detailOnly}
+      actions={suggestions.map((suggestion) => ({
+        label: suggestion.label,
+        ariaLabel: `${suggestion.label} — edit in composer`,
+        title: 'Add to the composer for editing',
+        onClick: () => onPrompt?.(suggestion.prompt),
+      }))}
+    />
   );
 }
 

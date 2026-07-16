@@ -10,10 +10,13 @@ from __future__ import annotations
 import uuid
 from unittest.mock import patch
 
+import pytest
+
 from app.agent_runtime import data_readiness
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
@@ -190,6 +193,76 @@ def _open_card(db, role, kind) -> AgentNeedsInput:
     )
 
 
+def test_answer_setting_keeps_request_contract_and_bumps_role_version(client, db):
+    headers, email = auth_headers(client)
+    org = _org_for_user(db, email)
+    role = _seed_role(db, org)
+    role.score_threshold = 55
+    row = AgentNeedsInput(
+        organization_id=org.id,
+        role_id=role.id,
+        kind="threshold_ambiguous",
+        prompt="Use 30 as the bar?",
+    )
+    db.add(row)
+    db.commit()
+    starting_version = int(role.version or 1)
+
+    resp = client.post(
+        f"/api/v1/agent-needs-input/{row.id}/answer",
+        headers=headers,
+        json={
+            "response": {"value": "30"},
+            "expected_version": starting_version,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "resolved"
+    db.expire_all()
+    stored_role = db.query(Role).filter(Role.id == role.id).one()
+    assert stored_role.score_threshold == 30
+    assert stored_role.version == starting_version + 1
+
+
+def test_answer_setting_rejects_a_stale_question_card(client, db):
+    headers, email = auth_headers(client)
+    org = _org_for_user(db, email)
+    role = _seed_role(db, org)
+    role.score_threshold = 55
+    row = AgentNeedsInput(
+        organization_id=org.id,
+        role_id=role.id,
+        kind="threshold_ambiguous",
+        prompt="Use 30 as the bar?",
+    )
+    db.add(row)
+    db.commit()
+    stale_version = int(role.version or 1)
+
+    # Simulate another user's settings edit after this question was rendered.
+    role.score_threshold = 70
+    role.version = stale_version + 1
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/agent-needs-input/{row.id}/answer",
+        headers=headers,
+        json={
+            "response": {"value": "30"},
+            "expected_version": stale_version,
+        },
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "ROLE_VERSION_CONFLICT"
+    db.expire_all()
+    stored_role = db.query(Role).filter(Role.id == role.id).one()
+    stored_row = db.query(AgentNeedsInput).filter(AgentNeedsInput.id == row.id).one()
+    assert stored_role.score_threshold == 70
+    assert stored_row.resolved_at is None
+
+
 def test_reject_missing_cv_card_rejects_file_less_only(client, db):
     headers, email = auth_headers(client)
     org = _org_for_user(db, email)
@@ -271,6 +344,41 @@ def test_reject_cv_gap_rejects_only_cv_gap_kinds(client, db):
 
     resp = client.post(REJECT_URL.format(id=row.id), headers=headers)
     assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.parametrize("team_role", ["interviewer", "coordinator"])
+def test_reject_cv_gap_denies_non_controlling_job_team_roles(
+    client, db, team_role
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    org = _org_for_user(db, email)
+    role = _seed_role(db, org)
+    app = _seed_app(db, org, role)
+    db.commit()
+    data_readiness.sync_cv_readiness(db, role=role)
+    db.commit()
+    row = _open_card(db, role, "missing_cv")
+
+    # Keep the authenticated token but make this user a non-controlling member
+    # of the now-configured job team.
+    user.role = "member"
+    db.add(
+        JobHiringTeam(
+            organization_id=org.id,
+            role_id=role.id,
+            user_id=user.id,
+            team_role=team_role,
+        )
+    )
+    db.commit()
+
+    resp = client.post(REJECT_URL.format(id=row.id), headers=headers)
+
+    assert resp.status_code == 403, resp.text
+    db.expire_all()
+    assert _reget(db, app.id).application_outcome == "open"
+    assert db.query(AgentNeedsInput).filter(AgentNeedsInput.id == row.id).one().is_open
 
 
 def test_reject_cv_gap_404_for_other_org(client, db):

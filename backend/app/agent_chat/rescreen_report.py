@@ -20,8 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_conversation import (
     AUTHOR_ROLE_ASSISTANT,
-    MESSAGE_KIND_ACTION,
-    MESSAGE_KIND_CHAT,
+    MESSAGE_KIND_PROACTIVE,
     AgentConversation,
     AgentConversationMessage,
 )
@@ -121,7 +120,10 @@ def post_rescreen_impact(
         organization_id=conversation.organization_id,
         role_id=role.id,
         author_role=AUTHOR_ROLE_ASSISTANT,
-        kind=MESSAGE_KIND_ACTION if actions else MESSAGE_KIND_CHAT,
+        # This completion is posted by background work, not as the direct reply
+        # to the recruiter's active turn. Persist the causal lane so the UI can
+        # keep it in Agent Feed even when it carries an action card.
+        kind=MESSAGE_KIND_PROACTIVE,
         content=[{"type": "text", "text": text}],
         text=text,
         actions=actions or None,

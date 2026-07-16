@@ -88,13 +88,18 @@
     width: min(320px, 86vw);
     z-index: 60;
     transform: translateX(-100%);
-    transition: transform .22s ease;
+    visibility: hidden;
+    transition: transform .22s ease, visibility 0s linear .22s;
     box-shadow: 0 24px 48px rgba(15, 8, 30, 0.22);
     border: 0;
     border-right: 1px solid var(--c-line);
     border-radius: 0;
   }
-  .cp-root.cp-nav-open .cp-side { transform: translateX(0); }
+  .cp-root.cp-nav-open .cp-side {
+    transform: translateX(0);
+    visibility: visible;
+    transition-delay: 0s;
+  }
   /* The chat card goes flush edge-to-edge on a phone. */
   .cp-root .cp-center { border: 0; border-radius: 0; }
   .cp-root .cp-nav-scrim {
@@ -112,11 +117,18 @@
   .cp-root.cp-nav-open .cp-nav-scrim { opacity: 1; pointer-events: auto; }
 }
 
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .cp-root .cp-side,
+  .cp-root .cp-nav-scrim {
+    transition: none;
+  }
+}
+
 @media (max-width: 640px) {
   .cp-root .cp-head { padding: 0 16px; gap: 10px; }
   .cp-root .cp-head-pill { display: none; }
   .cp-root .cp-scroll { padding: 18px 16px 168px; }
-  .cp-root .cp-thread { gap: 22px; }
+  .cp-root .cp-thread { gap: var(--chat-row-gap); }
   .cp-root .cp-composer-wrap { padding: 10px 14px 16px; }
   .cp-root .cp-msg-user { max-width: 88%; }
 }
@@ -139,12 +151,30 @@
    Ask/Agents switch, closed off with a hairline rule so it reads as a distinct
    head band over the list — matching the rail's bordered-card head. */
 .cp-side-top {
+  position: relative;
   padding: 13px 14px;
   display: flex;
   flex-direction: column;
   gap: 11px;
   border-bottom: 1px solid var(--c-line);
 }
+.cp-side-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--c-mute);
+  cursor: pointer;
+}
+.cp-side-close:hover { background: var(--c-bg-3); color: var(--c-ink-2); }
 /* "New conversation" tucks right under the head with the same 14px gutters the
    list rows use, 10px below. */
 .cp-side-head {
@@ -535,25 +565,47 @@
 
 /* ============ scroll + thread ============ */
 
+.cp-scroll-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--c-bg-2);
+}
+
 .cp-scroll {
+  position: static;
   flex: 1;
   overflow-y: auto;
   /* White conversation surface (Home dock `.ac-stream`). The larger bottom pad
      clears the absolutely-positioned composer wrap. */
-  padding: 20px 20px 180px;
+  padding: var(--chat-gutter) var(--chat-gutter) 180px;
   background: var(--c-bg-2);
   scroll-behavior: smooth;
   min-height: 0;
 }
+.cp-scroll-stack > .cp-scroll {
+  position: absolute;
+  inset: 0;
+  flex: none;
+}
+.cp-scroll[hidden] { display: none; }
+.cp-feed-scroll { padding-top: 14px; }
 @media (prefers-reduced-motion: reduce) {
   .cp-scroll { scroll-behavior: auto; }
 }
 .cp-thread {
-  max-width: 760px;
+  max-width: var(--chat-content-max);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--chat-row-gap);
+}
+
+.cp-tool-result {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--chat-artifact-gap);
 }
 .cp-history-control {
   display: flex;
@@ -578,15 +630,6 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
-/* Search-page user bubble matches search-preview `.umsg` exactly (16px radius,
-   10/15 padding, 13.5px, pure-white ink) — scoped to the chat thread so the
-   shared kit's bubble (Home dock + candidate workspace) is untouched. */
-.cp-thread .tk-msg-user {
-  padding: 10px 15px;
-  border-radius: 16px;
-  color: #fff;
-  font-size: 0.84375rem;
-}
 .cp-msg-assistant {
   align-self: flex-start;
   max-width: 100%;
@@ -596,35 +639,6 @@
   font-size: 0.90625rem;
   line-height: 1.6;
   color: var(--c-ink);
-}
-/* Mono purple kicker above each agent/assistant turn — "TAALI" on the Ask
-   thread (Thread.jsx), "AGENT" on the Agents thread (AgentConversation.jsx),
-   matching the Home dock `.ac-who`. The assistant column uses a 14px child gap,
-   so pull the next block up to land the preview's ~5px kicker-to-text spacing. */
-.cp-thread .tk-msg-assistant .cp-who,
-.cp-msg-assistant .cp-who {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: 0.59375rem;
-  font-weight: 500;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-  color: var(--c-purple);
-  margin-bottom: -9px;
-}
-/* On the Agents thread the kicker + prose wrap in one tight column
-   (.cp-agent-say, mirroring the Home dock `.ac-agent-say`) so the shared
-   assistant column's 14px gap only separates the prose from any impact /
-   evidence cards beneath it — the wrapper's own 3px gap sets the kicker
-   spacing, so the -9px pull above must not apply here. */
-.cp-thread .cp-agent-say { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.cp-thread .cp-agent-say .cp-who { margin-bottom: 0; }
-/* search-preview `.amsg`: assistant prose is 13.5px in the slightly-softer
-   ink-2. Scoped to the chat thread so the shared kit (Home dock + candidate
-   workspace) keeps its own 14.5px/ink default. */
-.cp-thread .tk-msg-assistant,
-.cp-thread .tk-md {
-  font-size: 0.84375rem;
-  color: var(--c-ink-2);
 }
 .cp-msg-assistant p { margin: 0 0 .6em; }
 .cp-msg-assistant p:last-child { margin-bottom: 0; }
@@ -638,121 +652,6 @@
 }
 .cp-msg-assistant ul, .cp-msg-assistant ol { padding-left: 22px; margin: 0 0 .6em; }
 
-/* ============ tool call card ============ */
-
-.cp-tool {
-  border: 1px solid var(--c-line);
-  background: var(--c-bg-2);
-  border-radius: 11px;
-  overflow: hidden;
-}
-.cp-tool.cp-tool-pending { border-style: dashed; }
-.cp-tool.cp-tool-error { border-color: color-mix(in oklab, var(--c-red) 35%, var(--c-line)); }
-.cp-tool-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 14px;
-  cursor: pointer;
-  background: var(--c-bg-2);
-}
-.cp-tool-head:hover { background: var(--c-bg-3); }
-/* search-preview tool glyph: 26px soft-purple tile, purple-2 icon. */
-.cp-tool-glyph {
-  width: 26px; height: 26px;
-  border-radius: 8px;
-  background: var(--c-purple-soft);
-  color: var(--c-purple-2);
-  display: grid; place-items: center;
-  flex-shrink: 0;
-}
-.cp-tool.cp-tool-error .cp-tool-glyph {
-  background: color-mix(in oklab, var(--c-red) 14%, transparent);
-  color: var(--c-red);
-}
-.cp-tool-tname {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--c-ink);
-  flex-shrink: 0;
-}
-.cp-tool-args {
-  flex: 1;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.6875rem;
-  color: var(--c-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cp-tool-args b {
-  color: var(--c-ink-2);
-  font-weight: 500;
-}
-/* search-preview result count: a soft-purple pill (e.g. "3 of 41"). The
-   transient pending / error states recolour the same pill (amber is in-scheme;
-   red is reserved for a genuine tool error, not a score). */
-.cp-tool-count {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--c-purple-2);
-  background: var(--c-purple-soft);
-  border-radius: 999px;
-  padding: 2px 9px;
-  flex-shrink: 0;
-}
-.cp-tool-count.cp-pending {
-  color: var(--c-amber);
-  background: color-mix(in oklab, var(--c-amber) 14%, transparent);
-}
-.cp-tool-count.cp-error {
-  color: var(--c-red);
-  background: color-mix(in oklab, var(--c-red) 12%, transparent);
-}
-.cp-tool-chev {
-  color: var(--c-mute-2);
-  transition: transform .2s;
-  flex-shrink: 0;
-}
-.cp-tool-open .cp-tool-chev { transform: rotate(90deg); }
-
-.cp-tool-body {
-  display: none;
-  padding: 12px 14px;
-  border-top: 1px solid var(--c-line);
-  background: var(--c-bg);
-}
-.cp-tool-open .cp-tool-body { display: block; }
-.cp-tool-summary {
-  font-size: 0.78125rem;
-  color: var(--c-ink);
-  line-height: 1.5;
-}
-.cp-tool-kv {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 6px 14px;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.71875rem;
-  margin-bottom: 8px;
-}
-.cp-tool-kv .k { color: var(--c-mute); }
-.cp-tool-kv .v { color: var(--c-ink); }
-.cp-tool-raw {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.6875rem;
-  background: var(--c-bg-2);
-  border: 1px solid var(--c-line);
-  border-radius: 8px;
-  padding: 8px 10px;
-  white-space: pre-wrap;
-  max-height: 280px;
-  overflow: auto;
-  color: var(--c-ink-2);
-}
-
 /* ============ result cards (candidate grid) ============ */
 
 .cp-cand-grid {
@@ -765,25 +664,25 @@
   flex-direction: column;
   gap: 4px;
   padding: 12px 14px;
-  border: 1px solid var(--c-line);
-  border-radius: 12px;
-  background: var(--c-bg-2);
+  border: 1px solid var(--chat-line);
+  border-radius: var(--chat-radius-control);
+  background: var(--chat-surface-subtle);
   text-decoration: none;
   color: inherit;
   transition: border-color .15s, box-shadow .15s;
 }
 .cp-cand:hover {
-  border-color: var(--c-purple);
-  box-shadow: 0 1px 0 rgba(29,23,48,.04), 0 12px 32px rgba(29,23,48,.08);
+  border-color: color-mix(in oklab, var(--chat-agent) 42%, var(--chat-line));
+  background: var(--chat-surface);
 }
 .cp-cand-name {
   font-weight: 600;
   font-size: 0.875rem;
-  color: var(--c-ink);
+  color: var(--chat-text);
 }
 .cp-cand-sub {
   font-size: 0.78125rem;
-  color: var(--c-mute);
+  color: var(--chat-muted);
 }
 .cp-cand-row {
   display: flex;
@@ -799,24 +698,24 @@
   gap: 4px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--c-bg-3);
-  color: var(--c-ink-2);
+  background: var(--chat-surface);
+  color: var(--chat-text-secondary);
 }
-.cp-score-pill .lab { color: var(--c-mute); }
+.cp-score-pill .lab { color: var(--chat-muted); }
 /* In-scheme score pills — purple family + grey, never traffic-light.
    high = solid purple, mid = soft-purple, low = neutral grey. Mirrors the
    grounded evidence card's pills so the two read as one system. */
-.cp-score-pill.cp-score-high { background: var(--c-purple); color: #fff; }
+.cp-score-pill.cp-score-high { background: var(--chat-agent); color: white; }
 .cp-score-pill.cp-score-high .lab { color: color-mix(in oklab, #fff 75%, transparent); }
-.cp-score-pill.cp-score-mid  { background: var(--c-purple-soft); color: var(--c-purple-2); }
+.cp-score-pill.cp-score-mid  { background: var(--chat-agent-soft); color: var(--chat-agent); }
 .cp-score-pill.cp-score-mid .lab { color: color-mix(in oklab, var(--c-purple-2) 70%, transparent); }
-.cp-score-pill.cp-score-low  { background: var(--c-bg-3); color: var(--c-mute); }
+.cp-score-pill.cp-score-low  { background: var(--chat-surface-subtle); color: var(--chat-muted); }
 .cp-stage-pill {
   display: inline-flex;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--c-bg-3);
-  color: var(--c-ink-2);
+  background: var(--chat-surface);
+  color: var(--chat-text-secondary);
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 0.6875rem;
 }
@@ -863,15 +762,15 @@
   flex-direction: column;
   gap: 2px;
   border-radius: 9px;
-  background: var(--c-bg-3);
+  background: var(--chat-surface-subtle);
   padding: 9px 10px;
 }
-.cp-op-stat strong { color: var(--c-ink); font-size: 1rem; }
-.cp-op-stat span { color: var(--c-mute); font-size: .6875rem; }
+.cp-op-stat strong { color: var(--chat-text); font-size: 1rem; }
+.cp-op-stat span { color: var(--chat-muted); font-size: var(--chat-meta-size); }
 .cp-op-stat.is-alert {
-  background: color-mix(in oklab, var(--c-amber) 12%, var(--c-bg-2));
+  background: color-mix(in oklab, var(--chat-attention-soft) 58%, var(--chat-surface));
 }
-.cp-op-stat.is-alert strong { color: var(--c-amber); }
+.cp-op-stat.is-alert strong { color: var(--chat-attention); }
 .cp-op-pills {
   display: flex;
   flex-wrap: wrap;
@@ -881,8 +780,8 @@
 .cp-op-pills span,
 .cp-assessment-meta span {
   border-radius: 999px;
-  background: var(--c-bg-3);
-  color: var(--c-mute);
+  background: var(--chat-surface-subtle);
+  color: var(--chat-muted);
   padding: 2px 8px;
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: .625rem;
@@ -893,22 +792,31 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border: 1px solid var(--c-line-2);
+  border: 1px solid var(--chat-line);
   border-radius: 9px;
   padding: 9px 10px;
   color: inherit;
   text-decoration: none;
 }
-.cp-assessment-row:hover { border-color: var(--c-purple); }
+.cp-assessment-row:hover { border-color: var(--chat-agent); }
 .cp-assessment-row > div:first-child { display: grid; gap: 2px; }
-.cp-assessment-row strong { color: var(--c-ink); font-size: .8125rem; }
-.cp-assessment-row > div:first-child span { color: var(--c-mute); font-size: .6875rem; }
+.cp-assessment-row strong { color: var(--chat-text); font-size: var(--chat-body-size); }
+.cp-assessment-row > div:first-child span { color: var(--chat-muted); font-size: var(--chat-meta-size); }
 .cp-assessment-meta { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
 .cp-assessment-meta span.is-alert {
-  background: color-mix(in oklab, var(--c-amber) 12%, var(--c-bg-2));
-  color: var(--c-amber);
+  background: color-mix(in oklab, var(--chat-attention-soft) 58%, var(--chat-surface));
+  color: var(--chat-attention);
 }
-.cp-op-empty { margin: 0; color: var(--c-mute); font-size: .8125rem; }
+.cp-op-empty { margin: 0; color: var(--chat-muted); font-size: var(--chat-body-size); }
+
+.cp-artifact-link {
+  color: var(--chat-link);
+  font-size: var(--chat-meta-size);
+  font-weight: 650;
+  text-decoration: none;
+}
+.cp-artifact-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.cp-artifact-link:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 2px; }
 
 @media (max-width: 680px) {
   .cp-assessment-row { align-items: flex-start; flex-direction: column; }
@@ -918,12 +826,10 @@
 /* ============ comparison table ============ */
 
 .cp-compare {
-  border: 1px solid var(--c-line);
-  border-radius: 12px;
   /* Scroll sideways when there are more candidate columns than fit — the
      table keeps a per-column min-width so names/scores don't crush. */
   overflow-x: auto;
-  background: var(--c-bg-2);
+  background: var(--chat-surface);
 }
 .cp-compare table { width: 100%; border-collapse: collapse; }
 /* Each candidate column holds a readable min-width; the leading label column
@@ -933,21 +839,21 @@
 .cp-compare th, .cp-compare td {
   padding: 10px 12px;
   text-align: left;
-  border-bottom: 1px solid var(--c-line-2);
+  border-bottom: 1px solid var(--chat-line);
   font-size: 0.8125rem;
 }
 .cp-compare th {
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 0.6875rem;
-  color: var(--c-mute);
+  color: var(--chat-muted);
   text-transform: uppercase;
   letter-spacing: .04em;
-  background: var(--c-bg-3);
+  background: var(--chat-surface-subtle);
 }
 /* Leader cell highlight — soft-purple wash, in-scheme (no green). */
 .cp-compare td.cp-best {
-  background: color-mix(in oklab, var(--c-purple) 10%, transparent);
-  color: var(--c-purple-2);
+  background: color-mix(in oklab, var(--chat-agent) 10%, transparent);
+  color: var(--chat-agent);
   font-weight: 600;
 }
 
@@ -976,10 +882,8 @@
    the input area capped to the thread width. Scoped overrides on the shared
    composer keep the other surfaces (Home dock, candidate workspace) untouched. */
 .cp-composer-wrap .tk-composer {
-  max-width: 760px;
+  max-width: var(--chat-content-max);
   margin: 0 auto;
-  border-radius: 16px;
-  box-shadow: 0 2px 14px rgba(94, 58, 168, 0.05);
 }
 /* search-preview `.cfoot` tail: a centred mono note under the composer. */
 .cp-composer-note {
@@ -1122,29 +1026,20 @@
 
 /* ============ search coverage + inline graph visual ============ */
 
-.cp-search-coverage {
+.cp-search-coverage-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
-  margin: 8px 0 10px;
-  padding: 9px 12px;
-  border: 1px solid var(--border-subtle, #e9e5ef);
-  border-radius: 10px;
-  background: var(--surface-subtle, #faf8fc);
-  color: var(--text-secondary, #6d6675);
-  font-size: 12px;
+  gap: var(--chat-space-1) var(--chat-space-3);
 }
 
-.cp-search-coverage.is-capped {
-  border-color: #e8d7a5;
-  background: #fffaf0;
+.cp-search-coverage-warning {
+  flex-basis: 100%;
+  color: var(--chat-attention-text);
 }
 
 .cp-graph {
-  border: 1px solid var(--c-line);
-  border-radius: 12px;
   overflow: hidden;
-  background: var(--c-bg-2);
+  background: var(--chat-surface);
 }
 .cp-graph-head {
   display: flex;
@@ -1153,10 +1048,10 @@
   gap: 12px;
   flex-wrap: wrap;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--c-line-2);
+  border-bottom: 1px solid var(--chat-line);
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 0.6875rem;
-  color: var(--c-mute);
+  color: var(--chat-muted);
 }
 .cp-graph-legend {
   display: inline-flex;
@@ -1175,7 +1070,7 @@
 .cp-graph-canvas {
   width: 100%;
   height: 360px;
-  background: linear-gradient(180deg, var(--c-bg-2), var(--c-bg-3));
+  background: linear-gradient(180deg, var(--chat-surface), var(--chat-surface-subtle));
 }
 
 /* ============ confirm modal ============ */

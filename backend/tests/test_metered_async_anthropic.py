@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -276,6 +277,87 @@ def test_role_owned_graph_call_without_role_fails_before_anthropic(db):
         graph_metering_ctx.reset(token)
 
     assert inner.messages.create_calls == []
+
+
+def test_workspace_pause_after_first_call_blocks_next_autonomous_anthropic(
+    db, monkeypatch,
+):
+    """One Graphiti episode may issue several LLM calls; re-admit each one."""
+
+    _enable_live_holds(monkeypatch)
+    org, role = _billed_role(db, balance=100_000)
+    role.agentic_mode_enabled = True
+    db.commit()
+    inner = _FakeAsyncAnthropic(
+        usage=_FakeUsage(input_tokens=100, output_tokens=10)
+    )
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            episode_name="pause-between-anthropic-calls",
+            require_hard_admission=True,
+            require_role_admission=True,
+        )
+    )
+    try:
+        _run(
+            wrapped.messages.create(
+                model="claude-haiku-4-5-20251001", messages=[]
+            )
+        )
+        org.agent_workspace_paused_at = datetime.now(timezone.utc)
+        db.commit()
+
+        with pytest.raises(GraphProviderAdmissionError, match="workspace agent is paused"):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001", messages=[]
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert len(inner.messages.create_calls) == 1
+
+
+def test_paused_workspace_allows_explicit_workspace_anthropic_call(
+    db, monkeypatch,
+):
+    """The global switch is an autonomy overlay, not a user-operation lock."""
+
+    _enable_live_holds(monkeypatch)
+    org = Organization(
+        name="Explicit Anthropic Workspace",
+        slug=f"explicit-anthropic-{id(db)}",
+        credits_balance=100_000,
+        agent_workspace_paused_at=datetime.now(timezone.utc),
+    )
+    db.add(org)
+    db.commit()
+    inner = _FakeAsyncAnthropic(
+        usage=_FakeUsage(input_tokens=100, output_tokens=10)
+    )
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            episode_name="explicit-workspace-search",
+            require_hard_admission=True,
+            require_role_admission=False,
+        )
+    )
+    try:
+        _run(
+            wrapped.messages.create(
+                model="claude-haiku-4-5-20251001", messages=[]
+            )
+        )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert len(inner.messages.create_calls) == 1
 
 
 def test_hard_admission_role_cap_never_calls_anthropic(db, monkeypatch):

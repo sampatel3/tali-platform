@@ -18,7 +18,7 @@ const TEAM_ROLES = [
 ];
 const roleLabel = (value) => TEAM_ROLES.find((r) => r.value === value)?.label || value;
 
-export const HiringTeamPanel = ({ roleId }) => {
+export const HiringTeamPanel = ({ roleId, roleVersion, onChanged }) => {
   const [members, setMembers] = useState(null);
   const [orgUsers, setOrgUsers] = useState([]);
   const [error, setError] = useState(null);
@@ -59,33 +59,51 @@ export const HiringTeamPanel = ({ roleId }) => {
     setBusy(true);
     setError(null);
     try {
-      await hiringTeamApi.set(roleId, Number(pick.user_id), pick.team_role);
+      await hiringTeamApi.set(roleId, Number(pick.user_id), pick.team_role, roleVersion);
       await reload();
+      await onChanged?.();
       setPick((p) => ({ ...p, user_id: '' }));
-    } catch {
-      setError('Could not add that person to the hiring team.');
+    } catch (err) {
+      setError(err?.response?.status === 409
+        ? 'The job changed. The latest team has been loaded; try again.'
+        : 'Could not add that person to the hiring team.');
+      await onChanged?.();
     } finally {
       setBusy(false);
     }
   };
 
   const changeRole = async (userId, teamRole) => {
+    setBusy(true);
     setError(null);
     try {
-      await hiringTeamApi.set(roleId, userId, teamRole);
+      await hiringTeamApi.set(roleId, userId, teamRole, roleVersion);
       await reload();
-    } catch {
-      setError('Could not update that team role.');
+      await onChanged?.();
+    } catch (err) {
+      setError(err?.response?.status === 409
+        ? 'The job changed. The latest team has been loaded; try again.'
+        : 'Could not update that team role.');
+      await onChanged?.();
+    } finally {
+      setBusy(false);
     }
   };
 
   const removeMember = async (userId) => {
+    setBusy(true);
     setError(null);
     try {
-      await hiringTeamApi.remove(roleId, userId);
+      await hiringTeamApi.remove(roleId, userId, roleVersion);
       await reload();
-    } catch {
-      setError('Could not remove that person.');
+      await onChanged?.();
+    } catch (err) {
+      setError(err?.response?.status === 409
+        ? 'The job changed. The latest team has been loaded; try again.'
+        : 'Could not remove that person.');
+      await onChanged?.();
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -164,6 +182,7 @@ export const HiringTeamPanel = ({ roleId }) => {
                   value={m.team_role}
                   inline
                   aria-label="Change team role"
+                  disabled={busy}
                   onChange={(e) => changeRole(m.user_id, e.target.value)}
                 >
                   {TEAM_ROLES.map((r) => (
@@ -172,7 +191,7 @@ export const HiringTeamPanel = ({ roleId }) => {
                     </option>
                   ))}
                 </Select>
-                <Button variant="ghost" size="xs" onClick={() => removeMember(m.user_id)}>
+                <Button variant="ghost" size="xs" disabled={busy} onClick={() => removeMember(m.user_id)}>
                   Remove
                 </Button>
               </div>

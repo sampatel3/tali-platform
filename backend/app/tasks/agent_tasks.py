@@ -53,7 +53,13 @@ def _mark_agent_tick_ready(db, *, role) -> None:
 
 
 def _mark_agent_bootstrap_failed(
-    db, *, role, detail: str, pause: bool = True
+    db,
+    *,
+    role,
+    detail: str,
+    pause: bool = True,
+    pause_reason: str | None = None,
+    audit_control_change: bool = False,
 ) -> None:
     """Persist an honest terminal bootstrap state and optionally fail closed."""
     from datetime import datetime, timezone
@@ -62,6 +68,11 @@ def _mark_agent_bootstrap_failed(
 
     now = datetime.now(timezone.utc)
     message = str(detail or "agent bootstrap failed")[:2000]
+    if audit_control_change:
+        from ..services.role_change_audit import capture_role_change_snapshot
+
+        audit_before = capture_role_change_snapshot(role)
+        audit_from_version = int(role.version or 1)
     role.agent_bootstrap_status = "failed"
     role.agent_bootstrap_error = message
     role.agent_bootstrap_completed_at = now
@@ -69,14 +80,42 @@ def _mark_agent_bootstrap_failed(
         budget_guard.pause_role(
             db,
             role=role,
-            reason=f"agent bootstrap failed after retries: {message}"[:2000],
+            reason=(
+                str(pause_reason)[:2000]
+                if pause_reason
+                else f"agent bootstrap failed after retries: {message}"[:2000]
+            ),
+        )
+    if audit_control_change:
+        from ..services.role_change_audit import (
+            ROLE_CHANGE_ACTION_AGENT_PAUSED,
+            add_role_change_event,
+        )
+        from ..services.role_concurrency import bump_role_version
+
+        audit_to_version = bump_role_version(role)
+        add_role_change_event(
+            db,
+            role=role,
+            before=audit_before,
+            action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
+            actor_user_id=None,
+            from_version=audit_from_version,
+            to_version=audit_to_version,
+            reason=str(pause_reason or message)[:2000],
         )
     db.add(role)
     db.commit()
 
 
 def _retry_or_fail_cohort_bootstrap(
-    task, *, db, role, exc: Exception, activation: bool
+    task,
+    *,
+    db,
+    role,
+    exc: Exception,
+    activation: bool,
+    dispatch_role_version: int,
 ) -> None:
     """Retry a failed tick; on final activation failure pause the role.
 
@@ -86,16 +125,49 @@ def _retry_or_fail_cohort_bootstrap(
     to a durable failed/paused state instead of leaving it apparently on.
     """
     role_id = int(role.id)
+    dispatched_version = int(dispatch_role_version)
     db.rollback()
     retries = int(getattr(task.request, "retries", 0) or 0)
     max_retries = int(getattr(task, "max_retries", 3) or 3)
     if activation and retries >= max_retries:
         from ..models.role import Role
 
-        current = db.query(Role).filter(Role.id == role_id).one_or_none()
-        if current is not None:
+        current = (
+            db.query(Role)
+            .filter(Role.id == role_id, Role.deleted_at.is_(None))
+            .populate_existing()
+            .with_for_update(of=Role)
+            .one_or_none()
+        )
+        if (
+            current is not None
+            and int(current.version or 1) == dispatched_version
+            and bool(current.agentic_mode_enabled)
+            and current.agent_paused_at is None
+        ):
             _mark_agent_bootstrap_failed(
-                db, role=current, detail="agent_bootstrap_failed", pause=True
+                db,
+                role=current,
+                # Exceptions can include provider URLs, credentials, or tenant
+                # content. Keep the raw value in logs, not persisted role state.
+                detail="agent_bootstrap_failed",
+                pause=True,
+                audit_control_change=True,
+            )
+        else:
+            # The failed worker belongs to an older shared-role revision (or
+            # the role was deleted/turned off/paused). Never let retry
+            # exhaustion overwrite that newer recruiter action.
+            current_version = (
+                int(current.version or 1) if current is not None else None
+            )
+            db.rollback()
+            logger.info(
+                "skipped stale agent bootstrap failure compensation "
+                "role_id=%s dispatch_version=%s current_version=%s",
+                role_id,
+                dispatched_version,
+                current_version,
             )
         logger.error(
             "agent activation bootstrap exhausted retries role_id=%s error=%s",
@@ -104,7 +176,15 @@ def _retry_or_fail_cohort_bootstrap(
         )
         raise exc
     countdown = min(15 * 60, 60 * (2**retries))
-    raise task.retry(exc=exc, countdown=countdown)
+    # A deferred activation learns its authoritative revision only after the
+    # first worker atomically switches the role on. Persist that immutable
+    # token into Celery's retry signature so later attempts cannot silently
+    # recapture a newer revision and compensate it as though it were theirs.
+    retry_kwargs = dict(getattr(task.request, "kwargs", {}) or {})
+    request_args = tuple(getattr(task.request, "args", ()) or ())
+    if len(request_args) < 4:
+        retry_kwargs["dispatch_role_version"] = dispatched_version
+    raise task.retry(exc=exc, countdown=countdown, kwargs=retry_kwargs)
 
 
 @celery_app.task(
@@ -120,6 +200,7 @@ def agent_daily_review_sweep(self) -> dict:
     ``agent_daily_review_role`` per role, so we don't hold a long
     transaction or block other beat tasks.
     """
+    from ..models.organization import Organization
     from ..models.role import Role
     from ..platform.database import SessionLocal
 
@@ -129,9 +210,12 @@ def agent_daily_review_sweep(self) -> dict:
     try:
         roles = (
             db.query(Role.id)
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
                 Role.deleted_at.is_(None),
+                Role.agent_paused_at.is_(None),
+                Organization.agent_workspace_paused_at.is_(None),
             )
             .all()
         )
@@ -182,7 +266,11 @@ def agent_daily_review_role(self, role_id: int) -> dict:
 
     db = SessionLocal()
     try:
-        role = db.query(Role).filter(Role.id == role_id).first()
+        role = (
+            db.query(Role)
+            .filter(Role.id == role_id, Role.deleted_at.is_(None))
+            .first()
+        )
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
         if not bool(role.agentic_mode_enabled):
@@ -194,7 +282,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
             }
-        role_block = automatic_role_action_block_reason(role)
+        role_block = automatic_role_action_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",
@@ -239,6 +327,7 @@ def agent_cohort_tick_sweep(self) -> dict:
     what's worth doing this cycle. With agents off, this is a no-op
     sweep — paused / disabled roles fall through.
     """
+    from ..models.organization import Organization
     from ..models.role import Role
     from ..platform.database import SessionLocal
 
@@ -246,16 +335,21 @@ def agent_cohort_tick_sweep(self) -> dict:
     db = SessionLocal()
     try:
         roles = (
-            db.query(Role.id)
+            db.query(Role.id, Role.version)
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
                 Role.deleted_at.is_(None),
                 Role.agent_paused_at.is_(None),
+                Organization.agent_workspace_paused_at.is_(None),
             )
             .all()
         )
-        for (role_id,) in roles:
-            agent_cohort_tick_role.delay(int(role_id))
+        for role_id, role_version in roles:
+            agent_cohort_tick_role.delay(
+                int(role_id),
+                dispatch_role_version=int(role_version or 1),
+            )
             enqueued.append(int(role_id))
     except Exception:
         logger.exception("agent_cohort_tick_sweep failed")
@@ -372,13 +466,17 @@ def agent_recovery_sweep(self, cap: int = AGENT_RECOVERY_SWEEP_CAP) -> dict:
     contract; recruiter-authored pauses are never touched. A recovered role
     receives an immediate cohort tick instead of waiting for the hourly sweep.
     """
-    from datetime import datetime, timezone
-
     from sqlalchemy import or_
 
     from ..agent_runtime import budget_guard
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.role_change_audit import (
+        ROLE_CHANGE_ACTION_AGENT_RESUMED,
+        add_role_change_event,
+        capture_role_change_snapshot,
+    )
+    from ..services.role_concurrency import bump_role_version
 
     resumed: list[int] = []
     dispatch_failed: list[int] = []
@@ -386,7 +484,7 @@ def agent_recovery_sweep(self, cap: int = AGENT_RECOVERY_SWEEP_CAP) -> dict:
     db = SessionLocal()
     try:
         roles = (
-            db.query(Role)
+            db.query(Role.id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
                 Role.deleted_at.is_(None),
@@ -400,41 +498,113 @@ def agent_recovery_sweep(self, cap: int = AGENT_RECOVERY_SWEEP_CAP) -> dict:
             .limit(max(1, min(int(cap), AGENT_RECOVERY_SWEEP_CAP)))
             .all()
         )
-        for role in roles:
+        for (candidate_role_id,) in roles:
             checked += 1
             try:
+                # Re-lock and re-check each candidate. Multiple beat workers
+                # may overlap; only one may own the paused revision and emit
+                # its recovery dispatch.
+                role = (
+                    db.query(Role)
+                    .filter(
+                        Role.id == int(candidate_role_id),
+                        Role.agentic_mode_enabled.is_(True),
+                        Role.deleted_at.is_(None),
+                        Role.agent_paused_at.isnot(None),
+                        or_(
+                            Role.agent_paused_reason.is_(None),
+                            Role.agent_paused_reason
+                            != budget_guard.MANUAL_PAUSE_REASON,
+                        ),
+                    )
+                    .populate_existing()
+                    .with_for_update(of=Role)
+                    .one_or_none()
+                )
+                if role is None:
+                    db.rollback()
+                    continue
+                audit_before = capture_role_change_snapshot(role)
+                audit_from_version = int(role.version or 1)
                 if not budget_guard.resume_if_under_budget(
                     db, role=role, explicit=False
                 ):
                     db.rollback()
                     continue
+                dispatched_role_id = int(role.id)
+                dispatched_role_version = bump_role_version(role)
+                add_role_change_event(
+                    db,
+                    role=role,
+                    before=audit_before,
+                    action=ROLE_CHANGE_ACTION_AGENT_RESUMED,
+                    actor_user_id=None,
+                    from_version=audit_from_version,
+                    to_version=dispatched_role_version,
+                    reason="automatic recovery after system hold cleared",
+                )
                 # Commit the guarded recovery before dispatch. If broker
                 # delivery fails, compensate below back to a durable hold.
                 db.commit()
                 try:
-                    agent_cohort_tick_role.delay(int(role.id), activation=False)
+                    agent_cohort_tick_role.delay(
+                        dispatched_role_id,
+                        activation=False,
+                        dispatch_role_version=dispatched_role_version,
+                    )
                 except Exception:
                     logger.exception(
-                        "agent recovery dispatch failed role_id=%s", role.id
+                        "agent recovery dispatch failed role_id=%s",
+                        dispatched_role_id,
                     )
-                    current = db.query(Role).filter(Role.id == int(role.id)).one_or_none()
-                    if current is not None:
-                        budget_guard.pause_role(
+                    current = (
+                        db.query(Role)
+                        .filter(
+                            Role.id == dispatched_role_id,
+                            Role.deleted_at.is_(None),
+                        )
+                        .populate_existing()
+                        .with_for_update(of=Role)
+                        .one_or_none()
+                    )
+                    if (
+                        current is not None
+                        and int(current.version or 1)
+                        == dispatched_role_version
+                        and bool(current.agentic_mode_enabled)
+                        and current.agent_paused_at is None
+                    ):
+                        _mark_agent_bootstrap_failed(
                             db,
                             role=current,
-                            reason="agent recovery dispatch failed",
+                            detail="agent recovery dispatch failed",
+                            pause=True,
+                            pause_reason="agent recovery dispatch failed",
+                            audit_control_change=True,
                         )
-                        current.agent_bootstrap_status = "failed"
-                        current.agent_bootstrap_error = "agent recovery dispatch failed"
-                        current.agent_bootstrap_completed_at = datetime.now(timezone.utc)
-                        db.add(current)
-                        db.commit()
-                    dispatch_failed.append(int(role.id))
+                    else:
+                        current_version = (
+                            int(current.version or 1)
+                            if current is not None
+                            else None
+                        )
+                        db.rollback()
+                        logger.info(
+                            "skipped stale agent recovery compensation "
+                            "role_id=%s dispatch_version=%s current_version=%s",
+                            dispatched_role_id,
+                            dispatched_role_version,
+                            current_version,
+                        )
+                    dispatch_failed.append(dispatched_role_id)
                     continue
-                resumed.append(int(role.id))
+                resumed.append(dispatched_role_id)
             except Exception:
                 db.rollback()
-                logger.exception("agent recovery check failed role_id=%s", role.id)
+                logger.exception(
+                    "agent recovery check failed role_id=%s",
+                    candidate_role_id,
+                )
     except Exception:
         db.rollback()
         logger.exception("agent_recovery_sweep failed")
@@ -578,6 +748,8 @@ def agent_cohort_tick_role(
     role_id: int,
     activation: bool = False,
     activation_intent_id: str | None = None,
+    dispatch_role_version: int | None = None,
+    dispatch_workspace_version: int | None = None,
 ) -> dict:
     """One cohort tick for ``role_id``.
 
@@ -600,6 +772,9 @@ def agent_cohort_tick_role(
     from ..platform.database import SessionLocal
     from ..services.role_execution_guard import (
         automatic_role_action_block_reason,
+    )
+    from ..services.workspace_agent_control import (
+        workspace_agent_control_snapshot,
     )
 
     db = SessionLocal()
@@ -627,10 +802,35 @@ def agent_cohort_tick_role(
             # The helper commits the atomic OFF->ON transition. Expire any
             # identity-map state before this normal cohort worker continues.
             db.expire_all()
-        role = db.query(Role).filter(Role.id == role_id).first()
+        role = (
+            db.query(Role)
+            .filter(Role.id == role_id, Role.deleted_at.is_(None))
+            .first()
+        )
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
-        role_block = automatic_role_action_block_reason(role)
+        workspace_paused, workspace_version = workspace_agent_control_snapshot(
+            db,
+            organization_id=int(role.organization_id),
+        )
+        if workspace_paused:
+            return {
+                "status": "skipped",
+                "reason": "workspace_paused",
+                "role_id": role_id,
+            }
+        if (
+            dispatch_workspace_version is not None
+            and int(dispatch_workspace_version) != int(workspace_version)
+        ):
+            return {
+                "status": "skipped",
+                "reason": "stale_workspace_control",
+                "role_id": role_id,
+                "dispatch_workspace_version": int(dispatch_workspace_version),
+                "workspace_control_version": int(workspace_version),
+            }
+        role_block = automatic_role_action_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",
@@ -645,6 +845,12 @@ def agent_cohort_tick_role(
         bootstrap = bool(
             activation or getattr(role, "agent_bootstrap_status", None) == "starting"
         )
+        # Direct activation/resume callers pass the revision they committed.
+        # Deferred activation cannot know its post-transition version until
+        # this worker completes the intent, so capture it exactly once here
+        # and thread it through every Celery retry.
+        if dispatch_role_version is None:
+            dispatch_role_version = int(role.version or 1)
 
         # B4: concurrent LLM-cycle guard. If a previous cycle for this role is
         # still running, don't start another paid deliberation. A bootstrap is
@@ -690,7 +896,12 @@ def agent_cohort_tick_role(
                 "activation score bootstrap failed role_id=%s", role_id
             )
             _retry_or_fail_cohort_bootstrap(
-                self, db=db, role=role, exc=exc, activation=bootstrap
+                self,
+                db=db,
+                role=role,
+                exc=exc,
+                activation=bootstrap,
+                dispatch_role_version=int(dispatch_role_version),
             )
         if role.agent_paused_at is not None:
             return {
@@ -746,7 +957,12 @@ def agent_cohort_tick_role(
             db.rollback()
             if bootstrap:
                 _retry_or_fail_cohort_bootstrap(
-                    self, db=db, role=role, exc=exc, activation=True
+                    self,
+                    db=db,
+                    role=role,
+                    exc=exc,
+                    activation=True,
+                    dispatch_role_version=int(dispatch_role_version),
                 )
 
         # Phase 1.6: correct stale "Below threshold" *display* labels left by
@@ -768,7 +984,12 @@ def agent_cohort_tick_role(
             db.rollback()
             if bootstrap:
                 _retry_or_fail_cohort_bootstrap(
-                    self, db=db, role=role, exc=exc, activation=True
+                    self,
+                    db=db,
+                    role=role,
+                    exc=exc,
+                    activation=True,
+                    dispatch_role_version=int(dispatch_role_version),
                 )
 
         # Phase 1.7: deterministic bulk decisioning. The policy verdict is
@@ -851,8 +1072,28 @@ def agent_cohort_tick_role(
         except Exception as exc:
             logger.exception("agent_cohort_tick_role failed role_id=%s", role_id)
             _retry_or_fail_cohort_bootstrap(
-                self, db=db, role=role, exc=exc, activation=bootstrap
+                self,
+                db=db,
+                role=role,
+                exc=exc,
+                activation=bootstrap,
+                dispatch_role_version=int(dispatch_role_version),
             )
+        if str(run.status) == "aborted" and str(run.error or "") in {
+            "workspace_paused_before_cycle",
+            "workspace_paused_during_cycle",
+            "workspace_control_changed_during_cycle",
+        }:
+            # The workspace overlay is not a role bootstrap failure. Preserve
+            # the role's desired ON/local-pause state; Resume workspace will
+            # dispatch a fresh tick carrying the new workspace generation.
+            return {
+                "status": "skipped",
+                "reason": str(run.error),
+                "role_id": role_id,
+                "agent_run_id": int(run.id),
+                "auto_scored_enqueued": auto_scored,
+            }
         if str(run.status) in {"failed", "aborted"}:
             _retry_or_fail_cohort_bootstrap(
                 self,
@@ -862,6 +1103,7 @@ def agent_cohort_tick_role(
                     f"agent cycle {run.status}: {run.error or 'no completion acknowledgement'}"
                 ),
                 activation=bootstrap,
+                dispatch_role_version=int(dispatch_role_version),
             )
         if str(run.status) == "budget_paused":
             _mark_agent_bootstrap_failed(
@@ -923,7 +1165,7 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
     bounded = max(0, int(limit))
     if bounded <= 0:
         return 0, set()
-    if automatic_role_action_block_reason(role) is not None:
+    if automatic_role_action_block_reason(role, db=db) is not None:
         return 0, set()
 
     latest_id = (
@@ -945,6 +1187,7 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
             CvScoreJob.status == SCORE_JOB_STALE,
             CvScoreJob.error_message.in_(
                 (
+                    "deferred_workspace_paused",
                     "deferred_agent_paused",
                     "deferred_agent_off",
                     "deferred_role_not_runnable",
@@ -1035,7 +1278,7 @@ def _auto_enqueue_scoring(
         # This helper is also exercised directly by recovery and activation
         # code. Keep the authority at the paid-work boundary instead of relying
         # only on the outer cohort task having checked an earlier Role snapshot.
-        if automatic_role_action_block_reason(role) is not None:
+        if automatic_role_action_block_reason(role, db=db) is not None:
             return 0
 
         deferred_touched, deferred_app_ids = _requeue_deferred_agent_scores(
@@ -1401,9 +1644,10 @@ def agent_manual_run(
 ) -> dict:
     """Recruiter-triggered (or CLI-triggered) one-shot run.
 
-    Bypasses the agentic-mode-enabled check so a recruiter can dry-run
-    against a role that hasn't been switched on yet, but still respects
-    the paused state.
+    Manual urgency does not override the shared role's power state.  A
+    separate, side-effect-free preview facility can be introduced later; this
+    production worker must never spend or queue recommendations while another
+    recruiter has deliberately turned the agent off.
     """
     from datetime import datetime, timezone
 
@@ -1411,12 +1655,23 @@ def agent_manual_run(
     from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.role_execution_guard import automatic_role_action_block_reason
 
     db = SessionLocal()
     try:
-        role = db.query(Role).filter(Role.id == role_id).first()
+        role = (
+            db.query(Role)
+            .filter(Role.id == role_id, Role.deleted_at.is_(None))
+            .first()
+        )
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        if not bool(role.agentic_mode_enabled):
+            return {
+                "status": "skipped",
+                "reason": "agent_disabled",
+                "role_id": role_id,
+            }
         if role.agent_paused_at is not None:
             if dispatch_key:
                 intent = (
@@ -1438,6 +1693,16 @@ def agent_manual_run(
                 "reason": "agent_paused",
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
+            }
+        role_block = automatic_role_action_block_reason(role, db=db)
+        if role_block:
+            return {
+                "status": "skipped",
+                "reason": "workspace_paused"
+                if role_block == "workspace agent is paused"
+                else "role_not_runnable",
+                "detail": role_block,
+                "role_id": role_id,
             }
         try:
             run = run_cycle(

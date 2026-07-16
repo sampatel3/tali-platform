@@ -2,16 +2,14 @@
 // design. This file is the orchestrator: fetches data, wires URL-backed
 // filters, composes the section components.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-
-import { MessageSquare } from 'lucide-react';
 
 import { agent as agentApi, agentChat } from '../../shared/api';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
-import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
-import { MotionAttentionBadge, Reveal } from '../../shared/motion';
+import { Reveal } from '../../shared/motion';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
@@ -19,12 +17,9 @@ import './home.css';
 import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared/metrics';
 import { HomeNow } from './HomeNow';
 import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
-import { AgentSidebar } from './agentchat/AgentSidebar';
+import { HomeAgentWorkspace } from './HomeAgentWorkspace';
+import { useWorkspaceAgentControl } from './useWorkspaceAgentControl';
 import './agentchat/agentchat.css';
-
-const LazyAgentChatDock = React.lazy(() => import('./agentchat/AgentChatDock').then((module) => ({
-  default: module.AgentChatDock,
-})));
 
 const ORG_STATUS_POLL_MS = 30_000;
 // Keep the decision cards live. The org-status poll above refreshes the badges
@@ -88,6 +83,7 @@ const greetingFor = (user) => {
 
 export const HomePage = ({ onNavigate, NavComponent }) => {
   const { user } = useAuth() || {};
+  const canControlWorkspaceAgent = String(user?.role || '') === 'owner';
   const { showToast } = useToast() || { showToast: () => {} };
   const [searchParams, setSearchParams] = useSearchParams();
   const {
@@ -385,41 +381,17 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     await Promise.all([loadDecisions(), loadRoles(), refetchOrgStatus()]);
   }, [loadDecisions, loadRoles, refetchOrgStatus]);
 
-  // Org-wide soft pause / resume from the header's Agent strip. Home = "All
-  // roles", so this pauses (or resumes) EVERY agent-enabled role at once via
-  // the existing /agent/pause-all + /agent/resume-all endpoints — the same
-  // mechanism the Jobs header uses. Pause keeps each role's pending review
-  // items (it doesn't disable the agent); resume clears the pause for roles
-  // back under their monthly cap. A ref guard blocks double-fire; on success we
-  // re-poll org-status so the strip flips Pause⇄Resume immediately.
-  const orgAgentBusyRef = useRef(false);
-  const [orgAgentAction, setOrgAgentAction] = useState(null);
-  const runOrgAgentBulk = useCallback(async (actionName, action) => {
-    if (orgAgentBusyRef.current) return;
-    orgAgentBusyRef.current = true;
-    setOrgAgentAction(actionName);
-    try {
-      await action();
-      // Reconcile the header first. The decision list and role rail can refresh
-      // in the background; keeping the mutation locked behind those slower
-      // requests used to make a following Pause/Resume click get discarded.
-      await refetchOrgStatus();
-      void Promise.all([loadDecisions(), loadRoles()]);
-    } catch {
-      showToast?.('Could not update the agents — try again.', 'error');
-    } finally {
-      orgAgentBusyRef.current = false;
-      setOrgAgentAction(null);
-    }
-  }, [loadDecisions, loadRoles, refetchOrgStatus, showToast]);
-  const handlePauseAllAgents = useCallback(
-    () => runOrgAgentBulk('pause', () => agentApi.pauseAll()),
-    [runOrgAgentBulk],
-  );
-  const handleResumeAllAgents = useCallback(
-    () => runOrgAgentBulk('resume', () => agentApi.resumeAll()),
-    [runOrgAgentBulk],
-  );
+  const {
+    action: orgAgentAction,
+    pause: handlePauseAllAgents,
+    resume: handleResumeAllAgents,
+  } = useWorkspaceAgentControl({
+    loadDecisions,
+    loadRoles,
+    refetchOrgStatus,
+    showToast,
+    workspaceControlVersion: orgStatus?.workspace_control_version,
+  });
 
   // Poll the active-agents list for the left rail + notification badges.
   // Self-contained: a missing/erroring endpoint degrades to the plain home
@@ -560,7 +532,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   // KPIs come from org-status; while it's loading, fall back to derived
   // counts so the strip never shows blanks on first paint.
-  const kpis = orgStatus || {
+  const kpis = useMemo(() => orgStatus || ({
     pending: pendingOrdered.length,
     pending_decisions: pendingOrdered.length,
     pending_questions: 0,
@@ -580,7 +552,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     paused_role_count: 0,
     active_role_count: 0,
     oldest_pending_age_seconds: null,
-  };
+  }), [decisions, orgStatus, pendingOrdered.length]);
 
   // Org budget tile (spent / cap + bar + projection) — same helper the Jobs
   // and role strips use so the format is identical everywhere.
@@ -605,11 +577,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     );
   }, [rolesBreakdown]);
 
-  // Org-level agent status for the header strip (Home = "All roles"). Built from
-  // the same /agent/org-status payload the KPIs read: active_role_count = roles
-  // running (enabled, not paused), paused_role_count = roles paused. The strip
-  // shows Pause when any are running, Resume when any are paused, and both in a
-  // mixed org — driving the org-wide pause-all / resume-all handlers above.
+  // Workspace control for the header strip. Effective role counts can all read
+  // paused while the overlay is active, but the explicit workspace fields are
+  // the source of truth for the control and its actor attribution.
   const agentRunningCount = Number(kpis.active_role_count || 0);
   const agentPausedCount = Number(kpis.paused_role_count || 0);
   const headerAgent = useMemo(() => {
@@ -626,35 +596,20 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           return `${Math.round(diff / 86_400_000)}d ago`;
         })()
       : null;
-    let tick;
-    if (running > 0) {
-      tick = ago
-        ? `Monitoring ${enabled} role${enabled === 1 ? '' : 's'} · last decision ${ago}`
-        : `Monitoring ${enabled} role${enabled === 1 ? '' : 's'}`;
-    } else if (paused > 0) {
-      tick = 'Paused by you';
-    } else {
-      tick = null;
-    }
-    return {
-      on: running > 0,
-      // Auto-paused visual only when EVERY enabled agent is paused.
-      paused: running === 0 && paused > 0,
-      pending: pendingDecisions,
-      spentCents: Number(kpis.org_budget_spent_cents || 0),
-      budgetCents: Number(kpis.org_budget_cap_cents || 0),
-      tick,
-      inFlight: false,
-      controlAction: orgAgentAction,
-      pausedReason: running === 0 && paused > 0 ? 'Paused by you' : null,
-    };
+    const fallbackTick = ago
+      ? `Monitoring ${enabled} role${enabled === 1 ? '' : 's'} · last decision ${ago}`
+      : `Monitoring ${enabled} role${enabled === 1 ? '' : 's'}`;
+    const built = buildAgentPropFromStatus(kpis, {
+      isEnabled: enabled > 0,
+      controlScope: 'workspace',
+      fallbackTick,
+    });
+    return built ? { ...built, controlAction: orgAgentAction, pending: pendingDecisions } : built;
   }, [
     agentRunningCount,
     agentPausedCount,
     pendingDecisions,
-    kpis.org_budget_spent_cents,
-    kpis.org_budget_cap_cents,
-    kpis.last_decision_at,
+    kpis,
     orgAgentAction,
   ]);
 
@@ -675,109 +630,54 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
           title={greetingFor(user)}
           subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
-          // All-roles agent strip: Home = every role, so Pause pauses ALL agents
-          // (and Resume resumes them) via /agent/pause-all + /agent/resume-all.
+          // Workspace control: the overlay gates every enabled role without
+          // rewriting the role's own saved ON/PAUSED/OFF state.
           agent={headerAgent}
-          onPauseAgent={handlePauseAllAgents}
-          onResumeAgent={handleResumeAllAgents}
-          pauseAllCount={agentRunningCount}
-          resumeAllCount={agentPausedCount}
+          onPauseAgent={canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
+          onResumeAgent={canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
+          pauseLabel="Pause workspace"
+          resumeLabel="Resume workspace"
           offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
         />
       </Reveal>
-      {/* The shell renders immediately (not gated on the async agents fetch),
-          so the page lays out once — no flash of the pre-rail layout. */}
-      <div className={`ac-shell ${(bulkMode || (activeRoleId != null && !chatHidden)) ? '' : 'ac-dock-collapsed'}`}>
-        <AgentSidebar
-          agents={agentsWithBudget}
-          activeRoleId={activeRoleId}
-          onSelect={handleSelectAgent}
-          bulkMode={bulkMode}
-          bulkSelected={bulkSelected}
-          onToggleBulkMode={toggleBulkMode}
-          onToggleSelected={toggleRoleSelected}
-        />
-        <div className="ac-main">
-
-      <div className="home-body">
-        {/* No top KPI strip — the hub leads with the funnel + the review queue
-            (the preview dropped the KPI row; the hero kicker carries "awaiting
-            you" and the full metrics live on the Analytics page). */}
-        <HomeNow
-          decisions={decisions}
-          pendingOrdered={pendingOrdered}
-          staleCount={staleCount}
-          selectedId={selectedId}
-          setSelectedId={setSelectedId}
-          loading={loadingDecisions}
-          filters={filters}
-          setFilters={setFilters}
-          rolesBreakdown={rolesBreakdown}
-          reload={reloadAll}
-          onNavigate={onNavigate}
-          questionsInDock={true}
-        />
-
-        {/* High-level pulse + a link to the full Analytics page. The detailed
-            console (outcomes, fleet, teaching, A/B, decision log) moved to
-            /analytics — keeps the hub's review loop focused, and keeps the
-            expensive reporting queries off every home load. */}
-        <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} onNavigate={onNavigate} />
-      </div>
-        </div>
-        {/* The chat dock opens when an agent is selected (or in bulk mode). Its
-            collapse control HIDES the chat but keeps the agent selected — the
-            slim edge handle below reopens it. Re-clicking the agent (or "All
-            roles") clears the scope and closes everything. */}
-        {(bulkMode || (activeRoleId != null && !chatHidden)) ? (
-          <React.Suspense fallback={null}>
-            <LazyAgentChatDock
-              roleId={activeRoleId}
-              roleName={activeAgent?.role_name}
-              agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
-              onReload={reloadAll}
-              onCollapse={() => { if (bulkMode) { clearBulk(); } else { setChatHidden(true); } }}
-              bulkSelectedRoles={bulkSelectedRoles}
-              onSendBulk={sendBulk}
-              onClearBulk={clearBulk}
-            />
-          </React.Suspense>
-        ) : null}
-        {/* Chat hidden but the agent stays selected — a slim edge handle brings
-            it back without losing the role scope. */}
-        {(activeRoleId != null && chatHidden && !bulkMode) ? (
-          <button
-            type="button"
-            className="ac-reopen"
-            onClick={() => setChatHidden(false)}
-            title="Show agent chat"
-            aria-label="Show agent chat"
-          >
-            <MessageSquare size={18} />
-            <MotionAttentionBadge
-              value={totalAttention}
-              className="ac-badge-count"
-              aria-label={`${totalAttention} agent update${totalAttention === 1 ? '' : 's'} awaiting you`}
-            />
-          </button>
-        ) : null}
-      </div>
-      </div>
-      {/* Mobile only: the side rail + dock don't fit a phone, so we route to
-          the Chat page's Agents tab (the same threads, kept in sync) instead
-          of cramming a floating dock over the feed. Hidden on desktop via CSS. */}
-      <button
-        type="button"
-        className="ac-mobile-cta"
-        onClick={() => onNavigate?.('chat-agents', { roleId: activeRoleId || undefined })}
+      <HomeAgentWorkspace
+        activeAgent={activeAgent}
+        activeRoleId={activeRoleId}
+        agents={agentsWithBudget}
+        bulkMode={bulkMode}
+        bulkSelected={bulkSelected}
+        bulkSelectedRoles={bulkSelectedRoles}
+        chatHidden={chatHidden}
+        onClearBulk={clearBulk}
+        onHideChat={() => setChatHidden(true)}
+        onNavigate={onNavigate}
+        onReload={reloadAll}
+        onSelectAgent={handleSelectAgent}
+        onSendBulk={sendBulk}
+        onShowChat={() => setChatHidden(false)}
+        onToggleBulkMode={toggleBulkMode}
+        onToggleSelected={toggleRoleSelected}
+        totalAttention={totalAttention}
       >
-        <MessageSquare size={16} /> Chat with your agents
-        <MotionAttentionBadge
-          value={totalAttention}
-          className="ac-badge-count"
-          aria-label={`${totalAttention} agent update${totalAttention === 1 ? '' : 's'} awaiting you`}
-        />
-      </button>
+        <div className="home-body">
+          <HomeNow
+            decisions={decisions}
+            pendingOrdered={pendingOrdered}
+            staleCount={staleCount}
+            selectedId={selectedId}
+            setSelectedId={setSelectedId}
+            loading={loadingDecisions}
+            filters={filters}
+            setFilters={setFilters}
+            rolesBreakdown={rolesBreakdown}
+            reload={reloadAll}
+            onNavigate={onNavigate}
+            questionsInDock={true}
+          />
+          <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} onNavigate={onNavigate} />
+        </div>
+      </HomeAgentWorkspace>
+      </div>
     </div>
   );
 };

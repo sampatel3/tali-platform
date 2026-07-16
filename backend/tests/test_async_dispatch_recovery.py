@@ -267,6 +267,7 @@ def test_agent_chat_publish_failure_stays_pending_then_recovers(client, db):
     org_id = _org_id(db, email)
     role = _role(db, org_id, name="Chat recovery")
     db.commit()
+    accepted_role_version = int(role.version or 1)
     with patch(
         "app.tasks.agent_chat_tasks.run_agent_chat_turn.delay",
         side_effect=RuntimeError("broker unavailable"),
@@ -280,6 +281,12 @@ def test_agent_chat_publish_failure_stays_pending_then_recovers(client, db):
     assert response.json()["dispatch_pending"] is True
     conversation = db.query(AgentConversation).filter_by(role_id=role.id).one()
     assert conversation.turn_status == "pending"
+    assert conversation.turn_accepted_role_version == accepted_role_version
+
+    # The broker failed after the durable receipt committed. A later role edit
+    # must not be adopted by Beat's replacement delivery.
+    role.version = accepted_role_version + 1
+    db.commit()
 
     from app.tasks.agent_chat_tasks import recover_agent_chat_turns
 
@@ -294,11 +301,32 @@ def test_agent_chat_publish_failure_stays_pending_then_recovers(client, db):
         user_id=user_id,
         organization_id=org_id,
         turn_message_id=turn_message_id,
+        accepted_role_version=accepted_role_version,
     )
+    recovered_payload = dict(delay.call_args.kwargs)
     with patch("app.tasks.agent_chat_tasks.run_agent_chat_turn.delay") as delay:
         second = recover_agent_chat_turns.run(limit=10)
     assert second["kicked"] == 0
     delay.assert_not_called()
+
+    seen = {}
+
+    def _capture_role_fence(**kwargs):
+        seen["accepted"] = int(kwargs["accepted_role_version"])
+        seen["current"] = int(kwargs["role"].version or 1)
+
+    from app.tasks.agent_chat_tasks import run_agent_chat_turn
+
+    with patch(
+        "app.agent_chat.engine.run_agent_response",
+        side_effect=_capture_role_fence,
+    ):
+        executed = run_agent_chat_turn.run(**recovered_payload)
+    assert executed["status"] == "replied"
+    assert seen == {
+        "accepted": accepted_role_version,
+        "current": accepted_role_version + 1,
+    }
 
 
 def test_agent_chat_duplicate_delivery_claims_turn_once(client, db):

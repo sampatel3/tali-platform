@@ -47,6 +47,7 @@ def test_job_spec_editor_persists_spec_name_tasks_and_diff(client, db, monkeypat
     response = client.put(
         f"/api/v1/roles/{role['id']}/job-spec",
         json={
+            "expected_version": role["version"],
             "name": "Backend Engineer",
             "job_spec_text": SPEC_A,
             "task_ids": [task_b["id"], task_a["id"], task_b["id"]],
@@ -85,7 +86,7 @@ def test_job_spec_editor_rejects_assessment_task_removal_before_mutation(
     role = client.post("/api/v1/roles", json={"name": "Original title"}, headers=headers).json()
     first = client.put(
         f"/api/v1/roles/{role['id']}/job-spec",
-        json={"job_spec_text": SPEC_A, "task_ids": [task["id"]]},
+        json={"expected_version": role["version"], "job_spec_text": SPEC_A, "task_ids": [task["id"]]},
         headers=headers,
     )
     assert first.status_code == 200, first.text
@@ -112,6 +113,7 @@ def test_job_spec_editor_rejects_assessment_task_removal_before_mutation(
     conflict = client.put(
         f"/api/v1/roles/{role['id']}/job-spec",
         json={
+            "expected_version": first.json()["role"]["version"],
             "name": "Should not persist",
             "job_spec_text": SPEC_B,
             "task_ids": [],
@@ -138,7 +140,7 @@ def test_job_spec_editor_omitted_task_ids_preserves_in_use_tasks(
     ).json()
     linked = client.put(
         f"/api/v1/roles/{role['id']}/job-spec",
-        json={"job_spec_text": SPEC_A, "task_ids": [task["id"]]},
+        json={"expected_version": role["version"], "job_spec_text": SPEC_A, "task_ids": [task["id"]]},
         headers=headers,
     )
     assert linked.status_code == 200, linked.text
@@ -166,7 +168,7 @@ def test_job_spec_editor_omitted_task_ids_preserves_in_use_tasks(
     # already-used task must remain untouched and must not trip removal checks.
     response = client.put(
         f"/api/v1/roles/{role['id']}/job-spec",
-        json={"name": "Updated without task payload", "job_spec_text": SPEC_B},
+        json={"expected_version": linked.json()["role"]["version"], "name": "Updated without task payload", "job_spec_text": SPEC_B},
         headers=headers,
     )
 
@@ -194,14 +196,14 @@ def test_job_spec_editor_is_org_scoped_for_roles_and_tasks(client, db, monkeypat
 
     role_scope = client.put(
         f"/api/v1/roles/{foreign_role['id']}/job-spec",
-        json={"job_spec_text": SPEC_A, "task_ids": []},
+        json={"expected_version": foreign_role["version"], "job_spec_text": SPEC_A, "task_ids": []},
         headers=headers_b,
     )
-    assert role_scope.status_code == 404
+    assert role_scope.status_code == 403
 
     task_scope = client.put(
         f"/api/v1/roles/{local_role['id']}/job-spec",
-        json={"job_spec_text": SPEC_A, "task_ids": [foreign_task["id"]]},
+        json={"expected_version": local_role["version"], "job_spec_text": SPEC_A, "task_ids": [foreign_task["id"]]},
         headers=headers_b,
     )
     assert task_scope.status_code == 422
@@ -222,7 +224,7 @@ def test_job_spec_editor_is_org_scoped_for_roles_and_tasks(client, db, monkeypat
     db.commit()
     global_link = client.put(
         f"/api/v1/roles/{local_role['id']}/job-spec",
-        json={"job_spec_text": SPEC_A, "task_ids": [global_task.id]},
+        json={"expected_version": local_role["version"], "job_spec_text": SPEC_A, "task_ids": [global_task.id]},
         headers=headers_b,
     )
     assert global_link.status_code == 200, global_link.text
@@ -236,7 +238,7 @@ def test_job_spec_editor_rejects_short_specs_without_mutation(client, db, monkey
 
     response = client.put(
         f"/api/v1/roles/{role['id']}/job-spec",
-        json={"job_spec_text": "x" * 59, "task_ids": []},
+        json={"expected_version": role["version"], "job_spec_text": "x" * 59, "task_ids": []},
         headers=headers,
     )
     assert response.status_code == 422
@@ -265,7 +267,7 @@ def test_job_spec_editor_rejects_sister_roles(client, db, monkeypatch):
 
     response = client.put(
         f"/api/v1/roles/{sister.id}/job-spec",
-        json={"job_spec_text": SPEC_A, "task_ids": []},
+        json={"expected_version": int(sister.version or 1), "job_spec_text": SPEC_A, "task_ids": []},
         headers=headers,
     )
     assert response.status_code == 409

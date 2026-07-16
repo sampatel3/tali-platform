@@ -16,6 +16,8 @@ from typing import Any
 from sqlalchemy import text
 
 from ..models.billing_credit_ledger import BillingCreditLedger
+from ..models.organization import Organization
+from ..models.role import Role
 from ..platform.database import SessionLocal
 from .pricing_service import Feature
 from .usage_credit_reservations import (
@@ -30,6 +32,60 @@ logger = logging.getLogger("taali.provider_usage_admission")
 PROVIDER_ATTEMPT_STARTED_STATE = "provider_attempt_started"
 PROVIDER_SUCCEEDED_PENDING_STATE = "provider_succeeded_metering_pending"
 PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE = "provider_succeeded_usage_unknown"
+
+
+class AutomaticProviderAuthorityError(RuntimeError):
+    """A live role/workspace control no longer authorizes provider spend."""
+
+
+def _lock_and_require_automatic_role_authority(
+    db: Any,
+    *,
+    organization_id: int,
+    role_id: int | None,
+) -> None:
+    """Linearize an autonomous provider attempt with both control switches.
+
+    Graphiti can make several Anthropic and Voyage calls during one admitted
+    episode.  A recruiter may pause the workspace or role between those calls,
+    so the initial task/outbox gate is not sufficient.  Every real provider
+    reservation takes the workspace row first and the role row second, then
+    evaluates their current values in that same transaction.
+    """
+
+    if role_id is None:
+        raise AutomaticProviderAuthorityError(
+            "autonomous provider admission requires role attribution"
+        )
+    organization = (
+        db.query(Organization)
+        .filter(Organization.id == int(organization_id))
+        .with_for_update(of=Organization)
+        .populate_existing()
+        .one_or_none()
+    )
+    if organization is None:
+        raise AutomaticProviderAuthorityError("workspace is unavailable")
+    if organization.agent_workspace_paused_at is not None:
+        raise AutomaticProviderAuthorityError("workspace agent is paused")
+
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .with_for_update(of=Role)
+        .populate_existing()
+        .one_or_none()
+    )
+    if role is None:
+        raise AutomaticProviderAuthorityError("role is unavailable")
+    if not bool(role.agentic_mode_enabled):
+        raise AutomaticProviderAuthorityError("role agent is disabled")
+    if role.agent_paused_at is not None:
+        raise AutomaticProviderAuthorityError("role agent is paused")
 
 
 def serialize_provider_work(
@@ -66,6 +122,7 @@ def reserve_provider_usage(
     sub_feature: str | None = None,
     amount: int | None = None,
     metadata: dict[str, Any] | None = None,
+    require_role_authority: bool = False,
 ) -> CreditReservation:
     """Commit one durable hold before an attributed provider call.
 
@@ -84,6 +141,12 @@ def reserve_provider_usage(
         f"{uuid.uuid4().hex}"
     )
     with SessionLocal() as meter_db:
+        if require_role_authority:
+            _lock_and_require_automatic_role_authority(
+                meter_db,
+                organization_id=int(organization_id),
+                role_id=int(role_id) if role_id is not None else None,
+            )
         reservation = reserve_credits(
             meter_db,
             organization_id=int(organization_id),
@@ -346,6 +409,7 @@ def mark_provider_usage_succeeded(
 
 
 __all__ = [
+    "AutomaticProviderAuthorityError",
     "PROVIDER_ATTEMPT_STARTED_STATE",
     "PROVIDER_SUCCEEDED_PENDING_STATE",
     "PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE",

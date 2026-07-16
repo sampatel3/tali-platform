@@ -77,6 +77,7 @@ def test_turn_on_command_is_persisted_while_role_stays_off(client):
         response = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 7500,
                 "auto_promote": True,
@@ -106,6 +107,7 @@ def test_turn_off_cancels_a_pending_activation_intent(client):
         queued = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
                 "activation_assessment_action": "approve_when_ready",
@@ -116,7 +118,7 @@ def test_turn_off_cancels_a_pending_activation_intent(client):
 
     cancelled = client.patch(
         f"/api/v1/roles/{created['id']}",
-        json={"agentic_mode_enabled": False},
+        json={"expected_version": queued.json()["version"], "agentic_mode_enabled": False},
         headers=headers,
     )
     assert cancelled.status_code == 200
@@ -141,6 +143,7 @@ def test_role_patch_versions_unfinished_activation_with_latest_policy(
         queued = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 7_500,
                 "activation_assessment_action": "approve_when_ready",
@@ -167,6 +170,7 @@ def test_role_patch_versions_unfinished_activation_with_latest_policy(
     updated = client.patch(
         f"/api/v1/roles/{role.id}",
         json={
+            "expected_version": queued.json()["version"],
             "monthly_usd_budget_cents": 3_300,
             "auto_send_assessment": False,
             "auto_resend_assessment": False,
@@ -218,6 +222,7 @@ def test_latest_skip_and_restrictions_win_when_pending_activation_completes(
         queued = client.patch(
             f"/api/v1/roles/{created['id']}",
             json={
+                "expected_version": created["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 8_000,
                 "auto_send_assessment": True,
@@ -232,6 +237,7 @@ def test_latest_skip_and_restrictions_win_when_pending_activation_completes(
     tightened = client.patch(
         f"/api/v1/roles/{created['id']}",
         json={
+            "expected_version": queued.json()["version"],
             "monthly_usd_budget_cents": 2_500,
             "auto_send_assessment": False,
             "auto_resend_assessment": False,
@@ -627,6 +633,32 @@ def test_sweep_broker_failure_leaves_role_off_and_intent_due(db):
     assert persisted.agentic_mode_enabled is False
     assert persisted.assessment_task_provisioning["activation_intent"]["request_id"] == intent["request_id"]
     assert persisted.assessment_task_provisioning["activation_intent"]["status"] == "pending"
+
+
+def test_sweep_leaves_activation_intent_pending_under_workspace_pause(db):
+    role, _ = _role_with_passing_draft(db, suffix="workspace-held")
+    intent = request_role_activation_intent(
+        role, user_id=14, monthly_budget_cents=7000
+    )
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    with (
+        patch("app.tasks.assessment_tasks.settings.AUTO_GENERATE_ASSESSMENT_TASKS", True),
+        patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as activation,
+    ):
+        summary = sweep_assessment_task_provisioning.run(limit=50)
+
+    assert summary["activation_due"] == 0
+    activation.assert_not_called()
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    assert persisted.agentic_mode_enabled is False
+    held = persisted.assessment_task_provisioning["activation_intent"]
+    assert held["request_id"] == intent["request_id"]
+    assert held["status"] == "pending"
 
 
 def test_sweep_surfaces_repair_exhaustion_without_dispatching_activation(db):

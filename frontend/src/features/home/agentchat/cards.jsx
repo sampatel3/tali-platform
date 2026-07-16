@@ -8,27 +8,34 @@ import { useState } from 'react';
 import {
   Check,
   CircleHelp,
-  ExternalLink,
   FileText,
   GitFork,
   SlidersHorizontal,
   X,
 } from 'lucide-react';
-import { AgentHelperPromptCard, AgentPromptCard } from '../../../shared/chat';
+import {
+  AgentHelperPromptCard,
+  AgentPromptCard,
+  ChatActivity,
+  ChatArtifact,
+} from '../../../shared/chat';
 import { AgentLoop } from '../../../shared/motion';
+import { Button } from '../../../shared/ui/TaaliPrimitives';
+import '../../../shared/chat/ChatArtifacts.css';
 import { AgentEventCard } from './AgentEventCard.jsx';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
+const humanizeOperation = (value) => String(value || 'Operation').replace(/_/g, ' ');
 
-export function ImpactCard({ card, onApply, onPrompt, busy }) {
+export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }) {
   if (!card || !card.type) return null;
 
   if (card.type === 'agent_event') {
-    return <AgentEventCard card={card} onPrompt={onPrompt} />;
+    return <AgentEventCard card={card} onPrompt={onPrompt} detailOnly={detailOnly} />;
   }
 
   if (card.type === 'helper_prompt') {
-    return <AgentHelperPromptCard card={card} onPrompt={onPrompt} />;
+    return <AgentHelperPromptCard card={card} onPrompt={onPrompt} detailOnly={detailOnly} />;
   }
 
   if (card.type === 'operation_preview') {
@@ -42,19 +49,27 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
       || preview.candidate_name
       || preview.candidate_email
       || (preview.application_id ? `Application ${preview.application_id}` : 'This role');
+    const operationLabel = labels[card.operation] || humanizeOperation(card.operation);
+    const confirmationPrompt = `Confirm ${operationLabel.toLowerCase()} for ${subject}.`;
     return (
-      <div className="ac-card ac-card-constraint" data-testid="operation-preview">
-        <div className="ac-card-head">
-          <CircleHelp size={14} />
-          <span>Confirmation required</span>
-        </div>
-        <div className="ac-draft-title">{labels[card.operation] || card.operation}</div>
-        <div className="ac-rescreen-estimate">{subject}</div>
-        {preview.body_preview ? (
-          <div className="ac-rescreen-estimate">“{preview.body_preview}”</div>
+      <ChatArtifact
+        data-testid="operation-preview"
+        eyebrow="Confirmation required"
+        title={operationLabel}
+        summary={subject}
+        icon={CircleHelp}
+        status={{ label: 'Not run', tone: 'neutral' }}
+        footer={onPrompt ? (
+          <Button variant="primary" size="xs" onClick={() => onPrompt(confirmationPrompt)}>
+            Review in composer
+          </Button>
         ) : null}
-        <div className="ac-rescreen-estimate">No action has run. Confirm in a new message.</div>
-      </div>
+      >
+        {preview.body_preview ? (
+          <div className="tk-artifact-rescreen-estimate">“{preview.body_preview}”</div>
+        ) : null}
+        <div className="tk-artifact-rescreen-estimate">No action has run. Confirm in a new message.</div>
+      </ChatArtifact>
     );
   }
 
@@ -65,57 +80,68 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
       ? 'Approve recommendation'
       : card.operation === 'override_decision'
         ? `Override → ${requested.alternative || 'alternative action'}`
-        : card.operation === 'teach_decision'
-          ? `Teach → ${requested.failure_mode || 'structured correction'} · ${requested.scope || 'decision'}`
-          : 'Re-evaluate decision';
+          : card.operation === 'teach_decision'
+            ? `Teach → ${requested.failure_mode || 'structured correction'} · ${requested.scope || 'decision'}`
+            : 'Re-evaluate decision';
+    const subject = decision.candidate_name || `Decision ${decision.decision_id}`;
+    const confirmationPrompt = `Confirm this action for ${subject}: ${action}.`;
     return (
-      <div className="ac-card ac-card-constraint" data-testid="decision-action-preview">
-        <div className="ac-card-head">
-          <CircleHelp size={14} />
-          <span>Confirmation required</span>
-        </div>
-        <div className="ac-draft-title">{decision.candidate_name || `Decision ${decision.decision_id}`}</div>
-        <div className="ac-rescreen-estimate">
+      <ChatArtifact
+        data-testid="decision-action-preview"
+        eyebrow="Confirmation required"
+        title={subject}
+        summary={action}
+        icon={CircleHelp}
+        status={{ label: 'Not run', tone: 'neutral' }}
+        footer={onPrompt ? (
+          <Button variant="primary" size="xs" onClick={() => onPrompt(confirmationPrompt)}>
+            Review in composer
+          </Button>
+        ) : null}
+      >
+        <div className="tk-artifact-rescreen-estimate">
           {action} · {decision.decision_type || decision.recommendation || 'pending decision'}
           {requested.workable_target_stage ? ` · ${requested.workable_target_stage}` : ''}
         </div>
-        <div className="ac-rescreen-estimate">No action has run. Confirm in a new message.</div>
-      </div>
+        <div className="tk-artifact-rescreen-estimate">No action has run. Confirm in a new message.</div>
+      </ChatArtifact>
     );
   }
 
   if (card.type === 'operation_receipt') {
     return (
-      <div className="ac-card ac-card-applied" data-testid="operation-receipt">
-        <div className="ac-card-head">
-          <Check size={14} />
-          <span>{card.status || 'Accepted'}</span>
-        </div>
-        <div className="ac-rescreen-estimate">{card.message || 'The operation was accepted.'}</div>
-      </div>
+      <ChatActivity
+        data-testid="operation-receipt"
+        severity="success"
+        severityLabel="Completed"
+        typeLabel="Operation receipt"
+        title={card.status || 'Operation accepted'}
+        summary={card.message || 'The operation was accepted.'}
+        icon={Check}
+      />
     );
   }
 
   if (card.type === 'constraint_change') {
     const c = card.criterion || {};
     return (
-      <div className="ac-card ac-card-constraint">
-        <div className="ac-card-head">
+      <div className="tk-artifact-card tk-artifact-card-constraint">
+        <div className="tk-artifact-card-head">
           <SlidersHorizontal size={14} />
           <span>Constraint {card.action}</span>
           {card.rescreening_count > 0 && (
-            <span className="ac-card-live">
-              <AgentLoop kind="pulse" className="ac-pulse" /> re-screening {card.rescreening_count}
+            <span className="tk-artifact-card-live">
+              <AgentLoop kind="pulse" className="tk-artifact-pulse" /> re-screening {card.rescreening_count}
             </span>
           )}
         </div>
         {c.text && (
-          <div className="ac-chip-row">
-            <span className="ac-constraint-chip">{c.text}</span>
+          <div className="tk-artifact-chip-row">
+            <span className="tk-artifact-constraint-chip">{c.text}</span>
           </div>
         )}
         {card.would_rescreen && card.would_rescreen.count > 0 && (
-          <div className="ac-rescreen-estimate">
+          <div className="tk-artifact-rescreen-estimate">
             Would re-screen ~{card.would_rescreen.count} candidate{card.would_rescreen.count === 1 ? '' : 's'}
             {typeof card.would_rescreen.est_cost_usd === 'number' ? ` (~$${card.would_rescreen.est_cost_usd})` : ''} — awaiting your OK.
           </div>
@@ -128,32 +154,32 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
     const added = card.added || [];
     const removed = card.removed || [];
     return (
-      <div className="ac-card ac-card-constraint">
-        <div className="ac-card-head">
+      <div className="tk-artifact-card tk-artifact-card-constraint">
+        <div className="tk-artifact-card-head">
           <FileText size={14} />
           <span>Job spec updated</span>
         </div>
         {added.length > 0 && (
-          <div className="ac-spec-diff">
-            <span className="ac-spec-diff-label add">+ Added</span>
-            <div className="ac-chip-row">
-              {added.map((t, i) => <span key={`a${i}`} className="ac-constraint-chip ac-chip-add">{t}</span>)}
+          <div className="tk-artifact-spec-diff">
+            <span className="tk-artifact-spec-diff-label add">+ Added</span>
+            <div className="tk-artifact-chip-row">
+              {added.map((t, i) => <span key={`a${i}`} className="tk-artifact-constraint-chip tk-artifact-chip-add">{t}</span>)}
             </div>
           </div>
         )}
         {removed.length > 0 && (
-          <div className="ac-spec-diff">
-            <span className="ac-spec-diff-label remove">− Removed</span>
-            <div className="ac-chip-row">
-              {removed.map((t, i) => <span key={`r${i}`} className="ac-constraint-chip ac-chip-remove">{t}</span>)}
+          <div className="tk-artifact-spec-diff">
+            <span className="tk-artifact-spec-diff-label remove">− Removed</span>
+            <div className="tk-artifact-chip-row">
+              {removed.map((t, i) => <span key={`r${i}`} className="tk-artifact-constraint-chip tk-artifact-chip-remove">{t}</span>)}
             </div>
           </div>
         )}
         {added.length === 0 && removed.length === 0 && (
-          <div className="ac-rescreen-estimate">Same criteria re-derived from the new wording — no chip changes.</div>
+          <div className="tk-artifact-rescreen-estimate">Same criteria re-derived from the new wording — no chip changes.</div>
         )}
         {card.would_rescreen && card.would_rescreen.count > 0 && (
-          <div className="ac-rescreen-estimate">
+          <div className="tk-artifact-rescreen-estimate">
             New spec re-derives every criterion — would re-screen ~{card.would_rescreen.count} candidate{card.would_rescreen.count === 1 ? '' : 's'}
             {typeof card.would_rescreen.est_cost_usd === 'number' ? ` (~$${card.would_rescreen.est_cost_usd})` : ''} — awaiting your OK.
           </div>
@@ -170,20 +196,20 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
       ? 'Bullhorn'
       : 'Workable';
     return (
-      <div className="ac-card ac-card-constraint">
-        <div className="ac-card-head">
+      <div className="tk-artifact-card tk-artifact-card-constraint">
+        <div className="tk-artifact-card-head">
           <GitFork size={14} />
           <span>Related role preview</span>
         </div>
-        <div className="ac-rescreen-estimate">
+        <div className="tk-artifact-rescreen-estimate">
           <strong>{card.proposed_name || 'New related role'}</strong> will share {total} candidate{total === 1 ? '' : 's'} with {card.source_role_name || `the original ${sourceProviderLabel} role`}.
         </div>
-        <div className="ac-statrow">
+        <div className="tk-artifact-statrow">
           <span><b>{scorable}</b> score now</span>
           <span><b>{missing}</b> missing CV text</span>
           {typeof card.estimated_cost_usd === 'number' ? <span><b>~${card.estimated_cost_usd}</b> estimated AI usage</span> : null}
         </div>
-        <div className="ac-rescreen-estimate">
+        <div className="tk-artifact-rescreen-estimate">
           Candidate stages and actions stay coupled to the original {sourceProviderLabel} job. Awaiting your confirmation.
         </div>
       </div>
@@ -193,26 +219,19 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
   if (card.type === 'related_role_created') {
     const counts = card.evaluation_counts || {};
     return (
-      <div className="ac-card ac-card-applied">
-        <div className="ac-card-head">
-          <Check size={14} />
-          <span>Related role created</span>
-        </div>
-        <div className="ac-rescreen-estimate">
-          <strong>{card.role_name}</strong> is scoring the shared roster now.
-        </div>
-        <div className="ac-statrow">
-          <span><b>{counts.pending ?? 0}</b> queued</span>
-          <span><b>{counts.unscorable ?? 0}</b> missing CV text</span>
-        </div>
-        {card.frontend_url ? (
-          <div className="ac-card-actions">
-            <a className="ac-btn ac-btn-soft" href={card.frontend_url}>
-              Open related role <ExternalLink size={12} />
-            </a>
-          </div>
-        ) : null}
-      </div>
+      <ChatActivity
+        severity="success"
+        severityLabel="Completed"
+        typeLabel="Role created"
+        title={card.role_name || 'Related role created'}
+        summary={`${counts.pending ?? 0} queued · ${counts.unscorable ?? 0} missing CV text`}
+        icon={Check}
+        source={card.frontend_url ? {
+          label: 'Open related role',
+          href: card.frontend_url,
+          ariaLabel: `Open ${card.role_name || 'related role'}`,
+        } : null}
+      />
     );
   }
 
@@ -224,38 +243,38 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
     // purple-tint bordered card with an inline "old → new · +N candidates clear"
     // line and an Apply button beneath. No icon header / oversized numerals.
     return (
-      <div className="ac-impact">
-        <div className="ac-impact-line">
-          <span className="ac-impact-label">Threshold</span>
-          <span className="ac-impact-old">{numOrDash(card.current_threshold)}</span>
-          <span className="ac-impact-arrow">→</span>
-          <b className="ac-impact-new">{numOrDash(target)}</b>
+      <div className="tk-artifact-impact">
+        <div className="tk-artifact-impact-line">
+          <span className="tk-artifact-impact-label">Threshold</span>
+          <span className="tk-artifact-impact-old">{numOrDash(card.current_threshold)}</span>
+          <span className="tk-artifact-impact-arrow">→</span>
+          <b className="tk-artifact-impact-new">{numOrDash(target)}</b>
           {typeof gain === 'number' && gain !== 0 && (
-            <span className="ac-impact-gain">
+            <span className="tk-artifact-impact-gain">
               · {gain > 0 ? `+${gain}` : gain} candidate{Math.abs(gain) === 1 ? '' : 's'} clear the cut-off
             </span>
           )}
           {typeof gain === 'number' && gain === 0 && (
-            <span className="ac-impact-gain">· no change</span>
+            <span className="tk-artifact-impact-gain">· no change</span>
           )}
         </div>
         {Array.isArray(card.added_sample) && card.added_sample.length > 0 && (
-          <div className="ac-chip-row">
+          <div className="tk-artifact-chip-row">
             {card.added_sample.map((n) => (
-              <span key={n} className="ac-name-chip">{n}</span>
+              <span key={n} className="tk-artifact-name-chip">{n}</span>
             ))}
           </div>
         )}
         {!sim && target != null && onApply && (
-          <div className="ac-impact-actions">
-            <button
-              type="button"
-              className="taali-btn taali-btn-primary taali-btn-xs ac-impact-apply"
+          <div className="tk-artifact-impact-actions">
+            <Button
+              variant="primary"
+              size="xs"
               disabled={busy}
               onClick={() => onApply(target)}
             >
               Apply {target}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -264,22 +283,14 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
 
   if (card.type === 'threshold_change') {
     return (
-      <div className="ac-card ac-card-applied">
-        <div className="ac-card-head">
-          <Check size={14} />
-          <span>Threshold applied</span>
-        </div>
-        <div className="ac-thresh-line">
-          <span className="ac-thresh-old">{numOrDash(card.before_threshold)}</span>
-          <span className="ac-arrow">→</span>
-          <span className="ac-thresh-new ac-thresh-applied">{numOrDash(card.after_threshold)}</span>
-        </div>
-        <div className="ac-statrow">
-          <span><b>{card.reconciled_decisions ?? 0}</b> decisions re-flowed</span>
-          <span><b>{card.created_decisions ?? 0}</b> decisions created</span>
-          <span><b>{card.above_after ?? '—'}</b> clear the cut-off</span>
-        </div>
-      </div>
+      <ChatActivity
+        severity="success"
+        severityLabel="Completed"
+        typeLabel="Threshold update"
+        title={`Threshold ${numOrDash(card.before_threshold)} → ${numOrDash(card.after_threshold)}`}
+        summary={`${card.discarded_advances ?? 0} advances retracted · ${card.created_rejects ?? 0} new rejects · ${card.above_after ?? '—'} clear the cut-off`}
+        icon={Check}
+      />
     );
   }
 
@@ -329,16 +340,16 @@ function RejectQuestionnaire({ questions = [], onSubmit, onCancel, busy }) {
   };
 
   return (
-    <div className="ac-reject">
+    <div className="tk-artifact-reject">
       {questions.map((q) => (
-        <div key={q.key} className="ac-reject-q">
-          <div className="ac-reject-prompt">{q.prompt}</div>
-          <div className="ac-reject-opts">
+        <div key={q.key} className="tk-artifact-reject-q">
+          <div className="tk-artifact-reject-prompt">{q.prompt}</div>
+          <div className="tk-artifact-reject-opts">
             {(q.options || []).map((o) => (
               <button
                 key={o.value}
                 type="button"
-                className={`ac-chip-toggle ${isOn(q, o.value) ? 'on' : ''}`}
+                className={`tk-artifact-chip-toggle ${isOn(q, o.value) ? 'on' : ''}`}
                 disabled={busy}
                 onClick={() => toggle(q, o.value)}
               >
@@ -349,20 +360,20 @@ function RejectQuestionnaire({ questions = [], onSubmit, onCancel, busy }) {
         </div>
       ))}
       <textarea
-        className="ac-reject-note"
+        className="tk-artifact-reject-note"
         rows={2}
         placeholder="Anything specific? (optional)"
         value={note}
         disabled={busy}
         onChange={(e) => setNote(e.target.value)}
       />
-      <div className="ac-card-actions">
-        <button className="ac-btn ac-btn-primary" disabled={busy || !hasAny} onClick={submit}>
+      <div className="tk-artifact-card-actions">
+        <Button variant="primary" size="xs" disabled={busy || !hasAny} onClick={submit}>
           <Check size={13} /> Revise draft
-        </button>
-        <button className="ac-btn ac-btn-ghost" disabled={busy} onClick={onCancel}>
+        </Button>
+        <Button variant="ghost" size="xs" disabled={busy} onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -379,33 +390,36 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
   if (!drafts.length) return null;
 
   return (
-    <div className="ac-card ac-card-draft">
-      <div className="ac-card-head">
+    <div className="tk-artifact-card tk-artifact-card-draft">
+      <div className="tk-artifact-card-head">
         <FileText size={14} />
         <span>
           {automaticActivation
             ? `${drafts.length} assessment${drafts.length === 1 ? '' : 's'} being validated for Turn on`
             : `${drafts.length} task draft${drafts.length === 1 ? '' : 's'} available for optional review`}
         </span>
+        {card?.role_version != null && (
+          <span className="ac-draft-tag">Job revision {card.role_version}</span>
+        )}
       </div>
       {drafts.map((d) => (
-        <div key={d.task_id} className="ac-draft">
-          <div className="ac-draft-title">{d.name}</div>
-          <div className="ac-draft-meta">
-            {d.deliverable_kind && <span className="ac-draft-tag">{d.deliverable_kind}</span>}
+        <div key={d.task_id} className="tk-artifact-draft">
+          <div className="tk-artifact-draft-title">{d.name}</div>
+          <div className="tk-artifact-draft-meta">
+            {d.deliverable_kind && <span className="tk-artifact-draft-tag">{d.deliverable_kind}</span>}
             <span>{(d.decisions || []).length} decisions</span>
             <span>{(d.rubric || []).length} rubric criteria</span>
             <span>{d.repo_file_count || 0} files</span>
           </div>
           {(d.decisions || []).length > 0 && (
-            <ul className="ac-draft-decisions">
+            <ul className="tk-artifact-draft-decisions">
               {d.decisions.slice(0, 3).map((dec, i) => (
                 <li key={i}>{dec.headline}</li>
               ))}
             </ul>
           )}
           {automaticActivation ? (
-            <div className="ac-draft-auto" role="status">
+            <div className="tk-artifact-draft-auto" role="status">
               Turn on is saved. The agent will battle-test, verify, and approve this task automatically; you can leave this page and no second click is needed.
             </div>
           ) : rejectingId === d.task_id ? (
@@ -415,25 +429,27 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
               onCancel={() => setRejectingId(null)}
               onSubmit={(fb) => {
                 setRejectingId(null);
-                onRevise?.(d.task_id, fb);
+                onRevise?.(d.task_id, fb, card.role_version);
               }}
             />
           ) : (
-            <div className="ac-card-actions">
-              <button
-                className="ac-btn ac-btn-primary"
+            <div className="tk-artifact-card-actions">
+              <Button
+                variant="primary"
+                size="xs"
                 disabled={busy}
-                onClick={() => onApprove?.(d.task_id)}
+                onClick={() => onApprove?.(d.task_id, card.role_version)}
               >
                 <Check size={13} /> Approve
-              </button>
-              <button
-                className="ac-btn ac-btn-soft"
+              </Button>
+              <Button
+                variant="soft"
+                size="xs"
                 disabled={busy}
                 onClick={() => setRejectingId(d.task_id)}
               >
                 <X size={13} /> Reject &amp; revise
-              </button>
+              </Button>
             </div>
           )}
         </div>

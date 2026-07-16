@@ -6,14 +6,21 @@
 // the live API, so a visitor feels the whole "agent works, you steer + decide"
 // loop end-to-end without a backend.
 
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 import { MessageSquare } from 'lucide-react';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
-import { ChatMessage, ChatComposer } from '../../shared/chat';
+import {
+  AgentFeedTimeline,
+  AgentStreamTabs,
+  ChatComposer,
+  ChatMessage,
+  ChatSurface,
+  agentFeedAttentionCount,
+} from '../../shared/chat';
 import { ActivityFeed } from './ActivityFeed';
 import { DecisionDetail } from './HomeNow';
 import { AgentSidebar } from './agentchat/AgentSidebar';
@@ -248,43 +255,206 @@ const DRAFT_CARD = {
   reject_questions: REJECT_QUESTIONS,
 };
 
+const SHOWCASE_HELPER_CARD = {
+  title: 'The shortlist is ready to move',
+  summary: 'Two candidates clear every must-have with cited evidence.',
+  question: 'Would you like a side-by-side comparison before deciding?',
+  priority: 'suggestion',
+  suggestions: [
+    {
+      label: 'Compare the two',
+      prompt: 'Compare Maya Chen and Jordan Patel side by side, including evidence and risks.',
+    },
+    {
+      label: 'Draft interview focus',
+      prompt: 'Draft tailored interview focus areas for Maya Chen and Jordan Patel.',
+    },
+  ],
+};
+
+// Autonomous work is deliberately kept out of the conversation. These are the
+// same timeline shapes the live dock receives, presented as quiet one-line feed
+// rows until the recruiter asks for detail.
+const SHOWCASE_FEED_ITEMS = [
+  {
+    kind: 'decision',
+    id: 'showcase-decision-28',
+    decision_id: 28,
+    role_id: 109,
+    candidate_name: 'Maya Chen',
+    recommendation: 'advance',
+    score: 88,
+    status: 'pending',
+    reasoning: 'Clears every must-have with verified evidence and leads this role\'s pipeline.',
+    created_at: new Date(_NOW - 32 * 60 * 1000).toISOString(),
+  },
+  {
+    kind: 'message',
+    id: 'showcase-helper',
+    author: 'agent',
+    message_kind: 'proactive',
+    created_at: new Date(_NOW - 14 * 60 * 1000).toISOString(),
+    actions: [{ type: 'helper_prompt', ...SHOWCASE_HELPER_CARD }],
+  },
+  {
+    kind: 'needs_input',
+    id: 'showcase-steer',
+    needs_input_id: 'showcase-steer',
+    status: 'open',
+    question_kind: 'task_assignment_missing',
+    title: 'Choose an assessment task',
+    prompt: 'This role has no assessment linked. Choose one before I send the next invitations.',
+    rationale: 'The agent pauses because sending an unlinked assessment would contact candidates with the wrong task.',
+    can_answer: false,
+    can_dismiss: true,
+    created_at: new Date(_NOW - 8 * 60 * 1000).toISOString(),
+  },
+  {
+    kind: 'message',
+    id: 'showcase-run-warning',
+    author: 'agent',
+    message_kind: 'event',
+    created_at: new Date(_NOW - 2 * 60 * 1000).toISOString(),
+    actions: [{
+      type: 'agent_event',
+      severity: 'warning',
+      event_type: 'agent_run_terminal',
+      title: 'Run stopped before completion',
+      summary: 'The cycle ended early. Six decisions were retained and unfinished work can be retried safely.',
+      occurred_at: new Date(_NOW - 2 * 60 * 1000).toISOString(),
+      details: [
+        { label: 'Agent run', value: '#7042' },
+        { label: 'Work retained', value: '6 decisions' },
+      ],
+      suggestions: [
+        { label: 'Explain stop', prompt: 'Explain why agent run #7042 stopped and what is safe to retry.' },
+        { label: 'Preview retry', prompt: 'Preview the unfinished work from agent run #7042 before retrying it.' },
+      ],
+    }],
+  },
+];
+
 // The agent chat dock — the central new surface. Static-but-real: it renders the
 // shared <ChatMessage>/<ChatComposer> + the live impact / draft-task cards, fed
 // with fixture data, so it looks exactly like the product.
 export const ShowcaseDock = ({ onAct }) => {
   const [input, setInput] = useState('');
+  const [streamView, setStreamView] = useState('chat');
+  const [feedItems, setFeedItems] = useState(SHOWCASE_FEED_ITEMS);
+  const chatPanelId = useId();
+  const feedPanelId = useId();
+  const openQuestions = useMemo(
+    () => feedItems.filter((item) => item.kind === 'needs_input' && item.status === 'open'),
+    [feedItems],
+  );
+  const openQuestionPositions = useMemo(
+    () => new Map(openQuestions.map((item, index) => [item.needs_input_id ?? item.id, index + 1])),
+    [openQuestions],
+  );
+  const feedAttention = useMemo(() => agentFeedAttentionCount(feedItems), [feedItems]);
+
   const submit = (text) => {
     setInput('');
     onAct(`“${text}” — in the live product this runs the agent and posts the impact here.`);
   };
+
+  const prefillFromFeed = (prompt) => {
+    setStreamView('chat');
+    setInput(prompt);
+  };
+
+  const answerFeedRequest = async (requestId, response) => {
+    setFeedItems((current) => current.map((item) => (
+      (item.needs_input_id ?? item.id) === requestId
+        ? { ...item, status: 'answered', response }
+        : item
+    )));
+    onAct('Steer received — the agent can continue from the feed without interrupting chat.');
+    return true;
+  };
+
+  const dismissFeedRequest = async (requestId) => {
+    setFeedItems((current) => current.map((item) => (
+      (item.needs_input_id ?? item.id) === requestId
+        ? { ...item, status: 'dismissed' }
+        : item
+    )));
+    return true;
+  };
+
   return (
-    <aside className="ac-dock">
+    <ChatSurface as="aside" density="compact" tone="agent" className="ac-dock">
       <div className="ac-dock-head">
         <MessageSquare size={15} />
         <span>Ask the agent</span>
         <span className="ac-dock-role">Senior Backend Engineer</span>
       </div>
-      <div className="ac-stream">
-        <ChatMessage role="user" text="Cap salary at AED 25k on this role" />
-        <ChatMessage
-          role="assistant"
-          text={"Done — set the cap to **AED 25,000**. 22 of 278 candidates stated a figure; the cap drops 4 of them, the rest are unverified so I can't filter on them. Want me to re-screen just the 4 affected?"}
+      <AgentStreamTabs
+        value={streamView}
+        onChange={setStreamView}
+        attentionCount={feedAttention}
+        chatPanelId={chatPanelId}
+        feedPanelId={feedPanelId}
+      />
+      <div className="ac-stream-stack">
+        <div
+          className="ac-stream"
+          id={chatPanelId}
+          role="tabpanel"
+          aria-label="Chat"
+          hidden={streamView !== 'chat'}
         >
-          <ImpactCard card={CONSTRAINT_CARD} onApply={() => {}} busy={false} />
-        </ChatMessage>
-        <ChatMessage role="user" text="what if I drop the cut-off to 65?" />
-        <ChatMessage
-          role="assistant"
-          text={"Dropping the cut-off **70 → 65** brings 6 more into review — Ada, Bo and Chen lead them. Already-advanced and rejected candidates stay put."}
+          <ChatMessage role="user" text="Cap salary at AED 25k on this role" />
+          <ChatMessage
+            role="assistant"
+            label="Agent"
+            text={"Done — set the cap to **AED 25,000**. 22 of 278 candidates stated a figure; the cap drops 4 of them, the rest are unverified so I can't filter on them. Want me to re-screen just the 4 affected?"}
+          >
+            <ImpactCard card={CONSTRAINT_CARD} onApply={() => {}} busy={false} />
+          </ChatMessage>
+          <ChatMessage role="user" text="what if I drop the cut-off to 65?" />
+          <ChatMessage
+            role="assistant"
+            label="Agent"
+            text={"Dropping the cut-off **70 → 65** brings 6 more into review — Ada, Bo and Chen lead them. Already-advanced and rejected candidates stay put."}
+          >
+            <ImpactCard card={SIM_CARD} onApply={() => {}} busy={false} />
+          </ChatMessage>
+          <ChatMessage
+            role="assistant"
+            label="Agent"
+            text={"You've also got an assessment task I drafted for this role — approve it, or reject with a steer and I'll re-author it:"}
+          >
+            <DraftTaskCard card={DRAFT_CARD} onApprove={() => onAct('Approved — the task is now live and assignable.')} onRevise={() => onAct('On it — re-authoring the task from your feedback.')} busy={false} />
+          </ChatMessage>
+        </div>
+        <div
+          className="ac-stream ac-feed-stream"
+          id={feedPanelId}
+          role="tabpanel"
+          aria-label="Agent feed"
+          hidden={streamView !== 'feed'}
         >
-          <ImpactCard card={SIM_CARD} onApply={() => {}} busy={false} />
-        </ChatMessage>
-        <ChatMessage
-          role="assistant"
-          text={"You've also got an assessment task I drafted for this role — approve it, or reject with a steer and I'll re-author it:"}
-        >
-          <DraftTaskCard card={DRAFT_CARD} onApprove={() => onAct('Approved — the task is now live and assignable.')} onRevise={() => onAct('On it — re-authoring the task from your feedback.')} busy={false} />
-        </ChatMessage>
+          <AgentFeedTimeline
+            items={feedItems}
+            roleId={109}
+            roleName="Senior Backend Engineer"
+            openQuestionPositions={openQuestionPositions}
+            openQuestionCount={openQuestions.length}
+            onAnswer={answerFeedRequest}
+            onDismiss={dismissFeedRequest}
+            onPrompt={prefillFromFeed}
+            onReply={(request) => prefillFromFeed(request?.prompt || '')}
+            renderAction={(card, _actionIndex, _item, options = {}) => (
+              <ImpactCard
+                card={card}
+                detailOnly={Boolean(options.detailOnly)}
+                onPrompt={prefillFromFeed}
+                busy={false}
+              />
+            )}
+          />
+        </div>
       </div>
       <div className="ac-dock-composer">
         <ChatComposer
@@ -294,7 +464,7 @@ export const ShowcaseDock = ({ onAct }) => {
           placeholder="Ask about this role's pool, or tell the agent to change something"
         />
       </div>
-    </aside>
+    </ChatSurface>
   );
 };
 

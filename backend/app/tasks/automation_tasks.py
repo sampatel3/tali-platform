@@ -22,7 +22,7 @@ from .celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-def _automatic_role_work_block_reason(role) -> str | None:
+def _automatic_role_work_block_reason(db, role) -> str | None:
     """Return why queued autonomous role work must not start now.
 
     A role can be paused, turned off, locally closed, or closed in its linked
@@ -33,7 +33,7 @@ def _automatic_role_work_block_reason(role) -> str | None:
 
     from ..services.role_execution_guard import automatic_role_action_block_reason
 
-    return automatic_role_action_block_reason(role)
+    return automatic_role_action_block_reason(role, db=db)
 
 
 def _set_activation_focus_state(
@@ -125,7 +125,7 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
-        role_block = _automatic_role_work_block_reason(role)
+        role_block = _automatic_role_work_block_reason(db, role)
         if role_block:
             return {
                 "status": "skipped",
@@ -206,8 +206,19 @@ def generate_role_interview_focus(
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        from ..services.workspace_agent_control import workspace_agent_is_paused
+
+        if workspace_agent_is_paused(
+            db,
+            organization_id=int(role.organization_id),
+        ):
+            return {
+                "status": "skipped",
+                "reason": "workspace_paused",
+                "role_id": role_id,
+            }
         if requires_running_agent:
-            role_block = _automatic_role_work_block_reason(role)
+            role_block = _automatic_role_work_block_reason(db, role)
             if role_block:
                 return {
                     "status": "skipped",
@@ -375,6 +386,24 @@ def run_application_auto_reject(
             .first()
         )
         role = app.role
+        if role is not None:
+            # The deterministic verdict may still be carded while automation is
+            # held, but an irreversible provider/native reject must linearize
+            # with workspace Pause and role Pause/Turn off.  Lock org -> role,
+            # then re-evaluate policy against that live snapshot below.
+            from ..services.role_execution_guard import lock_live_role
+
+            role = lock_live_role(
+                db,
+                role_id=int(role.id),
+                organization_id=int(app.organization_id),
+            )
+            org = (
+                db.query(Organization)
+                .filter(Organization.id == app.organization_id)
+                .populate_existing()
+                .one_or_none()
+            )
         try:
             result = run_auto_reject_if_needed(
                 db=db,
@@ -532,7 +561,7 @@ def parse_application_cv_sections(
             role_block = (
                 "role is unavailable"
                 if role is None or getattr(role, "deleted_at", None) is not None
-                else _automatic_role_work_block_reason(role)
+                else _automatic_role_work_block_reason(db, role)
             )
             if role_block:
                 if durable_outbox_id is not None:

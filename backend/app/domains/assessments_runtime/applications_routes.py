@@ -23,7 +23,11 @@ from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
 from ...cv_parsing.origins import CV_PARSE_ORIGIN_RECRUITER_UPLOAD
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
+from ...domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
@@ -144,6 +148,27 @@ logger = logging.getLogger("taali.applications")
 # queue (see pipeline_service.PIPELINE_STAGES).
 PIPELINE_STAGE_VALUES = {"sourced", "applied", "invited", "in_assessment", "review"}
 APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
+
+
+def _require_application_job_permission(
+    db: Session,
+    *,
+    current_user: User,
+    application_id: int,
+    permission: JobPermission,
+    lock_for_update: bool = True,
+) -> CandidateApplication:
+    """Load an application and enforce its live job-team policy under Role lock."""
+
+    app = get_application(application_id, current_user.organization_id, db)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(app.role_id),
+        permission=permission,
+        lock_for_update=lock_for_update,
+    )
+    return app
 
 
 def _application_is_workable_linked(app: CandidateApplication) -> bool:
@@ -597,6 +622,12 @@ def create_application(
 ):
     from ...actions import Actor, create_application as action
 
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     try:
         result = action.run(
             db,
@@ -656,6 +687,12 @@ def create_sourced_candidate(
     from ...services.candidate_identity_service import normalize_phone, resolve_candidate
 
     org_id = int(current_user.organization_id)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     role = get_role(role_id, org_id, db)
 
     email = (data.email or "").strip().lower() or None
@@ -1149,7 +1186,12 @@ def create_manual_application_interview(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     interview = _upsert_application_interview(
         db=db,
         app=app,
@@ -1193,7 +1235,12 @@ def link_fireflies_interview(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -1428,7 +1475,12 @@ def update_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     updates = data.model_dump(exclude_unset=True)
     try:
         ensure_pipeline_fields(app)
@@ -1508,7 +1560,12 @@ def update_application_manual_decision(
     ``expected_version`` guard prevents two recruiters silently clobbering each
     other's edit.
     """
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
 
     stored = app.manual_decision if isinstance(app.manual_decision, dict) else {}
     stored_version = int(stored.get("version", 0) or 0)
@@ -1628,6 +1685,7 @@ def list_applications_global(
     nl_subgraph_payload = None
     nl_rerank_applied = False
     nl_coverage_payload = None
+    nl_verification_payload: list[dict] = []
     if nl_query_clean:
         from ...candidate_search import rate_limit as nl_rate_limit
         from ...candidate_search.runner import run_search
@@ -1667,6 +1725,10 @@ def list_applications_global(
         parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
         nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
         nl_rerank_applied = nl_result.rerank_applied
+        nl_verification_payload = [
+            item.model_dump(mode="json")
+            for item in nl_result.verification_results
+        ]
         nl_coverage_payload = {
             "database_matches": (
                 nl_result.database_matches
@@ -1674,6 +1736,8 @@ def list_applications_global(
                 else len(nl_result.application_ids)
             ),
             "deep_checked": nl_result.deep_checked,
+            "evidence_succeeded": nl_result.evidence_succeeded,
+            "evidence_failed": nl_result.evidence_failed,
             "qualified": nl_result.qualified,
             "capped": nl_result.capped,
             "exhaustive": nl_result.exhaustive,
@@ -1867,6 +1931,15 @@ def list_applications_global(
         application_list_payload(app, include_cv_text=include_cv_text)
         for app in rows
     ]
+    if nl_query_clean and nl_verification_payload:
+        verification_by_id = {
+            int(item["application_id"]): item
+            for item in nl_verification_payload
+        }
+        for app, item in zip(rows, items):
+            verification = verification_by_id.get(int(app.id))
+            if verification is not None:
+                item["deep_verification"] = verification
     duration_ms = (perf_counter() - started_at) * 1000.0
     logged_role_ids = sorted(set(requested_role_ids))
     logger.info(
@@ -1902,6 +1975,7 @@ def list_applications_global(
         response_payload["nl_warnings"] = nl_warnings
         response_payload["nl_rerank_applied"] = nl_rerank_applied
         response_payload["nl_coverage"] = nl_coverage_payload
+        response_payload["nl_verification"] = nl_verification_payload
         if view == "graph" and nl_subgraph_payload is not None:
             response_payload["subgraph"] = nl_subgraph_payload
     return response_payload
@@ -2135,6 +2209,12 @@ def update_application_stage(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     try:
         app = advance_stage_action.run(
             db,
@@ -2166,7 +2246,12 @@ def update_application_outcome(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     ats_writeback_job_run_id = None
     try:
         ensure_pipeline_fields(app)
@@ -2453,7 +2538,12 @@ def move_application_in_active_ats(
     current_user: User = Depends(get_current_user),
 ):
     """Hand a candidate back through the workspace's connected ATS provider."""
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)
@@ -2515,7 +2605,12 @@ def move_application_in_workable(
     list reflects reality (post-handover candidates leave the active
     ``review`` bucket).
     """
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     if not app.workable_candidate_id:
         raise HTTPException(
             status_code=400,
@@ -2544,7 +2639,12 @@ def post_workable_candidate_note(
     instead of failing the request. Returns immediately; the note posts in the
     background (eager Celery in tests finishes inline).
     """
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     if not app.workable_candidate_id:
         raise HTTPException(
             status_code=400, detail="Application is not linked to a Workable candidate"
@@ -2604,7 +2704,12 @@ def add_application_note(
     ``for_agent`` (the default) the note rides in the agent's
     ``get_application`` payload as standing per-candidate guidance.
     """
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     try:
         event = create_recruiter_note(
             db,
@@ -2635,7 +2740,12 @@ def upload_application_cv(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     result = process_document_upload(
         upload=file,
         entity_id=application_id,
@@ -2698,7 +2808,12 @@ def generate_taali_cv_ai(
     - If the application is linked to Workable and no CV is present, we attempt to download the resume
       from Workable, extract text, then compute the match.
     """
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     role = app.role
     if not role or not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before generating TAALI score")
@@ -2796,7 +2911,12 @@ def refresh_application_interview_guidance(
     is pure aggregation of existing scoring + transcript data. Persists the
     updated columns so downstream report builders see the fresh values.
     """
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     refresh_application_interview_support(
         app, organization=getattr(app, "organization", None)
     )
@@ -2820,7 +2940,12 @@ def enrich_application_candidate(
     current_user: User = Depends(get_current_user),
 ):
     """Fetch full candidate profile from Workable and populate all profile fields."""
-    app = get_application(application_id, current_user.organization_id, db)
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     candidate = app.candidate
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -3204,7 +3329,12 @@ def batch_score_role(
     The cascade does fetch-CV (if missing) → pre-screen (if not run) → score, skipping
     each step that's already complete unless include_scored=true.
     """
-    role = get_role(role_id, current_user.organization_id, db)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     if not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before batch scoring")
 
@@ -3384,7 +3514,12 @@ def score_selected_applications(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="application_ids must be integers")
 
-    get_role(role_id, current_user.organization_id, db)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     apps = (
         db.query(CandidateApplication)
         .filter(
@@ -3483,7 +3618,12 @@ def fetch_cvs_selected_applications(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="application_ids must be integers")
 
-    get_role(role_id, current_user.organization_id, db)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)
@@ -3550,7 +3690,12 @@ def refresh_interview_support_bulk(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="application_ids must be integers")
 
-    get_role(role_id, current_user.organization_id, db)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.EDIT_ROLE,
+    )
     apps = (
         db.query(CandidateApplication)
         .filter(
@@ -3625,7 +3770,14 @@ def batch_score_status(
     only read from an in-process dict that the worker can't update,
     leaving the recruiter stuck looking at "0/N scored" forever.
     """
-    get_role(role_id, current_user.organization_id, db)
+    # This status read also auto-dispatches a queued paid batch when the prior
+    # one completes, so it is an agent-control boundary rather than a pure GET.
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     progress = _batch_score_progress.get(role_id, {})
     total = int(progress.get("total", 0) or 0)
     started_at = progress.get("started_at")
@@ -3823,7 +3975,12 @@ def cancel_batch_score(
     Also clears any queued (not-yet-started) batch so it doesn't
     auto-start after this cancel.
     """
-    get_role(role_id, current_user.organization_id, db)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
 
     # Layer 1: Redis cancel flag (stops the batch loop + future dequeues).
     set_ok = _set_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
@@ -3892,7 +4049,7 @@ def batch_score_all_roles(
     ),
     include_scored: bool = Query(default=False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Fan out batch-score across every active role in the org.
 
@@ -4316,7 +4473,12 @@ def batch_fetch_cvs_role(
     current_user: User = Depends(get_current_user),
 ):
     """Fetch CVs from Workable for all applications in this role that don't have CV text yet."""
-    role = get_role(role_id, current_user.organization_id, db)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org or not org.workable_connected:
         raise HTTPException(status_code=400, detail="Workable is not connected")
@@ -4405,7 +4567,12 @@ def cancel_batch_fetch_cvs(
     checks between candidates. The current Workable HTTP request
     finishes; subsequent ones are skipped.
     """
-    get_role(role_id, current_user.organization_id, db)
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     set_ok = _set_cancel_flag(_BATCH_FETCH_CANCEL_PREFIX, role_id)
     progress = _batch_fetch_cvs_progress.get(role_id, {})
     if progress.get("status") == "running":
@@ -4481,7 +4648,12 @@ def batch_pre_screen_role(
     dry_run=true: returns ``{will_process, total_with_cv, total_without_cv}``
     so the UI can populate a confirmation dialog.
     """
-    role = get_role(role_id, current_user.organization_id, db)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=JobPermission.CONTROL_AGENT,
+    )
     if not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before batch pre-screen")
 
@@ -4804,7 +4976,7 @@ def sync_graph_org(
     refresh: bool = Query(default=False, description="Re-sync all candidates with a CV (not just new/stale)."),
     dry_run: bool = Query(default=False, description="Return counts without starting a job."),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Org-wide: sync candidates with a CV to the knowledge graph (Neo4j via Graphiti).
 
@@ -4910,7 +5082,7 @@ def sync_graph_status(
 @router.post("/candidates/sync-graph/cancel")
 def cancel_sync_graph(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Cooperatively cancel a running org-wide graph sync.
 
@@ -5310,8 +5482,43 @@ def _run_process(
         )
 
     try:
+        if user_id is not None:
+            initiating_user = (
+                db.query(User)
+                .filter(
+                    User.id == int(user_id),
+                    User.organization_id == int(org_id),
+                )
+                .one_or_none()
+            )
+            if initiating_user is None:
+                progress["status"] = "failed"
+                progress["error"] = "initiating_user_unavailable"
+                _set_process_progress(role_id, progress)
+                return
+            try:
+                require_job_permission(
+                    db,
+                    current_user=initiating_user,
+                    role_id=role_id,
+                    permission=JobPermission.CONTROL_AGENT,
+                    lock_for_update=False,
+                )
+            except HTTPException:
+                progress["status"] = "failed"
+                progress["error"] = "authorization_revoked"
+                _set_process_progress(role_id, progress)
+                return
         org = db.query(Organization).filter(Organization.id == org_id).first()
-        role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
+        role = (
+            db.query(Role)
+            .filter(
+                Role.id == role_id,
+                Role.organization_id == org_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
         if not org or not role:
             progress["status"] = "failed"
             progress["error"] = "process_scope_missing"
@@ -5637,15 +5844,30 @@ def create_assessment_for_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
-    role = (
-        db.query(Role)
-        .options(joinedload(Role.tasks))
-        .filter(Role.id == app.role_id, Role.organization_id == current_user.organization_id)
-        .first()
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.CONTROL_AGENT,
+        # Assessment admission locks Organization before Role. Keep this first
+        # check non-locking, then re-check under the Role lock after the credit
+        # gate so every paid path follows the same Org -> Role order.
+        lock_for_update=False,
     )
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
+    creation_gate = get_assessment_creation_gate(
+        current_user.organization_id,
+        db,
+        role_id=int(app.role_id),
+        lock_organization=True,
+    )
+    if not creation_gate.get("can_create"):
+        raise HTTPException(status_code=402, detail=creation_gate.get("message"))
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(app.role_id),
+        permission=JobPermission.CONTROL_AGENT,
+    )
     if not any(task.id == data.task_id for task in (role.tasks or [])):
         raise HTTPException(status_code=400, detail="Task is not linked to this role")
     task = db.query(Task).filter(
@@ -5654,14 +5876,6 @@ def create_assessment_for_application(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    creation_gate = get_assessment_creation_gate(
-        current_user.organization_id,
-        db,
-        role_id=int(role.id),
-        lock_organization=True,
-    )
-    if not creation_gate.get("can_create"):
-        raise HTTPException(status_code=402, detail=creation_gate.get("message"))
     existing = _latest_active_assessment_for_application(app, db)
     if existing is not None:
         raise _assessment_create_conflict_response(existing)
@@ -5706,15 +5920,31 @@ def retake_assessment_for_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
-    role = (
-        db.query(Role)
-        .options(joinedload(Role.tasks))
-        .filter(Role.id == app.role_id, Role.organization_id == current_user.organization_id)
-        .first()
+    app = _require_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        permission=JobPermission.CONTROL_AGENT,
+        lock_for_update=False,
     )
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
+    existing = _latest_active_assessment_for_application(app, db)
+    if existing is None:
+        raise HTTPException(status_code=400, detail="No valid assessment exists for this candidate and role")
+    creation_gate = get_assessment_creation_gate(
+        current_user.organization_id,
+        db,
+        role_id=int(app.role_id),
+        exclude_assessment_id=existing.id,
+        lock_organization=True,
+    )
+    if not creation_gate.get("can_create"):
+        raise HTTPException(status_code=402, detail=creation_gate.get("message"))
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(app.role_id),
+        permission=JobPermission.CONTROL_AGENT,
+    )
     if not any(task.id == data.task_id for task in (role.tasks or [])):
         raise HTTPException(status_code=400, detail="Task is not linked to this role")
     task = db.query(Task).filter(
@@ -5723,19 +5953,6 @@ def retake_assessment_for_application(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-
-    existing = _latest_active_assessment_for_application(app, db)
-    if existing is None:
-        raise HTTPException(status_code=400, detail="No valid assessment exists for this candidate and role")
-    creation_gate = get_assessment_creation_gate(
-        current_user.organization_id,
-        db,
-        role_id=int(role.id),
-        exclude_assessment_id=existing.id,
-        lock_organization=True,
-    )
-    if not creation_gate.get("can_create"):
-        raise HTTPException(status_code=402, detail=creation_gate.get("message"))
 
     try:
         assessment = _create_application_assessment(

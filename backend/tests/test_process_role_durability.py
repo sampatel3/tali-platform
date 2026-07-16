@@ -5,11 +5,20 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.domains.assessments_runtime.process_routes import process_role
+import pytest
+from fastapi import HTTPException
+
+from app.domains.assessments_runtime import process_routes as process_routes_module
+from app.domains.assessments_runtime.process_routes import (
+    process_role,
+    process_role_cancel,
+    process_role_status,
+)
 from app.models.background_job_run import (
     JOB_KIND_PROCESS_ROLE,
     BackgroundJobRun,
 )
+from app.models.job_hiring_team import JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
@@ -32,6 +41,8 @@ def _scope(db, suffix: str) -> tuple[Organization, Role, User]:
         email=f"process-{suffix}@example.test",
         hashed_password="x",
         full_name="Process Owner",
+        role="owner",
+        is_active=True,
     )
     db.add_all([role, user])
     db.commit()
@@ -189,3 +200,99 @@ def test_stale_worker_fails_without_paid_replay_and_unblocks_role(db):
     )
     assert replacement.created is True
     assert replacement.run.id != failed.id
+
+
+@pytest.mark.parametrize("membership", [None, "interviewer"])
+def test_process_start_and_cancel_require_control_permission(db, membership):
+    org, role, _owner = _scope(db, f"denied-{membership or 'unassigned'}")
+    actor = User(
+        organization_id=org.id,
+        email=f"process-actor-denied-{membership or 'unassigned'}@example.test",
+        hashed_password="x",
+        full_name="Denied Process User",
+        role="member",
+        is_active=True,
+    )
+    db.add(actor)
+    db.flush()
+    if membership is not None:
+        db.add(
+            JobHiringTeam(
+                organization_id=org.id,
+                role_id=role.id,
+                user_id=actor.id,
+                team_role=membership,
+            )
+        )
+    db.commit()
+
+    with patch(
+        "app.domains.assessments_runtime.process_routes.ensure_process_role_intent"
+    ) as ensure_intent:
+        with pytest.raises(HTTPException) as start_error:
+            process_role(
+                role.id,
+                payload={"fetch_cvs": True},
+                dry_run=False,
+                db=db,
+                current_user=actor,
+            )
+    assert start_error.value.status_code == 403
+    ensure_intent.assert_not_called()
+
+    with patch(
+        "app.domains.assessments_runtime.process_routes.request_process_cancel"
+    ) as request_cancel:
+        with pytest.raises(HTTPException) as cancel_error:
+            process_role_cancel(role.id, db=db, current_user=actor)
+    assert cancel_error.value.status_code == 403
+    request_cancel.assert_not_called()
+    assert (
+        db.query(BackgroundJobRun)
+        .filter_by(kind=JOB_KIND_PROCESS_ROLE, scope_id=role.id)
+        .count()
+        == 0
+    )
+
+
+def test_process_status_uses_view_permission_without_granting_control(db):
+    org, role, _owner = _scope(db, "viewer")
+    viewer = User(
+        organization_id=org.id,
+        email="process-readonly-viewer@example.test",
+        hashed_password="x",
+        full_name="Process Viewer",
+        role="member",
+        is_active=True,
+    )
+    other_org = Organization(name="Other Process", slug="other-process")
+    db.add_all([viewer, other_org])
+    db.flush()
+    outsider = User(
+        organization_id=other_org.id,
+        email="process-outsider@example.test",
+        hashed_password="x",
+        full_name="Process Outsider",
+        role="owner",
+        is_active=True,
+    )
+    db.add(outsider)
+    db.commit()
+
+    # The compatibility in-memory progress map is process-global; isolate this
+    # newly created role id from earlier tests that used a fresh SQLite DB.
+    process_routes_module._process_progress.pop(int(role.id), None)
+    with patch.object(
+        process_routes_module, "_read_process_progress", return_value=None
+    ):
+        visible = process_role_status(role.id, db=db, current_user=viewer)
+    assert visible["role_name"] == role.name
+    assert visible["status"] == "idle"
+
+    with patch(
+        "app.domains.assessments_runtime.process_routes.latest_process_role_run"
+    ) as latest_run:
+        with pytest.raises(HTTPException) as status_error:
+            process_role_status(role.id, db=db, current_user=outsider)
+    assert status_error.value.status_code == 403
+    latest_run.assert_not_called()

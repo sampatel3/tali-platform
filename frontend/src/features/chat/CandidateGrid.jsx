@@ -1,6 +1,8 @@
 import React from 'react';
+import { UsersRound } from 'lucide-react';
 
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
+import { ChatArtifact } from '../../shared/chat';
 
 const scoreClass = (s) => {
   if (s == null) return '';
@@ -19,13 +21,15 @@ const ScorePill = ({ label, value }) => {
   );
 };
 
-const CandidateCard = ({ row }) => (
-  <a
-    className="cp-cand"
-    href={row.frontend_url || '#'}
-    target="_blank"
-    rel="noopener noreferrer"
-  >
+const CandidateCard = ({ row }) => {
+  const Component = row.frontend_url ? 'a' : 'div';
+  const linkProps = row.frontend_url ? {
+    href: row.frontend_url,
+    target: '_blank',
+    rel: 'noopener noreferrer',
+  } : {};
+  return (
+    <Component className="cp-cand" {...linkProps}>
     <div className="cp-cand-name">{row.candidate_name || '(no name)'}</div>
     <div className="cp-cand-sub">
       {[row.candidate_position, row.candidate_location].filter(Boolean).join(' · ') ||
@@ -40,21 +44,36 @@ const CandidateCard = ({ row }) => (
       ) : null}
     </div>
     <ScoreProvenance provenance={row?.score_summary?.score_provenance} density="pill" />
-  </a>
-);
+    </Component>
+  );
+};
 
 // Renders candidate-grid results from search_applications /
 // nl_search_candidates / graph_search_candidates / compare_applications.
 const CandidateGrid = ({ rows }) => {
   if (!rows?.length) {
-    return <div className="cp-tool-args">No candidates matched.</div>;
+    return (
+      <ChatArtifact
+        eyebrow="Candidate results"
+        title="No candidates matched"
+        summary="Try widening the filters or asking for a different signal."
+        icon={UsersRound}
+      />
+    );
   }
   return (
-    <div className="cp-cand-grid">
-      {rows.map((r) => (
-        <CandidateCard key={r.application_id || r.candidate_id || r.frontend_url} row={r} />
-      ))}
-    </div>
+    <ChatArtifact
+      eyebrow="Candidate results"
+      title={`${rows.length} candidate${rows.length === 1 ? '' : 's'}`}
+      summary="Scores, provenance, and current pipeline stage"
+      icon={UsersRound}
+    >
+      <div className="cp-cand-grid">
+        {rows.map((r) => (
+          <CandidateCard key={r.application_id || r.candidate_id || r.frontend_url} row={r} />
+        ))}
+      </div>
+    </ChatArtifact>
   );
 };
 

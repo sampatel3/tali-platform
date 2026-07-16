@@ -70,15 +70,26 @@ vi.mock('./Thread', () => ({
   },
 }));
 
-vi.mock('./Sidebar', () => ({ default: () => null }));
+vi.mock('./Sidebar', async () => {
+  const { forwardRef } = await vi.importActual('react');
+  return {
+    default: forwardRef(function MockSidebar(_props, ref) {
+      return <div ref={ref} />;
+    }),
+  };
+});
 vi.mock('./EmptyState', () => ({ default: () => null }));
 vi.mock('./ConfirmDialog', () => ({ default: () => null }));
 vi.mock('./AgentConversation', () => ({ default: () => null }));
-vi.mock('../../shared/chat', () => ({
-  ChatComposer: () => null,
-  ChatMessage: ({ children }) => <div>{children}</div>,
-  ThinkingDots: () => <span>Loading</span>,
-}));
+vi.mock('../../shared/chat', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    ChatComposer: () => null,
+    ChatMessage: ({ children }) => <div>{children}</div>,
+    ThinkingDots: () => <span>Loading</span>,
+  };
+});
 vi.mock('../../shared/api', () => ({
   agentChat: { listConversations: vi.fn() },
 }));
