@@ -269,6 +269,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
+      {/* Resolved/processing cards (timeline, history filters) have no rec slab,
+          so the chip + "why?" never render there — the narrative must carry the
+          policy cause itself or those cards show no explanation at all. */}
       {!hideDecisionParts ? (
         <DecisionNarrative
           decision={decision}

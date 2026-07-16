@@ -202,6 +202,45 @@ def test_agent_explanation_reuses_canonical_legacy_reasoning_humanizer():
     )
 
 
+def test_agent_reasoning_is_humanized_in_explanation():
+    # The explanation and raw serializer share the canonical humanizer, so
+    # scorer keys, internal IDs, and key=value dumps cannot drift between them.
+    decision = SimpleNamespace(
+        decision_type="advance_to_interview",
+        evidence={"decision_source": "agent"},
+        reasoning=(
+            'Aiazuddin (1042) clears role_fit and pre_screen; externally '
+            'advanced (workable_stage = "Technical Interview"). Policy fires '
+            "on role_fit."
+        ),
+        model_version="agent",
+    )
+
+    result = build_decision_explanation(decision, None)
+
+    for token in ("role_fit", "pre_screen", "workable_stage", "(1042)"):
+        assert token not in result["summary"]
+    assert "role fit" in result["summary"]
+    assert 'already at "Technical Interview" in Workable' in result["summary"]
+    assert "Policy triggered" in result["summary"]
+
+
+def test_clean_agent_reasoning_passes_through_unchanged():
+    text = (
+        "Strong distributed-systems depth and a proven verification habit; "
+        "recommend advancing to the technical interview."
+    )
+    decision = SimpleNamespace(
+        decision_type="advance_to_interview",
+        evidence={"decision_source": "agent"},
+        reasoning=text,
+        model_version="agent",
+    )
+
+    result = build_decision_explanation(decision, None)
+    assert result["summary"] == text
+
+
 def test_policy_fallback_is_not_relabelled_as_candidate_summary():
     decision = _decision(
         reasoning="Deterministic policy: role-fit 42 vs threshold 55 -> reject",
