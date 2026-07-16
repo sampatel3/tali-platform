@@ -336,4 +336,5 @@ def test_beat_routes_high_priority_canary_to_each_required_queue():
         assert entry["task"] == "app.tasks.health_tasks.queue_worker_heartbeat"
         assert entry["args"] == [queue_name]
         assert entry["options"]["queue"] == queue_name
-        assert entry["options"]["priority"] == 9
+        assert entry["options"]["priority"] == 0
+    assert celery_app.conf.task_default_priority == 5
