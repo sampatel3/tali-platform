@@ -24,7 +24,6 @@ import {
   roleExternalJobLive,
   roleExternalJobState,
 } from '../jobs/atsType';
-import { conflictActorLabel, roleVersionConflict } from '../jobs/roleConcurrency';
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
@@ -32,19 +31,36 @@ import { JobSpec, renderJobSpec, stripPlaceholderLines } from './JobSpec';
 import { RequisitionDepartment } from './RequisitionDepartment';
 import { RequisitionConversation } from './RequisitionConversation';
 import { RequisitionHeaderActions } from './RequisitionHeaderActions';
+import {
+  isImageRequisitionAttachment as isImage,
+  REQUISITION_ATTACHMENT_ACCEPT,
+  requisitionAttachmentErrorDetail,
+  stageRequisitionAttachment as stageFile,
+  validateRequisitionAttachments,
+} from './requisitionAttachments';
+import {
+  errorDetail,
+  reloadRequisitionAfterRoleConflict,
+  requisitionGapLabels,
+  requisitionPublishBlockedMessage,
+} from './requisitionGuards';
 import { useRequisitionList } from './useRequisitionList';
 import './requisitions.css';
 
-const isImage = (file) => Boolean(file && (file.type || '').startsWith('image/'));
-
-// One staged attachment = the File + a stable id + (for images) an object URL
-// for the thumbnail preview. We revoke the URL when the chip is removed / sent.
-let attachSeq = 0;
-const stageFile = (file) => ({
-  id: `att_${Date.now()}_${attachSeq++}`,
-  file,
-  url: isImage(file) ? URL.createObjectURL(file) : null,
-});
+export {
+  isSupportedRequisitionAttachment,
+  REQUISITION_ATTACHMENT_ACCEPT,
+  REQUISITION_ATTACHMENT_MAX_BYTES,
+  REQUISITION_ATTACHMENT_MAX_FILES,
+  requisitionAttachmentErrorDetail,
+  validateRequisitionAttachments,
+} from './requisitionAttachments';
+export {
+  reloadRequisitionAfterRoleConflict,
+  requisitionGapLabels,
+  requisitionPublishBlockedMessage,
+  requisitionRoleConflictMessage,
+} from './requisitionGuards';
 
 const REQUISITION_STATUS_LABELS = Object.freeze({
   draft: 'Draft',
@@ -82,13 +98,6 @@ export const requisitionAtsBridgeModel = (provider, externalJobId = null) => {
   };
 };
 
-// Prefer the backend's human-readable detail over a generic fallback. Structured
-// Role-version conflicts are reconciled separately below.
-const errorDetail = (err, fallback) => {
-  const detail = err?.response?.data?.detail;
-  return typeof detail === 'string' && detail.trim() ? detail : fallback;
-};
-
 // Only the legacy explicit `applied` lifecycle is archived. Publishing creates
 // a linked job while leaving the brief in draft/submitted state, so that linked
 // requisition remains editable and can be re-published with Role.version.
@@ -99,42 +108,6 @@ export const isRequisitionBriefReadOnly = (brief) => (
 export const isRelatedRoleBrief = (brief) => (
   brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
 );
-
-export const requisitionRoleConflictMessage = (error, { latestLoaded = true } = {}) => {
-  const conflict = roleVersionConflict(error);
-  if (!conflict) return null;
-  const actor = conflictActorLabel(conflict.changedBy);
-  const prefix = `${conflict.message || 'This job changed before your update was saved.'}${actor ? ` Changed by ${actor}.` : ''}`;
-  return latestLoaded
-    ? `${prefix} Latest requisition loaded — review and try again.`
-    : `${prefix} The latest requisition could not be loaded; reload this page before retrying.`;
-};
-
-export const reloadRequisitionAfterRoleConflict = async (
-  briefId,
-  error,
-  fetchBrief = requisitionApi.get,
-) => {
-  if (!roleVersionConflict(error)) return null;
-  try {
-    const latestBrief = await fetchBrief(briefId);
-    if (!latestBrief || Number(latestBrief.id) !== Number(briefId)) {
-      throw new Error('Conflict refresh returned the wrong requisition');
-    }
-    return {
-      brief: latestBrief,
-      message: requisitionRoleConflictMessage(error, { latestLoaded: true }),
-    };
-  } catch {
-    // Never adopt only the conflict's Role.version. Without the authoritative
-    // RoleBrief, doing so would let a retry pass OCC with stale requisition
-    // fields (notably the whole custom_fields object).
-    return {
-      brief: null,
-      message: requisitionRoleConflictMessage(error, { latestLoaded: false }),
-    };
-  }
-};
 
 export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [searchParams] = useSearchParams();
@@ -313,8 +286,19 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
   // ---- attachments ----
   const addFiles = useCallback((files) => {
-    const staged = Array.from(files || []).filter(Boolean).map(stageFile);
-    if (staged.length) setAttachments((prev) => [...prev, ...staged]);
+    const validation = validateRequisitionAttachments(
+      attachmentsRef.current.map((attachment) => attachment.file),
+      files,
+    );
+    if (validation.error) {
+      setError(validation.error);
+      return;
+    }
+    const staged = validation.files.map(stageFile);
+    if (staged.length) {
+      setError('');
+      setAttachments((prev) => [...prev, ...staged]);
+    }
   }, []);
 
   const onFilePick = useCallback((e) => {
@@ -403,13 +387,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
           : prev));
         if (restore.composer) setComposer((prev) => (prev ? prev : restore.composer));
         if (restore.attachments?.length) setAttachments((prev) => [...restore.attachments, ...prev]);
-        if (!conflicted) setError('The agent couldn\'t process that message. Your text and attachments are back in the box — try sending again.');
+        if (!conflicted) setError(requisitionAttachmentErrorDetail(err, 'The agent couldn\'t process that message. Your text and attachments are back in the box — try sending again.'));
       } else {
         // Quick-reply / no restore: leave the echo in place so it can be resent.
         setBrief((prev) => (prev
           ? { ...prev, messages: (prev.messages || []).map((m) => (m.__pending ? { ...m, __pending: false } : m)) }
           : prev));
-        if (!conflicted) setError('The agent couldn\'t process that message. It\'s still shown above — try again.');
+        if (!conflicted) setError(requisitionAttachmentErrorDetail(err, 'The agent couldn\'t process that message. It\'s still shown above — try again.'));
       }
     } finally {
       setTurnInFlight(false);
@@ -503,8 +487,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
   // ---- click-to-edit a brief field ----
   const saveField = useCallback(async (key, value, isCustom) => {
-    if (!selectedId) return;
+    if (!selectedId) return false;
     setSavingKey(key);
+    setError('');
     try {
       // Custom fields share one JSON dict, so merge rather than replace —
       // sending just { [key]: value } would wipe sibling custom fields.
@@ -519,10 +504,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       );
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
       patchListRow(selectedId, updated || {}); // title/completeness may move
+      return true;
     } catch (err) {
       if (!(await handleVersionConflict(err))) {
         setError(errorDetail(err, 'Could not save that field. Try again.'));
       }
+      return false;
     } finally {
       setSavingKey(null);
     }
@@ -641,10 +628,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     if (!selectedId) return;
     // Frontend gate mirrors the backend required-field validation and gives the
     // recruiter an immediate, field-oriented message before the request.
-    const remaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
-    if (remaining > 0) {
-      const action = relatedRoleDraft ? 'create this related role' : 'publish';
-      setError(`${remaining} required field${remaining === 1 ? '' : 's'} still needed before you can ${action} — fill them in on the Brief tab or answer the agent.`);
+    const remainingGaps = Array.isArray(brief?.gaps) ? brief.gaps : [];
+    if (remainingGaps.length > 0) {
+      // Keep the control clickable: a click now takes the recruiter directly to
+      // the structured Brief and names every blocker instead of leaving them at
+      // a dead disabled button. The backend still enforces the same gate.
+      setRightTab('brief');
+      setError(requisitionPublishBlockedMessage(
+        remainingGaps,
+        { relatedRole: relatedRoleDraft },
+      ));
       return;
     }
     setPublishing(true);
@@ -888,9 +881,14 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // Block sends while a switch is in flight (brief null / loadingBrief) so a
   // reply can't post to the wrong requisition, and while a turn is in flight.
   const canSend = Boolean(brief) && !applied && !loadingBrief && (composer.trim() || attachments.length > 0) && !turnInFlight;
-  // Required fields still open → publish is gated (see publish()). Drives the
-  // Publish button's disabled state + hint.
-  const requiredRemaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
+  // Required fields still open → publish is gated inside publish(). The button
+  // remains clickable so it can reveal these exact labels and open the Brief.
+  const requiredGaps = Array.isArray(brief?.gaps) ? brief.gaps : [];
+  const requiredRemaining = requiredGaps.length;
+  const requiredLabels = requisitionGapLabels(requiredGaps);
+  const requiredFieldsHint = requiredLabels.length > 0
+    ? `Required: ${requiredLabels.join(', ')}`
+    : '';
   // The next required field the agent wants (gaps are ordered; first = current).
   const currentGap = (brief?.gaps || [])[0] || null;
 
@@ -1092,6 +1090,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     publishing={publishing}
                     refCode={refCode}
                     relatedRoleDraft={relatedRoleDraft}
+                    requiredFieldsHint={requiredFieldsHint}
                     requiredRemaining={requiredRemaining}
                   />
                 </div>
@@ -1126,6 +1125,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                 {/* Conversation */}
                 <RequisitionConversation
                   applied={applied}
+                  attachmentAccept={REQUISITION_ATTACHMENT_ACCEPT}
                   attachments={attachments}
                   canSend={canSend}
                   composer={composer}

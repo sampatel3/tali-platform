@@ -1,35 +1,4 @@
-"""Conversational requisition intake — one chat turn at a time (the TURN ENGINE).
-
-The recruiter / hiring manager *talks* to Taali to capture a complete hiring
-spec. Each turn:
-
-  1. append the user message (+ attachment metadata) to ``brief.messages``;
-  2. run the deterministic GAP ENGINE against the org's spec template
-     (``requisition_template_service``) — which required fields are still empty;
-  3. make ONE metered, forced-tool-use LLM call (vision-capable: images become
-     base64 blocks, transcripts/PDFs are decoded into the user text) that both
-     CAPTURES field values and writes a conversational reply;
-  4. apply the captured values to brief columns / ``custom_fields`` with
-     per-template-field-type coercion (never blanking previously-captured data),
-     recompute ``completeness``, append the assistant reply, persist
-     ``open_questions`` into ``agent_state``;
-  5. return ``{brief, reply, messages, gaps}`` (gaps recomputed after applying).
-
-The pure pieces live in cohesive siblings and are re-exported here so the public
-import path (``app.services.requisition_chat_service``) is unchanged:
-
-  * ``requisition_chat_capture`` — the capture schema, gap engine, completeness,
-    value coercion/apply, and the deterministic single-answer path.
-  * ``requisition_chat_prompt`` — attachment handling + LLM input/system-prompt
-    assembly.
-  * ``requisition_chat_warm_start`` — recency-biased prefill + the opening turn.
-
-This module keeps the two LLM-calling orchestrators (``run_chat_turn`` and
-``draft_responsibilities``) plus ``generate_structured`` / ``get_metered_client``
-as module-level names, so the metered Anthropic call is billed + logged and the
-existing monkeypatch contract (patch ``…requisition_chat_service.generate_structured``)
-keeps working.
-"""
+"""Metered chat orchestrators; deterministic helpers are re-exported here."""
 from __future__ import annotations
 
 import json
@@ -43,12 +12,18 @@ from ..llm.structured import generate_structured
 from ..models.role_brief import RoleBrief
 from ..platform.config import settings
 from .claude_client_resolver import get_metered_client
+from .requisition_chat_grounding import ground_assistant_reply as _ground_assistant_reply
+from .requisition_chat_grounding import unreadable_attachment_result as _unreadable_attachment_result
+from .requisition_chat_source import (
+    mark_source_hydrated as _mark_source_hydrated,
+    persist_source_material as _persist_source_material,
+    source_material_for_transcript as _source_material_for_transcript,
+    source_needs_hydration as _source_needs_hydration,
+)
 from .requisition_template_service import resolve_template
 from .role_brief_service import update_brief_fields
-
-# Re-exported deterministic pieces — the public API of this module is composed
-# from the cohesive siblings (the import path stays stable for every caller).
 from .requisition_chat_capture import (  # noqa: F401
+    BriefFieldChange,
     ChatCapture,
     _is_empty,
     _resolve_suggested_replies,
@@ -63,9 +38,12 @@ from .requisition_chat_prompt import (  # noqa: F401
     ChatAttachment,
     _captured_brief_values,
     _history_for_llm,
+    attachment_content_has_warning,
     build_chat_system_prompt,
     build_persisted_user_message,
+    build_recoverable_source_material,
     build_user_turn_content,
+    prepare_user_turn_content,
 )
 from .requisition_chat_warm_start import (  # noqa: F401
     recent_role_titles,
@@ -75,20 +53,15 @@ from .requisition_chat_warm_start import (  # noqa: F401
 )
 
 _CHAT_FEATURE = "requisition_intake_chat"
-_MAX_TOKENS = 4000
+_MAX_TOKENS = 6000
 _FOCUS_GAP_COUNT = 3
-
-# AI-draft "What you'll do" — how many concrete responsibility statements we ask
-# for, and the custom_fields key they land in (no RoleBrief column → custom).
 _RESPONSIBILITIES_KEY = "responsibilities"
 _RESPONSIBILITIES_MIN = 6
 _RESPONSIBILITIES_MAX = 10
 _DRAFT_MAX_TOKENS = 1200
 
-# The public surface — every name a caller/test imports from this module path.
-# Listing them keeps the re-exports explicit (and marks them "used" for linters).
 __all__ = [
-    # capture
+    "BriefFieldChange",
     "ChatCapture",
     "apply_capture",
     "compute_completeness",
@@ -97,18 +70,17 @@ __all__ = [
     "opening_message",
     "record_answer",
     "_resolve_suggested_replies",
-    # prompt
     "ChatAttachment",
     "build_chat_system_prompt",
     "build_persisted_user_message",
+    "build_recoverable_source_material",
     "build_user_turn_content",
+    "prepare_user_turn_content",
     "_captured_brief_values",
-    # warm-start
     "recent_role_titles",
     "seed_opening_message",
     "warm_start_fields",
     "warm_start_from_roles",
-    # turn engine (this module)
     "ResponsibilitiesDraft",
     "run_chat_turn",
     "draft_responsibilities",
@@ -122,9 +94,6 @@ class ResponsibilitiesDraft(BaseModel):
     responsibilities: list[str]
 
 
-# --------------------------------------------------------------------------- #
-# The orchestrated chat turn.
-# --------------------------------------------------------------------------- #
 def run_chat_turn(
     db: Session,
     brief: RoleBrief,
@@ -137,61 +106,69 @@ def run_chat_turn(
     feature: str = _CHAT_FEATURE,
     client_org_name: Optional[str] = None,
     transcript_attr: str = "messages",
+    source_pre_hydrated: bool = False,
 ):
-    """Run ONE chat turn end-to-end and fold the result into the brief.
-
-    ``transcript_attr`` selects WHICH transcript this turn reads + appends to:
-    ``messages`` (recruiter, default) or ``client_messages`` (the public
-    hiring-manager intake). They are kept separate so the manager never sees the
-    recruiter's raw words; both fold captures into the SAME structured brief
-    fields, so the agent stays informed on either side.
-
-    Returns the ``StructuredResult`` (``.ok`` / ``.value`` / ``.error_reason``).
-    On success the brief is mutated (messages appended, fields applied,
-    completeness recomputed) and flushed; the caller owns the commit.
-
-    ``feature`` is the metering bucket (defaults to the recruiter intake chat;
-    the no-login CLIENT intake passes ``requisition_client_intake``).
-    ``client_org_name``, when set, switches the system prompt to the
-    CLIENT-FRAMED variant (consultancy's client describing the role, no pay
-    questions) — pass it together with a client-scoped ``template``.
-    """
+    """Run one intake turn, isolating the selected transcript; caller commits."""
     attachments = attachments or []
     if template is None:
         template = resolve_template(_org_of(brief))
     if brief.source_kind is None:
         update_brief_fields(db, brief, source_kind="conversational")
 
-    # 1. Append the user message (+ attachment metadata) to the SELECTED
-    # transcript (recruiter ``messages`` or hiring-manager ``client_messages``).
+    source_material_before_turn = _source_material_for_transcript(brief, transcript_attr)
+    turn_content, new_source_material = prepare_user_turn_content(message, attachments)
+    _persist_source_material(
+        db,
+        brief,
+        new_source_material,
+        transcript_attr=transcript_attr,
+    )
+    source_material = _source_material_for_transcript(brief, transcript_attr)
+    system_source_material = source_material_before_turn if new_source_material else source_material
+    has_image_content = isinstance(turn_content, list) and any(
+        isinstance(block, dict) and block.get("type") == "image"
+        for block in turn_content
+    )
+    readable_attachment = bool(new_source_material) or has_image_content
+    attachment_error = bool(attachments) and not readable_attachment
+    attachment_warning = bool(attachments) and attachment_content_has_warning(
+        turn_content
+    )
+    document_turn = readable_attachment or _source_needs_hydration(
+        brief,
+        source_material,
+        transcript_attr,
+    )
     history_before = list(getattr(brief, transcript_attr, None) or [])
     persisted_user = build_persisted_user_message(message, attachments)
     setattr(brief, transcript_attr, history_before + [persisted_user])
+    if attachment_error and not str(message or "").strip():
+        return _unreadable_attachment_result(db, brief, transcript_attr=transcript_attr)
 
-    # 2. Deterministic gap engine.
     gaps = compute_gaps(brief, template)
-    focus = gaps[:_FOCUS_GAP_COUNT]
+    focus = gaps if document_turn else gaps[:_FOCUS_GAP_COUNT]
 
-    # 3. ONE metered, forced-tool-use LLM call (vision-capable).
     if client is None:
         client = get_metered_client(organization_id=brief.organization_id)
-    # Use the FAST chat model (CLAUDE_CHAT_MODEL = Haiku, ~5× faster round-trip)
-    # rather than resolved_claude_model — on prod the latter is the recruitment
-    # agent's Sonnet (reasoning quality), which made each intake turn feel slow.
+    state = dict(brief.agent_state or {})
+    intent_sensitive = bool(
+        brief.source_role_id
+        or state.get("jd_override")
+        or state.get("pending_job_spec_source")
+        or document_turn
+    )
     resolved_model = (
         model
-        or (settings.CLAUDE_CHAT_MODEL or "").strip()
+        or (
+            settings.resolved_claude_model
+            if intent_sensitive
+            else (settings.CLAUDE_CHAT_MODEL or "").strip()
+        )
         or settings.resolved_claude_model
     )
-    # Warm-start context: the org's recent role titles (excluding this brief)
-    # so the agent can prefill sensibly.
     recent_titles = recent_role_titles(
         db, brief.organization_id, exclude_brief_id=brief.id
     )
-    # Requirements GUIDANCE: hand the agent the most similar prior role's
-    # requirements as a reference so its questions are sharper (captured live,
-    # never auto-filled). Recruiter-side only — the no-login CLIENT intake must
-    # never see the consultancy's other roles (client_org_name set => skip).
     requirements_guidance = None
     if client_org_name is None:
         from .requisition_similar_service import similar_requirements_guidance
@@ -207,13 +184,12 @@ def run_chat_turn(
         client_org_name=client_org_name,
         requirements_guidance=requirements_guidance,
         transcript=getattr(brief, transcript_attr, None),
+        source_material=system_source_material,
+        document_turn=document_turn,
     )
-    # LLM history = ONLY the selected transcript (the manager's own thread for
-    # the client intake), so the recruiter's raw words never reach the model.
+    captured_before = _captured_brief_values(brief, template)
     llm_messages = _history_for_llm(history_before)
-    llm_messages.append(
-        {"role": "user", "content": build_user_turn_content(message, attachments)}
-    )
+    llm_messages.append({"role": "user", "content": turn_content})
 
     result = generate_structured(
         client,
@@ -233,10 +209,55 @@ def run_chat_turn(
     )
 
     if result.ok and result.value is not None:
-        # 4. Apply captured values + recompute completeness.
-        apply_capture(db, brief, result.value, template)
-        # Append the assistant reply to the SELECTED transcript.
-        reply = (result.value.assistant_reply or "").strip()
+        change_mode = str(result.value.change_mode or "amend")
+        if change_mode == "clarify" and new_source_material and not result.value.pending_job_spec:
+            result.value.pending_job_spec = new_source_material
+        if change_mode == "clarify" and not result.value.suggested_replies:
+            result.value.suggested_replies = [
+                "Replace current draft",
+                "Apply differences only",
+            ]
+        apply_capture(
+            db,
+            brief,
+            result.value,
+            template,
+            transcript_attr=transcript_attr,
+        )
+        captured_after = _captured_brief_values(brief, template)
+        post_capture_gaps = compute_gaps(brief, template)
+        capture_changed = captured_after != captured_before
+        canonical_supplied = bool(str(result.value.canonical_job_spec or "").strip())
+        changed_keys = sorted(set(captured_before) | set(captured_after), key=str)
+        changed_keys = [
+            key for key in changed_keys if captured_before.get(key) != captured_after.get(key)
+        ]
+        if change_mode != "clarify" and (
+            capture_changed or canonical_supplied or not post_capture_gaps
+        ):
+            _mark_source_hydrated(
+                db,
+                brief,
+                _source_material_for_transcript(brief, transcript_attr),
+                transcript_attr,
+            )
+        reply, overridden = _ground_assistant_reply(
+            brief=brief,
+            template=template,
+            message=message,
+            model_reply=result.value.assistant_reply,
+            document_turn=document_turn,
+            attachment_error=attachment_error,
+            attachment_warning=attachment_warning,
+            source_updated=source_pre_hydrated or capture_changed or canonical_supplied,
+            change_mode=change_mode,
+            changed_keys=changed_keys,
+            client_org_name=client_org_name,
+        )
+        result.value.assistant_reply = reply
+        if overridden:
+            result.value.suggested_replies = []
+            result.value.suggested_multi = False
         setattr(brief, transcript_attr, list(getattr(brief, transcript_attr) or []) + [
             {
                 "role": "assistant",
@@ -245,10 +266,9 @@ def run_chat_turn(
                 "suggested_replies": _resolve_suggested_replies(
                     result.value, brief, template
                 ),
-                # Whether those replies are multi-select (pick several + send).
-                # Rides on the message so both the live chat response and a later
-                # GET snapshot can render the right chip behaviour.
                 "suggested_multi": bool(getattr(result.value, "suggested_multi", False)),
+                "change_mode": change_mode,
+                "changed_fields": changed_keys,
             }
         ])
         db.flush()
@@ -271,9 +291,6 @@ def _org_of(brief: RoleBrief):
     )
 
 
-# --------------------------------------------------------------------------- #
-# AI-draft the JD's "What you'll do" responsibilities list.
-# --------------------------------------------------------------------------- #
 def _spec_context_for_draft(brief: RoleBrief) -> dict[str, Any]:
     """The captured spec fields the responsibilities draft is grounded in
     (title, summary, seniority, department, must_haves, preferred). Only
@@ -310,6 +327,7 @@ def draft_responsibilities(
     client: Any = None,
     model: Optional[str] = None,
     feature: str = _CHAT_FEATURE,
+    template: Optional[dict[str, Any]] = None,
 ):
     """AI-draft the JD's "What you'll do" list and store it into
     ``custom_fields.responsibilities``.
@@ -325,9 +343,6 @@ def draft_responsibilities(
     """
     if client is None:
         client = get_metered_client(organization_id=brief.organization_id)
-    # FAST chat model (Haiku) — same rationale as run_chat_turn: the resolved
-    # model is the recruitment agent's Sonnet on prod, which is overkill + slow
-    # for a one-shot draft.
     resolved_model = (
         model
         or (settings.CLAUDE_CHAT_MODEL or "").strip()
@@ -364,6 +379,20 @@ def draft_responsibilities(
         custom = dict(brief.custom_fields or {})
         custom[_RESPONSIBILITIES_KEY] = statements
         update_brief_fields(db, brief, custom_fields=custom)
+        state = dict(brief.agent_state or {})
+        if state.get("jd_override"):
+            state.pop("jd_override", None)
+            state["canonical_spec_mode"] = "structured"
+            try:
+                revision = int(state.get("job_spec_revision") or 0) + 1
+            except (TypeError, ValueError):
+                revision = 1
+            state["job_spec_revision"] = revision
+            state["job_spec_last_change_mode"] = "draft_responsibilities"
+            state.pop("pending_job_spec_source", None)
+            update_brief_fields(db, brief, agent_state=state)
+        resolved_template = template or resolve_template(_org_of(brief))
+        brief.completeness = compute_completeness(brief, resolved_template)
         db.flush()
     return result
 
@@ -374,8 +403,6 @@ class CompanyBlurbDraft(BaseModel):
     company_description: str = ""
 
 
-# Metering bucket for the one-time company-blurb extraction (single-shot, like
-# the intake-agent extraction). Recent role specs we feed the extractor.
 _COMPANY_BLURB_FEATURE = "requisition_intake"
 _COMPANY_BLURB_SOURCE_ROLES = 3
 _COMPANY_BLURB_MAX_TOKENS = 400

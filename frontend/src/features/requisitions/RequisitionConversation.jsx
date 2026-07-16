@@ -3,8 +3,6 @@ import { FileText, Paperclip, X } from 'lucide-react';
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { MotionSpinner } from '../../shared/motion';
 
-const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
-
 function RequisitionTurn({ message }) {
   const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   if (message.role === 'user') {
@@ -46,6 +44,7 @@ function RequisitionTurn({ message }) {
 
 export function RequisitionConversation({
   applied,
+  attachmentAccept,
   attachments,
   canSend,
   composer,
@@ -115,11 +114,13 @@ export function RequisitionConversation({
             >
               <Paperclip size={14} /> Attach
             </button>
-            <span className="rq-attach-hint">transcript or JD screenshot · or paste an image</span>
+            <span className="rq-attach-hint">
+              JD or transcript · PDF, DOCX, text, or image · max 6 files, 15 MB each
+            </span>
             <input
               ref={fileInputRef}
               type="file"
-              accept={ACCEPT}
+              accept={attachmentAccept}
               multiple
               hidden
               onChange={onFilePick}

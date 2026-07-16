@@ -9,7 +9,9 @@ from __future__ import annotations
 import io
 
 from sqlalchemy import event
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from app.domains.outreach import prospect_routes
 from tests.conftest import auth_headers, create_candidate_via_api
 
 
@@ -192,6 +194,33 @@ def test_import_row_cap_413(client):
         headers=headers,
     )
     assert resp.status_code == 413
+
+
+def test_import_byte_cap_bounds_read_before_csv_or_database_work(
+    client, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    seen_sizes = []
+
+    async def _oversized_read(_upload, size=-1):
+        seen_sizes.append(size)
+        return b"x" * (prospect_routes._MAX_IMPORT_BYTES + 1)
+
+    def _boom(*args, **kwargs):  # pragma: no cover - byte cap must win
+        raise AssertionError("oversized CSV must not reach parsing or database work")
+
+    monkeypatch.setattr(StarletteUploadFile, "read", _oversized_read)
+    monkeypatch.setattr(prospect_routes.csv, "DictReader", _boom)
+    monkeypatch.setattr(prospect_routes, "normalize_email", _boom)
+
+    resp = client.post(
+        "/api/v1/prospects/import",
+        files={"file": _csv_bytes("full_name,email\nAlice,alice@example.com\n")},
+        headers=headers,
+    )
+
+    assert resp.status_code == 413, resp.text
+    assert seen_sizes == [prospect_routes._MAX_IMPORT_BYTES + 1]
 
 
 def test_import_missing_required_columns_400(client):

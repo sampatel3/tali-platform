@@ -3,11 +3,28 @@ serializer extras (custom_fields/messages/completeness/gaps), settings template
 GET/PUT. The LLM is monkeypatched at the service module (no Anthropic)."""
 import io
 
+import pytest
+
 from app.llm.structured import StructuredResult
+from app.domains.assessments_runtime import requisition_routes as requisition_routes_module
+from app.models.role import Role
+from app.models.role_brief import RoleBrief
+from app.models.user import User
 from app.platform.config import settings
 from app.services import requisition_chat_service as chat
 from app.services.requisition_chat_service import ChatCapture, ResponsibilitiesDraft
 from tests.conftest import auth_headers
+
+
+LEGACY_RELATED_SPEC = """# AI Engineer
+
+## Key responsibilities
+- Build production RAG services.
+- Own model reliability and observability.
+
+## Requirements
+- Python
+"""
 
 
 def test_create_requisition_seeds_opening_message_and_serializer_extras(client):
@@ -55,7 +72,9 @@ def test_chat_endpoint_multipart_applies_and_returns_contract(client, monkeypatc
     body = resp.json()
     # Top-level contract: brief / reply / messages / gaps / suggested_replies.
     assert set(body.keys()) == {"brief", "reply", "messages", "gaps", "suggested_replies"}
-    assert body["reply"].startswith("Onsite or remote")
+    assert body["reply"].startswith("I've amended the draft.")
+    assert "Updated: Must-haves, Title" in body["reply"]
+    assert "What domain or industry" in body["reply"]
     # The model gave no suggested_replies → deterministic fallback to the next
     # gap's options. With title captured, the next gap is `domain` (a free-text
     # field), so there are no tappable options — the manager types it.
@@ -71,6 +90,84 @@ def test_chat_endpoint_multipart_applies_and_returns_contract(client, monkeypatc
     assert "title" not in gap_keys and "workplace_type" in gap_keys
 
 
+def test_existing_related_draft_is_read_only_hydrated_then_persisted_by_chat(
+    client, db, monkeypatch
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    source = Role(
+        organization_id=user.organization_id,
+        name="AI Engineer",
+        source="workable",
+        workable_job_id="legacy-related-source",
+        job_spec_text=LEGACY_RELATED_SPEC,
+    )
+    db.add(source)
+    db.flush()
+    legacy = RoleBrief(
+        organization_id=user.organization_id,
+        created_by_user_id=user.id,
+        source_role_id=source.id,
+        title="AI Engineer · Related",
+        agent_state={"jd_override": LEGACY_RELATED_SPEC},
+        custom_fields={},
+    )
+    db.add(legacy)
+    db.commit()
+    brief_id = legacy.id
+
+    # GET stays read-only but its compatibility view immediately removes the
+    # false responsibilities blocker for drafts created before the fix.
+    viewed = client.get(
+        f"/api/v1/requisitions/{brief_id}", headers=headers
+    )
+    assert viewed.status_code == 200, viewed.text
+    assert viewed.json()["custom_fields"]["responsibilities"] == [
+        "Build production RAG services.",
+        "Own model reliability and observability.",
+    ]
+    db.expire_all()
+    stored = db.get(RoleBrief, brief_id)
+    assert stored.raw_input is None
+    assert not (stored.custom_fields or {}).get("responsibilities")
+
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+    seen = {}
+
+    def fake_generate_structured(c, **kwargs):
+        seen["system"] = kwargs["system"]
+        return StructuredResult(
+            value=ChatCapture(
+                assistant_reply="What else should change?",
+                responsibilities=[
+                    "Build production RAG services.",
+                    "Own model reliability and observability.",
+                ],
+            ),
+            ok=True,
+        )
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    chatted = client.post(
+        f"/api/v1/requisitions/{brief_id}/chat",
+        data={"message": "Use the attached job spec first"},
+        headers=headers,
+    )
+    assert chatted.status_code == 200, chatted.text
+    assert "EXTRACT EXHAUSTIVELY" in seen["system"]
+    assert LEGACY_RELATED_SPEC.strip() in seen["system"]
+    db.expire_all()
+    stored = db.get(RoleBrief, brief_id)
+    assert stored.raw_input == LEGACY_RELATED_SPEC.strip()
+    assert stored.custom_fields["responsibilities"] == [
+        "Build production RAG services.",
+        "Own model reliability and observability.",
+    ]
+    # The deterministic legacy backfill alone must not mark the full saved JD
+    # as extracted; a later turn should still ask the model to hydrate its gaps.
+    assert "recruiter_source_hydration_digest" not in (stored.agent_state or {})
+
+
 def test_chat_endpoint_requires_message_or_file(client):
     headers, _ = auth_headers(client)
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
@@ -78,6 +175,87 @@ def test_chat_endpoint_requires_message_or_file(client):
         f"/api/v1/requisitions/{brief_id}/chat", data={"message": "   "}, headers=headers
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "content"),
+    [
+        ("renamed.png", "image/heic", b"not really a png"),
+        ("forged.png", "image/png", b"not really a png"),
+    ],
+)
+def test_chat_endpoint_rejects_invalid_attachment_before_provider_call(
+    client, monkeypatch, filename, content_type, content
+):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+
+    def _boom(*args, **kwargs):  # pragma: no cover - rejection must win
+        raise AssertionError("provider-backed chat must not run for a rejected upload")
+
+    monkeypatch.setattr(requisition_routes_module, "run_chat_turn", _boom)
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/chat",
+        files=[
+            (
+                "files",
+                (filename, io.BytesIO(content), content_type),
+            )
+        ],
+        headers=headers,
+    )
+
+    assert resp.status_code == 415, resp.text
+    assert filename in resp.json()["detail"]
+
+
+def test_chat_replace_or_amend_clarification_keeps_pending_spec_internal(
+    client, db, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Current role", "jd_override": "CURRENT JD"},
+        headers=headers,
+    )
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(
+                assistant_reply="Replace or amend?",
+                change_mode="clarify",
+                title="Must not apply",
+            ),
+            ok=True,
+        ),
+    )
+
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/chat",
+        data={"message": "Here is a different specification"},
+        files=[
+            (
+                "files",
+                ("proposal.txt", io.BytesIO(b"# Different role\n\nMust have Go."), "text/plain"),
+            )
+        ],
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["brief"]["title"] == "Current role"
+    assert body["suggested_replies"] == [
+        "Replace current draft",
+        "Apply differences only",
+    ]
+    assert "pending_job_spec_source" not in body["brief"]["agent_state"]
+    db.expire_all()
+    stored = db.get(RoleBrief, brief_id)
+    assert "Must have Go" in stored.agent_state["pending_job_spec_source"]
 
 
 # --------------------------------------------------------------------------- #
@@ -206,9 +384,9 @@ def test_answer_endpoint_unknown_field_key_422(client):
     assert [m["role"] for m in after["messages"]] == ["assistant"]
 
 
-def test_answer_endpoint_completeness_reaches_100_then_publish_nudge(client):
+def test_answer_endpoint_completeness_reaches_100_then_review_nudge(client):
     """Answering every required field drives completeness to 100 and the reply
-    becomes the publish nudge with no options."""
+    becomes a review-ready nudge with no options."""
     headers, _ = auth_headers(client)
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
     # Required fields in the default template: title, domain, seniority, summary,
@@ -239,7 +417,9 @@ def test_answer_endpoint_completeness_reaches_100_then_publish_nudge(client):
         ).json()
     assert body["gaps"] == []
     assert body["brief"]["completeness"] == 100
-    assert body["reply"].endswith("That's everything I need — want to publish this?")
+    assert body["reply"].endswith(
+        "That's everything I need — the brief is ready for review."
+    )
     assert body["suggested_replies"] == []
 
 
@@ -254,7 +434,12 @@ def test_draft_responsibilities_lands_in_custom_fields_and_threads_metering(
     # Capture a bit of spec so the draft has something to ground on.
     client.patch(
         f"/api/v1/requisitions/{brief_id}",
-        json={"title": "Backend Engineer", "seniority": "Senior", "must_haves": ["Python"]},
+        json={
+            "title": "Backend Engineer",
+            "seniority": "Senior",
+            "must_haves": ["Python"],
+            "jd_override": "# Backend Engineer\n\nOld responsibilities.",
+        },
         headers=headers,
     )
 
@@ -289,8 +474,12 @@ def test_draft_responsibilities_lands_in_custom_fields_and_threads_metering(
     body = resp.json()
     # The drafted list landed in custom_fields.responsibilities...
     assert body["custom_fields"]["responsibilities"] == drafted
+    assert "responsibilities" not in [gap["key"] for gap in body["gaps"]]
     # ...and the serialized brief is the full requisition shape (gaps/messages).
     assert "gaps" in body and "messages" in body and body["title"] == "Backend Engineer"
+    assert body["jd_override"] is None
+    assert body["agent_state"]["canonical_spec_mode"] == "structured"
+    assert body["agent_state"]["job_spec_last_change_mode"] == "draft_responsibilities"
 
     # Metering + call shape threaded correctly.
     assert captured["use_tool_use"] is True
@@ -407,6 +596,30 @@ def test_patch_requisition_accepts_custom_fields(client):
     assert resp.json()["custom_fields"] == {"visa_sponsorship": "Yes"}
 
 
+def test_patch_requisition_recomputes_live_completeness(client):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+
+    body = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={
+            "title": "AI Engineer",
+            "custom_fields": {"domain": "Banking", "urgency": "High"},
+        },
+        headers=headers,
+    ).json()
+
+    # Three of eleven default required fields are now filled.
+    assert body["completeness"] == round(100 * 3 / 11)
+    gap_keys = [gap["key"] for gap in body["gaps"]]
+    assert "title" not in gap_keys
+    assert "domain" not in gap_keys
+    assert "urgency" not in gap_keys
+    # GET derives the same percentage from the same live snapshot.
+    got = client.get(f"/api/v1/requisitions/{brief_id}", headers=headers).json()
+    assert got["completeness"] == body["completeness"]
+
+
 # --------------------------------------------------------------------------- #
 # Warm-start: a 2nd requisition prefills from the org's recent specs
 # --------------------------------------------------------------------------- #
@@ -435,10 +648,11 @@ def test_create_requisition_warm_starts_from_recent_spec(client):
     # Salary currency still seeded to AED (unaffected by warm-start).
     assert body["salary_currency"] == "AED"
     # The prefilled required fields count toward the live gap engine — they're
-    # no longer listed as gaps (completeness itself stays 0 until the first chat
-    # turn, matching the create contract).
+    # no longer listed as gaps, and derived completeness reflects those warm
+    # values immediately.
     gap_keys = [g["key"] for g in body["gaps"]]
     assert "workplace_type" not in gap_keys and "employment_type" not in gap_keys
+    assert body["completeness"] == round(100 * 2 / 11)
 
 
 def test_create_first_requisition_has_no_warm_start(client):
@@ -479,6 +693,9 @@ def test_jd_override_round_trips_and_clears_preserving_agent_state(client):
     assert resp.json()["agent_state"]["open_questions"] == ["salary range?"]
     # ``jd_override`` is stored inside agent_state, not as a stray column.
     assert resp.json()["agent_state"]["jd_override"] == "# Senior Engineer\n\nHand-edited JD body."
+    assert resp.json()["agent_state"]["canonical_spec_mode"] == "verbatim"
+    assert resp.json()["agent_state"]["job_spec_revision"] == 1
+    assert resp.json()["agent_state"]["job_spec_last_change_mode"] == "manual"
 
     # Serializer returns it on GET too.
     assert client.get(
@@ -492,6 +709,8 @@ def test_jd_override_round_trips_and_clears_preserving_agent_state(client):
     assert cleared["jd_override"] is None
     assert "jd_override" not in cleared["agent_state"]
     assert cleared["agent_state"]["open_questions"] == ["salary range?"]
+    assert cleared["agent_state"]["canonical_spec_mode"] == "structured"
+    assert cleared["agent_state"]["job_spec_revision"] == 2
 
 
 def test_jd_override_alongside_other_field_edits(client):
@@ -506,6 +725,18 @@ def test_jd_override_alongside_other_field_edits(client):
     assert resp.status_code == 200, resp.text
     assert resp.json()["title"] == "Eng"  # column edit still applied
     assert resp.json()["jd_override"] == "Custom JD"
+
+    # A later Brief-only edit must not leave the old verbatim JD active.
+    revised = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Senior Eng"},
+        headers=headers,
+    )
+    assert revised.status_code == 200, revised.text
+    assert revised.json()["title"] == "Senior Eng"
+    assert revised.json()["jd_override"] is None
+    assert revised.json()["agent_state"]["canonical_spec_mode"] == "structured"
+    assert revised.json()["agent_state"]["job_spec_last_change_mode"] == "manual_brief"
 
 
 def test_company_blurb_settings_get_put_generate_and_serializer_fallback(client):

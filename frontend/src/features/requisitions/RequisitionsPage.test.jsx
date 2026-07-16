@@ -1,16 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
+import { RequisitionHeaderActions } from './RequisitionHeaderActions';
 import {
   buildRequisitionAtsSpec,
   isRelatedRoleBrief,
   isPublishedRequisition,
   isRequisitionBriefReadOnly,
+  isSupportedRequisitionAttachment,
+  REQUISITION_ATTACHMENT_ACCEPT,
+  REQUISITION_ATTACHMENT_MAX_BYTES,
   reloadRequisitionAfterRoleConflict,
   requisitionAtsBridgeModel,
   requisitionAtsProvider,
+  requisitionGapLabels,
+  requisitionPublishBlockedMessage,
   requisitionRoleConflictMessage,
   requisitionStatusLabel,
+  validateRequisitionAttachments,
 } from './RequisitionsPage';
+
+const attachment = (name, type, size = 100) => ({ name, type, size });
 
 describe('requisition lifecycle labels', () => {
   it('maps backend submitted/applied states to recruiter-facing lifecycle language', () => {
@@ -135,4 +146,135 @@ describe('requisition ATS bridge', () => {
     expect(unlinked.linked).toBe(false);
     expect(unlinked.copyLabel).toBe(`Optional: copy for ${label}`);
   });
+});
+
+describe('requisition attachment guardrails', () => {
+  it('offers DOCX and exact supported image formats without broad image/*', () => {
+    expect(REQUISITION_ATTACHMENT_ACCEPT).toContain('.docx');
+    expect(REQUISITION_ATTACHMENT_ACCEPT).toContain('.webp');
+    expect(REQUISITION_ATTACHMENT_ACCEPT).not.toContain('image/*');
+
+    expect(isSupportedRequisitionAttachment(attachment(
+      'job-spec.docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ))).toBe(true);
+    expect(isSupportedRequisitionAttachment(attachment('role.webp', 'image/webp'))).toBe(true);
+    expect(isSupportedRequisitionAttachment(attachment('role.svg', 'image/svg+xml'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('role.heic', 'image/heic'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('renamed.pdf', 'image/heic'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('renamed.jpg', 'application/pdf'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('unknown.pdf', 'application/octet-stream'))).toBe(true);
+    expect(isSupportedRequisitionAttachment(attachment('transcript.srt', 'application/x-subrip'))).toBe(true);
+  });
+
+  it('matches the backend six-file and 15 MB per-file limits', () => {
+    const existing = Array.from({ length: 5 }, (_, index) => attachment(`note-${index}.txt`, 'text/plain'));
+    const tooMany = validateRequisitionAttachments(existing, [
+      attachment('six.txt', 'text/plain'),
+      attachment('seven.txt', 'text/plain'),
+    ]);
+    expect(tooMany.files).toEqual([]);
+    expect(tooMany.error).toContain('up to 6 files');
+
+    const oversized = validateRequisitionAttachments([], [
+      attachment('large.pdf', 'application/pdf', REQUISITION_ATTACHMENT_MAX_BYTES + 1),
+    ]);
+    expect(oversized.files).toEqual([]);
+    expect(oversized.error).toContain('large.pdf');
+    expect(oversized.error).toContain('15 MB');
+  });
+
+  it('rejects unsupported selections and preserves a valid selection as-is', () => {
+    const svg = attachment('diagram.svg', 'image/svg+xml');
+    expect(validateRequisitionAttachments([], [svg]).error).toContain('isn\'t supported');
+
+    const files = [
+      attachment('spec.pdf', 'application/pdf'),
+      attachment('notes.md', 'text/markdown'),
+    ];
+    expect(validateRequisitionAttachments([], files)).toEqual({ files, error: '' });
+  });
+});
+
+describe('requisition publish blockers', () => {
+  const gaps = [
+    { key: 'responsibilities', label: 'Key responsibilities' },
+    { key: 'success_profile', label: 'Success profile' },
+    { key: 'success_profile', label: 'Success profile' },
+  ];
+
+  it('uses exact, de-duplicated field labels with a key fallback', () => {
+    expect(requisitionGapLabels(gaps)).toEqual(['Key responsibilities', 'Success profile']);
+    expect(requisitionGapLabels([{ key: 'target_start_date' }])).toEqual(['Target Start Date']);
+  });
+
+  it('uses the correct action language for normal and related roles', () => {
+    expect(requisitionPublishBlockedMessage(gaps)).toBe(
+      'Complete the required Brief fields before you can publish this job: Key responsibilities, Success profile.',
+    );
+    expect(requisitionPublishBlockedMessage(gaps, { relatedRole: true })).toBe(
+      'Complete the required Brief fields before you can create and score candidates: Key responsibilities, Success profile.',
+    );
+  });
+});
+
+describe('requisition publish blocker controls', () => {
+  const requiredFieldsHint = 'Required: Key responsibilities, Success profile';
+  const cases = [
+    {
+      label: 'related-role create',
+      name: 'Create and score candidates',
+      props: {
+        relatedRoleDraft: true,
+        brief: { source_role_id: 42, source_role: { name: 'Platform Engineer' } },
+      },
+      showsHint: true,
+    },
+    {
+      label: 'initial publish',
+      name: 'Publish job page',
+      props: { relatedRoleDraft: false },
+      showsHint: true,
+    },
+    {
+      label: 're-publish',
+      name: 'Re-publish',
+      props: {
+        relatedRoleDraft: false,
+        jobPage: { token: 'page-token' },
+        jobPageUrl: '/jobs/public/page-token',
+      },
+      showsHint: false,
+    },
+  ];
+
+  it.each(cases)(
+    'keeps $label clickable on gaps, labels blockers, and disables only while publishing',
+    ({ name, props, showsHint }) => {
+      const onPublish = vi.fn();
+      const common = {
+        applied: false,
+        atsBridge: {},
+        onPublish,
+        publishing: false,
+        requiredFieldsHint,
+        requiredRemaining: 2,
+      };
+      const { rerender } = render(
+        <RequisitionHeaderActions {...common} {...props} />,
+      );
+
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeEnabled();
+      expect(button).toHaveAttribute('title', requiredFieldsHint);
+      if (showsHint) expect(screen.getByText(requiredFieldsHint)).toBeInTheDocument();
+      fireEvent.click(button);
+      expect(onPublish).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <RequisitionHeaderActions {...common} {...props} publishing />,
+      );
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    },
+  );
 });

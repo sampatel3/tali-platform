@@ -34,6 +34,9 @@ router = APIRouter(prefix="/prospects", tags=["Prospects"])
 
 # CSV import is a curated shortlist, not a data dump.
 _MAX_IMPORT_ROWS = 500
+# Enough for 500 unusually rich prospect rows (~20 KiB each), while preventing
+# a direct caller from making the API materialize an unbounded multipart body.
+_MAX_IMPORT_BYTES = 10 * 1024 * 1024
 
 # Recognised CSV columns (headers matched case-insensitively).
 _CSV_REQUIRED = ("full_name", "email")
@@ -182,7 +185,12 @@ async def import_prospects(
     """
     org_id = current_user.organization_id
 
-    raw = await file.read()
+    raw = await file.read(_MAX_IMPORT_BYTES + 1)
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="CSV exceeds the 10 MB upload limit",
+        )
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:

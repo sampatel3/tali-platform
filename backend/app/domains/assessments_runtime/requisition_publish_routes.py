@@ -20,7 +20,7 @@ from ...models.user import User
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
 from ...services.cv_score_orchestrator import mark_role_scores_stale
-from ...services.requisition_chat_capture import compute_gaps
+from ...services.requisition_chat_capture import compute_completeness, compute_gaps
 from ...services.requisition_reconfiguration import (
     prepare_running_role_reconfiguration,
 )
@@ -28,6 +28,9 @@ from ...services.related_role_service import (
     RelatedRoleError,
     create_related_role,
     related_role_created_payload,
+)
+from ...services.related_role_spec_hydration import (
+    hydrate_related_role_draft_from_saved_spec,
 )
 from ...services.requisition_template_service import resolve_template
 from ...services.role_brief_service import (
@@ -192,7 +195,15 @@ def publish_requisition(
     # applies — the API is the source of truth, so a direct call can't publish a
     # half-filled requisition that skips the UI guard.
     org = _org(db, current_user.organization_id)
-    gaps = compute_gaps(brief, resolve_template(org))
+    template = resolve_template(org)
+    # Pre-fix related-role drafts may still carry their cloned JD only in
+    # ``agent_state.jd_override``. Recover explicitly headed responsibilities
+    # before applying the authoritative gap gate so a direct API publish has the
+    # same backward-compatible behaviour as opening the draft in the UI.
+    if source_role_id is not None and hydrate_related_role_draft_from_saved_spec(brief):
+        brief.completeness = compute_completeness(brief, template)
+        db.flush()
+    gaps = compute_gaps(brief, template)
     if gaps:
         labels = [g.get("label") or g.get("key") or "a required field" for g in gaps]
         raise HTTPException(

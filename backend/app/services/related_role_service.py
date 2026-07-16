@@ -27,6 +27,7 @@ from ..models.role_brief import RoleBrief
 from ..tasks.sister_role_tasks import score_sister_role
 from .ats_role_lifecycle import ats_job_lifecycle
 from .requisition_chat_capture import compute_completeness
+from .related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
 from .role_brief_service import create_brief, materialize_brief_to_role
 from .role_criteria_service import sync_derived_criteria
 from .sister_role_service import ensure_sister_evaluations
@@ -257,6 +258,12 @@ def create_related_role_draft(
         if clean_spec_override is not None
         else (source.job_spec_text or source_override or "")
     ).strip()
+    if cloned_spec:
+        # The verbatim JD is source material for later intake turns, not merely
+        # a rendered/publishing override.  Keep it on the cloned brief so future
+        # chat hydration can revisit the document without relying on attachment
+        # bytes or the source role still being unchanged.
+        hydrate_related_role_draft_from_saved_spec(brief, cloned_spec)
     state: dict[str, Any] = {
         "related_role_source_snapshot": {
             "role_id": int(source.id),
@@ -266,6 +273,9 @@ def create_related_role_draft(
     }
     if cloned_spec:
         state["jd_override"] = cloned_spec
+        state["canonical_spec_mode"] = "verbatim"
+        state["job_spec_revision"] = 1
+        state["job_spec_last_change_mode"] = "clone"
     brief.agent_state = state
 
     provider = ats_job_lifecycle(source).provider
@@ -280,10 +290,12 @@ def create_related_role_draft(
             "role": "assistant",
             "content": (
                 f"I've copied **{source.name}** into a new related-role draft, "
-                f"{copied_note}. Tell me what should change for this version. "
-                "You can describe only the differences; I'll keep the complete "
-                "specification updated on the right. When you're ready, you'll "
-                "review the shared candidate count and create the new scoring "
+                f"{copied_note}, and populated every structured field I could "
+                "read from it. Tell me what should change for this version. "
+                "You can describe only the differences; I'll save those into the "
+                "brief and ask only about details the source does not answer. When "
+                "you're ready, review the shared candidate count and use **Create "
+                "and score candidates** to create the new scoring "
                 f"role. Candidate stages and actions will stay coupled to the original {provider_label} job."
             ),
             "attachments": [],

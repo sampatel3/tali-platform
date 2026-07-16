@@ -1,6 +1,8 @@
 """Unit tests for service modules — document_service, s3_service, and security."""
 
+import io
 import os
+import zipfile
 
 import pytest
 from datetime import timedelta
@@ -14,12 +16,15 @@ from fastapi import HTTPException
 # ===================================================================
 
 from app.services.document_service import (
+    MAX_FILE_SIZE,
     extract_text_from_pdf,
     extract_text_from_docx,
     extract_text_from_txt,
     extract_text,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
+    process_document_upload,
+    read_upload_content,
     validate_upload,
     save_file_locally,
 )
@@ -30,6 +35,22 @@ class _FakeUploadFile:
 
     def __init__(self, filename: str):
         self.filename = filename
+
+
+class _RecordingFile:
+    def __init__(self, content: bytes):
+        self.content = content
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        return self.content[:size]
+
+
+class _FakeReadableUpload(_FakeUploadFile):
+    def __init__(self, filename: str, content: bytes):
+        super().__init__(filename)
+        self.file = _RecordingFile(content)
 
 
 class TestExtractTextFromTxt:
@@ -84,6 +105,16 @@ class TestExtractTextFromDocx:
     def test_empty_bytes_returns_empty(self):
         result = extract_text_from_docx(b"")
         assert result == ""
+
+    def test_rejects_compressed_docx_with_oversized_main_xml(self):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(
+            stream, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
+            archive.writestr("word/document.xml", b"x" * (9 * 1024 * 1024))
+
+        assert len(stream.getvalue()) < 20_000
+        assert extract_text_from_docx(stream.getvalue()) == ""
 
 
 class TestExtractText:
@@ -156,6 +187,30 @@ class TestValidateUpload:
         upload = _FakeUploadFile("doc.pdf")
         with pytest.raises(HTTPException):
             validate_upload(upload, allowed_extensions={"png", "jpg"})
+
+
+class TestReadUploadContent:
+
+    def test_oversized_read_is_bounded_before_downstream_processing(self, monkeypatch):
+        upload = _FakeReadableUpload("oversized.txt", b"x" * (MAX_FILE_SIZE + 1))
+
+        def _boom(*args, **kwargs):  # pragma: no cover - size guard must win
+            raise AssertionError("oversized content must not reach storage or extraction")
+
+        monkeypatch.setattr("app.services.s3_service.upload_bytes_to_s3", _boom)
+        monkeypatch.setattr("app.services.document_service.extract_text", _boom)
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_document_upload(upload, entity_id=1, doc_type="job_spec")
+
+        assert exc_info.value.status_code == 400
+        assert upload.file.read_sizes == [MAX_FILE_SIZE + 1]
+
+    def test_small_read_uses_same_explicit_bound(self):
+        upload = _FakeReadableUpload("notes.txt", b"small")
+
+        assert read_upload_content(upload) == b"small"
+        assert upload.file.read_sizes == [MAX_FILE_SIZE + 1]
 
 
 class TestSaveFileLocally:

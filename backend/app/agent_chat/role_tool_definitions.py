@@ -215,9 +215,9 @@ ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "start_related_role_draft",
             "description": (
                 "Start the existing conversational job-creation flow as a NEW related-role "
-                "draft cloned from this ATS role. The full original specification and "
-                "structured brief are pre-populated; the recruiter can describe only the "
-                "differences in the requisition chat before confirming creation and scoring. "
+                "draft cloned from this ATS role. Its full specification, structured fields, "
+                "and labelled responsibilities are copied; intake reads that source and asks "
+                "only for genuine gaps before the recruiter describes just the differences. "
                 "Use this for open-ended cousin/sister-role requests or whenever the recruiter "
                 "wants to refine the new role conversationally. This creates only a draft and "
                 "does not spend scoring usage."

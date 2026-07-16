@@ -12,8 +12,10 @@ import {
 import { MotionSpinner } from '../../shared/motion';
 import { atsProviderLabel } from '../jobs/atsType';
 
-const requiredFieldsTitle = (count) => (
-  count > 0 ? `${count} required field${count === 1 ? '' : 's'} still needed` : undefined
+const requiredFieldsTitle = (count, hint) => (
+  count > 0
+    ? hint || `${count} required field${count === 1 ? '' : 's'} still needed`
+    : undefined
 );
 
 function RelatedRoleActions({
@@ -23,6 +25,7 @@ function RelatedRoleActions({
   onPublish,
   preview,
   publishing,
+  requiredFieldsHint,
   requiredRemaining,
 }) {
   return (
@@ -70,8 +73,8 @@ function RelatedRoleActions({
             type="button"
             className="rq-publish-btn"
             onClick={onPublish}
-            disabled={publishing || requiredRemaining > 0}
-            title={requiredFieldsTitle(requiredRemaining)}
+            disabled={publishing}
+            title={requiredFieldsTitle(requiredRemaining, requiredFieldsHint)}
           >
             {publishing
               ? <MotionSpinner className="rq-motion-spinner" size={15} />
@@ -80,7 +83,9 @@ function RelatedRoleActions({
           </button>
         )}
         {!applied && requiredRemaining > 0 ? (
-          <span className="rq-publish-hint">{requiredFieldsTitle(requiredRemaining)}</span>
+          <span className="rq-publish-hint">
+            {requiredFieldsTitle(requiredRemaining, requiredFieldsHint)}
+          </span>
         ) : null}
       </div>
     </div>
@@ -117,6 +122,7 @@ function StandardRequisitionActions({
   onPublish,
   publishing,
   refCode,
+  requiredFieldsHint,
   requiredRemaining,
 }) {
   return (
@@ -197,8 +203,8 @@ function StandardRequisitionActions({
               type="button"
               className="rq-btn-sm is-ghost"
               onClick={onPublish}
-              disabled={publishing || requiredRemaining > 0}
-              title={requiredFieldsTitle(requiredRemaining)}
+              disabled={publishing}
+              title={requiredFieldsTitle(requiredRemaining, requiredFieldsHint)}
             >
               {publishing
                 ? <MotionSpinner className="rq-motion-spinner" size={15} />
@@ -253,8 +259,8 @@ function StandardRequisitionActions({
             type="button"
             className="rq-publish-btn"
             onClick={onPublish}
-            disabled={publishing || requiredRemaining > 0}
-            title={requiredFieldsTitle(requiredRemaining)}
+            disabled={publishing}
+            title={requiredFieldsTitle(requiredRemaining, requiredFieldsHint)}
           >
             {publishing
               ? <MotionSpinner className="rq-motion-spinner" size={15} />
@@ -262,7 +268,9 @@ function StandardRequisitionActions({
             Publish job page
           </button>
           {requiredRemaining > 0 ? (
-            <span className="rq-publish-hint">{requiredFieldsTitle(requiredRemaining)}</span>
+            <span className="rq-publish-hint">
+              {requiredFieldsTitle(requiredRemaining, requiredFieldsHint)}
+            </span>
           ) : null}
         </div>
       )}

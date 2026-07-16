@@ -9,6 +9,13 @@ import {
   cx,
 } from '../../shared/ui/TaaliPrimitives';
 
+export const CANDIDATE_CV_ACCEPT = '.pdf,.docx';
+export const isSupportedCandidateCvFile = (file) => {
+  const name = String(file?.name || '').toLowerCase();
+  const extension = name.includes('.') ? name.split('.').pop() : '';
+  return extension === 'pdf' || extension === 'docx';
+};
+
 export const CandidateSheet = ({
   open,
   role,
@@ -21,6 +28,7 @@ export const CandidateSheet = ({
   const [name, setName] = useState('');
   const [position, setPosition] = useState('');
   const [cvFile, setCvFile] = useState(null);
+  const [cvError, setCvError] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [touched, setTouched] = useState({
     email: false,
@@ -34,6 +42,7 @@ export const CandidateSheet = ({
     setName('');
     setPosition(role?.name || '');
     setCvFile(null);
+    setCvError('');
     setDragActive(false);
     setTouched({ email: false, name: false, cv: false });
   }, [open, role]);
@@ -44,11 +53,22 @@ export const CandidateSheet = ({
   const hasCv = Boolean(cvFile);
   const canSave = Boolean(role) && hasRoleSpec && validEmail && validName && !saving;
 
+  const selectCvFile = (file) => {
+    setTouched((prev) => ({ ...prev, cv: true }));
+    if (file && !isSupportedCandidateCvFile(file)) {
+      setCvFile(null);
+      setCvError('Upload a PDF or DOCX file.');
+      return;
+    }
+    setCvFile(file || null);
+    setCvError('');
+  };
+
   const onDropFile = (event) => {
     event.preventDefault();
     setDragActive(false);
     const file = event.dataTransfer?.files?.[0];
-    if (file) setCvFile(file);
+    if (file) selectCvFile(file);
   };
 
   return (
@@ -168,15 +188,15 @@ export const CandidateSheet = ({
             <span className="mt-1 block text-xs text-[var(--taali-muted)]">PDF or DOCX</span>
             <input
               type="file"
-              accept=".pdf,.docx,.doc"
-              onChange={(event) => {
-                setTouched((prev) => ({ ...prev, cv: true }));
-                setCvFile(event.target.files?.[0] || null);
-              }}
+              accept={CANDIDATE_CV_ACCEPT}
+              aria-label="Upload candidate CV"
+              onChange={(event) => selectCvFile(event.target.files?.[0] || null)}
               className="sr-only"
             />
           </label>
-          {!hasCv ? (
+          {cvError ? (
+            <span className="mt-1 block text-xs text-[var(--taali-danger)]" role="alert">{cvError}</span>
+          ) : !hasCv ? (
             <span className="mt-1 block text-xs text-[var(--taali-warning)]">No CV yet. Role fit scoring will show N/A until uploaded.</span>
           ) : null}
         </div>

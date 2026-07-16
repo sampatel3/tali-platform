@@ -7,6 +7,7 @@ from datetime import date, datetime
 import logging
 import re
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -19,6 +20,9 @@ logger = logging.getLogger("taali.documents")
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 _UNSAFE_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+_MAX_DOCX_ZIP_ENTRIES = 2_000
+_MAX_DOCX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+_MAX_DOCX_MAIN_XML_BYTES = 8 * 1024 * 1024
 
 
 def load_stored_document_bytes(file_url: str | None) -> bytes | None:
@@ -102,13 +106,72 @@ def sanitize_json_for_storage(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 def extract_text_from_docx(content: bytes) -> str:
-    """Extract text from DOCX bytes using python-docx."""
+    """Extract paragraph and table-cell text from DOCX bytes in document order."""
     try:
         from docx import Document
 
+        # DOCX is a ZIP container. Validate central-directory sizes before
+        # python-docx expands package parts so a small compressed upload cannot
+        # become an unbounded synchronous memory/CPU operation.
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            members = archive.infolist()
+            total_uncompressed = sum(member.file_size for member in members)
+            main_xml_size = next(
+                (
+                    member.file_size
+                    for member in members
+                    if member.filename == "word/document.xml"
+                ),
+                0,
+            )
+            if (
+                len(members) > _MAX_DOCX_ZIP_ENTRIES
+                or total_uncompressed > _MAX_DOCX_UNCOMPRESSED_BYTES
+                or main_xml_size > _MAX_DOCX_MAIN_XML_BYTES
+            ):
+                logger.warning(
+                    "DOCX text extraction rejected oversized archive: "
+                    "entries=%s uncompressed_bytes=%s main_xml_bytes=%s",
+                    len(members),
+                    total_uncompressed,
+                    main_xml_size,
+                )
+                return ""
+
         doc = Document(io.BytesIO(content))
-        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-        return "\n\n".join(paragraphs).strip()
+        blocks: list[str] = []
+
+        # python-docx 1.1+ exposes paragraphs and tables in their real XML
+        # order. Keep a fallback for older compatible versions rather than
+        # silently dropping all table-based job-spec fields.
+        inner_content = (
+            doc.iter_inner_content()
+            if hasattr(doc, "iter_inner_content")
+            else [*doc.paragraphs, *doc.tables]
+        )
+        for block in inner_content:
+            if hasattr(block, "rows"):
+                for row in block.rows:
+                    # Merged cells can appear more than once in ``row.cells``;
+                    # retain each distinct cell XML node once per row.
+                    seen_cells: set[int] = set()
+                    for cell in row.cells:
+                        cell_key = id(cell._tc)
+                        if cell_key in seen_cells:
+                            continue
+                        seen_cells.add(cell_key)
+                        cell_text = "\n\n".join(
+                            paragraph.text.strip()
+                            for paragraph in cell.paragraphs
+                            if paragraph.text.strip()
+                        )
+                        if cell_text:
+                            blocks.append(cell_text)
+                continue
+            text = str(getattr(block, "text", "") or "").strip()
+            if text:
+                blocks.append(text)
+        return "\n\n".join(blocks).strip()
     except Exception as exc:
         logger.warning("DOCX text extraction failed: %s", exc)
         return ""
@@ -160,7 +223,7 @@ def validate_upload(upload: UploadFile, allowed_extensions: set[str] | None = No
 
 def read_upload_content(upload: UploadFile) -> bytes:
     """Read and validate upload content size. Returns raw bytes."""
-    content = upload.file.read()
+    content = upload.file.read(MAX_FILE_SIZE + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(content) > MAX_FILE_SIZE:

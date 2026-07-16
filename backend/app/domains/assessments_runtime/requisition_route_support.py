@@ -36,7 +36,7 @@ from ...services.requisition_similar_service import (
     apply_agnostic_fields,
     standardize_agnostic_fields,
 )
-from ...services.requisition_template_service import iter_fields
+from ...services.requisition_template_service import iter_fields, template_key_to_column
 from ...services.role_brief_service import create_brief
 from .job_authorization import JobPermission, require_job_permission
 
@@ -60,6 +60,47 @@ class AnswerRequisition(BaseModel):
     field_key: str
     value: Any = None
     expected_version: int | None = Field(default=None, ge=1)
+
+
+def apply_manual_spec_state(
+    brief: RoleBrief, data: dict[str, Any], template: dict[str, Any]
+) -> None:
+    """Keep manual Brief/JD edits on one canonical-spec revision."""
+
+    override_explicit = "jd_override" in data
+    state = dict(brief.agent_state or {})
+    changed = False
+    change_mode = "manual"
+    if override_explicit:
+        raw = data.pop("jd_override")
+        override = (raw or "").strip() if isinstance(raw, str) else raw
+        if override:
+            state["jd_override"] = override
+            state["canonical_spec_mode"] = "verbatim"
+        else:
+            state.pop("jd_override", None)
+            state["canonical_spec_mode"] = "structured"
+        changed = True
+    else:
+        spec_edit_keys = {
+            template_key_to_column(field["key"]) or "custom_fields"
+            for _section, field in iter_fields(template)
+        }
+        if state.get("jd_override") and set(data).intersection(spec_edit_keys):
+            state.pop("jd_override", None)
+            state["canonical_spec_mode"] = "structured"
+            change_mode = "manual_brief"
+            changed = True
+    if not changed:
+        return
+    try:
+        revision = int(state.get("job_spec_revision") or 0) + 1
+    except (TypeError, ValueError):
+        revision = 1
+    state["job_spec_revision"] = revision
+    state["job_spec_last_change_mode"] = change_mode
+    state.pop("pending_job_spec_source", None)
+    brief.agent_state = state
 
 
 def start_related_role_requisition(
