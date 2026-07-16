@@ -74,8 +74,7 @@ railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
 echo "Deploying web service '$WEB_SERVICE' from $BACKEND_DIR (environment: $ENV_NAME)..."
 (
   cd "$ROOT_DIR"
-  railway up ./backend \
-    --path-as-root \
+  railway up \
     --service "$WEB_SERVICE" \
     --environment "$ENV_NAME" \
     --detach

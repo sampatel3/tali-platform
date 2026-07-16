@@ -82,8 +82,7 @@ deploy_worker_service() {
   echo "Deploying '$service' (queues=$queues, beat=$beat) from $BACKEND_DIR ..."
   (
     cd "$ROOT_DIR"
-    railway up ./backend \
-      --path-as-root \
+    railway up \
       --service "$service" \
       --environment "$ENV_NAME" \
       --detach
