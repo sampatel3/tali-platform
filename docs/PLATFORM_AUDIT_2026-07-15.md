@@ -87,13 +87,14 @@ related-role integration in PR #1040 and decision-presentation integration in
 PR #1034. The branch is published as draft PR #1043 and remains undeployed.
 
 The authoritative final backend run used the exact locked Python 3.11.9
-environment with all 157 hashed development pins; frontend verification used
-Node 24.7 while CI pins Node 22.23.1. The backend deployment image also pins
-Python 3.11.9; the frontend deployment contract currently declares Node
-`>=22.12.0`, not an exact patch. Local Compose,
-deployment documentation, and migration verification agree on PostgreSQL 16.
-Supported-runtime CI is therefore a release gate even when a local check is
-green.
+environment with all 157 hashed development pins. The final frontend run used
+a clean detached worktree with the CI runtime, Node 22.23.1 and npm 10.9.8;
+exact install, audit, all gates, production build, bundle budget, and built-route
+smoke passed. The backend deployment image also pins Python 3.11.9; the
+frontend deployment contract currently declares Node `>=22.12.0`, not an exact
+patch. Local Compose, deployment documentation, and migration verification
+agree on PostgreSQL 16. Remote supported-runtime CI and the provider preview
+remain release gates even after the matching local runtime is green.
 
 Website review used source inspection and the historical 156-finding UX audit
 (50 P1, 76 P2, 30 P3). That audit records all five remediation PRs as merged,
@@ -258,10 +259,12 @@ Current frontend changes include:
 
 The machine UI guard reports zero unresolved token or component-policy
 violations. Frontend architecture and motion-system gates pass. The final
-154-file/1,087-test gated run is warning-free: React scheduling warnings fell
+156-file/1,093-test gated run is warning-free: React scheduling warnings fell
 from 58 to zero, Router future-flag warnings from 30 to zero, and Motion
-diagnostics from two to zero. No console suppression was added, and CI now
-rejects those warning classes so the clean signal cannot silently regress.
+diagnostics from two to zero. A fail-closed setup guard now blocks and reports
+unexpected API XHR/fetch calls even when application error handling catches the
+rejection. No console suppression was added, and CI rejects these warning and
+network-leak classes so the clean signal cannot silently regress.
 
 ### Frontend optimization assessment
 
@@ -275,6 +278,8 @@ These optimizations keep the same or better result:
 | Visibility-aware polling | Hidden tabs stop spending network/CPU while visible state remains current on return. |
 | Lazy routes and vendor chunks | Initial pages do not download Monaco, Cytoscape, or charts until needed; those features remain available. |
 | Bundle budget | Prevents silent regressions rather than deleting a feature to meet a one-time target. |
+| npm 10-compatible exact install | The lock now records DOMPurify's optional Trusted Types peer, keeps the security override unambiguous at 3.4.12, and uses jsdom 28.1's Node 22 undici bridge. This removes failed preview/install and test-retry work without changing shipped capability. |
+| Fail-closed test network isolation | Shell and background-job clients use the canonical API facade; unexpected test XHR/fetch is rejected before dispatch and fails the test with its method/URL. This replaces deep-import/mock workarounds and prevents false-green integration tests. |
 | SQL-side filter facets/pagination | The UI receives accurate, complete facets without pulling full rows or CV bodies. |
 
 ### Post-deploy website verification still required
@@ -490,8 +495,8 @@ Do not sum these figures; several sets overlap.
 | Frontend architecture + motion | Passed |
 | Frontend UI token/component policy | Passed with zero violations |
 | Frontend ESLint + TypeScript contract | Passed |
-| Full frontend gated Vitest | 154 files / 1,087 tests passed in 24.97 seconds; zero warning diagnostics (58 React scheduling, 30 Router, and 2 Motion diagnostics reduced to zero). CI preserves Vitest failures and independently fails on those warning classes. |
-| Frontend production build + bundle budget | 3,410 modules built in 1.48 seconds; 209 files, 5,735,139 bytes raw (5.4695 MiB), 2,652,603 bytes gzip level 9 (2.5297 MiB), and 6,205,440 allocated bytes (5.9180 MiB). Raw/gzip bytes: main JS 73,238/19,952, CSS 231,546/39,670, graph 434,159/135,770, charts 412,998/105,280, Job Pipeline 174,040/49,148, Requisitions 45,633/13,059, Client Intake 12,641/4,299, and Candidate Standing Report 80,699/23,008. |
+| Full frontend gated Vitest | Clean Node 22.23.1/npm 10.9.8 install: 156 files / 1,093 tests passed in 36.83 seconds; zero warning, unhandled-error, or unexpected-network diagnostics. The six added tests cover feedback ordering/submission/version conflicts and recruiter Q&A success/empty/error states. CI preserves Vitest failures and independently fails on warning and network-leak classes. |
+| Frontend production build + bundle budget | Clean Node 22.23.1/npm 10.9.8 install: 3,410 modules built in 2.06 seconds; 208 files, 5,734,419 bytes raw (5.4688 MiB), 2,652,075 bytes gzip level 9 (2.5292 MiB), and 6,373,376 allocated bytes (6.0781 MiB on the retained temporary worktree filesystem). Raw/gzip bytes: main JS 71,502/19,428, CSS 231,546/39,670, graph 434,159/135,770, charts 412,998/105,280, Job Pipeline 174,018/49,134, Requisitions 45,601/13,040, Client Intake 12,641/4,298, and Candidate Standing Report 80,693/22,992. Bundle budgets and all 14 built-route HTTP smokes passed. |
 | Frontend dependency audit | 0 vulnerabilities |
 | Complete default non-production backend pytest selection | Locked CPython 3.11.9: 5,932 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 246.65-second final-integration-tree run. PostgreSQL behavior is covered separately below. |
 | Backend coverage | 75.927783% combined line-and-branch coverage (70,401/92,721 covered units): 56,579/71,323 lines (79.327847%) and 13,822/21,398 branches (64.594822%). The enforced combined floor remains 74%; the ignored originals were left intact and copies were preserved outside the worktree after measurement, with neither committed. |
@@ -539,9 +544,10 @@ Do not sum these figures; several sets overlap.
    is live. Scanner-root or AST-policy changes require review; arbitrary main
    guards, prefixes, type-only imports, dead branches, and non-empty package
    initializers are already covered by focused regressions.
-8. The final backend suite passed in a locked Python 3.11.9 environment. Local
-   frontend verification still used Node 24 and does not replace the supported
-   Node 22.23.1 CI run, especially after broad framework/dependency upgrades.
+8. The final backend suite passed in a locked Python 3.11.9 environment. The
+   final frontend suite also passed from a clean exact Node 22.23.1/npm 10.9.8
+   install. Remote Ubuntu CI and the Vercel preview still remain independent
+   gates for host-specific behavior after broad framework/dependency upgrades.
 
 ## Outstanding Codex/GitHub review work
 
@@ -594,7 +600,7 @@ less useful.
 | P1 / cost and capability | **Fitted-policy shadow/promotion is dormant while the nightly fitter is scheduled.** Equivalent ordered inputs now reuse the current fingerprinted candidate before expensive search, per-organization work is serialized, and pending output is bounded. Changed evidence can still consume DB/CPU to fit a candidate, but the production engine never loads it and no scheduler opens, records, or concludes durable shadow runs. | Fitted output is currently only a fail-closed safety input to governed rule retunes. Automatically wiring the bookkeeping would still lack durable per-decision shadow identity, realised-outcome linkage, and operator activation; compute deduplication is not feature activation. | Measure the remaining scheduled fit's cost and safety value. Keep it only if that value is justified; otherwise disable the dormant fit schedule without weakening the live rule retuner. Before learned-policy activation, implement the durable shadow lifecycle, bias/outcome gates, observability, and explicit operator promotion. |
 | Medium / scaffold | **`GRAPH_OUTCOME_PRIOR_ENABLED` is not a functional feature.** Bounded shadow math exists, but the fetch returns `None` and configuration rejects enablement. | Outcome-learned graph signals can reproduce historical bias; a numeric nudge without evidence and governance would make matching less trustworthy. | Keep it unavailable in product/configuration. Activate only after graph retrieval is durable, the shadow distribution and predictive value are reviewed, the autoresearch bias gate passes, and rollback/monitoring exist. |
 | Medium / security migration | **Legacy integration credentials may still use the unversioned/plaintext read fallback.** | The fallback prevents breaking existing Workable/Fireflies rows during rollout; new encrypted writes alone do not transform old data. | Inventory existing rows, re-encrypt or rotate them with the production integration key, verify previous-key rollback, and remove plaintext reads only after telemetry proves the migration complete. |
-| Medium / runtime | **Frontend local and supported runtimes differ:** the backend passed in the exact locked Python 3.11.9 environment, while local frontend checks used Node 24 and CI targets Node 22.23.1; frontend deployment declares Node `>=22.12.0`. | Build-tool and native-package behavior can differ even with green local tests, and the frontend host can select a different Node 22 patch than CI. | Require the supported Node CI run before the release candidate and align the frontend hosting runtime as tightly as the provider supports. |
+| Low / runtime | **The frontend host range remains broader than the CI pin:** the clean local frontend contract passed on exact Node 22.23.1/npm 10.9.8, while deployment declares Node `>=22.12.0`. | The frontend host can select a different Node 22 patch even though the npm 10 lock and Node 22 dispatcher regressions are now fixed and locally reproduced. | Require remote CI and the provider preview before the release candidate, and align the hosting runtime as tightly as the provider supports. |
 | Medium / staging | **Broad framework/dependency upgrades have cross-cutting compatibility risk.** | Unit mocks cannot fully exercise server lifecycle, auth/security middleware, provider SDKs, PDF/browser tooling, or deployment packaging under real infrastructure. | Stage the complete upgraded graph on supported runtimes; run migration, auth, provider, file/PDF, worker, and rollback smoke before production. Do not “optimize” by deleting supported behavior to make the upgrade easier. |
 | Medium / accessibility | **The website pass did not include physical devices, automated accessibility tooling, or assistive-technology/screen-reader use.** | Source review, desktop/mobile browser smoke, keyboard focus, and reduced-motion checks do not prove semantic announcements, focus order, touch behavior, or real-device rendering. | Run automated accessibility checks plus keyboard and screen-reader smoke on representative public, auth, candidate, assessment, and recruiter flows after the release candidate is deployed to staging. |
 | Medium | **A5 input-window divergence:** pre-screen sees untruncated CV/JD while holistic uses 14k/8k windows. | Silently truncating the gate could miss late must-haves; silently expanding holistic may raise token cost and latency. | Choose a canonical evidence-window policy, test long-document must-have placement, and measure accuracy/cost before rollout. |
@@ -651,9 +657,10 @@ claim is made because legacy migration 015 requires a live connection.
    production-like snapshot/backup in staging. The genuinely empty and
    fail-closed PostgreSQL 16 paths are already green; a production-shaped data
    upgrade remains the final migration rehearsal.
-4. Run the complete frontend CI contract on Node 22.23.1: exact install,
-   dependency audit, architecture/motion/UI lint, ESLint, TypeScript check,
-   full Vitest, production build, bundle budget, and built-route smoke.
+4. Require the remote frontend CI contract and provider preview to repeat the
+   locally-green Node 22.23.1/npm 10.9.8 exact install, dependency audit,
+   architecture/motion/UI lint, ESLint, TypeScript check, full Vitest,
+   production build, bundle budget, and built-route smoke.
 5. Assign code-owner, security, data-policy, and product reviewers to the draft
    PR, then resolve overlap with the open PR queue recorded above. Do not infer
    approval from a lack of comments.
