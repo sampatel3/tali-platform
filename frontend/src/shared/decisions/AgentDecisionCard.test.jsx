@@ -23,6 +23,10 @@ const baseDecision = {
   candidate_name: 'Tarig Elamin',
   status: 'pending',
   decision_type: 'reject',
+  role_family: {
+    owner: { id: 31, name: 'Data Platform Lead' },
+    related: [{ id: 47, name: 'AI Engineer' }],
+  },
   reasoning: 'Below the role-fit bar.',
   evidence: {},
 };
@@ -83,16 +87,48 @@ describe('AgentDecisionCard reject consequence copy', () => {
   // Parity with the candidate-report rail: a one-click reject must show what
   // confirming does to the one shared ATS application and linked role family.
   // Previously the hub card showed nothing.
-  it('shows the shared reject consequence under the recommendation', () => {
+  it('names every linked role in the shared reject consequence', () => {
     renderCard(baseDecision);
     expect(
-      screen.getByText(/Rejects the shared ATS application across the original and every related role\./i),
+      screen.getByText(
+        /Rejects the shared ATS application across all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)\./i,
+      ),
     ).toBeInTheDocument();
     const recommendation = screen.getByRole('button', { name: /reject/i });
     expect(recommendation)
-      .toHaveAttribute('title', expect.stringMatching(/shared ATS application/i));
+      .toHaveAttribute('title', expect.stringMatching(/Data Platform Lead #31.*AI Engineer #47/i));
     expect(recommendation).toHaveAttribute('data-motion-loop', 'flow');
     expect(recommendation).toHaveAttribute('data-motion-state', 'rest');
+  });
+
+  it('keeps the generic reject consequence when linked-role metadata is absent', () => {
+    renderCard({ ...baseDecision, role_family: undefined });
+    expect(
+      screen.getByText(/Rejects this candidate's ATS application\. If this role shares a candidate pool/i),
+    ).toBeInTheDocument();
+  });
+
+  it('passes role-specific shared-application copy into a reject confirmation', () => {
+    const onAlternative = vi.fn();
+    render(
+      <AgentDecisionCard
+        decision={{ ...baseDecision, decision_type: 'send_assessment' }}
+        onApprove={noop}
+        onAlternative={onAlternative}
+        onTeach={noop}
+        onSnooze={noop}
+        busy={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reject$/i }));
+    expect(onAlternative).toHaveBeenCalledWith(
+      expect.objectContaining({ id: baseDecision.id }),
+      expect.objectContaining({
+        action: 'reject',
+        body: expect.stringMatching(/Data Platform Lead #31 \(original\).*AI Engineer #47 \(related\)/i),
+      }),
+    );
   });
 
   it('does not show the consequence on a non-reject card', () => {

@@ -146,13 +146,16 @@ def transition_related_role_stage(
 
 
 def related_role_advance_note(role: Role, owner_role: Role | None) -> str:
-    owner_name = (
-        str(getattr(owner_role, "name", "") or "").strip() or "the original role"
+    owner_label = (
+        f"{owner_role.name} #{owner_role.id}"
+        if owner_role is not None
+        else "the original linked role"
     )
+    related_label = f"{role.name} #{role.id}"
     return (
-        f"Advanced for related role: {role.name}. Taali assessed this candidate "
-        f"in the independent {role.name} funnel. The ATS application is shared "
-        f"with {owner_name}."
+        f"Advanced for related role: {related_label}. Taali assessed this candidate "
+        f"in the independent {related_label} funnel. The ATS application is shared "
+        f"with {owner_label}."
     )
 
 

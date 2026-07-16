@@ -128,6 +128,10 @@ def test_list_pending_is_role_scoped_and_snooze_aware(staleness, db):
     assert row["candidate_name"] == "Candidate visible"
     assert row["supported_alternatives"] == ["reject", "skip_assessment_advance"]
     assert row["can_approve"] is True
+    assert row["role_family"] == {
+        "owner": {"id": int(role.id), "name": "Platform Engineer"},
+        "related": [],
+    }
 
     including_snoozed = commands.list_pending_decisions(
         db, role, user, include_snoozed=True
@@ -137,6 +141,76 @@ def test_list_pending_is_role_scoped_and_snooze_aware(staleness, db):
         int(visible.id),
         int(snoozed.id),
     }
+
+
+@patch.object(commands.decision_staleness, "evaluate")
+def test_pending_snapshots_include_complete_org_scoped_role_family(staleness, db):
+    org, user, owner, _other_role = _context(db)
+    related_z = Role(
+        organization_id=int(org.id),
+        name="Zulu Platform Engineer",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+    )
+    related_a = Role(
+        organization_id=int(org.id),
+        name="AI Platform Engineer",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+    )
+    foreign_org = Organization(
+        name="Foreign Decision Command Org",
+        slug=f"foreign-decision-command-{id(db)}",
+    )
+    db.add_all([related_z, related_a, foreign_org])
+    db.flush()
+    # A malformed cross-tenant sibling must never enter a recruiter-facing
+    # preview, even though the self-referential foreign key itself is valid.
+    foreign_related = Role(
+        organization_id=int(foreign_org.id),
+        name="Private Foreign Alternative",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+    )
+    db.add(foreign_related)
+    owner_decision = _decision(db, org, owner, label="owner-family", decision_type="reject")
+    related_decision = _decision(
+        db,
+        org,
+        related_a,
+        label="related-family",
+        decision_type="reject",
+    )
+    db.commit()
+    staleness.return_value = StalenessReport(is_stale=False)
+
+    expected_family = {
+        "owner": {"id": int(owner.id), "name": "Platform Engineer"},
+        "related": [
+            {"id": int(related_a.id), "name": "AI Platform Engineer"},
+            {"id": int(related_z.id), "name": "Zulu Platform Engineer"},
+        ],
+    }
+    owner_snapshot = commands.get_pending_decision(
+        db,
+        owner,
+        user,
+        int(owner_decision.id),
+    )
+    related_snapshot = commands.get_pending_decision(
+        db,
+        related_a,
+        user,
+        int(related_decision.id),
+    )
+
+    assert owner_snapshot["role_family"] == expected_family
+    assert related_snapshot["role_family"] == expected_family
+    assert "Private Foreign Alternative" not in str(owner_snapshot)
+    assert "Private Foreign Alternative" not in str(related_snapshot)
 
 
 @patch.object(commands.decision_staleness, "evaluate")

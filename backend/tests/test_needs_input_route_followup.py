@@ -49,6 +49,44 @@ def _question(db, role, *, schema=None, kind: str = "other") -> AgentNeedsInput:
     return row
 
 
+def test_list_includes_complete_named_role_family(client, db):
+    headers, owner = _world(db, client)
+    owner.name = "Data Platform Lead"
+    related = Role(
+        organization_id=int(owner.organization_id),
+        name="AI Engineer",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+    )
+    sibling = Role(
+        organization_id=int(owner.organization_id),
+        name="ML Engineer",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+    )
+    db.add_all([related, sibling])
+    db.flush()
+    row = _question(db, related, kind="missing_cv")
+
+    response = client.get(
+        f"/api/v1/agent-needs-input?role_id={int(related.id)}",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()[0]
+    assert payload["id"] == int(row.id)
+    assert payload["role_family"] == {
+        "owner": {"id": int(owner.id), "name": "Data Platform Lead"},
+        "related": [
+            {"id": int(related.id), "name": "AI Engineer"},
+            {"id": int(sibling.id), "name": "ML Engineer"},
+        ],
+    }
+
+
 @pytest.mark.parametrize(
     "schema",
     [

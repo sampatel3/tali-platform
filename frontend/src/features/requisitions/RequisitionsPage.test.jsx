@@ -15,7 +15,9 @@ import {
   requisitionGapLabels,
   requisitionHeaderStatusLabel,
   requisitionPublishBlockedMessage,
+  requisitionRoleReference,
   requisitionRoleConflictMessage,
+  requisitionSourceRoleReference,
   requisitionStatusLabel,
   validateRequisitionAttachments,
 } from './RequisitionsPage';
@@ -55,16 +57,27 @@ describe('requisition lifecycle labels', () => {
     const relatedDraft = {
       brief_kind: 'related_role',
       source_role_id: 42,
-      source_role: { name: 'AI Engineer' },
+      source_role: { role_id: 42, name: 'AI Engineer' },
       title: '   ',
       status: 'draft',
     };
 
-    expect(requisitionDisplayTitle(relatedDraft)).toBe('AI Engineer · Related');
+    expect(requisitionDisplayTitle(relatedDraft)).toBe('AI Engineer #42 · Related');
     expect(requisitionHeaderStatusLabel(relatedDraft)).toBe('Related draft');
     expect(requisitionHeaderStatusLabel({ ...relatedDraft, status: 'applied' })).toBe('Related role');
     expect(requisitionDisplayTitle({ title: 'Platform AI Engineer' })).toBe('Platform AI Engineer');
     expect(requisitionDisplayTitle({ title: '   ' })).toBe('Untitled job');
+  });
+
+  it('renders complete role references with graceful partial fallbacks', () => {
+    expect(requisitionRoleReference('AI Engineer', 42)).toBe('AI Engineer #42');
+    expect(requisitionRoleReference('AI Engineer #42', 42)).toBe('AI Engineer #42');
+    expect(requisitionRoleReference('AI Engineer', null)).toBe('Role');
+    expect(requisitionRoleReference('', 42)).toBe('Role');
+    expect(requisitionSourceRoleReference({
+      source_role_id: 42,
+      source_role: { role_id: 42, name: 'AI Engineer' },
+    })).toBe('AI Engineer #42');
   });
 
   it('reloads the authoritative requisition after a stale linked write', async () => {

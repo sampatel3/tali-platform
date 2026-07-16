@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -42,6 +42,32 @@ describe('AgentNeedsInputCard', () => {
     );
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('names the complete linked family before a CV-gap cohort rejection', async () => {
+    mocks.get.mockResolvedValue({
+      data: [{
+        id: 19,
+        role_id: 47,
+        role_name: 'AI Engineer',
+        role_version: 3,
+        kind: 'missing_cv',
+        prompt: 'Six candidates have no readable CV.',
+        role_family: {
+          owner: { id: 31, name: 'Data Platform Lead' },
+          related: [{ id: 47, name: 'AI Engineer' }],
+        },
+      }],
+    });
+
+    render(<AgentNeedsInputCard roleId={47} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject — no CV' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Rejects the shared ATS application across all linked roles: Data Platform Lead #31 (original) and AI Engineer #47 (related).',
+    );
+    expect(screen.getByRole('button', { name: 'Confirm reject' })).toBeInTheDocument();
     expect(mocks.post).not.toHaveBeenCalled();
   });
 });

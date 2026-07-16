@@ -165,6 +165,31 @@ describe('HomeNow — bulk-approve Enter gate', () => {
   });
 });
 
+describe('HomeNow — bulk reject blast radius', () => {
+  it('names every linked role before approving a reject recommendation', () => {
+    const reject = {
+      ...mkAdvance(7, 'Aisha Khan'),
+      decision_type: 'reject',
+      recommendation: 'Reject',
+      workable_job_id: 'de-shortcode',
+      role_family: {
+        owner: { id: 31, name: 'Data Platform Lead' },
+        related: [{ id: 47, name: 'AI Engineer' }],
+      },
+    };
+    const { container } = renderHome({
+      decisions: [reject],
+      pendingOrdered: [reject],
+    });
+
+    fireEvent.click(within(container).getByRole('button', { name: /Approve 1 visible/i }));
+
+    expect(within(container).getByRole('alert')).toHaveTextContent(
+      'Data Platform Lead #31 (original) and AI Engineer #47 (related)',
+    );
+  });
+});
+
 describe('HomeNow — action shortcuts are suppressed while a modal is open', () => {
   beforeEach(() => {
     snoozeDecision.mockReset().mockResolvedValue({ data: {} });

@@ -7,7 +7,7 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload
 
 from ...deps import get_current_user
 from ...models.candidate import Candidate
@@ -45,6 +45,7 @@ from ...tasks.sister_role_tasks import score_sister_role
 from .roles_management_routes import _serialize_role_detail
 from .job_authorization import JobPermission, require_job_permission
 from .related_role_actions import move_related_role_application_stage
+from .role_support import role_family_load_options
 
 router = APIRouter(tags=["Sister roles"])
 logger = logging.getLogger("taali.sister_roles")
@@ -63,7 +64,7 @@ def _source_role(db: Session, *, role_id: int, organization_id: int) -> Role:
 def _sister_role(db: Session, *, role_id: int, organization_id: int) -> Role:
     role = (
         db.query(Role)
-        .options(joinedload(Role.ats_owner_role), selectinload(Role.sister_roles))
+        .options(*role_family_load_options(organization_id=organization_id))
         .filter(
             Role.id == role_id,
             Role.organization_id == organization_id,
@@ -137,8 +138,9 @@ def create_sister_role(
         db.query(Role)
         .options(
             joinedload(Role.tasks),
-            joinedload(Role.ats_owner_role),
-            selectinload(Role.sister_roles),
+            *role_family_load_options(
+                organization_id=int(current_user.organization_id)
+            ),
         )
         .filter(Role.id == sister.id)
         .first()

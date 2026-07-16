@@ -5,7 +5,6 @@ import {
   ChevronDown,
   GitFork,
   MessageSquare,
-  RefreshCw,
   Send,
   Sparkles,
 } from 'lucide-react';
@@ -62,6 +61,7 @@ import {
 } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
+import { isRejectDecisionType } from '../../shared/decisions/decisionActions';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 import { useRoleAutonomyChange } from './useRoleAutonomyChange';
 import { useRoleAgentControls } from './useRoleAgentControls';
@@ -84,15 +84,29 @@ import {
   summarizeUnscoredApplications,
 } from './jobPipelineUtils';
 import {
-  buildRelatedRolePipelineStats,
-  isRelatedRoleScoringActive,
-  RelatedRoleContextBanner,
-  RelatedRolePipelineLabel,
-  RelatedRoleScoringInlineStatus,
-  relatedRoleScoringActionLabel,
-  useEffectiveRelatedAgentResume,
   useRelatedRoleScoringPolling,
 } from './relatedRoleScoringUi';
+import {
+  OriginalRoleButton,
+  RoleFamilyHeaderNote,
+  roleFamilyOwner,
+  roleFamilyReferences,
+  roleReferenceLabel,
+} from './RoleFamilyHeaderUi';
+
+const decisionRecommendsReject = (decision) => (
+  isRejectDecisionType(decision?.decision_type)
+  || String(decision?.recommendation || decision?.action || '')
+    .trim().toLowerCase().includes('reject')
+);
+
+const linkedRoleTargetCopy = (role, roleFamily) => {
+  const references = roleFamilyReferences({ ...role, role_family: roleFamily });
+  const labels = references.map(roleReferenceLabel).filter(Boolean);
+  return labels.length > 1
+    ? labels.join(', ')
+    : 'the original and every related role in this shared candidate pool';
+};
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
@@ -134,6 +148,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
   const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
   const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
+  const [role, setRole] = useState(null);
+  const [decisionApprovalToConfirm, setDecisionApprovalToConfirm] = useState(null);
   const fetchPendingDecisions = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     try {
@@ -173,8 +189,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }, 30_000);
     return () => window.clearInterval(handle);
   }, [fetchPendingDecisions]);
-  const handleApproveDecision = useCallback(async (decisionId) => {
+  const handleApproveDecision = useCallback(async (decisionOrId, { confirmed = false } = {}) => {
+    const decision = typeof decisionOrId === 'object' ? decisionOrId : null;
+    const decisionId = decision?.id || decisionOrId;
     if (!decisionId) return;
+    const decisionFamily = decision?.role_family || role?.role_family;
+    const linkedReferences = roleFamilyReferences({
+      ...role,
+      role_family: decisionFamily || role?.role_family,
+    });
+    const sharedPool = linkedReferences.length > 1
+      || role?.role_kind === 'sister'
+      || Number(role?.sister_role_count || 0) > 0;
+    if (!confirmed && decisionRecommendsReject(decision) && sharedPool) {
+      setDecisionApprovalToConfirm({ ...decision, id: decisionId, role_family: decisionFamily });
+      return;
+    }
     setResolvingDecisionId(decisionId);
     try {
       await apiClient.agent.approveDecision(decisionId);
@@ -186,7 +216,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setResolvingDecisionId(null);
     }
-  }, [fetchPendingDecisions, showToast]);
+  }, [fetchPendingDecisions, role, showToast]);
   const handleOverrideDecision = useCallback(async (decisionId) => {
     if (!decisionId) return;
     setResolvingDecisionId(decisionId);
@@ -201,7 +231,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setResolvingDecisionId(null);
     }
   }, [fetchPendingDecisions, showToast]);
-  const [role, setRole] = useState(null);
   // Workspace chips also power the role editor's suppressed-chip view.
   const [workspaceCriteria, setWorkspaceCriteria] = useState([]);
   const [criteriaBusy, setCriteriaBusy] = useState(false);
@@ -215,8 +244,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
-  const [sisterRescoring, setSisterRescoring] = useState(false);
-  const [sisterPollVersion, setSisterPollVersion] = useState(0);
+  const sisterPollVersion = 0;
   const [startingRelatedRole, setStartingRelatedRole] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
@@ -374,18 +402,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [specEditorDirty, setSpecEditorDirty] = useState(false);
   const [pendingRoleView, setPendingRoleView] = useState(null);
 
-  // Sister roles are read-only scoring projections. Their authoritative job
-  // specification belongs to the original ATS role, and the API rejects spec
-  // writes here, so do not expose an editor that can only fail on save.
-  const canEditJobSpec = Boolean(role) && role?.role_kind !== 'sister';
-  useEffect(() => {
-    if (role?.role_kind !== 'sister') return;
-    setEditingSpec(false);
-    setSpecEditorDirty(false);
-    setPendingRoleView(null);
-    setJobSpecError('');
-    setJobSpecConflict(null);
-  }, [role?.role_kind]);
+  const canEditJobSpec = Boolean(role);
   // Only the most recent workspace load may write state.
   const loadSeqRef = useRef(0);
   const loadedRoleIdRef = useRef(null);
@@ -485,19 +502,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         setRoleApplications(applicationPayloads);
       } catch (error) {
         applicationError ||= error;
-      }
-      if (nextRole?.role_kind === 'sister') {
-        const [hiredAppsRes, withdrawnAppsRes] = await Promise.all([
-          rolesApi.listApplications(numericRoleId, appsQuery('hired')),
-          rolesApi.listApplications(numericRoleId, appsQuery('withdrawn')),
-        ]);
-        if (seq !== loadSeqRef.current) return;
-        applicationPayloads = [
-          ...applicationPayloads,
-          ...(hiredAppsRes?.data || []),
-          ...(withdrawnAppsRes?.data || []),
-        ];
-        setRoleApplications(applicationPayloads);
       }
       if (applicationError) {
         setApplicationsLoadError(getErrorMessage(applicationError, 'Some candidates could not be loaded.'));
@@ -661,12 +665,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   });
 
   const rejectedApplications = useMemo(() => (
-    roleApplications.filter((application) => (
-      role?.role_kind === 'sister'
-        ? application?.application_outcome !== 'open'
-        : application?.application_outcome === 'rejected'
-    ))
-  ), [role?.role_kind, roleApplications]);
+    roleApplications.filter((application) => application?.application_outcome === 'rejected')
+  ), [roleApplications]);
   const activeApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'open')
   ), [roleApplications]);
@@ -713,16 +713,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ?? 0
     );
     const budget = budgetTile(monthlySpentCents, monthlyBudgetCents);
-    if (role?.role_kind === 'sister') {
-      return buildRelatedRolePipelineStats({
-        status: sisterScoringStatus,
-        rosterFallback: activeApplications.length + rejectedApplications.length,
-        belowThresholdCount,
-        thresholdValue,
-        budget,
-        monthlyBudgetCents,
-      });
-    }
     // Awaiting you = this role's pending agent recommendations (HITL — what
     // needs your call), NOT every scored candidate. Scored/Completed candidates
     // the agent hasn't ruled on yet are "decision pending" (shown as context).
@@ -783,15 +773,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         sub: budget.sub,
       },
     ];
-  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, rejectedApplications.length, role, sisterScoringStatus, thresholdValue]);
+  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, role, thresholdValue]);
 
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
       ...stage,
       items: activeApplications.filter((application) => matchesPipelineStage(application, stage.key)),
     })),
-    { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', items: rejectedApplications },
-  ], [activeApplications, rejectedApplications, role?.role_kind]);
+    { key: 'rejected', label: 'Rejected', items: rejectedApplications },
+  ], [activeApplications, rejectedApplications]);
 
   // Candidates-table rows: filter by the active stage segment, then sort by
   // the chosen column. Memoized on the data + sort so the 30s decision/agent
@@ -1150,22 +1140,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
    * edit from silently changing candidate assignment behavior.
    */
 
-  const handleRescoreSister = useCallback(async () => {
-    if (!Number.isFinite(numericRoleId) || sisterRescoring) return;
-    setSisterRescoring(true);
-    try {
-      const res = await rolesApi.rescoreSister(numericRoleId);
-      setSisterScoringStatus(res?.data || null);
-      setSisterPollVersion((value) => value + 1);
-      showToast('Re-scoring queued for the coupled candidate roster.', 'success');
-      window.setTimeout(() => { void loadRoleWorkspace(); }, 1000);
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to queue the related-role re-score.'), 'error');
-    } finally {
-      setSisterRescoring(false);
-    }
-  }, [loadRoleWorkspace, numericRoleId, rolesApi, showToast, sisterRescoring]);
-
   const handleStartRelatedRole = useCallback(async () => {
     if (!role?.id || startingRelatedRole) return;
     setStartingRelatedRole(true);
@@ -1238,9 +1212,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     handleRoleVersionConflict,
     showToast,
   });
-  const handleResumeLegacyWorkspace = useEffectiveRelatedAgentResume({
-    agentStatus, onResumeRole: handleResumeAgent, refetchAgentStatus, resumeWorkspace: apiClient.agent.resumeAll, reloadRole: loadRoleWorkspace, setPollingVersion: setSisterPollVersion, showToast });
-
   // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
   // AgentHeader with a role-scoped agent panel on the right. Builds the
   // panel agent prop from the polled /agent/status payload, with the
@@ -1459,7 +1430,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
   const externalProvider = roleAtsProvider(role);
   const externalProviderLabel = atsProviderLabel(externalProvider);
-  const relatedScoringActive = isRelatedRoleScoringActive(sisterScoringStatus);
+  const familyOwner = roleFamilyOwner(role);
+  const familyRelated = (role?.role_family?.related || []).filter((reference) => (
+    Number(reference?.id) !== Number(familyOwner?.id)
+  ));
+  const headerDisplayRole = role?.role_kind === 'sister'
+    ? {
+      ...role,
+      role_kind: 'standard',
+      ats_owner_role_id: null,
+      ats_provider: externalProvider,
+      source: externalProvider,
+    }
+    : role;
   const intakeLifecycleCopy = agentIntakeLifecycleCopy(role);
   const manualPauseLifecycleCopy = externalProvider
     ? `A manual Pause also stops Taali processing until you Resume; it does not change the ${externalProviderLabel} posting.`
@@ -1475,9 +1458,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <span>{role?.name || 'Role'}<span className="ah-period">.</span></span>
             {/* States the mode this pipeline runs in: synced from an external
                 ATS, or Taali's own full ATS. */}
-            {role ? <AtsTypeTag role={role} size="sm" /> : null}
+            {role ? <AtsTypeTag role={headerDisplayRole} size="sm" /> : null}
           </span>
         )}
+        subtitle={<RoleFamilyHeaderNote role={role} providerLabel={externalProviderLabel} />}
         period={false}
         breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
         actions={(
@@ -1505,15 +1489,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 Review {roleAgent.pending} {roleAgent.pending === 1 ? 'item' : 'items'} →
               </button>
             ) : null}
-            {role?.role_kind === 'sister' ? (
-              <button type="button" className="btn btn-outline btn-sm" onClick={handleRescoreSister} disabled={sisterRescoring || relatedScoringActive}>
-                {sisterRescoring || sisterScoringStatus?.status === 'running' || sisterScoringStatus?.status === 'retrying'
-                  ? <Spinner size={12} />
-                  : (sisterScoringStatus?.status === 'waiting' ? null : <RefreshCw size={12} />)}
-                {relatedRoleScoringActionLabel(sisterScoringStatus)}
-              </button>
+            {role?.role_kind === 'sister' && familyOwner?.id ? (
+              <OriginalRoleButton
+                owner={familyOwner}
+                onOpen={() => navigate(`/jobs/${familyOwner.id}`)}
+              />
             ) : null}
-            {role?.role_kind !== 'sister' ? (
+            {role?.id ? (
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
@@ -1558,30 +1540,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
             <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
             <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-            {role?.role_kind === 'sister' ? (
-              <div className="f"><span className="k">{externalProviderLabel} owner</span><span className="v purple">{role?.ats_owner_role_name || 'Original role'}</span></div>
-            ) : (
-              (() => {
-                const activeTasks = roleTasks.filter((task) => task?.is_active !== false);
-                const draftTasks = roleTasks.filter((task) => task?.is_active === false && task?.generated);
-                return (
-                  <div className="f">
-                    <span className="k">{activeTasks.length > 1 ? 'Tasks · A/B' : activeTasks.length ? 'Linked task' : 'Assessment'}</span>
-                    <span className="v purple">
-                      {activeTasks.length
-                        ? activeTasks.map((task) => task.name).join(' · ')
-                        : draftTasks.length
-                          ? `${draftTasks[0].name} · draft`
-                          : Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment)
-                            ? 'Skipped'
-                            : 'Skipped until task assigned'}
-                    </span>
-                  </div>
-                );
-              })()
-            )}
-            {role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0 ? (
-              <div className="f"><span className="k">Related roles</span><span className="v purple">{role.sister_role_count} related role{role.sister_role_count === 1 ? '' : 's'}</span></div>
+            {(() => {
+              const activeTasks = roleTasks.filter((task) => task?.is_active !== false);
+              const draftTasks = roleTasks.filter((task) => task?.is_active === false && task?.generated);
+              return (
+                <div className="f">
+                  <span className="k">{activeTasks.length > 1 ? 'Tasks · A/B' : activeTasks.length ? 'Linked task' : 'Assessment'}</span>
+                  <span className="v purple">
+                    {activeTasks.length
+                      ? activeTasks.map((task) => task.name).join(' · ')
+                      : draftTasks.length
+                        ? `${draftTasks[0].name} · draft`
+                        : Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment)
+                          ? 'Skipped'
+                          : 'Skipped until task assigned'}
+                  </span>
+                </div>
+              );
+            })()}
+            {role?.role_kind !== 'sister' && familyRelated.length > 0 ? (
+              <div className="f"><span className="k">Related roles</span><span className="v purple">{familyRelated.map(roleReferenceLabel).join(' · ')}</span></div>
             ) : null}
           </div>
         )}
@@ -1593,16 +1571,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         onAgentSettings={goToAgentSettings}
         controlsDisabledReason={roleAgentControlDisabledReason}
       />
-      {role?.role_kind === 'sister' ? (
-        <RelatedRoleContextBanner
-          role={role}
-          providerLabel={externalProviderLabel}
-          status={sisterScoringStatus}
-          agentStatus={agentStatus}
-          onResumeWorkspace={handleResumeLegacyWorkspace}
-          onOpenOriginal={() => navigate(`/jobs/${role.ats_owner_role_id}`)}
-        />
-      ) : null}
       <div className="page">
         {(activationIsPending || activationIsBlocked) ? (
           <div
@@ -1644,9 +1612,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 </div>
                 <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>Retry</button>
               </div>
-            ) : null}
-            {role?.role_kind === 'sister' ? (
-              <RelatedRolePipelineLabel providerLabel={externalProviderLabel} />
             ) : null}
             <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
           </>
@@ -1748,7 +1713,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                     className="btn btn-purple btn-xs"
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      void handleApproveDecision(pendingDecision.id);
+                                      void handleApproveDecision(pendingDecision);
                                     }}
                                     disabled={decisionResolving}
                                   >
@@ -2045,7 +2010,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     return { key: stage.key, label: stage.label, count: items.length };
                   }),
                   // Rejected is an outcome, kept at the far edge of the lens.
-                  { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', count: rejectedApplications.length },
+                  { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
                 ].map((seg) => (
                   <button
                     key={seg.key}
@@ -2070,9 +2035,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 >
                   <Send size={12} />Reach out ({selectedSourcedAppIds.size})
                 </button>
-              ) : null}
-              {role?.role_kind === 'sister' ? (
-                <RelatedRoleScoringInlineStatus status={sisterScoringStatus} />
               ) : null}
             </div>
             {tableStageFilter === 'sourced' && numericRoleId ? (
@@ -2144,9 +2106,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         ) : null}
                         <th>Candidate</th>
                         <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">{role?.role_kind === 'sister' ? 'Related-role score' : 'Score'}{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">Score{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
                         </th>
-                        {role?.role_kind === 'sister' ? <th title={`Fit score on ${role?.ats_owner_role_name || 'the original role'}`}>Original fit</th> : null}
                         <th>Stage</th>
                         {/* External-ATS roles show the synced ATS stage;
                             full-ATS roles show the native Taali pipeline stage
@@ -2223,13 +2184,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                   className="mt-0.5"
                                 />
                               </td>
-                              {role?.role_kind === 'sister' ? (
-                                <td>
-                                  {application?.source_role_score != null
-                                    ? <span className="stage-pill">{Math.round(Number(application.source_role_score))}</span>
-                                    : <span className="ctable-em">—</span>}
-                                </td>
-                              ) : null}
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
@@ -2280,7 +2234,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={(role?.role_kind === 'sister' ? 8 : 7) + (sourcingSelection ? 1 : 0)} className="ctable-triage-cell">
+                                <td colSpan={7 + (sourcingSelection ? 1 : 0)} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} agentRunning={agentRunning} />
                                 </td>
                               </tr>
@@ -2323,6 +2277,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           variant="danger"
           onClose={() => setPendingRoleView(null)}
           onConfirm={discardSpecAndNavigate}
+        />
+
+        <ConfirmActionDialog
+          open={decisionApprovalToConfirm != null}
+          title="Reject across linked roles?"
+          description={`Approving this recommendation rejects the shared application for ${linkedRoleTargetCopy(
+            role,
+            decisionApprovalToConfirm?.role_family || role?.role_family,
+          )}.`}
+          warning="This rejection cannot be limited to only one role in the shared candidate pool."
+          confirmLabel="Reject across all linked roles"
+          variant="danger"
+          onClose={() => setDecisionApprovalToConfirm(null)}
+          onConfirm={() => {
+            const decision = decisionApprovalToConfirm;
+            setDecisionApprovalToConfirm(null);
+            void handleApproveDecision(decision, { confirmed: true });
+          }}
         />
 
         <ReachOutDialog

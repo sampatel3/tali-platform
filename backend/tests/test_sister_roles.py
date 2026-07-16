@@ -2,16 +2,34 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from sqlalchemy import inspect as sa_inspect
+
+from app.domains.assessments_runtime.role_support import (
+    role_family_load_options,
+    role_family_response,
+)
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.job_hiring_team import TEAM_ROLE_HIRING_MANAGER, JobHiringTeam
 from app.models.job_page import JobPage
+from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
 from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
+from app.services.sister_role_service import related_role_advance_note
 from tests.conftest import auth_headers
+
+
+def test_related_role_advance_note_names_both_role_references():
+    owner = SimpleNamespace(id=31, name="Data Platform Lead")
+    related = SimpleNamespace(id=47, name="AI Engineer")
+
+    note = related_role_advance_note(related, owner)
+
+    assert "AI Engineer #47" in note
+    assert "Data Platform Lead #31" in note
 
 
 def _source_role_with_candidates(db, *, organization_id: int) -> tuple[Role, list[CandidateApplication]]:
@@ -102,6 +120,192 @@ def _match_output(*, ok: bool):
         cache_hit=False,
         model_dump=lambda **_: {"role_fit_score": 88.0},
     )
+
+
+def test_role_list_and_detail_include_complete_named_role_family(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    source = Role(
+        organization_id=user.organization_id,
+        name="Platform Engineer",
+        source="workable",
+        workable_job_id="PLATFORM-ENG",
+        workable_job_data={"state": "published"},
+    )
+    db.add(source)
+    db.flush()
+    related_z = Role(
+        organization_id=user.organization_id,
+        name="Platform Engineer · Zero Trust",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=source.id,
+    )
+    related_a = Role(
+        organization_id=user.organization_id,
+        name="Platform Engineer · API",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=source.id,
+    )
+    db.add_all([related_z, related_a])
+    db.commit()
+
+    expected_family = {
+        "owner": {"id": source.id, "name": source.name},
+        "related": [
+            {"id": related_a.id, "name": related_a.name},
+            {"id": related_z.id, "name": related_z.name},
+        ],
+    }
+
+    listing = client.get(
+        "/api/v1/roles",
+        params={"sort_by": "name"},
+        headers=headers,
+    )
+    assert listing.status_code == 200, listing.text
+    listed_by_id = {row["id"]: row for row in listing.json()}
+    assert listed_by_id[source.id]["role_family"] == expected_family
+    assert listed_by_id[related_a.id]["role_family"] == expected_family
+    assert listed_by_id[related_z.id]["role_family"] == expected_family
+
+    source_detail = client.get(
+        f"/api/v1/roles/{source.id}", params={"shell": True}, headers=headers
+    )
+    related_detail = client.get(
+        f"/api/v1/roles/{related_z.id}", params={"shell": True}, headers=headers
+    )
+    assert source_detail.status_code == 200, source_detail.text
+    assert related_detail.status_code == 200, related_detail.text
+    assert source_detail.json()["role_family"] == expected_family
+    assert related_detail.json()["role_family"] == expected_family
+
+
+def test_role_family_responses_exclude_cross_organization_links(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    other_org = Organization(name="Other tenant family org")
+    db.add(other_org)
+    db.flush()
+
+    local_owner = Role(
+        organization_id=user.organization_id,
+        name="Local owner",
+        source="workable",
+    )
+    foreign_owner = Role(
+        organization_id=other_org.id,
+        name="Foreign private owner",
+        source="workable",
+    )
+    db.add_all([local_owner, foreign_owner])
+    db.flush()
+    foreign_related = Role(
+        organization_id=other_org.id,
+        name="Foreign private related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=local_owner.id,
+    )
+    local_malformed_related = Role(
+        organization_id=user.organization_id,
+        name="Local malformed related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=foreign_owner.id,
+    )
+    db.add_all([foreign_related, local_malformed_related])
+    db.commit()
+
+    owner_response = client.get(
+        f"/api/v1/roles/{local_owner.id}", params={"shell": True}, headers=headers
+    )
+    related_response = client.get(
+        f"/api/v1/roles/{local_malformed_related.id}",
+        params={"shell": True},
+        headers=headers,
+    )
+
+    assert owner_response.status_code == 200, owner_response.text
+    assert owner_response.json()["role_family"] == {
+        "owner": {"id": local_owner.id, "name": local_owner.name},
+        "related": [],
+    }
+    assert "Foreign private related role" not in owner_response.text
+
+    assert related_response.status_code == 200, related_response.text
+    related_payload = related_response.json()
+    assert related_payload["ats_owner_role_name"] is None
+    assert related_payload["role_family"] == {
+        "owner": {
+            "id": local_malformed_related.id,
+            "name": local_malformed_related.name,
+        },
+        "related": [],
+    }
+    assert "Foreign private owner" not in related_response.text
+
+
+def test_role_family_serializer_filters_foreign_siblings_without_scoped_loader():
+    owner = Role(
+        id=91_001,
+        organization_id=801,
+        name="Local transient owner",
+        source="workable",
+    )
+    foreign_related = Role(
+        id=91_002,
+        organization_id=802,
+        name="Foreign transient related",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+    )
+    owner.sister_roles.append(foreign_related)
+
+    assert role_family_response(owner).model_dump() == {
+        "owner": {"id": owner.id, "name": owner.name},
+        "related": [],
+    }
+
+
+def test_role_family_loader_keeps_sibling_job_specs_deferred(db):
+    org = Organization(name="Lightweight family loader org")
+    db.add(org)
+    db.flush()
+    owner = Role(
+        organization_id=org.id,
+        name="Reference-only owner",
+        source="workable",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=org.id,
+        name="Reference-only related",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_spec_text="Large related-role job specification " * 100,
+    )
+    db.add(related)
+    db.commit()
+    owner_id = int(owner.id)
+    org_id = int(org.id)
+    db.expunge_all()
+
+    loaded_owner = (
+        db.query(Role)
+        .options(*role_family_load_options(organization_id=org_id))
+        .filter(Role.id == owner_id)
+        .one()
+    )
+    loaded_related = loaded_owner.sister_roles[0]
+    unloaded = sa_inspect(loaded_related).unloaded
+
+    assert loaded_related.name == "Reference-only related"
+    assert "job_spec_text" in unloaded
+    assert "screening_pack_template" in unloaded
 
 
 def test_create_sister_role_persists_separate_scores_and_projects_source_roster(client, db):
@@ -368,6 +572,7 @@ def test_related_role_uses_cloned_requisition_chat_then_creates_coupled_scoring_
     receipt = published.json()
     assert receipt["related_role"] is True
     assert receipt["source_role_id"] == source.id
+    assert receipt["source_role_name"] == source.name
     assert receipt["status"] == BRIEF_STATUS_APPLIED
     assert receipt["evaluation_counts"] == {
         "total": 2,

@@ -269,6 +269,17 @@
   color: #fff;
 }
 
+.agent-needs-input-reject-warning {
+  flex: 1 0 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklab, var(--amber) 28%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--amber-soft) 58%, transparent);
+  color: var(--ink-2);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
 .agent-needs-input-reject:disabled {
   opacity: 0.6;
   cursor: not-allowed;

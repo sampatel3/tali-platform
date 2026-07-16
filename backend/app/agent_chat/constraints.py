@@ -156,7 +156,13 @@ def _criteria_text_map(db: Session, role: Role) -> dict[str, str]:
     }
 
 
-def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str, Any]:
+def update_job_spec(
+    db: Session,
+    role: Role,
+    *,
+    job_spec_text: str,
+    provision_assessment_task: bool = True,
+) -> dict[str, Any]:
     """Replace THIS role's job description + re-derive its spec criteria.
 
     A new JD re-derives the must / preferred / constraint chips from the spec's
@@ -165,7 +171,8 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
     re-derive IMMEDIATELY (cheap, no LLM) but do NOT re-screen: return the criteria
     diff + a cost estimate and leave the spend to an explicit ``rescreen_role``
     (same opt-in guard as a constraint edit). Recruiter-added chips (salary caps
-    etc.) are untouched — only the spec-derived ones change.
+    etc.) are untouched — only the spec-derived ones change. Related-role callers
+    disable assessment-task provisioning because their score lifecycle is separate.
     """
     text = (job_spec_text or "").strip()
     if len(text) < 60:
@@ -188,7 +195,9 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
         sync_derived_criteria(db, role)
         from ..platform.config import settings
 
-        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+        if provision_assessment_task and getattr(
+            settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False
+        ):
             from ..services.task_provisioning_service import (
                 request_assessment_task_provisioning,
             )
