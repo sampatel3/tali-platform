@@ -27,7 +27,7 @@ GENERAL_SIZE_LIMIT = 1000
 # land another feature. Lower it whenever the corresponding module shrinks.
 LEGACY_SIZE_BASELINES: dict[str, int] = {
     "app/agent_chat/tools.py": 391,
-    "app/agent_runtime/tool_registry.py": 2692,
+    "app/agent_runtime/tool_registry.py": 2689,
     "app/candidate_search/top_candidates.py": 1160,
     "app/components/assessments/rubric_scoring.py": 1200,
     "app/components/assessments/service.py": 1417,

@@ -46,6 +46,10 @@ from ..services.decision_evidence_service import blocked_must_have_requirements
 from ..services.decision_presentation_service import normalize_candidate_summary
 from ..sub_agents.base import public_sub_agent_error
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
+from .tool_descriptions import (
+    QUEUE_EVIDENCE_DESC as _QUEUE_EVIDENCE_DESC,
+    QUEUE_REASONING_DESC as _QUEUE_REASONING_DESC,
+)
 
 
 # Cohort signals are recomputed when older than this. The full pool query
@@ -70,24 +74,6 @@ class _AgentReadCtx:
 # ---------------------------------------------------------------------------
 # Tool schemas exposed to Anthropic
 # ---------------------------------------------------------------------------
-
-_QUEUE_REASONING_DESC = (
-    # Shown VERBATIM to the recruiter on the decision card, so the full
-    # plain-English contract lives here — a tool description outranks the
-    # system prompt, so "cite concrete fields" made the model write field
-    # names literally.
-    "1-3 short sentences a recruiter can read aloud. Lead with the "
-    "recommendation and the one or two facts that justify it. Use plain "
-    "words only: never internal identifiers or numeric IDs, never snake_case "
-    'field or scorer keys (write "role fit", "pre-screen", "CV match"), and '
-    'never key=value pairs (write "already at Technical Interview in '
-    'Workable"). Keep it compact.'
-)
-_QUEUE_EVIDENCE_DESC = (
-    "Cited evidence: e.g. {cv_match_score: 87, taali_score: 78, "
-    "criteria_hits: ['python', '5y SaaS'], cv_excerpt: '...'}."
-)
-
 
 AGENT_TOOLS: list[dict[str, Any]] = [
     # ------------------------------------------------------------------
