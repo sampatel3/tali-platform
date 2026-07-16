@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const http = vi.hoisted(() => ({
+  get: vi.fn(),
   patch: vi.fn(),
   post: vi.fn(),
   put: vi.fn(),
@@ -48,6 +49,12 @@ describe('versioned role mutation clients', () => {
     expect(http.post).toHaveBeenCalledWith('/agent/resume-all', {
       expected_control_version: 9,
     });
+  });
+
+  it('caps the status refresh that gates workspace controls', () => {
+    agent.orgStatus();
+
+    expect(http.get).toHaveBeenCalledWith('/agent/org-status', { timeout: 10000 });
   });
 
   it('versions draft approval and structured revision commands', () => {

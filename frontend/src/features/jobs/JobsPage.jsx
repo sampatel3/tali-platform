@@ -26,7 +26,10 @@ import {
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
-import { workspaceControlConflictMessage } from '../../shared/workspaceAgentControl';
+import {
+  resolveWorkspaceControlVersion,
+  workspaceControlConflictMessage,
+} from '../../shared/workspaceAgentControl';
 import {
   EmptyState,
   Select,
@@ -715,18 +718,24 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const handlePauseAllAgents = useCallback(
     () => runAgentBulk(
       'pause',
-      () => apiClient.agent.pauseAll(headerAgent?.workspaceControlVersion),
+      async () => apiClient.agent.pauseAll(await resolveWorkspaceControlVersion(
+        headerAgent?.workspaceControlVersion,
+        refetchAgentStatus,
+      )),
       'Could not pause the workspace agent.',
     ),
-    [headerAgent?.workspaceControlVersion, runAgentBulk],
+    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
   );
   const handleResumeAllAgents = useCallback(
     () => runAgentBulk(
       'resume',
-      () => apiClient.agent.resumeAll(headerAgent?.workspaceControlVersion),
+      async () => apiClient.agent.resumeAll(await resolveWorkspaceControlVersion(
+        headerAgent?.workspaceControlVersion,
+        refetchAgentStatus,
+      )),
       'Could not resume the workspace agent.',
     ),
-    [headerAgent?.workspaceControlVersion, runAgentBulk],
+    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
   );
   return (
     <div>

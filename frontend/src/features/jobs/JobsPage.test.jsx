@@ -410,6 +410,53 @@ describe('JobsPage Workable sync states', () => {
     expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
   });
 
+  it('accepts a pause click when the cached status predates the control version', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 705 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{ ...baseRoles[0], agentic_mode_enabled: true }],
+    });
+    const incomplete = {
+      active_role_count: 1,
+      paused_role_count: 0,
+      workspace_paused: false,
+    };
+    const current = { ...incomplete, workspace_control_version: 6 };
+    const paused = {
+      active_role_count: 0,
+      paused_role_count: 1,
+      workspace_paused: true,
+      workspace_control_version: 7,
+      workspace_paused_at: new Date().toISOString(),
+      workspace_paused_reason: 'paused by recruiter',
+      workspace_paused_by: {
+        user_id: 7,
+        name: 'Sam Patel',
+        is_current_user: true,
+      },
+    };
+    apiClient.agent.orgStatus
+      .mockReset()
+      .mockResolvedValueOnce({ data: incomplete })
+      .mockResolvedValueOnce({ data: current })
+      .mockResolvedValue({ data: paused });
+    apiClient.agent.pauseAll.mockResolvedValue({
+      data: { workspace_paused: true, workspace_control_version: 7 },
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    const pause = await screen.findByRole('button', { name: 'Pause workspace' });
+    expect(pause).not.toBeDisabled();
+    fireEvent.click(pause);
+
+    await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(6));
+    expect(await screen.findByRole('button', { name: 'Resume workspace' })).toBeInTheDocument();
+  });
+
   it('does not reuse a pre-mutation workspace poll after Pause succeeds', async () => {
     localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 704 }));
     apiClient.roles.list.mockResolvedValue({

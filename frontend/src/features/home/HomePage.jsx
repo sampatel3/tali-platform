@@ -11,7 +11,10 @@ import { agent as agentApi, agentChat } from '../../shared/api';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
-import { workspaceControlConflictMessage } from '../../shared/workspaceAgentControl';
+import {
+  resolveWorkspaceControlVersion,
+  workspaceControlConflictMessage,
+} from '../../shared/workspaceAgentControl';
 import { MotionAttentionBadge, Reveal } from '../../shared/motion';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -416,12 +419,22 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     }
   }, [loadDecisions, loadRoles, refetchOrgStatus, showToast]);
   const handlePauseAllAgents = useCallback(
-    () => runOrgAgentBulk('pause', () => agentApi.pauseAll(orgStatus?.workspace_control_version)),
-    [orgStatus?.workspace_control_version, runOrgAgentBulk],
+    () => runOrgAgentBulk('pause', async () => agentApi.pauseAll(
+      await resolveWorkspaceControlVersion(
+        orgStatus?.workspace_control_version,
+        refetchOrgStatus,
+      ),
+    )),
+    [orgStatus?.workspace_control_version, refetchOrgStatus, runOrgAgentBulk],
   );
   const handleResumeAllAgents = useCallback(
-    () => runOrgAgentBulk('resume', () => agentApi.resumeAll(orgStatus?.workspace_control_version)),
-    [orgStatus?.workspace_control_version, runOrgAgentBulk],
+    () => runOrgAgentBulk('resume', async () => agentApi.resumeAll(
+      await resolveWorkspaceControlVersion(
+        orgStatus?.workspace_control_version,
+        refetchOrgStatus,
+      ),
+    )),
+    [orgStatus?.workspace_control_version, refetchOrgStatus, runOrgAgentBulk],
   );
 
   // Poll the active-agents list for the left rail + notification badges.

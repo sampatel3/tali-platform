@@ -222,6 +222,23 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
   });
 
+  it('keeps workspace pause clickable while a missing version is refreshed on click', () => {
+    const onPause = vi.fn();
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: false,
+      active_role_count: 2,
+      paused_role_count: 0,
+      pending_decisions: 3,
+    }, { isEnabled: true, controlScope: 'workspace' });
+
+    render(<AgentHeader title="Jobs" agent={agent} onPauseAgent={onPause} />);
+
+    const pause = screen.getByRole('button', { name: 'Pause workspace' });
+    expect(pause).not.toBeDisabled();
+    fireEvent.click(pause);
+    expect(onPause).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps a zero-role workspace hold visible without inventing a $50 budget', () => {
     const agent = buildAgentPropFromStatus({
       workspace_paused: true,
