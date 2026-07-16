@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import {
   BrowserRouter,
   Navigate,
@@ -24,185 +24,65 @@ import { MotionSystemProvider } from './shared/motion';
 
 import { PreviewNavGuard } from './shared/layout/PreviewNavGuard';
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
-
-const LandingPage = lazy(() =>
-  import('./features/marketing/LandingPage').then((m) => ({ default: m.LandingPage }))
-);
-const LoginPage = lazy(() =>
-  import('./features/auth/LoginPage').then((m) => ({ default: m.LoginPage }))
-);
-const RegisterPage = lazy(() =>
-  import('./features/auth/RegisterPage').then((m) => ({ default: m.RegisterPage }))
-);
-const ForgotPasswordPage = lazy(() =>
-  import('./features/auth/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage }))
-);
-const ResetPasswordPage = lazy(() =>
-  import('./features/auth/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage }))
-);
-const VerifyEmailPage = lazy(() =>
-  import('./features/auth/VerifyEmailPage').then((m) => ({ default: m.VerifyEmailPage }))
-);
-const AcceptInvitePage = lazy(() =>
-  import('./features/auth/AcceptInvitePage').then((m) => ({ default: m.AcceptInvitePage }))
-);
-const DashboardNav = lazy(() =>
-  import('./shared/layout/Shell').then((m) => ({ default: m.Shell }))
-);
-const ConnectWorkableButton = lazy(() =>
-  import('./features/integrations/WorkableConnection').then((m) => ({ default: m.ConnectWorkableButton }))
-);
-const WorkableCallbackPage = lazy(() =>
-  import('./features/integrations/WorkableConnection').then((m) => ({ default: m.WorkableCallbackPage }))
-);
-const NotFoundPage = lazy(() =>
-  import('./features/marketing/NotFoundPage').then((m) => ({ default: m.NotFoundPage }))
-);
-const HomePage = lazy(() =>
-  import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
-);
-const PipelineAnalyticsPage = lazy(() =>
-  import('./features/analytics/PipelineAnalyticsPage').then((m) => ({ default: m.PipelineAnalyticsPage }))
-);
-const AnalyticsPage = lazy(() =>
-  import('./features/home/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage }))
-);
-const CandidateWelcomePage = lazy(() =>
-  import('./features/assessment_runtime/CandidateWelcomePage').then((m) => ({ default: m.CandidateWelcomePage }))
-);
-const BackgroundJobsToaster = lazy(() =>
-  import('./features/candidates/BackgroundJobsToaster').then((m) => ({ default: m.BackgroundJobsToaster }))
-);
-const ToastShowcasePage = lazy(() =>
-  import('./features/dev/ToastShowcasePage').then((m) => ({ default: m.ToastShowcasePage }))
-);
-const MotionShowcasePage = lazy(() =>
-  import('./features/dev/MotionShowcasePage').then((m) => ({ default: m.MotionShowcasePage }))
-);
-const ButtonShowcasePage = lazy(() =>
-  import('./features/dev/ButtonShowcasePage').then((m) => ({ default: m.ButtonShowcasePage }))
-);
-
-const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
-const DemoExperiencePage = lazy(() =>
-  import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
-);
-const DemoLeadPage = lazy(() =>
-  import('./features/marketing/DemoLeadPage').then((m) => ({ default: m.DemoLeadPage }))
-);
-const DemoShowcasePage = lazy(() =>
-  import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
-);
-// Internal, no-auth landing-design preview (/landing-preview?v=a|b|c|d). Landing
-// variants Sam eyeballs in prod (D — the pinned scroll-scrubbed "Watch it work"
-// concept — is the default); fixture data only, no APIs.
-const LandingPreviewPage = lazy(() =>
-  import('./features/marketing/landing_preview/LandingPreviewPage').then((m) => ({ default: m.LandingPreviewPage }))
-);
-const DeveloperPortalPage = lazy(() =>
-  import('./features/developers/DeveloperPortalPage').then((m) => ({ default: m.DeveloperPortalPage }))
-);
-const AssessmentsPage = lazy(() =>
-  import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
-);
-const ChatPage = lazy(() =>
-  import('./features/chat/ChatPage').then((m) => ({ default: m.ChatPage }))
-);
-const ChatShowcaseView = lazy(() =>
-  import('./features/chat/ChatShowcaseView').then((m) => ({ default: m.ChatShowcaseView }))
-);
-const ChatDesignSystemView = lazy(() =>
-  import('./features/chat/ChatDesignSystemView').then((m) => ({ default: m.ChatDesignSystemView }))
-);
-const AgentPromptPreviewPage = lazy(() =>
-  import('./features/chat/AgentPromptPreviewPage').then((m) => ({ default: m.AgentPromptPreviewPage }))
-);
-const HomeShowcaseView = lazy(() =>
-  import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
-);
-// Internal, no-auth PREVIEW of the real /home Hub with the Motion library
-// applied (/home-preview). Same production components + fixtures as
-// HomeShowcaseView; motion.dev adds the agent-ON flip, queue-advance, tickers
-// and reveals. Fixture data only — no APIs, not in isProtectedRecruiterPath.
-const HomeMotionPreview = lazy(() =>
-  import('./features/home/HomeMotionPreview').then((m) => ({ default: m.HomeMotionPreview }))
-);
-// Internal Motion previews of the rest of the app (/jobs-preview,
-// /report-preview, /analytics-preview) — companions to /home-preview so the
-// founder can tour the whole app on Motion. Public, no-auth: they reuse
-// production leaf components on fixture data only, make no API calls, and are
-// not in isProtectedRecruiterPath (nor httpClient isPublicPath).
-const JobsMotionPreview = lazy(() =>
-  import('./features/jobs/JobsMotionPreview').then((m) => ({ default: m.JobsMotionPreview }))
-);
-const ReportMotionPreview = lazy(() =>
-  import('./features/candidates/ReportMotionPreview').then((m) => ({ default: m.ReportMotionPreview }))
-);
-const AnalyticsMotionPreview = lazy(() =>
-  import('./features/analytics/AnalyticsMotionPreview').then((m) => ({ default: m.AnalyticsMotionPreview }))
-);
-const TopReportPage = lazy(() => import('./features/chat/TopReportPage'));
-const SubmittalPackPage = lazy(() => import('./features/jobs/SubmittalPackPage'));
-const CandidateStandingReportPage = lazy(() =>
-  import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
-);
-const JobsPage = lazy(() =>
-  import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
-);
-const UnsubscribePage = lazy(() =>
-  import('./features/outreach/UnsubscribePage')
-);
-const OutreachThanksPage = lazy(() =>
-  import('./features/outreach/OutreachThanksPage')
-);
-const RequisitionsPage = lazy(() =>
-  import('./features/requisitions/RequisitionsPage').then((m) => ({ default: m.RequisitionsPage }))
-);
-const PublicJobPage = lazy(() =>
-  import('./features/jobpage/PublicJobPage').then((m) => ({ default: m.PublicJobPage }))
-);
-const CareersPage = lazy(() =>
-  import('./features/jobpage/CareersPage').then((m) => ({ default: m.CareersPage }))
-);
-const ClientIntakePage = lazy(() =>
-  import('./features/clientintake/ClientIntakePage').then((m) => ({ default: m.ClientIntakePage }))
-);
-const JobPipelinePage = lazy(() =>
-  import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
-);
-const TasksPage = lazy(() =>
-  import('./features/tasks/TasksPage').then((m) => ({ default: m.TasksPage }))
-);
-const TaskPreviewPage = lazy(() =>
-  import('./features/tasks/TasksPage').then((m) => ({ default: m.TaskPreviewPage }))
-);
-const BespokeTaskRequestPage = lazy(() =>
-  import('./features/tasks/BespokeTaskRequestPage').then((m) => ({ default: m.BespokeTaskRequestPage }))
-);
-const SettingsPage = lazy(() =>
-  import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
-);
-const RequisitionTemplatePage = lazy(() =>
-  import('./features/settings/RequisitionTemplatePage').then((m) => ({ default: m.RequisitionTemplatePage }))
-);
-const AtsAdminPage = lazy(() =>
-  import('./features/admin/AtsAdminPage').then((m) => ({ default: m.AtsAdminPage }))
-);
-const DecisionPolicyPage = lazy(() =>
-  import('./features/decision_policy/DecisionPolicyPage')
-);
-const TokenGate = lazy(() =>
-  import('./features/_dev/TokenGate')
-);
-const DeckIframe = lazy(() =>
-  import('./features/_dev/DeckIframe')
-);
-const BlogIndexPage = lazy(() =>
-  import('./features/blog/BlogIndexPage')
-);
-const BlogPostPage = lazy(() =>
-  import('./features/blog/BlogPostPage')
-);
+import {
+  AcceptInvitePage,
+  AgentPromptPreviewPage,
+  AnalyticsMotionPreview,
+  AnalyticsPage,
+  AssessmentPage,
+  AssessmentsPage,
+  AtsAdminPage,
+  BackgroundJobsToaster,
+  BespokeTaskRequestPage,
+  BlogIndexPage,
+  BlogPostPage,
+  ButtonShowcasePage,
+  CandidateStandingReportPage,
+  CandidateWelcomePage,
+  CareersPage,
+  ChatPage,
+  ChatShowcaseView,
+  ChatDesignSystemView,
+  ClientIntakePage,
+  ConnectWorkableButton,
+  DashboardNav,
+  DecisionPolicyPage,
+  DeckIframe,
+  DemoExperiencePage,
+  DemoLeadPage,
+  DemoShowcasePage,
+  DeveloperPortalPage,
+  ForgotPasswordPage,
+  HomeMotionPreview,
+  HomePage,
+  HomeShowcaseView,
+  JobPipelinePage,
+  JobsMotionPreview,
+  JobsPage,
+  LandingPage,
+  LandingPreviewPage,
+  LoginPage,
+  MotionShowcasePage,
+  NotFoundPage,
+  OutreachThanksPage,
+  PipelineAnalyticsPage,
+  PublicJobPage,
+  RegisterPage,
+  ReportMotionPreview,
+  RequisitionTemplatePage,
+  RequisitionsPage,
+  ResetPasswordPage,
+  SettingsPage,
+  SubmittalPackPage,
+  TaskPreviewPage,
+  TasksPage,
+  ToastShowcasePage,
+  TokenGate,
+  TopReportPage,
+  UnsubscribePage,
+  VerifyEmailPage,
+  WorkableCallbackPage,
+} from './app/lazyPages';
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;

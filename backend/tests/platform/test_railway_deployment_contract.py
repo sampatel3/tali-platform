@@ -11,6 +11,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 RAILWAY_DIR = ROOT / "scripts" / "railway"
 SHELL_FILES = [
+    ROOT / "scripts" / "deploy_production.sh",
+    ROOT / "scripts" / "release" / "assert_canonical_source.sh",
+    ROOT / "scripts" / "release" / "assert_canonical_release.sh",
     RAILWAY_DIR / "lib.sh",
     RAILWAY_DIR / "check_status.sh",
     RAILWAY_DIR / "prepare_production.sh",

@@ -11,6 +11,9 @@ WEB_SERVICE="${RAILWAY_BACKEND_SERVICE:-resourceful-adaptation}"
 GENERAL_WORKER_SERVICE="${RAILWAY_WORKER_SERVICE:-taali-worker}"
 SCORING_WORKER_SERVICE="${RAILWAY_SCORING_WORKER_SERVICE:-taali-worker-scoring}"
 
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
+railway_assert_canonical_backend_dir "$ROOT_DIR" "$BACKEND_DIR" "$ENV_NAME"
+
 for command in railway python3 curl; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "error: required command is not installed: $command" >&2
@@ -48,6 +51,8 @@ PY
 railway_assert_distinct_services \
   "$WEB_SERVICE" "$GENERAL_WORKER_SERVICE" "$SCORING_WORKER_SERVICE"
 railway environment "$ENV_NAME" >/dev/null
+railway_assert_production_database_provenance \
+  "$ENV_NAME" "$WEB_SERVICE" "$BACKEND_DIR"
 
 # A web-only deployment must never report success while either required worker
 # is missing, failed, or configured for the wrong queue/Beat ownership.
@@ -65,6 +70,7 @@ previous_id="$(
   railway_service_deployment_id "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE"
 )"
 
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
 echo "Deploying web service '$WEB_SERVICE' from $BACKEND_DIR (environment: $ENV_NAME)..."
 (
   cd "$BACKEND_DIR"

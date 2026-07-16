@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:architecture": "node scripts/check-architecture.mjs && node scripts/check-motion-system.mjs && node scripts/check-chat-system.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs && node scripts/check-motion-system.mjs && node scripts/check-chat-system.mjs && vitest run scripts/check-architecture.test.mjs",
     "generate:landing-fixtures": "node scripts/generate-data-engineer-fixtures.mjs",
     "typecheck": "tsc --noEmit",
     "lint:ui": "node scripts/lint-ui.mjs",

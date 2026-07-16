@@ -11,6 +11,9 @@ WEB_SERVICE="${RAILWAY_BACKEND_SERVICE:-resourceful-adaptation}"
 GENERAL_WORKER_SERVICE="${RAILWAY_WORKER_SERVICE:-taali-worker}"
 SCORING_WORKER_SERVICE="${RAILWAY_SCORING_WORKER_SERVICE:-taali-worker-scoring}"
 
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
+railway_assert_canonical_backend_dir "$ROOT_DIR" "$BACKEND_DIR" "$ENV_NAME"
+
 if [[ "$ENV_NAME" != "production" ]]; then
   echo "error: prepare_production.sh only accepts RAILWAY_ENVIRONMENT=production." >&2
   exit 1
@@ -43,6 +46,17 @@ for service in \
   railway_service_snapshot "$STATUS_FILE" "$ENV_NAME" "$service" >/dev/null
 done
 
+# Read and validate the database state before changing any production variable.
+# The temporary file contains secrets, is never printed, and is removed on exit.
+railway variable list \
+  --service "$WEB_SERVICE" \
+  --environment "$ENV_NAME" \
+  --json > "$WEB_VARIABLES_FILE"
+chmod 600 "$WEB_VARIABLES_FILE"
+railway_assert_database_provenance_from_variables_file \
+  "$WEB_VARIABLES_FILE" "$BACKEND_DIR"
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
+
 echo "Pinning the production agent contract on web and both workers without deploying..."
 for service in \
   "$WEB_SERVICE" \
@@ -71,14 +85,7 @@ for service in \
     "$ENV_NAME" "$service" "MVP_DISABLE_WORKABLE" "false"
 done
 
-# Fetch the resolved public database URL without printing any Railway variables.
-# Migrations run as a separate predeploy operation, before either worker starts
-# executing code that may depend on the new schema.
-railway variable list \
-  --service "$WEB_SERVICE" \
-  --environment "$ENV_NAME" \
-  --json > "$WEB_VARIABLES_FILE"
-
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
 python3 - "$WEB_VARIABLES_FILE" "$BACKEND_DIR" <<'PY'
 import json
 import os
@@ -116,7 +123,15 @@ if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(
 env = os.environ.copy()
 env["DATABASE_PUBLIC_URL"] = database_url
 env["DATABASE_URL"] = database_url
-print(f"Running production migrations against {hostname} ...", flush=True)
+# Re-query immediately before upgrading so a concurrent out-of-tree deployment
+# cannot change the production revision after the pre-mutation gate.
+subprocess.run(
+    [sys.executable, "scripts/check_alembic_provenance.py"],
+    cwd=backend_dir,
+    env=env,
+    check=True,
+)
+print("Running production migrations from the verified release tree ...", flush=True)
 subprocess.run(
     [sys.executable, "-m", "alembic", "upgrade", "head"],
     cwd=backend_dir,
