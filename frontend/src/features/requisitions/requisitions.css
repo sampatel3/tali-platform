@@ -194,6 +194,8 @@
   flex-shrink: 0;
 }
 .rq-main-head-titles { min-width: 0; flex: 1; }
+.rq-main-head.is-related { flex-wrap: wrap; }
+.rq-main-head.is-related .rq-main-head-titles { min-width: 220px; flex: 1 1 260px; }
 .rq-main-title {
   margin: 0;
   font-family: var(--font-display);
@@ -208,6 +210,7 @@
 .rq-main-sub {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 3px;
   font-family: var(--font-mono);
@@ -219,6 +222,7 @@
 .rq-status-chip {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 6px;
   padding: 4px 10px;
   border-radius: 999px;
@@ -228,6 +232,7 @@
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .rq-publish-btn {
@@ -401,12 +406,18 @@ a.rq-btn-sm { text-decoration: none; }
   gap: 10px;
   min-width: 0;
 }
+.rq-main-head.is-related .rq-head-actions {
+  flex: 0 1 520px;
+  width: 100%;
+  margin-left: auto;
+}
 .rq-related-card {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 9px;
-  width: min(520px, 100%);
+  width: 100%;
+  box-sizing: border-box;
   padding: 12px 14px;
   border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
   border-radius: 12px;

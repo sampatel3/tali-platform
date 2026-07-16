@@ -40,9 +40,15 @@ import {
 } from './requisitionAttachments';
 import {
   errorDetail,
+  isPublishedRequisition,
+  isRelatedRoleBrief,
+  isRequisitionBriefReadOnly,
   reloadRequisitionAfterRoleConflict,
+  requisitionDisplayTitle,
   requisitionGapLabels,
+  requisitionHeaderStatusLabel,
   requisitionPublishBlockedMessage,
+  requisitionStatusLabel,
 } from './requisitionGuards';
 import { useRequisitionList } from './useRequisitionList';
 import './requisitions.css';
@@ -56,24 +62,17 @@ export {
   validateRequisitionAttachments,
 } from './requisitionAttachments';
 export {
+  isPublishedRequisition,
+  isRelatedRoleBrief,
+  isRequisitionBriefReadOnly,
   reloadRequisitionAfterRoleConflict,
+  requisitionDisplayTitle,
   requisitionGapLabels,
+  requisitionHeaderStatusLabel,
   requisitionPublishBlockedMessage,
   requisitionRoleConflictMessage,
+  requisitionStatusLabel,
 } from './requisitionGuards';
-
-const REQUISITION_STATUS_LABELS = Object.freeze({
-  draft: 'Draft',
-  submitted: 'Ready to publish',
-  applied: 'Published',
-  published: 'Published', // compatibility with pre-lifecycle payloads
-});
-export const requisitionStatusLabel = (status) => {
-  const normalized = String(status || 'draft').toLowerCase();
-  return REQUISITION_STATUS_LABELS[normalized]
-    || normalized.replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
-};
-export const isPublishedRequisition = (status) => ['applied', 'published'].includes(String(status || '').toLowerCase());
 
 export const requisitionAtsProvider = (organization, linkedJob = null) => (
   roleAtsProvider(linkedJob) || organizationAtsProvider(organization)
@@ -97,17 +96,6 @@ export const requisitionAtsBridgeModel = (provider, externalJobId = null) => {
     copyLabel: linked ? null : `Optional: copy for ${label}`,
   };
 };
-
-// Only the legacy explicit `applied` lifecycle is archived. Publishing creates
-// a linked job while leaving the brief in draft/submitted state, so that linked
-// requisition remains editable and can be re-published with Role.version.
-export const isRequisitionBriefReadOnly = (brief) => (
-  String(brief?.status || '').toLowerCase() === 'applied'
-);
-
-export const isRelatedRoleBrief = (brief) => (
-  brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
-);
 
 export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [searchParams] = useSearchParams();
@@ -970,7 +958,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     className={`rq-side-item${b.id === selectedId ? ' is-active' : ''}`}
                     onClick={() => select(b.id)}
                   >
-                    <span className="rq-side-title">{b.title || 'Untitled job'}</span>
+                    <span className="rq-side-title">{requisitionDisplayTitle(b)}</span>
                     <span className="rq-side-meta">
                       <span className={`rq-dot ${isPublishedRequisition(b.status) ? 'is-published' : 'is-open'}`} />
                       {isRelatedRoleBrief(b)
@@ -1035,15 +1023,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
             </div>
           ) : (
             <>
-              <header className="rq-main-head">
+              <header className={`rq-main-head${relatedRoleDraft ? ' is-related' : ''}`}>
                 <div className="rq-main-head-titles">
-                  <h1 className="rq-main-title">{brief.title || 'Untitled job'}</h1>
+                  <h1 className="rq-main-title">{requisitionDisplayTitle(brief)}</h1>
                   <div className="rq-main-sub">
-                    <span className="rq-status-chip">
-                      {relatedRoleDraft
-                        ? (applied ? 'Related role created' : 'Related role draft')
-                        : requisitionStatusLabel(brief.status)}
-                    </span>
+                    <span className="rq-status-chip">{requisitionHeaderStatusLabel(brief)}</span>
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
                   {/* Hiring department folded into the header (no separate

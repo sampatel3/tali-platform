@@ -6,6 +6,48 @@ export const errorDetail = (error, fallback) => {
   return typeof detail === 'string' && detail.trim() ? detail : fallback;
 };
 
+const REQUISITION_STATUS_LABELS = Object.freeze({
+  draft: 'Draft',
+  submitted: 'Ready to publish',
+  applied: 'Published',
+  published: 'Published', // compatibility with pre-lifecycle payloads
+});
+
+export const requisitionStatusLabel = (status) => {
+  const normalized = String(status || 'draft').toLowerCase();
+  return REQUISITION_STATUS_LABELS[normalized]
+    || normalized.replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
+};
+
+export const isPublishedRequisition = (status) => (
+  ['applied', 'published'].includes(String(status || '').toLowerCase())
+);
+
+// Only the legacy explicit `applied` lifecycle is archived. Publishing creates
+// a linked job while leaving the brief editable in draft/submitted state.
+export const isRequisitionBriefReadOnly = (brief) => (
+  String(brief?.status || '').toLowerCase() === 'applied'
+);
+
+export const isRelatedRoleBrief = (brief) => (
+  brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
+);
+
+// List and detail payloads normally carry the same title, while a related-role
+// draft also has a durable source name. Keep one display contract everywhere.
+export const requisitionDisplayTitle = (brief) => {
+  const title = String(brief?.title || '').trim();
+  if (title) return title;
+  const sourceName = String(brief?.source_role?.name || brief?.source_role_name || '').trim();
+  if (isRelatedRoleBrief(brief) && sourceName) return `${sourceName} · Related`;
+  return 'Untitled job';
+};
+
+export const requisitionHeaderStatusLabel = (brief) => {
+  if (!isRelatedRoleBrief(brief)) return requisitionStatusLabel(brief?.status);
+  return isRequisitionBriefReadOnly(brief) ? 'Related role' : 'Related draft';
+};
+
 const humanizeGapKey = (key) => String(key || '')
   .replace(/_/g, ' ')
   .replace(/\b\w/g, (character) => character.toUpperCase())
