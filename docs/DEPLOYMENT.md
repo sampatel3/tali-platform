@@ -30,7 +30,7 @@ Always deploy backend services through repository wrapper scripts from repo root
 
 ```bash
 ./scripts/railway/check_status.sh
-./scripts/railway/deploy_production.sh
+./scripts/deploy_production.sh
 ./scripts/railway/fetch_logs.sh resourceful-adaptation
 ```
 
@@ -43,6 +43,17 @@ RAILWAY_SCORING_WORKER_SERVICE=<scoring-worker-service> \
 ```
 
 Why this matters:
+- Every production-capable wrapper independently requires a clean worktree whose
+  release SHA is in `origin/main`; calling a lower-level Railway wrapper directly
+  does not bypass the guard.
+- A coordinated rollout uses a process-scoped attestation to stay pinned to its
+  exact kickoff SHA if `main` advances while Railway and Vercel are deploying;
+  setting a SHA environment variable alone cannot enter coordinated mode.
+- Before any production variable mutation, migration, or service deployment, the
+  wrapper queries `alembic_version` without printing the database URL and refuses
+  a database revision absent from or unreachable in the exact release tree.
+  A genuinely empty new database is accepted as Alembic base; a database with
+  user tables but no `alembic_version` table fails closed.
 - Deploys are forced from `backend/` so Railway does not attempt a repo-root build.
 - Web, general-worker, and scoring-worker services are validated by exact name.
 - The coordinated wrapper pins live metering and native apply, migrates
@@ -149,28 +160,32 @@ RAILWAY_BACKEND_SERVICE=resourceful-adaptation \
 RAILWAY_WORKER_SERVICE=taali-worker \
 RAILWAY_SCORING_WORKER_SERVICE=taali-worker-scoring \
 RAILWAY_BACKEND_URL=https://resourceful-adaptation-production.up.railway.app \
-  ./scripts/railway/deploy_production.sh
+  ./scripts/deploy_production.sh
 ```
 
 The order is enforced:
 
-1. Set `USAGE_METER_LIVE=true` and `ATS_PUBLIC_APPLY_ENABLED=true` with
+1. Fetch `origin/main`, require the exact clean release SHA, query production's
+   current `alembic_version` rows, and verify that every row exists and is
+   reachable in the release migration graph.
+2. Set `USAGE_METER_LIVE=true` and `ATS_PUBLIC_APPLY_ENABLED=true` with
    `--skip-deploys` on web and both workers, then read back and validate all six
    values.
-2. Resolve the web service's production `DATABASE_PUBLIC_URL`, run
+3. Recheck migration provenance, then run
    `python -m alembic upgrade head` separately from service startup, then run
    `python -m alembic current` against the same public database.
-3. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
+4. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
    wait for a new `SUCCESS` deployment ID.
-4. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
+5. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
    deploy it and wait for its own new `SUCCESS` deployment ID.
-5. Deploy web, wait for its new Railway deployment to succeed, poll public
+6. Deploy web, wait for its new Railway deployment to succeed, poll public
    `/ready`, then require the default worker's live Anthropic, E2B, Resend
    delivery, and GitHub capability checks to pass.
 
-Any missing service, duplicate service name, wrong topology variable, failed
-deployment, migration failure, or readiness timeout makes the wrapper exit
-non-zero. A single healthy worker cannot produce a successful rollout.
+Any non-canonical source, out-of-tree database revision, missing service,
+duplicate service name, wrong topology variable, failed deployment, migration
+failure, or readiness timeout makes the wrapper exit non-zero. A single healthy
+worker cannot produce a successful rollout.
 
 ### 6. Verify autonomous Turn on readiness
 
@@ -272,7 +287,8 @@ VITE_STRIPE_PUBLISHABLE_KEY=pk_live_...
 ### 4. Redeploy with variables
 
 ```bash
-vercel --prod
+cd ..
+./scripts/deploy_production.sh
 ```
 
 ### 5. Verify

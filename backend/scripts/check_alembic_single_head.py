@@ -36,9 +36,11 @@ _DOWN_RE = re.compile(r'^down_revision\s*=\s*(.*?)(?=^\w+\s*=)', re.M | re.S)
 _QUOTED_RE = re.compile(r'[\'"]([^\'"]+)[\'"]')
 
 
-def compute_heads() -> tuple[list[str], dict[str, list[str]]]:
+def compute_heads() -> tuple[list[str], dict[str, list[str]], list[str]]:
     revisions: set[str] = set()
     edges: dict[str, list[str]] = {}
+    revision_paths: dict[str, Path] = {}
+    errors: list[str] = []
     for path in sorted(VERSIONS_DIR.glob("*.py")):
         if path.name == "__init__.py":
             continue
@@ -47,7 +49,14 @@ def compute_heads() -> tuple[list[str], dict[str, list[str]]]:
         if not rev_m:
             continue
         rev = rev_m.group(1)
+        if rev in revision_paths:
+            errors.append(
+                f"duplicate revision {rev!r} in "
+                f"{revision_paths[rev].name!r} and {path.name!r}"
+            )
+            continue
         revisions.add(rev)
+        revision_paths[rev] = path
         down_m = _DOWN_RE.search(src)
         edges[rev] = _QUOTED_RE.findall(down_m.group(1)) if down_m else []
 
@@ -57,19 +66,21 @@ def compute_heads() -> tuple[list[str], dict[str, list[str]]]:
         {p for parents in edges.values() for p in parents if p not in revisions}
     )
     if dangling:
-        print(
-            "ERROR: migrations reference unknown down_revision(s): "
-            f"{dangling}",
-            file=sys.stderr,
+        errors.append(
+            "migrations reference unknown down_revision(s): " f"{dangling}"
         )
-    return heads, edges
+    return heads, edges, errors
 
 
 def main() -> int:
     if not VERSIONS_DIR.is_dir():
         print(f"ERROR: versions dir not found: {VERSIONS_DIR}", file=sys.stderr)
         return 1
-    heads, _ = compute_heads()
+    heads, _, errors = compute_heads()
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        return 1
     if len(heads) == 1:
         print(f"OK: single alembic head ({heads[0]})")
         return 0

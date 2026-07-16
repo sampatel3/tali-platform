@@ -1,23 +1,62 @@
 name: CI
 
-# Pre-pilot: nobody on prod yet, so CI is intentionally minimal —
-# build/syntax gates only, fast feedback, no test suite. Run tests
-# locally before significant changes; the Production Smoke Tests
-# workflow exercises the live API on a separate cadence.
-#
-# Restored when the platform has real users:
-# - backend pytest (with Redis service container for Celery paths)
-# - frontend vitest
-# - coverage thresholds
-# - dead-code report
+# Fast structural checks plus focused behavioral regressions for merge-prone
+# application flows. The separate Production Smoke Tests workflow exercises
+# the live API on a scheduled cadence.
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main, master, work]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  merge-safety:
+    # The merge queue receives the backend/frontend checks below against its
+    # already-composed merge-group SHA. This job inspects a PR's real head.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout actual head (not the synthetic PR merge commit)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Validate event base SHA is available
+        id: current-base
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "$EVENT_BASE_SHA^{commit}"
+          echo "sha=$EVENT_BASE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Check branch freshness and simulate merge
+        env:
+          BASE_SHA: ${{ steps.current-base.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_LABEL: ${{ github.event.pull_request.base.ref }}
+        run: |
+          python scripts/ci/check_merge_safety.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --base-label "$BASE_LABEL"
+
   backend:
+    needs: merge-safety
+    if: always()
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -25,10 +64,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Require merge-safety success for pull requests
+        if: github.event_name == 'pull_request'
+        env:
+          MERGE_SAFETY_RESULT: ${{ needs.merge-safety.result }}
+        run: |
+          if [[ "$MERGE_SAFETY_RESULT" != "success" ]]; then
+            echo "merge-safety must pass before backend CI can pass (result: $MERGE_SAFETY_RESULT)" >&2
+            exit 1
+          fi
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
       - name: Backend syntax check
         # Compiles every .py file in app/ — catches syntax errors,
         # bad indentation, and broken imports of stdlib/typing names.
@@ -41,11 +91,23 @@ jobs:
         # needs no pip install. Fix = add a merge revision.
         run: python scripts/check_alembic_single_head.py
       - name: Backend file-size gate
-        # Backend mirror of the frontend architecture gate: API route files
-        # and service modules must stay <= 500 LOC unless allowlisted in
-        # scripts/check_file_sizes.py (the same gate tests/ asserts).
-        # Stdlib-only. Fix = split the file, don't grow the allowlist.
+        # Backend mirror of the frontend architecture gate: new API/service
+        # modules stay <= 500 LOC and existing hotspots have burn-down caps.
+        # Stdlib-only. Fix = split the file, don't raise a ratcheted baseline.
         run: python scripts/check_file_sizes.py
+      - name: Install backend test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Targeted backend regression tests
+        # Pins canonical-release controls and merge-sensitive behavior: local
+        # ATS writes, role ordering/paging, and atomic assessment dispatch.
+        run: |
+          python -m pytest -q \
+            ../scripts/ci/tests/test_check_merge_safety.py \
+            tests/platform/test_release_safeguards.py \
+            tests/platform/test_railway_deployment_contract.py \
+            tests/test_workable_stage_local_write_guard.py \
+            tests/test_roles_list_ordering.py \
+            tests/test_send_assessment_action.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -67,6 +129,13 @@ jobs:
         # Cheap line-count + structural cap — keeps single files from
         # ballooning past the 2,600-line threshold.
         run: npm run check:architecture
+      - name: Targeted frontend regression tests
+        # Guards two prior clean-merge regressions: inactive-role dimming and
+        # optimistic assessment dispatch/failure reconciliation.
+        run: |
+          npm test -- \
+            src/features/jobs/JobsPage.test.jsx \
+            src/features/home/HomeNow.optimistic.test.jsx
       - name: Build frontend
         # Vite build will fail on import errors, type errors (where
         # tsc is wired), and missing modules — the cheap regression

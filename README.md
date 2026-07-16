@@ -42,7 +42,7 @@ The core platform is implemented and deployable end-to-end, and active execution
 
 **Live (current):**
 - **Frontend:** https://frontend-psi-navy-15.vercel.app — set `VITE_API_URL` in Vercel to your Railway backend URL so login/dashboard work.
-- **Backend:** Deploy from `backend/` with Railway; use the dashboard to get the backend service name and run `railway up -s <name>` if needed.
+- **Backend:** Deploy Railway and Vercel together only through `./scripts/deploy_production.sh` from a clean checkout at the exact current `origin/main` commit.
 
 ---
 
@@ -85,7 +85,7 @@ taali-platform/
 1. **Backend + two workers (Railway)**
    - New project; add PostgreSQL and Redis, plus web, general-worker, and scoring-worker services from `backend/`.
    - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `RESEND_API_KEY`, real GitHub credentials, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
-   - Merge the release through `main`, fetch it locally, and run `./scripts/deploy_production.sh` from that exact clean commit. The release guard refuses stale or feature-branch deployments, checks the migration head and chat design system, then coordinates Railway and Vercel from the same SHA. The Railway phase pins and validates live metering and native apply on all three services, migrates via production `DATABASE_PUBLIC_URL`, deploys general `celery` + Beat, deploys scoring-only without Beat, deploys web, then polls `/ready`.
+   - Merge the release through `main`, fetch it locally, and run `./scripts/deploy_production.sh` from that exact clean commit. Every production-capable Railway entrypoint independently refuses dirty, stale, or feature-branch worktrees; an internally attested rollout pins Railway and Vercel to its exact kickoff SHA even if `main` advances while it is running. Before changing variables, migrating, or deploying, it also verifies that every revision recorded in production is present and reachable in that exact release's Alembic graph.
    - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final gate validates web, both queue canaries, and live Anthropic/E2B/Resend/GitHub capability for the default assessment path.
 
 2. **Frontend (Vercel)**  

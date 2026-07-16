@@ -1,4 +1,8 @@
-/* ---- Background jobs toaster (bottom-right persistent panel) ---- */
+/*
+ * Canonical owner for the background-jobs toaster.
+ * Keep these global selectors out of lazy page styles: loading a report page
+ * must not restyle an already-mounted app-shell toaster.
+ */
 .bg-jobs-toaster {
   position: fixed;
   right: 20px;
