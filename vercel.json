@@ -3,6 +3,18 @@
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
   "installCommand": "cd frontend && npm ci",
+  "redirects": [
+    { "source": "/home-preview.html", "destination": "/home-preview", "permanent": false },
+    {
+      "source": "/jobs-preview.html",
+      "has": [{ "type": "query", "key": "agent", "value": "(?<agent>paused|loading)" }],
+      "destination": "/jobs-preview?agent=:agent",
+      "permanent": false
+    },
+    { "source": "/jobs-preview.html", "destination": "/jobs-preview", "permanent": false },
+    { "source": "/report-preview.html", "destination": "/report-preview", "permanent": false },
+    { "source": "/analytics-preview.html", "destination": "/analytics-preview", "permanent": false }
+  ],
   "rewrites": [
     { "source": "/agentic-hiring", "destination": "/agentic-hiring.html" },
     { "source": "/ai-native-hiring", "destination": "/ai-native-hiring.html" },

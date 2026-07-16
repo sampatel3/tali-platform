@@ -58,6 +58,8 @@ def test_update_job_spec_applies_rederives_and_estimates(db):
     assert "Kubernetes" in res["added"]
     assert "Python" in res["removed"]
     assert "count" in res["would_rescreen"] and "est_cost_usd" in res["would_rescreen"]
+    assert res["scores_invalidated"] == 0
+    assert res["rescore_dispatch_approved"] is False
     db.refresh(role)
     assert role.job_spec_text.startswith("Senior AI Engineer")
     assert role.description == role.job_spec_text

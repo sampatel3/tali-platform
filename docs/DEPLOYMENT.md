@@ -30,7 +30,7 @@ Always deploy backend services through repository wrapper scripts from repo root
 
 ```bash
 ./scripts/railway/check_status.sh
-./scripts/railway/deploy_production.sh
+./scripts/deploy_production.sh
 ./scripts/railway/fetch_logs.sh resourceful-adaptation
 ```
 
@@ -43,7 +43,20 @@ RAILWAY_SCORING_WORKER_SERVICE=<scoring-worker-service> \
 ```
 
 Why this matters:
-- Deploys are forced from `backend/` so Railway does not attempt a repo-root build.
+- Every production-capable wrapper independently requires a clean worktree whose
+  release SHA is in `origin/main`; calling a lower-level Railway wrapper directly
+  does not bypass the guard.
+- A coordinated rollout uses a process-scoped attestation to stay pinned to its
+  exact kickoff SHA if `main` advances while Railway and Vercel are deploying;
+  setting a SHA environment variable alone cannot enter coordinated mode.
+- Before any production variable mutation, migration, or service deployment, the
+  wrapper queries `alembic_version` without printing the database URL and refuses
+  a database revision absent from or unreachable in the exact release tree.
+  A genuinely empty new database is accepted as Alembic base; a database with
+  user tables but no `alembic_version` table fails closed.
+- CLI deploys preserve `backend/` as the upload prefix so Railway's configured
+  `/backend` service root and `/backend/railway.json` resolve exactly as they do
+  for GitHub-triggered deployments.
 - Web, general-worker, and scoring-worker services are validated by exact name.
 - The coordinated wrapper pins live metering and native apply, migrates
   production, deploys both workers, deploys web, waits for public `/ready`, and
@@ -152,35 +165,49 @@ RAILWAY_BACKEND_SERVICE=resourceful-adaptation \
 RAILWAY_WORKER_SERVICE=taali-worker \
 RAILWAY_SCORING_WORKER_SERVICE=taali-worker-scoring \
 RAILWAY_BACKEND_URL=https://resourceful-adaptation-production.up.railway.app \
-  ./scripts/railway/deploy_production.sh
+  ./scripts/deploy_production.sh
 ```
 
 The order is enforced:
 
-1. Pin the production agent/ATS contract and
-   `TRUST_RAILWAY_X_REAL_IP=true` with `--skip-deploys` on web and both workers,
-   then read every value back before deploying.
-2. Resolve the web service's production `DATABASE_PUBLIC_URL`, then run
-   `python -m app.scripts.database_migrate` against it. The command serializes
-   deploys with a PostgreSQL advisory lock, rejects unversioned partial schemas,
-   applies the complete Alembic chain to a genuinely empty database, and verifies
-   the release head, model columns, append-only triggers, and search indexes.
-   Lock acquisition fails after 300 seconds by default; set
+1. Fetch `origin/main`, require the exact clean release SHA, query production's
+   current `alembic_version` rows, and verify every row exists and is reachable
+   in the release migration graph. The read-only provider preflight also binds
+   the checkout to the expected Railway project, environment, three services,
+   authenticated user, and exact Vercel project before any provider mutation.
+   A private process attestation pins every child step to the kickoff SHA even
+   if `main` advances while the coordinated release is running.
+2. Resolve the web service's validated pre-screen policy, then pin the full
+   production agent/ATS contract (`USAGE_METER_LIVE`, native apply, Bullhorn,
+   Workable, trusted Railway proxy IPs, and both scoring-gate variables) with
+   `--skip-deploys` on web and both workers. Read every value back before any
+   service deploy.
+3. Recheck both the release source and migration provenance immediately before
+   running `python -m app.scripts.database_migrate` against the production
+   `DATABASE_PUBLIC_URL`. The command serializes deploys with a PostgreSQL
+   advisory lock, rejects unversioned partial schemas, applies the complete
+   Alembic chain only from the verified release tree, and verifies the release
+   head, model columns, append-only triggers, and search indexes. Lock
+   acquisition fails after 300 seconds by default; set
    `DATABASE_MIGRATION_LOCK_TIMEOUT_SECONDS` to tune that bounded wait.
-3. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
+4. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
    wait for a new `SUCCESS` deployment ID.
-4. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
+5. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
    deploy it and wait for its own new `SUCCESS` deployment ID.
-5. Deploy web, wait for its new Railway deployment to succeed, poll public
+6. Deploy web from the repository root with Railway's `--path-as-root`, wait for
+   its new deployment to succeed, poll public
    `/ready`, then use `ADMIN_SECRET` against `/admin/health` and require the
    default worker's live Anthropic, E2B, Resend delivery, and GitHub capability
    checks to pass. The secret is read from Railway without printing the
    variable payload and is passed to curl through a mode-0600 temporary header
    file rather than a process-list argument.
+7. Revalidate the unchanged attested source, deploy the linked Vercel production
+   project from `frontend/`, and revalidate the same SHA once more.
 
-Any missing service, duplicate service name, wrong topology variable, failed
-deployment, migration failure, or readiness timeout makes the wrapper exit
-non-zero. A single healthy worker cannot produce a successful rollout.
+Any non-canonical source, out-of-tree database revision, missing service,
+duplicate service name, wrong topology variable, failed deployment, migration
+failure, or readiness timeout makes the wrapper exit non-zero. A single healthy
+worker cannot produce a successful rollout.
 
 ### 6. Verify autonomous Turn on readiness
 
@@ -287,7 +314,8 @@ VITE_STRIPE_PUBLISHABLE_KEY=pk_live_...
 ### 4. Redeploy with variables
 
 ```bash
-vercel --prod
+cd ..
+./scripts/deploy_production.sh
 ```
 
 ### 5. Verify

@@ -67,6 +67,15 @@ class CvScoreJob(Base):
         default=False,
         server_default=sql_false(),
     )
+    # Stale scores can be made visibly untrustworthy without authorizing a
+    # paid rescore.  Only an explicit recruiter confirmation flips this gate;
+    # ordinary/legacy work defaults to approved to preserve existing flows.
+    dispatch_approved = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=sql_true(),
+    )
     queued_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)

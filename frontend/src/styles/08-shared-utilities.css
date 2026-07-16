@@ -1,3 +1,5 @@
+/* Canonical global utility layer. Lazy page styles may extend these classes
+   only through a page-qualified selector; they must not redefine the base. */
 .field,
 label.field {
   display: block;
@@ -246,16 +248,6 @@ label.field {
 
 .taali-page-header {
   padding: calc(var(--taali-spacing) * 3);
-}
-
-.taali-input,
-.taali-select,
-.taali-textarea {
-  width: 100%;
-  border: 1px solid var(--taali-border-soft);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.88);
-  color: var(--ink);
 }
 
 [hidden] {

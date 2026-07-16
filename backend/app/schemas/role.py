@@ -442,6 +442,8 @@ class RoleJobSpecUpdateResponse(BaseModel):
     role: RoleResponse
     diff: JobSpecCriteriaDiff
     would_rescreen: JobSpecRescreenEstimate
+    scores_invalidated: int = 0
+    rescore_dispatch_approved: bool = False
 
 
 class ApplicationCreate(BaseModel):

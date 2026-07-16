@@ -13,6 +13,7 @@ RAILWAY_DIR = ROOT / "scripts" / "railway"
 RELEASE_DIR = ROOT / "scripts" / "release"
 SHELL_FILES = [
     ROOT / "scripts" / "deploy_production.sh",
+    RELEASE_DIR / "assert_canonical_source.sh",
     RELEASE_DIR / "assert_canonical_release.sh",
     RELEASE_DIR / "assert_provider_preflight.sh",
     RAILWAY_DIR / "lib.sh",
@@ -54,9 +55,13 @@ def test_root_rollout_preflights_both_providers_before_any_deploy():
     assert script.index("assert_provider_preflight.sh") < script.index(
         "scripts/railway/deploy_production.sh"
     )
+    assert script.index("railway_begin_coordinated_release") < script.index(
+        "scripts/railway/deploy_production.sh"
+    )
     assert script.index("scripts/railway/deploy_production.sh") < script.index(
         "vercel --prod --yes"
     )
+    assert script.count('assert_canonical_source.sh" --expected-sha') >= 3
     assert "git status --porcelain" in script
 
 
@@ -210,6 +215,14 @@ def test_predeploy_pins_metering_and_runs_separate_migrations():
     assert 'ENABLE_PRE_SCREEN_GATE="$ENABLE_PRE_SCREEN_GATE"' in script
     assert "--skip-deploys" in script
     assert 'payload.get("DATABASE_PUBLIC_URL")' in script
+    assert "railway_assert_database_provenance_from_variables_file" in script
+    assert "scripts/check_alembic_provenance.py" in script
+    assert script.index("railway_assert_database_provenance_from_variables_file") < (
+        script.index("railway variable set")
+    )
+    assert script.index("scripts/check_alembic_provenance.py") < script.index(
+        '[sys.executable, "-m", "app.scripts.database_migrate"]'
+    )
     assert '[sys.executable, "-m", "app.scripts.database_migrate"]' in script
     assert '[sys.executable, "-m", "alembic", "upgrade", "head"]' not in script
 
@@ -267,6 +280,9 @@ def test_worker_wrapper_enforces_split_queue_and_single_beat_topology():
     assert "TALI_WORKER_QUEUES=scoring" in script
     assert "TALI_WORKER_BEAT=false" in script
     assert script.count("deploy_worker_service") == 3  # definition + two calls
+    assert "railway up ./backend" in script
+    assert "--path-as-root" in script
+    assert 'cd "$BACKEND_DIR"' not in script
 
 
 def test_web_wrapper_checks_workers_and_polls_readiness():
@@ -277,6 +293,9 @@ def test_web_wrapper_checks_workers_and_polls_readiness():
     assert "railway_wait_for_readiness" in script
     assert "railway_validate_default_agent_capabilities" in script
     assert 'payload.get("ADMIN_SECRET")' in script
+    assert "railway up ./backend" in script
+    assert "--path-as-root" in script
+    assert 'cd "$BACKEND_DIR"' not in script
 
 
 def test_status_wrapper_validates_agent_and_ats_contract_everywhere():

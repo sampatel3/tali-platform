@@ -36,6 +36,7 @@ from ..models.cv_score_job import (
     SCORE_JOB_ERROR,
     SCORE_JOB_PENDING,
     SCORE_JOB_RUNNING,
+    SCORE_JOB_STALE,
 )
 from ..models.role import Role
 from ..models.organization import Organization
@@ -134,6 +135,9 @@ def _authorize_autonomous_scoring_phase(
     overlay via ``requires_active_agent=False``.
     """
 
+    from .score_dispatch_authority import require_score_phase_authority
+
+    require_score_phase_authority(db, application=application, job=job, phase=phase)
     if not bool(getattr(job, "requires_active_agent", True)):
         return
     organization_id = getattr(application, "organization_id", None)
@@ -190,10 +194,6 @@ def _authorize_autonomous_scoring_phase(
             phase=phase,
             detail="role agent is paused",
         )
-
-
-
-
 def _latest_job(db: Session, application_id: int) -> CvScoreJob | None:
     return (
         db.query(CvScoreJob)
@@ -280,21 +280,10 @@ def enqueue_score(
     pending/running and ``force`` is False. Returns ``None`` when the
     application can't be scored (no CV, no spec, no API key).
 
-    ``force`` only controls the duplicate-job check (allow re-enqueue
-    even if a pending/running job already exists). It does NOT bypass
-    the pre-screen gate — historically the two were conflated, which
-    meant batch rescores accidentally ran the expensive v9 prompt on
-    every candidate even when ``ENABLE_PRE_SCREEN_GATE`` was on.
-
-    ``bypass_pre_screen`` is the explicit opt-out for the pre-screen
-    gate: use only when a recruiter has reviewed and wants a full v9
-    score regardless of the cheap filter's verdict.
-
-    ``requires_active_agent`` is durable execution authority, not merely an
-    enqueue-time hint. Ingest/cohort/agent callers set it to ``True`` so a
-    queued job cannot begin after Pause or Turn off. Authenticated recruiter
-    and administrator actions leave it ``False`` and may still run while the
-    autonomous agent is held (subject to credits and the role cap).
+    ``force`` bypasses duplicate detection, not pre-screen. The separate
+    ``bypass_pre_screen`` flag is recruiter authority to skip that gate.
+    Autonomous callers set ``requires_active_agent`` so both live controls and
+    any job-spec rescreen approval hold are enforced before provider spend.
     """
     if not application or application.id is None:
         return None
@@ -439,11 +428,21 @@ def enqueue_score(
             )
             return None
 
-        # Duplicate reuse belongs inside the role lock.  Otherwise two public
-        # requests for the same application can both pass `_latest_job` before
-        # either pending row becomes visible.
+        latest_attempt = _latest_job(db, application.id)
+        if (
+            bool(requires_active_agent)
+            and latest_attempt is not None
+            and latest_attempt.status == SCORE_JOB_STALE
+            and not bool(latest_attempt.dispatch_approved)
+        ):
+            logger.info(
+                "autonomous score enqueue awaiting rescreen approval "
+                "application_id=%s",
+                application.id,
+            )
+            return None
         if not force:
-            existing = _latest_job(db, application.id)
+            existing = latest_attempt
             if existing is not None and existing.status in {
                 SCORE_JOB_PENDING,
                 SCORE_JOB_RUNNING,
@@ -1027,6 +1026,7 @@ def _execute_scoring_v3(
             phase=phase,
         )
 
+    authorize_full_score_provider("full_score.cache_or_provider")
     if _holistic_enabled_for(application):
         # Holistic Sonnet engine: single calibrated call whose ``overall``
         # becomes role_fit_score directly. The pre-screen gate above already
@@ -1312,22 +1312,24 @@ def _enqueue_stale_job(
     role_id: int,
     now: datetime,
     requires_active_agent: bool = True,
+    dispatch_approved: bool = True,
+    supersede_existing_stale: bool = False,
 ) -> bool:
-    """Add a ``status=stale`` CvScoreJob row if no active stale job
-    already exists. Returns True if a row was added. Flushes so the
-    row is visible to subsequent queries in the same session.
-    """
+    """Add a stale job, or durably promote an existing stale job's authority."""
     latest = _latest_job(db, app.id)
-    if latest is not None and latest.status == "stale":
-        # A later explicit recruiter approval upgrades an already-stale
-        # autonomous row into durable execution authority.  Without this,
-        # confirming a re-screen while the agent is paused could leave the
-        # existing row permanently ineligible for the recovery sweep.
-        if (
-            not bool(requires_active_agent)
-            and bool(getattr(latest, "requires_active_agent", True))
-        ):
+    if (
+        latest is not None
+        and latest.status == "stale"
+        and not supersede_existing_stale
+    ):
+        changed = False
+        if not bool(requires_active_agent) and bool(latest.requires_active_agent):
             latest.requires_active_agent = False
+            changed = True
+        if bool(dispatch_approved) and not bool(latest.dispatch_approved):
+            latest.dispatch_approved = True
+            changed = True
+        if changed:
             db.add(latest)
             db.flush()
         return False
@@ -1338,6 +1340,7 @@ def _enqueue_stale_job(
             status="stale",
             queued_at=now,
             requires_active_agent=bool(requires_active_agent),
+            dispatch_approved=bool(dispatch_approved),
         )
     )
     db.flush()
@@ -1349,24 +1352,15 @@ def mark_role_scores_stale(
     application_ids: list[int] | None = None,
     dispatch_tech_questions: bool = True,
     requires_active_agent: bool = True,
+    dispatch_approved: bool = True,
+    supersede_existing_stale: bool = False,
 ) -> int:
     """Invalidate every scored application for a role.
-
-    ``application_ids`` (optional) scopes the invalidation to just those
-    applications — used by the agent's reasoned criteria change to re-screen
-    only the genuinely-affected subset instead of the whole pool. ``None``
-    (default) keeps the original role-wide behaviour unchanged.
-
-    Called when the role's must-have / constraint criteria or its job
-    spec change (preferred-criteria edits don't trigger because
-    pre-screen ignores nice-to-haves). Marks each scored app as stale:
-    keeps the numeric score visible so the UI can show "Strong match
-    — 87 (stale)" until the rescore lands, enqueues a stale
-    CvScoreJob row, and discards any pending agent decisions that
-    were based on the old score.
-
-    Returns the number of applications invalidated.
+    Optional ids scope the change; an empty list is a no-op. Existing values
+    remain visibly stale and ``dispatch_approved=False`` authorizes no spend.
     """
+    if application_ids is not None and not application_ids:
+        return 0
     apps_q = (
         db.query(CandidateApplication)
         .filter(
@@ -1382,7 +1376,7 @@ def mark_role_scores_stale(
             ),
         )
     )
-    if application_ids:
+    if application_ids is not None:
         apps_q = apps_q.filter(CandidateApplication.id.in_(list(application_ids)))
     apps = apps_q.all()
     # A6: resolved applications are frozen — invalidation hooks must
@@ -1402,6 +1396,8 @@ def mark_role_scores_stale(
             role_id=role_id,
             now=now,
             requires_active_agent=requires_active_agent,
+            dispatch_approved=dispatch_approved,
+            supersede_existing_stale=supersede_existing_stale,
         ):
             continue
         _clear_application_scores(app)

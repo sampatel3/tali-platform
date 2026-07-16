@@ -11,6 +11,9 @@ WEB_SERVICE="${RAILWAY_BACKEND_SERVICE:-resourceful-adaptation}"
 GENERAL_WORKER_SERVICE="${RAILWAY_WORKER_SERVICE:-taali-worker}"
 SCORING_WORKER_SERVICE="${RAILWAY_SCORING_WORKER_SERVICE:-taali-worker-scoring}"
 
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
+railway_assert_canonical_backend_dir "$ROOT_DIR" "$BACKEND_DIR" "$ENV_NAME"
+
 for command in railway python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "error: required command is not installed: $command" >&2
@@ -39,6 +42,9 @@ railway_service_snapshot \
   "$STATUS_FILE" "$ENV_NAME" "$GENERAL_WORKER_SERVICE" >/dev/null
 railway_service_snapshot \
   "$STATUS_FILE" "$ENV_NAME" "$SCORING_WORKER_SERVICE" >/dev/null
+railway_assert_production_database_provenance \
+  "$ENV_NAME" "$WEB_SERVICE" "$BACKEND_DIR"
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
 
 echo "Pinning the production worker topology (environment: $ENV_NAME)..."
 railway variable set \
@@ -72,10 +78,12 @@ deploy_worker_service() {
   previous_id="$(railway_service_deployment_id "$fresh_status" "$ENV_NAME" "$service")"
   rm -f "$fresh_status"
 
+  railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
   echo "Deploying '$service' (queues=$queues, beat=$beat) from $BACKEND_DIR ..."
   (
-    cd "$BACKEND_DIR"
-    railway up \
+    cd "$ROOT_DIR"
+    railway up ./backend \
+      --path-as-root \
       --service "$service" \
       --environment "$ENV_NAME" \
       --detach

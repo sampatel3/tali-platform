@@ -11,6 +11,9 @@ WEB_SERVICE="${RAILWAY_BACKEND_SERVICE:-resourceful-adaptation}"
 GENERAL_WORKER_SERVICE="${RAILWAY_WORKER_SERVICE:-taali-worker}"
 SCORING_WORKER_SERVICE="${RAILWAY_SCORING_WORKER_SERVICE:-taali-worker-scoring}"
 
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
+railway_assert_canonical_backend_dir "$ROOT_DIR" "$BACKEND_DIR" "$ENV_NAME"
+
 if [[ "$ENV_NAME" != "production" ]]; then
   echo "error: prepare_production.sh only accepts RAILWAY_ENVIRONMENT=production." >&2
   exit 1
@@ -43,16 +46,21 @@ for service in \
   railway_service_snapshot "$STATUS_FILE" "$ENV_NAME" "$service" >/dev/null
 done
 
-# The pre-screen gate is process-local, so workers must inherit the web
-# service's resolved policy. Reading it once and propagating the validated
-# values prevents identical candidates being gated differently by the API and
-# Celery after an env-only policy change.
+# Read and validate the database state before changing any production variable.
+# This temporary file contains secrets, is never printed, and remains mode 0600.
+# The pre-screen gate is process-local, so workers must also inherit the web
+# service's resolved policy. Reading it once prevents the API and Celery from
+# applying different candidate gates after an environment-only policy change.
+chmod 600 "$WEB_VARIABLES_FILE"
 railway variable list \
   --service "$WEB_SERVICE" \
   --environment "$ENV_NAME" \
   --json > "$WEB_VARIABLES_FILE"
 SCORING_POLICY="$(railway_scoring_policy_from_file "$WEB_VARIABLES_FILE")"
 IFS=$'\t' read -r PRE_SCREEN_THRESHOLD ENABLE_PRE_SCREEN_GATE <<< "$SCORING_POLICY"
+railway_assert_database_provenance_from_variables_file \
+  "$WEB_VARIABLES_FILE" "$BACKEND_DIR"
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
 
 echo "Pinning the production agent contract on web and both workers without deploying..."
 for service in \
@@ -94,6 +102,7 @@ done
 # Fetch the resolved public database URL without printing any Railway variables.
 # Migrations run as a separate predeploy operation, before either worker starts
 # executing code that may depend on the new schema.
+railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
 python3 - "$WEB_VARIABLES_FILE" "$BACKEND_DIR" <<'PY'
 import json
 import os
@@ -131,7 +140,18 @@ if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(
 env = os.environ.copy()
 env["DATABASE_PUBLIC_URL"] = database_url
 env["DATABASE_URL"] = database_url
-print(f"Running locked production bootstrap/migrations against {hostname} ...", flush=True)
+# Re-query immediately before upgrading so a concurrent out-of-tree deployment
+# cannot change the production revision after the pre-mutation gate.
+subprocess.run(
+    [sys.executable, "scripts/check_alembic_provenance.py"],
+    cwd=backend_dir,
+    env=env,
+    check=True,
+)
+print(
+    f"Running locked production migrations from the verified release tree against {hostname} ...",
+    flush=True,
+)
 subprocess.run(
     [sys.executable, "-m", "app.scripts.database_migrate"],
     cwd=backend_dir,

@@ -225,8 +225,8 @@ def test_file_size_guard_for_api_and_service_paths(tmp_path: Path) -> None:
 
     violations = module.find_violations()
     assert not violations, (
-        f"API/service paths must stay <= {module.SIZE_LIMIT} LOC unless allowlisted "
-        f"in scripts/check_file_sizes.py. Violations: {violations}"
+        f"API/service paths must stay <= {module.SIZE_LIMIT} LOC and ratcheted "
+        f"hotspots may not grow. Violations: {violations}"
     )
 
     decorated = tmp_path / "decorated.py"
@@ -245,6 +245,26 @@ def test_file_size_guard_for_api_and_service_paths(tmp_path: Path) -> None:
     assert module._has_endpoint_decorator(decorated) is True
     assert module._has_endpoint_decorator(registered) is True
     assert module._has_endpoint_decorator(ordinary) is False
+
+
+def test_file_size_guard_enforces_ratcheted_merge_hotspots(tmp_path, monkeypatch) -> None:
+    import importlib.util
+
+    script = PROJECT_ROOT / "scripts" / "check_file_sizes.py"
+    spec = importlib.util.spec_from_file_location("check_file_sizes_hotspots", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+
+    assert module.MERGE_HOTSPOTS <= module.RATCHETED_FILES.keys()
+    hotspot = "app/main.py"
+    limit = module.RATCHETED_FILES[hotspot][0]
+    hotspot_path = tmp_path / hotspot
+    hotspot_path.parent.mkdir(parents=True)
+    hotspot_path.write_text("# line\n" * (limit + 1), encoding="utf-8")
+    monkeypatch.setattr(module, "BACKEND_ROOT", tmp_path)
+
+    assert module.find_violations() == [f"{hotspot} ({limit + 1} LOC, max {limit})"]
 
 
 def test_alembic_resolves_to_a_single_head() -> None:

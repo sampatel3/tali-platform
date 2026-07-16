@@ -74,8 +74,16 @@ def _trigger_rescreen(
     reads the stale jobs (same guard ``mark_role_scores_stale`` uses for the
     tech-questions regen).
     """
+    if application_ids is not None and not application_ids:
+        return 0
     from ..services.cv_score_orchestrator import mark_role_scores_stale
+    from ..services.score_dispatch_authority import approve_role_stale_dispatch
 
+    promoted = approve_role_stale_dispatch(
+        db,
+        role_id=int(role.id),
+        application_ids=application_ids,
+    )
     invalidated = mark_role_scores_stale(
         db,
         int(role.id),
@@ -85,7 +93,12 @@ def _trigger_rescreen(
         # Persist that authority on every stale row so Beat can recover a lost
         # one-shot publish even if the autonomous role agent is paused/off.
         requires_active_agent=False,
+        dispatch_approved=True,
+        dispatch_tech_questions=False,
     )
+    admitted = int(promoted + invalidated)
+    if admitted <= 0:
+        return 0
     try:
         from ..tasks.scoring_tasks import sweep_stale_scores
 
@@ -95,21 +108,26 @@ def _trigger_rescreen(
                 "role_id": int(role.id),
                 "application_ids": (
                     [int(value) for value in application_ids]
-                    if application_ids
+                    if application_ids is not None
                     else None
                 ),
                 "explicit": True,
             },
             countdown=10,
         )
+        from ..tasks.automation_tasks import regenerate_role_tech_questions
+
+        regenerate_role_tech_questions.apply_async(
+            args=[int(role.id)], countdown=10
+        )
     except Exception:  # pragma: no cover — never fail the edit on dispatch
         import logging
 
         logging.getLogger("taali.agent_chat").exception(
-            "constraint edit: failed to dispatch stale-score sweep for role_id=%s",
+            "constraint edit: failed to dispatch approved rescreen for role_id=%s",
             role.id,
         )
-    return int(invalidated)
+    return admitted
 
 
 # Rough per-candidate cost of a re-screen (prescreen + full score), from
@@ -179,6 +197,17 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
         return {"ok": False, "error": "That doesn't look like a full job spec — paste the whole description and I'll apply it."}
 
     before = _criteria_text_map(db, role)
+    spec_changed = text != (role.job_spec_text or "").strip()
+    invalidated = 0
+    if spec_changed:
+        # Canonical paid-work lock order is Role -> CvScoreJob. Select only the
+        # key so this defensive service-level lock cannot overwrite the new
+        # in-memory spec when endpoint/chat callers already hold the same row.
+        with db.no_autoflush:
+            db.query(Role.id).filter(
+                Role.id == int(role.id),
+                Role.organization_id == int(role.organization_id),
+            ).with_for_update().scalar()
     now = datetime.now(timezone.utc)
     role.job_spec_text = text
     # Text edits are first-class recruiter overrides, not an ephemeral agent
@@ -208,6 +237,22 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
                 supersede_generated_drafts=True,
             )
         db.flush()
+        if spec_changed:
+            from ..services.cv_score_orchestrator import mark_role_scores_stale
+            from ..services.score_dispatch_authority import (
+                revoke_role_active_dispatch,
+            )
+
+            invalidated = mark_role_scores_stale(
+                db,
+                int(role.id),
+                reason="job_spec_updated_awaiting_rescreen_approval",
+                dispatch_tech_questions=False,
+                requires_active_agent=True,
+                dispatch_approved=False,
+                supersede_existing_stale=True,
+            )
+            invalidated += revoke_role_active_dispatch(db, role_id=int(role.id))
     except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
         db.rollback()
         return {"ok": False, "error": f"I couldn't parse that spec into criteria ({type(exc).__name__}); the role is unchanged."}
@@ -221,6 +266,8 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
         "added": added[:12],
         "removed": removed[:12],
         "criteria_count": len(after),
+        "scores_invalidated": int(invalidated),
+        "rescore_dispatch_approved": False,
         # A new JD re-derives every criterion → the whole pool needs re-scoring.
         # Opt-in: show the cost, run rescreen_role only on the recruiter's yes.
         "would_rescreen": estimate_rescreen(db, role),

@@ -1,7 +1,11 @@
 name: CI
 
+# Comprehensive local correctness gates run here. Production Smoke Tests stay
+# isolated in their scheduled workflow because they exercise live services.
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main, master, work]
 
@@ -28,8 +32,8 @@ jobs:
       - name: Classify changed paths
         id: scope
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
         run: |
           backend=false
           frontend=false
@@ -60,9 +64,49 @@ jobs:
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
 
+  merge-safety:
+    # Merge-group jobs already run against a composed queue SHA. For pull
+    # requests, inspect the real head and reject stale or overlapping branches
+    # before the comprehensive backend gate can pass.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout actual head (not the synthetic PR merge commit)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Python 3.11.9
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11.9'
+      - name: Validate event base SHA is available
+        id: current-base
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "$EVENT_BASE_SHA^{commit}"
+          echo "sha=$EVENT_BASE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Check branch freshness and simulate merge
+        env:
+          BASE_SHA: ${{ steps.current-base.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_LABEL: ${{ github.event.pull_request.base.ref }}
+        run: |
+          python scripts/ci/check_merge_safety.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --base-label "$BASE_LABEL"
+
   backend:
-    needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    needs: [changes, merge-safety]
+    if: >-
+      always() &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -73,6 +117,15 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+      - name: Require merge-safety success for pull requests
+        if: github.event_name == 'pull_request'
+        env:
+          MERGE_SAFETY_RESULT: ${{ needs.merge-safety.result }}
+        run: |
+          if [[ "$MERGE_SAFETY_RESULT" != "success" ]]; then
+            echo "merge-safety must pass before backend CI can pass (result: $MERGE_SAFETY_RESULT)" >&2
+            exit 1
+          fi
       - name: Setup Python 3.11.9
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -95,6 +148,10 @@ jobs:
         run: ruff check alembic app scripts tests
       - name: Backend architecture ratchets
         run: python scripts/check_file_sizes.py
+      - name: Merge-safety unit contracts
+        # This test module lives beside the repository-level merge checker, so
+        # backend pytest discovery would not otherwise collect it.
+        run: python -m pytest -q ../scripts/ci/tests/test_check_merge_safety.py
       - name: Dead-code import-graph gate
         working-directory: .
         run: >-
@@ -104,8 +161,8 @@ jobs:
       - name: Patch whitespace
         working-directory: .
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
         run: |
           if [[ -n "$BASE_SHA" \
                 && "$BASE_SHA" != "0000000000000000000000000000000000000000" \

@@ -52,6 +52,8 @@ historical record of the completed Jobs-first redesign, not a current backlog.
 - **Frontend:** https://www.taali.ai — `VITE_API_URL` in Vercel points to the Railway
   backend. `VITE_PUBLIC_API_BASE_URL` optionally controls the full separately
   advertised developer API base (including `/public/v1`).
+- **Backend:** Railway web plus distinct general and scoring workers; public
+  health endpoints are linked from the deployment guide.
 - **Release:** Deploy the backend and frontend from the same clean `main` commit
   with `./scripts/deploy_production.sh`; do not bypass its coordinated migration,
   worker, readiness, capability, and Vercel gates with direct provider commands.
@@ -98,8 +100,8 @@ taali-platform/
 
 1. **Backend + two workers (Railway)**
    - New project; add PostgreSQL and Redis, plus web, general-worker, and scoring-worker services from `backend/`.
-   - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, independent `SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, and required `ADMIN_SECRET` values, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `RESEND_API_KEY`, real GitHub credentials, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
-   - Merge the release through `main`, fetch it locally, and run `./scripts/deploy_production.sh` from that exact clean commit. The release guard refuses stale or feature-branch deployments, checks the migration head and chat design system, then coordinates Railway and Vercel from the same SHA. The Railway phase pins and validates live metering and native apply on all three services, migrates via production `DATABASE_PUBLIC_URL`, deploys general `celery` + Beat, deploys scoring-only without Beat, deploys web, then polls `/ready`.
+   - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, independently generated high-entropy `SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, and `ADMIN_SECRET` values, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `RESEND_API_KEY`, real GitHub credentials, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
+   - Merge through `main`, fetch it locally, and run `./scripts/deploy_production.sh` from that exact clean commit. The release guard refuses dirty, stale, and feature-branch worktrees, verifies the migration head, chat design system, provider identities, exact linked projects, and required services, then attests Railway and Vercel to the kickoff SHA even if `main` advances mid-rollout. Before changing variables and again immediately before migration, it verifies that every production revision is present and reachable in that release's Alembic graph. The Railway phase pins and validates the agent/ATS policy on all three services, runs the locked production migration bootstrap, deploys general `celery` + Beat, deploys scoring-only without Beat, deploys web from the repository root, then polls `/ready` and the authenticated capability gate.
    - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final gate validates web, both queue canaries, and live Anthropic/E2B/Resend/GitHub capability for the default assessment path.
 
 2. **Frontend (Vercel)**  

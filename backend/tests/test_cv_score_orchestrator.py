@@ -796,7 +796,11 @@ def test_autonomous_pause_after_pre_screen_blocks_full_score_phase(
             job=job,
         )
 
-    assert phases == ["pre_screen", "full_score.main"]
+    assert phases == [
+        "pre_screen",
+        "full_score.cache_or_provider",
+        "full_score.main",
+    ]
     pre_screen.assert_called_once_with(app)
     full_score_provider.assert_not_called()
 
@@ -961,6 +965,41 @@ def test_explicit_score_phase_ignores_workspace_overlay(session) -> None:
         job=explicit_job,
         phase="full_score.main",
     )
+
+
+def test_revoked_explicit_dispatch_is_fenced_before_cache_fee(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.services.score_dispatch_authority import ScoreDispatchRevoked
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_RUNNING,
+        requires_active_agent=False,
+        dispatch_approved=False,
+    )
+    db.add(job)
+    db.commit()
+    runner = MagicMock()
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", runner)
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_resolve_anthropic_client",
+        lambda _organization: object(),
+    )
+
+    with pytest.raises(ScoreDispatchRevoked) as revoked:
+        cv_score_orchestrator._execute_scoring_v3(
+            db,
+            application=app,
+            job=job,
+        )
+
+    assert revoked.value.phase == "full_score.cache_or_provider"
+    assert revoked.value.detail == "rescreen approval is required"
+    runner.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -1304,6 +1343,229 @@ def test_explicit_rescreen_promotes_existing_stale_job_authority(session) -> Non
     assert stale.requires_active_agent is False
 
 
+def test_job_spec_stale_waits_for_durable_rescreen_approval(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.agent_chat.constraints import rescreen_role
+    from app.tasks import scoring_tasks
+    from app.tasks.agent_scoring_dispatch import _auto_enqueue_scoring
+
+    app.pre_screen_score_100 = 72.0
+    app.cv_match_score = None
+    db.flush()
+    assert mark_role_scores_stale(
+        db,
+        role.id,
+        reason="job_spec_updated_awaiting_rescreen_approval",
+        dispatch_tech_questions=False,
+        dispatch_approved=False,
+        supersede_existing_stale=True,
+    ) == 1
+    db.commit()
+    stale = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id, CvScoreJob.status == "stale")
+        .one()
+    )
+    assert stale.dispatch_approved is False
+    assert role.agentic_mode_enabled is True
+
+    enqueued: list[int] = []
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "enqueue_score",
+        lambda _db, application, **_kwargs: enqueued.append(int(application.id)),
+    )
+    sweep = scoring_tasks.sweep_stale_scores.run(limit=10)
+    assert sweep["examined"] == sweep["enqueued"] == 0
+    explicit_sweep = scoring_tasks.sweep_stale_scores.run(
+        limit=10,
+        role_id=int(role.id),
+        explicit=True,
+    )
+    assert explicit_sweep["examined"] == explicit_sweep["enqueued"] == 0
+    assert _auto_enqueue_scoring(db, role=role, limit=10) == 0
+    assert enqueued == []
+
+    execute = MagicMock()
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", execute)
+    held = scoring_tasks.score_application_job.run(
+        app.id,
+        job_id=stale.id,
+    )
+    assert held["status"] == "awaiting_rescore_approval"
+    execute.assert_not_called()
+
+    with monkeypatch.context() as context:
+        from app.services import role_tech_questions_service
+
+        invalidate_tech = MagicMock()
+        empty_publish = MagicMock()
+        context.setattr(
+            role_tech_questions_service, "invalidate", invalidate_tech
+        )
+        context.setattr(
+            scoring_tasks.sweep_stale_scores, "apply_async", empty_publish
+        )
+        assert mark_role_scores_stale(
+            db, role.id, application_ids=[]
+        ) == 0
+        empty = rescreen_role(db, role, application_ids=[])
+    assert empty == {
+        "type": "rescreen_started",
+        "rescreening_count": 0,
+        "scoped": True,
+    }
+    invalidate_tech.assert_not_called()
+    empty_publish.assert_not_called()
+    db.refresh(stale)
+    assert stale.dispatch_approved is False
+
+    with monkeypatch.context() as context:
+        publish = MagicMock()
+        tech_publish = MagicMock()
+        context.setattr(scoring_tasks.sweep_stale_scores, "apply_async", publish)
+        from app.tasks import automation_tasks
+
+        context.setattr(
+            automation_tasks.regenerate_role_tech_questions,
+            "apply_async",
+            tech_publish,
+        )
+        first = rescreen_role(db, role)
+        second = rescreen_role(db, role)
+
+    assert first["rescreening_count"] == 1
+    assert second["rescreening_count"] == 0
+    assert publish.call_count == 1
+    db.commit()
+    db.refresh(stale)
+    assert stale.dispatch_approved is True
+    assert stale.requires_active_agent is False
+    assert (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id, CvScoreJob.status == "stale")
+        .count()
+        == 1
+    )
+
+
+def test_job_spec_edit_terminalizes_older_pending_dispatch_until_approval(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.agent_chat.constraints import rescreen_role, update_job_spec
+    from app.tasks import automation_tasks, scoring_tasks
+
+    old_job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=False,
+        dispatch_approved=True,
+    )
+    db.add(old_job)
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.role_criteria_service.sync_derived_criteria",
+        lambda _db, _role: None,
+    )
+    result = update_job_spec(
+        db,
+        role,
+        job_spec_text=(
+            "Senior platform engineer. Requirements: Python, distributed "
+            "systems, resilient services, observability, and AWS operations."
+        ),
+    )
+    assert result["applied"] is True
+    assert result["scores_invalidated"] == 1
+    db.commit()
+    db.refresh(old_job)
+    assert old_job.status == SCORE_JOB_ERROR
+    assert old_job.dispatch_approved is False
+    assert old_job.error_message == "superseded_by_job_spec_update"
+    assert (
+        db.query(CvScoreJob)
+        .filter(
+            CvScoreJob.role_id == role.id,
+            CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
+        )
+        .count()
+        == 0
+    )
+    latest = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id)
+        .order_by(CvScoreJob.id.desc())
+        .first()
+    )
+    assert latest is not None and latest.status == "stale"
+    assert latest.dispatch_approved is False
+
+    execute = MagicMock()
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", execute)
+    held = scoring_tasks.score_application_job.run(app.id, job_id=old_job.id)
+    assert held["status"] == "skipped"
+    execute.assert_not_called()
+
+    publish = MagicMock()
+    tech_publish = MagicMock()
+    monkeypatch.setattr(scoring_tasks.sweep_stale_scores, "apply_async", publish)
+    monkeypatch.setattr(
+        automation_tasks.regenerate_role_tech_questions,
+        "apply_async",
+        tech_publish,
+    )
+    approved = rescreen_role(db, role)
+    assert approved["rescreening_count"] == 1
+    db.commit()
+    db.refresh(latest)
+    assert latest.dispatch_approved is True
+    assert latest.requires_active_agent is False
+    publish.assert_called_once()
+    enqueue = MagicMock()
+    monkeypatch.setattr(cv_score_orchestrator, "enqueue_score", enqueue)
+    empty_sweep = scoring_tasks.sweep_stale_scores.run(
+        limit=10,
+        role_id=int(role.id),
+        application_ids=[],
+        explicit=True,
+    )
+    assert empty_sweep["examined"] == empty_sweep["enqueued"] == 0
+    enqueue.assert_not_called()
+
+
+def test_manual_score_is_fresh_authority_for_unapproved_stale_work(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.tasks import scoring_tasks
+
+    app.pre_screen_score_100 = 72.0
+    db.flush()
+    mark_role_scores_stale(
+        db,
+        role.id,
+        dispatch_tech_questions=False,
+        dispatch_approved=False,
+        supersede_existing_stale=True,
+    )
+    db.commit()
+    publish = MagicMock(return_value=SimpleNamespace(id="manual-score"))
+    monkeypatch.setattr(scoring_tasks.score_application_job, "delay", publish)
+
+    assert enqueue_score(db, app, requires_active_agent=True) is None
+    manual = enqueue_score(db, app, requires_active_agent=False)
+
+    assert manual is not None
+    assert manual.status == SCORE_JOB_PENDING
+    assert manual.requires_active_agent is False
+    assert manual.dispatch_approved is True
+    assert publish.call_count == 1
+
+
 def test_confirmed_stale_recovery_is_bounded_in_beat_schedule() -> None:
     from app.tasks.celery_app import celery_app
 
@@ -1361,6 +1623,8 @@ def test_score_worker_discards_result_when_role_intent_changes_mid_call(
 ) -> None:
     db, _org, role, app = session
     from app.domains.assessments_runtime import applications_routes
+    from app.platform.database import SessionLocal
+    from app.services.score_dispatch_authority import revoke_role_active_dispatch
     from app.tasks import scoring_tasks
 
     job = CvScoreJob(
@@ -1371,12 +1635,20 @@ def test_score_worker_discards_result_when_role_intent_changes_mid_call(
     db.add(job)
     db.commit()
 
-    def fake_execute(worker_db, *, application, job, force_full_score=False):
+    def fake_execute(_worker_db, *, application, job, force_full_score=False):
         # Simulate a re-publish committing while the provider call was in
         # flight: the computed score belongs to the old fingerprint, while the
         # live role now carries materially different hiring intent.
-        live_role = worker_db.query(Role).filter(Role.id == role.id).one()
-        live_role.job_spec_text = "Materially revised requisition intent"
+        observer = SessionLocal()
+        try:
+            live_role = observer.query(Role).filter(Role.id == role.id).one()
+            live_role.job_spec_text = "Materially revised requisition intent"
+            assert revoke_role_active_dispatch(
+                observer, role_id=int(role.id)
+            ) == 1
+            observer.commit()
+        finally:
+            observer.close()
         application.cv_match_score = 99.0
         application.cv_match_details = {"summary": "old-JD output"}
         job.status = SCORE_JOB_DONE
@@ -1408,9 +1680,9 @@ def test_score_worker_discards_result_when_role_intent_changes_mid_call(
     assert persisted_app.cv_match_score is None
     assert persisted_app.cv_match_details is None
     assert persisted_attempt.status == SCORE_JOB_ERROR
-    assert persisted_attempt.error_message == "superseded_role_intent"
+    assert persisted_attempt.error_message == "superseded_by_job_spec_update"
     assert latest is not None and latest.status == "stale"
-    assert latest.error_message == "rescore_after_role_reconfiguration"
+    assert latest.dispatch_approved is False
 
 
 def test_score_worker_hard_limit_precedes_running_lease_recovery() -> None:

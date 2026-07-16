@@ -135,7 +135,21 @@ describe('llms.txt', () => {
 
 const repoRoot = path.resolve(frontendRoot, '..');
 const rootVercel = JSON.parse(fs.readFileSync(path.join(repoRoot, 'vercel.json'), 'utf8'));
+const frontendVercel = JSON.parse(read('vercel.json'));
 const contentCss = read('public/styles/content.css');
+
+const PREVIEW_REDIRECTS = [
+  { source: '/home-preview.html', destination: '/home-preview', permanent: false },
+  {
+    source: '/jobs-preview.html',
+    has: [{ type: 'query', key: 'agent', value: '(?<agent>paused|loading)' }],
+    destination: '/jobs-preview?agent=:agent',
+    permanent: false,
+  },
+  { source: '/jobs-preview.html', destination: '/jobs-preview', permanent: false },
+  { source: '/report-preview.html', destination: '/report-preview', permanent: false },
+  { source: '/analytics-preview.html', destination: '/analytics-preview', permanent: false },
+];
 
 const CONTENT_PAGES = [
   { file: 'public/agentic-hiring.html', slug: '/agentic-hiring', topic: 'agentic hiring' },
@@ -218,6 +232,48 @@ describe('vercel rewrites', () => {
     }
     const article = rootVercel.rewrites.find((r) => r.source === '/blog/ai-native-coding-and-knowledge-work');
     expect(article.destination).toBe('/blog-ai-native.html');
+  });
+});
+
+describe('legacy preview redirects', () => {
+  it('keeps both deployment configs on the same exact temporary redirects', () => {
+    expect(rootVercel.redirects).toEqual(PREVIEW_REDIRECTS);
+    expect(frontendVercel.redirects).toEqual(PREVIEW_REDIRECTS);
+  });
+
+  it('redirects the four retired .html aliases to canonical React routes', () => {
+    const genericRedirects = PREVIEW_REDIRECTS.filter(({ has }) => !has);
+    expect(genericRedirects.map(({ source, destination }) => [source, destination])).toEqual([
+      ['/home-preview.html', '/home-preview'],
+      ['/jobs-preview.html', '/jobs-preview'],
+      ['/report-preview.html', '/report-preview'],
+      ['/analytics-preview.html', '/analytics-preview'],
+    ]);
+    expect(PREVIEW_REDIRECTS.every(({ permanent }) => permanent === false)).toBe(true);
+  });
+
+  it('preserves supported jobs preview agent states before the generic fallback', () => {
+    const jobRedirects = PREVIEW_REDIRECTS.filter(({ source }) => source === '/jobs-preview.html');
+    expect(jobRedirects).toEqual([
+      {
+        source: '/jobs-preview.html',
+        has: [{ type: 'query', key: 'agent', value: '(?<agent>paused|loading)' }],
+        destination: '/jobs-preview?agent=:agent',
+        permanent: false,
+      },
+      { source: '/jobs-preview.html', destination: '/jobs-preview', permanent: false },
+    ]);
+
+    const [statefulRedirect] = jobRedirects;
+    const agentPattern = new RegExp(`^${statefulRedirect.has[0].value}$`);
+    for (const agent of ['paused', 'loading']) {
+      const match = agent.match(agentPattern);
+      expect(match?.groups?.agent).toBe(agent);
+      expect(statefulRedirect.destination.replace(':agent', match.groups.agent)).toBe(
+        `/jobs-preview?agent=${agent}`,
+      );
+    }
+    expect('unknown'.match(agentPattern)).toBeNull();
   });
 });
 

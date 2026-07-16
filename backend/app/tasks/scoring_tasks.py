@@ -107,6 +107,11 @@ def score_application_job(
         _execute_scoring,
         _latest_job,
     )
+    from ..services.score_dispatch_authority import (
+        ScoreDispatchRevoked,
+        discard_superseded_score_result,
+        score_dispatch_is_approved,
+    )
     from ..services.role_execution_guard import (
         automatic_role_action_block_reason,
     )
@@ -135,7 +140,10 @@ def score_application_job(
             return {"status": "missing", "application_id": application_id}
 
         if job_id is not None:
-            job = db.query(CvScoreJob).filter(CvScoreJob.id == int(job_id)).first()
+            job = db.query(CvScoreJob).filter(
+                CvScoreJob.id == int(job_id),
+                CvScoreJob.application_id == int(application_id),
+            ).first()
         else:
             job = _latest_job(db, application_id)
         if job is None:
@@ -146,13 +154,14 @@ def score_application_job(
             return {"status": "no_job", "application_id": application_id}
 
         if job.status not in {SCORE_JOB_PENDING, SCORE_JOB_STALE}:
-            # Another worker already picked this up — bail out.
             return {"status": "skipped", "application_id": application_id, "job_status": job.status}
+        if not bool(job.dispatch_approved):
+            return {
+                "status": "awaiting_rescore_approval",
+                "application_id": application_id,
+            }
 
-        # Every queued score is fenced by the current role lifecycle under the
-        # same lock that claims the job. A recruiter-authorized score may run
-        # while an active role's agent is paused. Autonomous work additionally
-        # rechecks all current run-authority conditions before the paid call.
+        # Fence paid work under the same role lock used by control changes.
         if bool(getattr(job, "requires_active_agent", True)):
             # Workspace Pause/Resume owns the outer execution authority. Take
             # its organization lock before the Role lock so this paid-work
@@ -246,6 +255,7 @@ def score_application_job(
             .filter(
                 CvScoreJob.id == int(job.id),
                 CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_STALE]),
+                CvScoreJob.dispatch_approved.is_(True),
             )
             .update(
                 {
@@ -259,6 +269,13 @@ def score_application_job(
         )
         if claimed != 1:
             db.rollback()
+            if not score_dispatch_is_approved(
+                db, job_id=int(job.id), application_id=int(application_id)
+            ):
+                return {
+                    "status": "awaiting_rescore_approval",
+                    "application_id": application_id,
+                }
             current_status = (
                 db.query(CvScoreJob.status)
                 .filter(CvScoreJob.id == int(job.id))
@@ -420,49 +437,21 @@ def score_application_job(
                 live_role is None
                 or live_fingerprint != scoring_intent_fingerprint
                 or role_reconfiguration_is_active(live_role)
+                or not score_dispatch_is_approved(
+                    db,
+                    job_id=int(job.id),
+                    application_id=int(application_id),
+                )
             )
             if role_intent_superseded:
-                db.rollback()  # discard every old-JD score/cache/application write
-                terminal_job = (
-                    db.query(CvScoreJob)
-                    .filter(CvScoreJob.id == int(job.id))
-                    .with_for_update()
-                    .one_or_none()
+                return discard_superseded_score_result(
+                    db,
+                    application_id=int(application_id),
+                    role_id=int(scoring_role.id),
+                    job=job,
+                    live_fingerprint=live_fingerprint,
+                    force_full_score=bool(force_full_score),
                 )
-                now = datetime.now(timezone.utc)
-                if terminal_job is not None:
-                    terminal_job.status = SCORE_JOB_ERROR
-                    terminal_job.error_message = "superseded_role_intent"
-                    terminal_job.finished_at = now
-                latest = _latest_job(db, int(application_id))
-                if latest is None or int(latest.id) == int(job.id) or latest.status != SCORE_JOB_STALE:
-                    db.add(
-                        CvScoreJob(
-                            application_id=int(application_id),
-                            role_id=int(scoring_role.id),
-                            status=SCORE_JOB_STALE,
-                            cache_key=(
-                                f"role-intent:{live_fingerprint}"
-                                if live_fingerprint
-                                else None
-                            ),
-                            error_message="rescore_after_role_reconfiguration",
-                            requires_active_agent=bool(
-                                getattr(job, "requires_active_agent", True)
-                            ),
-                            force_full_score=bool(
-                                getattr(job, "force_full_score", False)
-                                or force_full_score
-                            ),
-                            queued_at=now,
-                        )
-                    )
-                db.commit()
-                return {
-                    "status": "superseded_role_intent",
-                    "application_id": application_id,
-                    "role_id": int(scoring_role.id),
-                }
             # Post-execution cancel guard: _execute_scoring calls Claude
             # synchronously (10-30s). If cancel fired DURING that call, the
             # Redis flag is the cross-process interrupt signal. Without this
@@ -582,7 +571,7 @@ def score_application_job(
                 "application_id": application_id,
                 "cache_hit": cache_hit,
             }
-        except AutonomousScoringDeferred as exc:
+        except (AutonomousScoringDeferred, ScoreDispatchRevoked) as exc:
             # A workspace Pause committed between provider phases.  Discard
             # every tentative pre-screen/score/cache write from this attempt,
             # then retain a durable stale marker for Resume/cohort recovery.
@@ -596,7 +585,11 @@ def score_application_job(
                 .with_for_update()
                 .one_or_none()
             )
-            if exc.detail == "workspace agent is paused":
+            if exc.detail == "rescreen approval is required":
+                deferred_status = "awaiting_rescore_approval"
+            elif exc.detail == "role intent changed":
+                deferred_status = "superseded_role_intent"
+            elif exc.detail == "workspace agent is paused":
                 deferred_status = "deferred_workspace_paused"
             elif exc.detail == "role agent is paused":
                 deferred_status = "deferred_agent_paused"
@@ -882,13 +875,8 @@ def sweep_stale_scores(
     skipped = 0
     examined = 0
     try:
-        # Find apps whose LATEST CvScoreJob row is ``status='stale'``.
-        # ``CvScoreJob`` rows are append-only — a successful rescore
-        # adds a new ``pending`` / ``running`` / ``done`` row instead
-        # of converting the old stale one — so naive
-        # ``status == "stale"`` queries would re-enqueue already-fixed
-        # apps on every safety-net run and burn token budget. The window query
-        # below scopes to the most-recent job per application.
+        # Only the latest append-only attempt may be recovered; historical
+        # stale rows must never trigger duplicate provider spend.
         from sqlalchemy import desc, func
 
         latest_job_subq = (
@@ -910,6 +898,7 @@ def sweep_stale_scores(
             .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 CvScoreJob.status == "stale",
+                CvScoreJob.dispatch_approved.is_(True),
                 Role.deleted_at.is_(None),
             )
         )
@@ -925,7 +914,7 @@ def sweep_stale_scores(
             latest_jobs_query = latest_jobs_query.filter(
                 CvScoreJob.role_id == int(role_id)
             )
-        if application_ids:
+        if application_ids is not None:
             latest_jobs_query = latest_jobs_query.filter(
                 CvScoreJob.application_id.in_(
                     [int(value) for value in application_ids]

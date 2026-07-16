@@ -62,6 +62,7 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
         .join(latest_id, CvScoreJob.id == latest_id.c.job_id)
         .filter(
             CvScoreJob.status == SCORE_JOB_STALE,
+            CvScoreJob.dispatch_approved.is_(True),
             CvScoreJob.error_message.in_(
                 (
                     "deferred_workspace_paused",
@@ -145,6 +146,7 @@ def _auto_enqueue_scoring(
         from ..models.cv_score_job import (
             SCORE_JOB_PENDING,
             SCORE_JOB_RUNNING,
+            SCORE_JOB_STALE,
             CvScoreJob,
         )
         from ..services.cv_score_orchestrator import enqueue_score
@@ -185,6 +187,21 @@ def _auto_enqueue_scoring(
             )
             .exists()
         )
+        latest_score_job_id = (
+            db.query(func.max(CvScoreJob.id))
+            .filter(CvScoreJob.application_id == CandidateApplication.id)
+            .correlate(CandidateApplication)
+            .scalar_subquery()
+        )
+        unapproved_stale_job = (
+            db.query(CvScoreJob.id)
+            .filter(
+                CvScoreJob.id == latest_score_job_id,
+                CvScoreJob.status == SCORE_JOB_STALE,
+                CvScoreJob.dispatch_approved.is_(False),
+            )
+            .exists()
+        )
         unscored = (
             db.query(CandidateApplication)
             .filter(
@@ -209,6 +226,7 @@ def _auto_enqueue_scoring(
                 # prevents repeated ticks from spending the whole projected
                 # capacity on idempotent re-touches of the same rows.
                 not_(active_score_job),
+                not_(unapproved_stale_job),
                 # Skip recently-errored apps unless a fresh CV beats the
                 # backoff or there's no pre-screen attempt yet.
                 or_(

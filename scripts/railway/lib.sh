@@ -3,6 +3,159 @@
 # Shared, side-effect-free helpers for the Railway deployment wrappers.
 # Callers own `set -euo pipefail` and select the Railway environment first.
 
+railway_begin_coordinated_release() {
+  local root_dir="$1"
+  local release_sha="$2"
+  local attestation_file attestation_token canonical_root
+
+  if [[ -n "${TALI_COORDINATED_RELEASE_SHA:-}" \
+    || -n "${TALI_COORDINATED_RELEASE_ATTESTATION:-}" \
+    || -n "${TALI_COORDINATED_RELEASE_TOKEN:-}" ]]; then
+    echo "error: coordinated release state already exists." >&2
+    return 1
+  fi
+
+  release_sha="$(git -C "$root_dir" rev-parse "${release_sha}^{commit}")"
+  canonical_root="$(cd "$root_dir" && pwd -P)"
+  attestation_file="$(mktemp)"
+  chmod 600 "$attestation_file"
+  attestation_token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  printf '%s\n%s\n%s\n' \
+    "$attestation_token" "$release_sha" "$canonical_root" > "$attestation_file"
+
+  export TALI_COORDINATED_RELEASE_SHA="$release_sha"
+  export TALI_COORDINATED_RELEASE_ATTESTATION="$attestation_file"
+  export TALI_COORDINATED_RELEASE_TOKEN="$attestation_token"
+  TALI_COORDINATED_RELEASE_ATTESTATION_CREATED="$attestation_file"
+}
+
+railway_end_coordinated_release() {
+  local attestation_file="${TALI_COORDINATED_RELEASE_ATTESTATION_CREATED:-}"
+  if [[ -n "$attestation_file" ]]; then
+    rm -f "$attestation_file"
+  fi
+  unset TALI_COORDINATED_RELEASE_SHA
+  unset TALI_COORDINATED_RELEASE_ATTESTATION
+  unset TALI_COORDINATED_RELEASE_TOKEN
+  unset TALI_COORDINATED_RELEASE_ATTESTATION_CREATED
+}
+
+railway_assert_release_source() {
+  local root_dir="$1"
+  local environment="$2"
+
+  if [[ "$environment" != "production" ]]; then
+    return 0
+  fi
+
+  local guard="$root_dir/scripts/release/assert_canonical_source.sh"
+  if [[ -n "${TALI_COORDINATED_RELEASE_SHA:-}" ]]; then
+    "$guard" --expected-sha "$TALI_COORDINATED_RELEASE_SHA"
+  else
+    "$guard"
+  fi
+}
+
+railway_assert_canonical_backend_dir() {
+  local root_dir="$1"
+  local backend_dir="$2"
+  local environment="$3"
+
+  if [[ "$environment" != "production" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$backend_dir" || ! -d "$root_dir/backend" ]]; then
+    echo "error: canonical backend directory is missing." >&2
+    return 1
+  fi
+
+  local actual_backend canonical_backend
+  actual_backend="$(cd "$backend_dir" && pwd -P)"
+  canonical_backend="$(cd "$root_dir/backend" && pwd -P)"
+  if [[ "$actual_backend" != "$canonical_backend" ]]; then
+    echo "error: production must deploy backend/ from the verified release worktree." >&2
+    return 1
+  fi
+}
+
+railway_assert_database_provenance_from_variables_file() {
+  local variables_file="$1"
+  local backend_dir="$2"
+
+  python3 - "$variables_file" "$backend_dir" <<'PY'
+import json
+import os
+import subprocess
+import sys
+from urllib.parse import urlsplit
+
+variables_file, backend_dir = sys.argv[1:]
+with open(variables_file, encoding="utf-8") as handle:
+    payload = json.load(handle)
+if not isinstance(payload, dict):
+    print("error: unexpected Railway variable payload for the web service.", file=sys.stderr)
+    raise SystemExit(1)
+
+database_url = str(payload.get("DATABASE_PUBLIC_URL") or "").strip()
+if not database_url:
+    print(
+        "error: production web service has no DATABASE_PUBLIC_URL; "
+        "attach the public Postgres URL before rollout.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+parsed = urlsplit(database_url)
+hostname = (parsed.hostname or "").lower()
+if parsed.scheme not in {"postgres", "postgresql"} or not hostname:
+    print("error: DATABASE_PUBLIC_URL is not a valid PostgreSQL URL.", file=sys.stderr)
+    raise SystemExit(1)
+if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(
+    ".railway.internal"
+):
+    print(
+        "error: DATABASE_PUBLIC_URL is not publicly reachable from the deploy host.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+env = os.environ.copy()
+env["DATABASE_PUBLIC_URL"] = database_url
+env["DATABASE_URL"] = database_url
+subprocess.run(
+    [sys.executable, "scripts/check_alembic_provenance.py"],
+    cwd=backend_dir,
+    env=env,
+    check=True,
+)
+PY
+}
+
+railway_assert_production_database_provenance() {
+  local environment="$1"
+  local web_service="$2"
+  local backend_dir="$3"
+
+  if [[ "$environment" != "production" ]]; then
+    return 0
+  fi
+
+  local variables_file result=0
+  variables_file="$(mktemp)"
+  chmod 600 "$variables_file"
+  if ! railway variable list \
+    --service "$web_service" \
+    --environment "$environment" \
+    --json > "$variables_file"; then
+    echo "error: could not read production web variables for migration provenance." >&2
+    rm -f "$variables_file"
+    return 1
+  fi
+  railway_assert_database_provenance_from_variables_file \
+    "$variables_file" "$backend_dir" || result=$?
+  rm -f "$variables_file"
+  return "$result"
+}
+
 railway_assert_distinct_services() {
   local web_service="$1"
   local general_worker_service="$2"

@@ -473,27 +473,6 @@
   line-height: 1.4;
 }
 
-.t-pill {
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-eyebrow);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  background: var(--bg-3);
-  color: var(--mute);
-}
-
-.t-pill.p1 {
-  background: color-mix(in oklab, var(--red) 14%, var(--bg-3));
-  color: var(--red);
-}
-
-.t-pill.p2 {
-  background: color-mix(in oklab, var(--amber) 14%, var(--bg-3));
-  color: var(--amber);
-}
-
 .t-due {
   font-family: var(--font-mono);
   font-size: var(--fs-caption);

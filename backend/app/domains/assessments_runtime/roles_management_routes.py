@@ -1741,8 +1741,7 @@ def update_role_job_spec(
         logger.exception("Failed to update job spec for role_id=%s", role_id)
         raise HTTPException(status_code=500, detail="Failed to update job spec")
 
-    # Regeneration is asynchronous and best-effort. The recruiter-authored spec
-    # is already durable even if the worker/broker is temporarily unavailable.
+    # Best-effort regeneration cannot roll back the already-durable spec.
     try:
         on_role_jd_attached(role)
     except Exception:  # pragma: no cover - persistence must remain successful
@@ -1762,8 +1761,9 @@ def update_role_job_spec(
             "count": 0,
             "est_cost_usd": 0.0,
         },
+        "scores_invalidated": int(result.get("scores_invalidated") or 0),
+        "rescore_dispatch_approved": False,
     }
-
 
 @router.post("/roles/{role_id}/upload-job-spec")
 def upload_role_job_spec(

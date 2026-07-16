@@ -58,6 +58,7 @@ def recover_stuck_score_jobs_impl(
                 CvScoreJob.force_full_score,
             )
             .filter(
+                CvScoreJob.dispatch_approved.is_(True),
                 or_(
                     and_(
                         CvScoreJob.status == SCORE_JOB_PENDING,
