@@ -168,6 +168,17 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     assert row["taali_score"] is None
     assert row["score_status"] == "pending"
 
+    evaluations[0].status = "retry_wait"
+    evaluations[0].last_error_code = "authority_blocked"
+    db.commit()
+    waiting_rows = client.get(
+        f"/api/v1/roles/{sister['id']}/applications",
+        params={"application_outcome": "open"},
+        headers=headers,
+    )
+    assert waiting_rows.status_code == 200, waiting_rows.text
+    assert waiting_rows.json()[0]["score_status"] == "retry_wait"
+
     rejected_rows = client.get(
         f"/api/v1/roles/{sister['id']}/applications",
         params={"application_outcome": "rejected"},
@@ -551,7 +562,6 @@ def test_related_role_hard_admission_uses_source_role_budget(
 
 def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
     headers, email = auth_headers(client)
-    del headers
     user = db.query(User).filter(User.email == email).first()
     source, evaluation = _scorable_evaluation(
         db, organization_id=user.organization_id
@@ -572,6 +582,18 @@ def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
     saved = db.get(SisterRoleEvaluation, evaluation.id)
     assert saved.status == "retry_wait"
     assert saved.attempts == 0
+
+    status_response = client.get(
+        f"/api/v1/roles/{evaluation.role_id}/sister-scoring-status",
+        headers=headers,
+    )
+    assert status_response.status_code == 200, status_response.text
+    status_body = status_response.json()
+    assert status_body["status"] == "waiting"
+    assert status_body["waiting_reason"] == "agent_paused"
+    assert status_body["scoreable_total"] == 1
+    assert status_body["scored"] == 0
+    assert status_body["progress_percent"] == 0
 
     source = db.get(Role, source.id)
     source.agent_paused_at = None

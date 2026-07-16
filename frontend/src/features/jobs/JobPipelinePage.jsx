@@ -4,7 +4,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
   GitFork,
-  Link2,
   MessageSquare,
   RefreshCw,
   Send,
@@ -84,6 +83,15 @@ import {
   resolvedRoleAutomation,
   summarizeUnscoredApplications,
 } from './jobPipelineUtils';
+import {
+  buildRelatedRolePipelineStats,
+  isRelatedRoleScoringActive,
+  RelatedRoleContextBanner,
+  RelatedRolePipelineLabel,
+  RelatedRoleScoringInlineStatus,
+  relatedRoleScoringActionLabel,
+  useRelatedRoleScoringPolling,
+} from './relatedRoleScoringUi';
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
@@ -232,30 +240,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     showToast,
   });
 
-  useEffect(() => {
-    if (role?.role_kind !== 'sister' || !rolesApi?.sisterScoringStatus) {
-      setSisterScoringStatus(null);
-      return undefined;
-    }
-    let cancelled = false;
-    let timer = null;
-    const poll = async () => {
-      try {
-        const res = await rolesApi.sisterScoringStatus(numericRoleId);
-        if (cancelled) return;
-        const next = res?.data || null;
-        setSisterScoringStatus(next);
-        if (next?.status === 'running') timer = window.setTimeout(poll, 3000);
-      } catch {
-        if (!cancelled) setSisterScoringStatus(null);
-      }
-    };
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [numericRoleId, role?.role_kind, rolesApi, sisterPollVersion]);
+  useRelatedRoleScoringPolling(role?.role_kind === 'sister', numericRoleId, rolesApi, sisterPollVersion, setSisterScoringStatus);
   const handleThresholdModeChange = useCallback(async (nextMode) => {
     if (!Number.isFinite(numericRoleId)) return;
     if (nextMode !== 'auto' && nextMode !== 'manual') return;
@@ -727,6 +712,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ?? 0
     );
     const budget = budgetTile(monthlySpentCents, monthlyBudgetCents);
+    if (role?.role_kind === 'sister') {
+      return buildRelatedRolePipelineStats({
+        status: sisterScoringStatus,
+        rosterFallback: activeApplications.length + rejectedApplications.length,
+        belowThresholdCount,
+        thresholdValue,
+        budget,
+        monthlyBudgetCents,
+      });
+    }
     // Awaiting you = this role's pending agent recommendations (HITL — what
     // needs your call), NOT every scored candidate. Scored/Completed candidates
     // the agent hasn't ruled on yet are "decision pending" (shown as context).
@@ -787,7 +782,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         sub: budget.sub,
       },
     ];
-  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, role, thresholdValue]);
+  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, rejectedApplications.length, role, sisterScoringStatus, thresholdValue]);
 
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
@@ -1560,6 +1555,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
   const externalProvider = roleAtsProvider(role);
   const externalProviderLabel = atsProviderLabel(externalProvider);
+  const relatedScoringActive = isRelatedRoleScoringActive(sisterScoringStatus);
   const intakeLifecycleCopy = agentIntakeLifecycleCopy(role);
   const manualPauseLifecycleCopy = externalProvider
     ? `A manual Pause also stops Taali processing until you Resume; it does not change the ${externalProviderLabel} posting.`
@@ -1606,9 +1602,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </button>
             ) : null}
             {role?.role_kind === 'sister' ? (
-              <button type="button" className="btn btn-outline btn-sm" onClick={handleRescoreSister} disabled={sisterRescoring || sisterScoringStatus?.status === 'running'}>
-                {sisterRescoring || sisterScoringStatus?.status === 'running' ? <Spinner size={12} /> : <RefreshCw size={12} />}
-                {sisterScoringStatus?.status === 'running' ? `Scoring ${sisterScoringStatus.progress_percent || 0}%` : 'Re-score roster'}
+              <button type="button" className="btn btn-outline btn-sm" onClick={handleRescoreSister} disabled={sisterRescoring || relatedScoringActive}>
+                {sisterRescoring || sisterScoringStatus?.status === 'running' || sisterScoringStatus?.status === 'retrying'
+                  ? <Spinner size={12} />
+                  : (sisterScoringStatus?.status === 'waiting' ? null : <RefreshCw size={12} />)}
+                {relatedRoleScoringActionLabel(sisterScoringStatus)}
               </button>
             ) : null}
             {role?.role_kind !== 'sister' ? (
@@ -1683,7 +1681,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             ) : null}
           </div>
         )}
-        agent={roleAgent}
+        agent={role?.role_kind === 'sister' ? null : roleAgent}
         onActivateAgent={role?.role_kind === 'sister' ? undefined : handleActivateAgent}
         onPauseAgent={role?.role_kind === 'sister' ? undefined : handlePauseAgent}
         onResumeAgent={role?.role_kind === 'sister' ? undefined : handleResumeAgent}
@@ -1692,18 +1690,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         controlsDisabledReason={role?.role_kind === 'sister' ? null : roleAgentControlDisabledReason}
       />
       {role?.role_kind === 'sister' ? (
-        <div className="mx-auto mt-4 flex max-w-[1440px] flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3 text-sm">
-          <div className="flex items-center gap-2">
-            <Link2 size={15} className="text-[var(--taali-purple)]" />
-            <span>
-              This is a scoring view coupled to <strong>{role.ats_owner_role_name || `the original ${externalProviderLabel} role`}</strong>.
-              Stages and candidate actions write back through that original application.
-            </span>
-          </div>
-          <button type="button" className="btn btn-outline btn-sm" onClick={() => navigate(`/jobs/${role.ats_owner_role_id}`)}>
-            Open original role
-          </button>
-        </div>
+        <RelatedRoleContextBanner
+          role={role}
+          providerLabel={externalProviderLabel}
+          status={sisterScoringStatus}
+          onOpenOriginal={() => navigate(`/jobs/${role.ats_owner_role_id}`)}
+        />
       ) : null}
       <div className="page">
         {(activationIsPending || activationIsBlocked) ? (
@@ -1746,6 +1738,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 </div>
                 <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>Retry</button>
               </div>
+            ) : null}
+            {role?.role_kind === 'sister' ? (
+              <RelatedRolePipelineLabel providerLabel={externalProviderLabel} />
             ) : null}
             <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
           </>
@@ -2165,10 +2160,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   <Send size={12} />Reach out ({selectedSourcedAppIds.size})
                 </button>
               ) : null}
-              {role?.role_kind === 'sister' && sisterScoringStatus?.status === 'running' ? (
-                <span className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
-                  <Spinner size={12} /> Related-role scores {sisterScoringStatus.progress_percent || 0}% complete
-                </span>
+              {role?.role_kind === 'sister' ? (
+                <RelatedRoleScoringInlineStatus status={sisterScoringStatus} />
               ) : null}
             </div>
             {tableStageFilter === 'sourced' && numericRoleId ? (
