@@ -12,6 +12,13 @@ export const roles = {
   createSister: (sourceRoleId, data) => api.post(`/roles/${sourceRoleId}/sisters`, data),
   rescoreSister: (roleId) => api.post(`/roles/${roleId}/sister-rescore`),
   sisterScoringStatus: (roleId) => api.get(`/roles/${roleId}/sister-scoring-status`),
+  relatedAtsTransitionCapability: (roleId) =>
+    api.get(`/roles/${roleId}/related-ats-transition-capability`),
+  moveRelatedApplicationToAtsStage: (roleId, applicationId, data) =>
+    api.post(
+      `/roles/${roleId}/applications/${applicationId}/ats/managed-move-stage-v1`,
+      data,
+    ),
   // Shared role writes use optimistic concurrency. Callers must forward the
   // `version` they rendered as `expected_version`; a stale write returns 409
   // with the latest role so the draft/control can be reconciled safely.
@@ -200,6 +207,8 @@ export const roles = {
   createSourcedCandidate: (roleId, data) => api.post(`/roles/${roleId}/sourced-candidates`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
+  updateRelatedApplicationStage: (roleId, applicationId, data) =>
+    api.patch(`/roles/${roleId}/applications/${applicationId}/stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
   // Record/update a recruiter's manual decision (advance/hold/reject +
   // rationale, confidence, next steps) on an application with no assessment

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
 import '../../styles/08-candidate-detail.css';
@@ -116,6 +116,8 @@ const REJECT_VALUE = '__reject__';
 export function CandidateTriageDrawer({
   application,
   roleId = null,
+  isRelatedRole = false,
+  hasRelatedRoles = false,
   roleTasks = [],
   mode = 'inline',
   activityLabel = '',
@@ -159,6 +161,7 @@ export function CandidateTriageDrawer({
   const [selectedMoveAction, setSelectedMoveAction] = useState('');
   const [showDetails, setShowDetails] = useState(false);
   const containerRef = useRef(null);
+  const relatedRoleAssessmentNoteId = useId();
 
   const applicationId = application?.id || null;
   const assessmentId = useMemo(() => resolveAssessmentId(application), [application]);
@@ -249,7 +252,12 @@ export function CandidateTriageDrawer({
     setActiveTab('move');
     setSelectedMoveAction('');
     setShowDetails(false);
-    if (roleTasks.length === 1) {
+    if (isRelatedRole) {
+      // Related roles are score-only projections of the owner's application.
+      // Never preselect an inherited owner task as though it could be sent
+      // from this funnel.
+      setSelectedTaskId('');
+    } else if (roleTasks.length === 1) {
       setSelectedTaskId(String(roleTasks[0].id));
     } else if (roleTasks.length > 1) {
       // Multiple linked tasks ⇒ an A/B is in play. Default to Auto so an
@@ -260,7 +268,7 @@ export function CandidateTriageDrawer({
     } else {
       setSelectedTaskId('');
     }
-  }, [applicationId, roleTasks]);
+  }, [applicationId, isRelatedRole, roleTasks]);
 
   // Drop the stage selection if the underlying stage list changes (rare,
   // but happens after the provider stage catalogue is fetched).
@@ -291,7 +299,16 @@ export function CandidateTriageDrawer({
   const reportHref = candidateReportHref(application, roleId);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
   const isRejectSelected = selectedMoveAction === REJECT_VALUE;
+  const showRejectWarning = isRejectSelected
+    && (isRelatedRole || hasRelatedRoles || isPostHandoverAtsStage);
   const moveBusy = isRejectSelected ? rejectBusy : atsMovementBusy;
+
+  const handleSendAssessmentClick = () => {
+    // Keep the UI guard even though the owning hook also rejects this action:
+    // inherited tasks must never mutate the canonical owner's application.
+    if (isRelatedRole || !canAct || !selectedTaskId || assessmentBusy) return;
+    onSendAssessment?.(application, selectedTaskId);
+  };
 
   const handleReportClick = (event) => {
     if (stopPlainNavigation(event)) return;
@@ -493,20 +510,35 @@ export function CandidateTriageDrawer({
               })()}
             </div>
           ) : null}
+          {isRelatedRole ? (
+            <div className="ctc-agent-note" id={relatedRoleAssessmentNoteId} role="note">
+              Assessment sending is unavailable for related roles. Related roles are score-only
+              views of a shared application; send or retake assessments from the original role.
+              Linked tasks below are shown for context only.
+            </div>
+          ) : null}
           <div className="ctc-cards">
             {roleTasks.length === 0 ? (
-              <div className="ctc-empty">No tasks linked to this role yet.</div>
+              <div className="ctc-empty">
+                {isRelatedRole
+                  ? 'No shared assessment tasks are linked on the original role.'
+                  : 'No tasks linked to this role yet.'}
+              </div>
             ) : (
               <>
                 {roleTasks.length > 1 ? (
                   <button
                     type="button"
                     className={`ctc-card ${selectedTaskId === 'auto' ? 'on' : ''}`}
-                    disabled={!canAct}
+                    disabled={!canAct || isRelatedRole}
                     onClick={() => setSelectedTaskId('auto')}
                   >
                     <div className="ctc-card-title">Auto · A/B split</div>
-                    <div className="ctc-card-sub">Experiment assigns the task — 50/50, stable per candidate</div>
+                    <div className="ctc-card-sub">
+                      {isRelatedRole
+                        ? 'Configured on the original role · view only'
+                        : 'Experiment assigns the task — 50/50, stable per candidate'}
+                    </div>
                   </button>
                 ) : null}
                 {roleTasks.map((task) => {
@@ -516,18 +548,20 @@ export function CandidateTriageDrawer({
                       key={task.id}
                       type="button"
                       className={`ctc-card ${isOn ? 'on' : ''}`}
-                      disabled={!canAct}
+                      disabled={!canAct || isRelatedRole}
                       onClick={() => setSelectedTaskId(String(task.id))}
                     >
                       <div className="ctc-card-title">{task.name}</div>
-                      <div className="ctc-card-sub">~60 min · in-browser IDE</div>
+                      <div className="ctc-card-sub">
+                        {isRelatedRole ? 'Shared from original role · view only' : '~60 min · in-browser IDE'}
+                      </div>
                     </button>
                   );
                 })}
               </>
             )}
           </div>
-          {agentRunning ? (
+          {agentRunning && !isRelatedRole ? (
             <div className="ctc-agent-note">
               The agent sends assessments automatically for this role. Sending here is a manual override.
             </div>
@@ -543,13 +577,14 @@ export function CandidateTriageDrawer({
             <span className="ctc-grow" />
             <Button
               type="button"
-              variant={agentRunning ? 'secondary' : 'primary'}
+              variant={agentRunning || isRelatedRole ? 'secondary' : 'primary'}
               size="sm"
-              disabled={!canAct || !selectedTaskId || assessmentBusy}
-              onClick={() => onSendAssessment?.(application, selectedTaskId)}
+              disabled={isRelatedRole || !canAct || !selectedTaskId || assessmentBusy}
+              aria-describedby={isRelatedRole ? relatedRoleAssessmentNoteId : undefined}
+              onClick={handleSendAssessmentClick}
             >
               {assessmentBusy ? <Spinner size={14} className="!text-current" /> : null}
-              {assessmentBusy ? 'Sending…' : sendLabel}
+              {assessmentBusy ? 'Sending…' : (isRelatedRole ? 'Available in original role' : sendLabel)}
             </Button>
           </div>
         </div>
@@ -606,13 +641,25 @@ export function CandidateTriageDrawer({
               <div className="ctc-card-sub">Closes the application</div>
             </button>
           </div>
-          {/* Reject is always allowed, including after provider hand-off. A
-              later-stage reject updates the owning ATS, so warn first. */}
-          {isRejectSelected && isPostHandoverAtsStage ? (
+          {/* Rejection changes the one canonical ATS application, so it is
+              global across the original and every related-role funnel. */}
+          {showRejectWarning ? (
             <div className="ctc-reject-warning" role="alert">
-              <strong>Heads up —</strong> this candidate is in{' '}
-              <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}, so rejecting will update them there.
-              You can still reject — just make sure that&apos;s intended.
+              {isRelatedRole || hasRelatedRoles ? (
+                <>
+                  <strong>Reject everywhere —</strong> this is one shared {providerLabel} application.
+                  Rejecting here disqualifies the candidate in the original role and every related role.
+                  {isPostHandoverAtsStage ? (
+                    <> They are currently in <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}.</>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <strong>Heads up —</strong> this candidate is in{' '}
+                  <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}, so rejecting will update them there.
+                  You can still reject — just make sure that&apos;s intended.
+                </>
+              )}
             </div>
           ) : null}
           <div className="ctc-action-row">

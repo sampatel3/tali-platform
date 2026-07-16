@@ -31,6 +31,12 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
+from .ats_operation_guards import (
+    lock_live_application_move,
+    recruiter_actor as _recruiter_actor,
+)
+from .ats_operation_labels import active_ats_label as _active_ats_label
+from . import related_role_ats_transition as related_ats
 from .workable_actions_service import (
     WorkableWritebackError,
     strict_workable_writes,
@@ -64,50 +70,6 @@ _GATED_OVERRIDE_ACTIONS = frozenset({"reject", "advance", "skip_assessment_advan
 _GATED_DECISION_TYPES = frozenset({"reject", "skip_assessment_reject", "advance_to_interview"})
 
 
-def _recruiter_actor(user_id: int | None):
-    from ..actions.types import ACTOR_RECRUITER, Actor
-
-    return Actor(type=ACTOR_RECRUITER, user_id=int(user_id) if user_id else None)
-
-
-def _active_ats_label(
-    db: Session, organization_id: int, payload: dict | None = None
-) -> tuple[str, str]:
-    """Return ``(slug, label)`` for provider-aware audit/error wording."""
-    from ..components.integrations.resolver import (
-        resolve_application_ats_provider,
-        resolve_ats_provider,
-    )
-    from ..models.organization import Organization
-
-    org = db.query(Organization).filter(Organization.id == organization_id).first()
-    provider = None
-    application_id = (payload or {}).get("application_id")
-    if application_id is not None:
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == int(application_id),
-                CandidateApplication.organization_id == int(organization_id),
-            )
-            .first()
-        )
-        provider = resolve_application_ats_provider(org, db, app)
-        if provider is None and app is not None and app.bullhorn_job_submission_id:
-            return "bullhorn", "Bullhorn"
-    if provider is None:
-        provider = resolve_ats_provider(org, db)
-    slug = str(getattr(provider, "ats", "") or "").lower()
-    if slug == "bullhorn":
-        return "bullhorn", "Bullhorn"
-    if slug == "workable":
-        return "workable", "Workable"
-    # This runner predates provider routing and disconnected/local fixtures can
-    # still inject its legacy Workable errors. Bullhorn is always explicit via
-    # the resolver; preserve Workable wording for the fallback contract.
-    return "workable", "Workable"
-
-
 def _route_bullhorn_op(
     db: Session, organization_id: int, payload: dict, *, handler_name: str
 ) -> dict | None:
@@ -129,7 +91,13 @@ def _route_bullhorn_op(
         return None
     application_id = int(payload["application_id"])
     app = (
-        db.query(CandidateApplication)
+        lock_live_application_move(
+            db,
+            organization_id=organization_id,
+            application_id=application_id,
+        )
+        if handler_name == "run_move_stage"
+        else db.query(CandidateApplication)
         .filter(
             CandidateApplication.id == application_id,
             CandidateApplication.organization_id == organization_id,
@@ -476,18 +444,24 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
     target_stage = str(payload.get("target_stage") or "").strip()
     reason = payload.get("reason")
     user_id = payload.get("user_id")
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
+    app = lock_live_application_move(
+        db,
+        organization_id=organization_id,
+        application_id=application_id,
     )
-    if app is None or not app.workable_candidate_id:
-        return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
+    if not app.workable_candidate_id:
+        raise WorkableWritebackError(
+            action="move",
+            code="not_linked",
+            message="The application is no longer linked to Workable",
+            retriable=False,
+        )
     org = db.query(Organization).filter(Organization.id == organization_id).first()
     role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
+
+    prepared_related_transition = related_ats.prepare_related_role_ats_transition(
+        db, acting_role_id=payload.get("acting_role_id"), application=app
+    )
 
     with strict_workable_writes():
         move_candidate_in_workable(
@@ -521,6 +495,14 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
             metadata={"workable_target_stage": target_stage},
             idempotency_key=f"workable_handback:{app.id}:{target_stage}",
         )
+    related_ats.finalize_prepared_workable_related_role_transition(
+        db, organization_id=organization_id,
+        prepared=prepared_related_transition,
+        application=app,
+        owner_role=role,
+        user_id=user_id,
+        post_note=_op_post_note,
+    )
     db.commit()
     return {"status": "ok", "application_id": application_id}
 

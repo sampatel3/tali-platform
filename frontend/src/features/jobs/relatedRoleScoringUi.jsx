@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { Link2 } from 'lucide-react';
 
 import { formatCount } from '../../shared/metrics';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { getErrorMessage } from '../candidates/candidatesUiUtils';
 
 const ACTIVE_SCORING_STATES = new Set(['running', 'waiting', 'retrying']);
 
@@ -45,6 +46,34 @@ export const useRelatedRoleScoringPolling = (
   }, [enabled, onStatus, refreshKey, roleId, rolesApi]);
 };
 
+export const useEffectiveRelatedAgentResume = ({
+  agentStatus,
+  onResumeRole,
+  refetchAgentStatus,
+  resumeWorkspace,
+  reloadRole,
+  setPollingVersion,
+  showToast,
+}) => useCallback(async () => {
+  if (!agentStatus?.workspace_paused) return onResumeRole();
+  try {
+    const refreshed = await refetchAgentStatus?.();
+    const version = Number(
+      refreshed?.workspace_control_version
+      ?? refreshed?.data?.workspace_control_version
+      ?? agentStatus?.workspace_control_version,
+    );
+    if (!Number.isFinite(version)) throw new Error('Workspace control state is still loading. Try again.');
+    await resumeWorkspace(version);
+    showToast('Workspace Agent resumed. Related-role scoring will continue automatically.', 'success');
+    await refetchAgentStatus?.();
+    setPollingVersion((value) => value + 1);
+    void reloadRole();
+  } catch (error) {
+    showToast(getErrorMessage(error, 'Only a workspace owner can resume the workspace Agent.'), 'error');
+  }
+}, [agentStatus, onResumeRole, refetchAgentStatus, reloadRole, resumeWorkspace, setPollingVersion, showToast]);
+
 export const relatedRoleScoringActionLabel = (status) => {
   const progress = Number(status?.progress_percent || 0);
   switch (String(status?.status || '').toLowerCase()) {
@@ -70,9 +99,9 @@ const waitCopy = (reason) => {
     case 'workspace_paused':
       return 'The workspace Agent is paused. Resume it to continue scoring automatically.';
     case 'agent_off':
-      return 'The original role’s Agent is off. Turn it on to continue scoring automatically.';
+      return 'This related role’s Agent is off. Turn it on to continue scoring automatically.';
     case 'agent_paused':
-      return 'The original role’s Agent is paused. Resume it to continue scoring automatically.';
+      return 'This related role’s Agent is paused. Resume it to continue scoring automatically.';
     case 'job_not_open':
       return 'The original role is not open. Reopen it before related-role scoring can continue.';
     case 'ats_job_not_live':
@@ -80,7 +109,7 @@ const waitCopy = (reason) => {
     case 'temporary_retry':
       return 'Scoring is waiting to retry after a temporary service issue.';
     default:
-      return 'Scoring is waiting for the original role to allow model-backed work.';
+      return 'Scoring is waiting for this related role’s Agent to allow model-backed work.';
   }
 };
 
@@ -89,7 +118,8 @@ const scoringNotice = (status) => {
   const counts = status?.counts || {};
   const total = Math.max(0, Number(status?.total || 0));
   const unscorable = Math.max(0, Number(counts?.unscorable || 0));
-  const scoreable = Math.max(0, Number(status?.scoreable_total ?? (total - unscorable)));
+  const excluded = Math.max(0, Number(counts?.excluded || 0));
+  const scoreable = Math.max(0, Number(status?.scoreable_total ?? (total - unscorable - excluded)));
   const scored = Math.max(0, Number(status?.scored ?? counts?.done ?? 0));
   const errors = Math.max(0, Number(counts?.error || 0));
   const progress = Math.max(0, Number(status?.progress_percent || 0));
@@ -97,22 +127,25 @@ const scoringNotice = (status) => {
   const unavailableSummary = unscorable > 0
     ? ` ${formatCount(unscorable)} ${unscorable === 1 ? 'candidate has' : 'candidates have'} no usable CV text.`
     : '';
+  const excludedSummary = excluded > 0
+    ? ` ${formatCount(excluded)} ${excluded === 1 ? 'candidate is' : 'candidates are'} already closed or disqualified in the shared ATS application.`
+    : '';
   switch (String(status?.status || '').toLowerCase()) {
     case 'running':
-      return { title: `Related-role scoring in progress · ${progress}%`, body: `${scoreSummary}.${unavailableSummary}` };
+      return { title: `Related-role scoring in progress · ${progress}%`, body: `${scoreSummary}.${unavailableSummary}${excludedSummary}` };
     case 'waiting':
     case 'retrying':
       return {
         title: `Related-role scoring is waiting · ${progress}%`,
-        body: `${waitCopy(status?.waiting_reason)} ${scoreSummary}.${unavailableSummary}`,
+        body: `${waitCopy(status?.waiting_reason)} ${scoreSummary}.${unavailableSummary}${excludedSummary}`,
       };
     case 'error':
       return {
         title: 'Related-role scoring needs attention',
-        body: `${formatCount(errors)} ${errors === 1 ? 'candidate could' : 'candidates could'} not be scored. ${scoreSummary}.${unavailableSummary}`,
+        body: `${formatCount(errors)} ${errors === 1 ? 'candidate could' : 'candidates could'} not be scored. ${scoreSummary}.${unavailableSummary}${excludedSummary}`,
       };
     case 'completed':
-      return { title: 'Related-role scoring complete', body: `${scoreSummary}.${unavailableSummary}` };
+      return { title: 'Related-role scoring complete', body: `${scoreSummary}.${unavailableSummary}${excludedSummary}` };
     default:
       return null;
   }
@@ -129,6 +162,7 @@ export const buildRelatedRolePipelineStats = ({
   const counts = status?.counts || {};
   const total = Math.max(0, Number(status?.total ?? rosterFallback));
   const unscorable = Math.max(0, Number(counts?.unscorable || 0));
+  const excluded = Math.max(0, Number(counts?.excluded || 0));
   const errors = Math.max(0, Number(counts?.error || 0));
   const scored = Math.max(0, Number(status?.scored ?? counts?.done ?? 0));
   const awaitingScore = Math.max(
@@ -155,10 +189,11 @@ export const buildRelatedRolePipelineStats = ({
     {
       key: 'not-scored',
       label: 'Cannot score',
-      value: formatCount(unscorable + errors),
+      value: formatCount(unscorable + errors + excluded),
       sub: [
         unscorable > 0 ? `${formatCount(unscorable)} without CV text` : null,
         errors > 0 ? `${formatCount(errors)} errors` : null,
+        excluded > 0 ? `${formatCount(excluded)} ATS-closed` : null,
       ].filter(Boolean).join(' · ') || 'none',
     },
     {
@@ -172,16 +207,25 @@ export const buildRelatedRolePipelineStats = ({
   ];
 };
 
-export const RelatedRoleContextBanner = ({ role, providerLabel, status, onOpenOriginal }) => {
+export const RelatedRoleContextBanner = ({
+  role,
+  providerLabel,
+  status,
+  agentStatus,
+  onResumeWorkspace,
+  onOpenOriginal,
+}) => {
   const notice = scoringNotice(status);
   return (
     <div className="mx-auto mt-4 flex max-w-[1440px] flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3 text-sm">
       <div className="flex items-start gap-2">
         <Link2 size={15} className="text-[var(--taali-purple)]" />
         <div>
-          <div>
-            This is a scoring view coupled to <strong>{role.ats_owner_role_name || `the original ${providerLabel} role`}</strong>.
-            Stages and candidate actions write back through that original application.
+          <div><strong>Related role · independent Taali pipeline</strong></div>
+          <div className="mt-1 text-[var(--taali-muted)]">
+            This role independently scores and progresses the candidates attached to{' '}
+            <strong className="text-[var(--taali-text)]">{role.ats_owner_role_name || `the original ${providerLabel} role`}</strong>.
+            {' '}The {providerLabel} application is shared: rejecting in any linked role rejects the candidate in the original and every related role. Advancing keeps this role&apos;s own funnel and writes through the shared application.
           </div>
           {notice ? (
             <div className="mt-1 text-[var(--taali-muted)]" role="status">
@@ -191,16 +235,23 @@ export const RelatedRoleContextBanner = ({ role, providerLabel, status, onOpenOr
           ) : null}
         </div>
       </div>
-      <button type="button" className="btn btn-outline btn-sm" onClick={onOpenOriginal}>
-        Open original role
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        {agentStatus?.workspace_paused ? (
+          <button type="button" className="btn btn-primary btn-sm" onClick={onResumeWorkspace}>
+            Resume workspace Agent
+          </button>
+        ) : null}
+        <button type="button" className="btn btn-outline btn-sm" onClick={onOpenOriginal}>
+          Open original role
+        </button>
+      </div>
     </div>
   );
 };
 
 export const RelatedRolePipelineLabel = ({ providerLabel }) => (
   <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--taali-muted)]">
-    Original {providerLabel} pipeline · shared ATS stages, not related-role score progress
+    Related-role Taali pipeline · independent stages · shared {providerLabel} application
   </div>
 );
 

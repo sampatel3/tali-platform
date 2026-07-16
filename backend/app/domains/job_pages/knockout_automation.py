@@ -234,6 +234,15 @@ def try_auto_resolve_knockout(
             return False
 
     ensure_pipeline_fields(application)
+    # Preserve the specific, auditable reason on older knockout review cards
+    # before the canonical close hook discards every other pending decision.
+    # This remains in the same transaction as the outcome change, so a later
+    # failure cannot leave the cards resolved while the application is open.
+    if _discard_pending_knockout_cards(db, application=application):
+        # Tests and some batch callers intentionally disable autoflush. Make
+        # the specific resolution visible before the generic close query so
+        # it cannot select and overwrite the same pending rows.
+        db.flush()
     transition_outcome(
         db,
         app=application,
@@ -264,7 +273,6 @@ def try_auto_resolve_knockout(
         reason=reason,
         triggered=True,
     )
-    _discard_pending_knockout_cards(db, application=application)
     return True
 
 

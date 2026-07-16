@@ -52,18 +52,18 @@ FIXED_HUMAN_REVIEW_ACTIONS = (
 )
 
 SCORE_ONLY_ROLE_AUTOMATION_MESSAGE = (
-    "Sister roles are score-only views. Automation remains on the original "
-    "ATS role."
+    "Related-role automation is score-only: each related role has its own scoring "
+    "Agent and Taali funnel, while provider actions remain human-confirmed because "
+    "the ATS application is shared."
 )
 
 
 def role_is_score_only(role: Role) -> bool:
-    """Return whether ``role`` is prohibited from owning agent automation.
+    """Return whether ``role`` uses related-role-safe automation policy.
 
-    Sister roles deliberately share the owner role's candidate roster while
-    keeping only an alternate job specification and score set.  Centralising
-    this invariant keeps HTTP and chat control surfaces from drifting into a
-    state where a sister role can write candidate actions independently.
+    Related roles own scoring and local workflow state while sharing one ATS
+    application. Centralising this invariant keeps irreversible provider
+    actions human-confirmed.
     """
     return str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
 

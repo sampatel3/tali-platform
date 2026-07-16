@@ -198,13 +198,27 @@ def _dispatch_confirmed_application_action(
                     dispatch_key=claim.dispatch_key,
                     **normalized,
                 )
-            message = (
-                "The focused agent run is queued."
-                if normalized.get("application_id") is not None and result.get("queued")
-                else "The role agent run is queued."
-                if result.get("queued")
-                else str(result.get("detail") or "The agent run was not queued.")
+            run_label = (
+                "focused agent run"
+                if normalized.get("application_id") is not None
+                else "role agent run"
             )
+            if result.get("dispatch_pending"):
+                message = (
+                    f"The {run_label} is safely recorded and awaiting automatic "
+                    "queue recovery."
+                )
+            elif result.get("queued"):
+                message = f"The {run_label} is queued."
+            elif result.get("replayed"):
+                message = (
+                    f"The earlier {run_label} already finished with status "
+                    f"{result.get('status') or 'unknown'}."
+                )
+            else:
+                message = str(
+                    result.get("detail") or "The agent run was not queued."
+                )
     except Exception:
         abandon_uncommitted_command(db, claim)
         raise

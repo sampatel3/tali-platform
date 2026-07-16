@@ -13,6 +13,7 @@ from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
+from ...services.sister_role_service import reconcile_related_roles_after_outcome
 
 # An application is described by TWO independent axes:
 #
@@ -807,10 +808,8 @@ def transition_outcome(
         idempotency_key=idempotency_key,
     )
 
-    # Best-effort outcome-learning hook. Same pattern as transition_stage
-    # — imported here so pipeline_service has no hard dependency on
-    # agent_runtime, and any failure inside it never blocks the
-    # outcome change.
+    # Best-effort hook imported here to avoid a hard agent-runtime dependency;
+    # failures never block the canonical outcome change.
     try:
         from ...agent_runtime import outcome_learning
 
@@ -848,6 +847,7 @@ def transition_outcome(
                 app.id,
             )
 
+    reconcile_related_roles_after_outcome(db, app)
     return app
 
 

@@ -986,3 +986,11 @@
     flex-direction: column;
   }
 }
+.related-role-locked {
+  opacity: 0.5;
+  filter: grayscale(0.35);
+}
+
+.related-role-locked:hover {
+  opacity: 0.64;
+}

@@ -301,8 +301,6 @@ def run_cycle(
             .one_or_none()
         )
         if existing is not None:
-            if str(existing.status) != AGENT_RUN_DISPATCHING:
-                return existing
             if (
                 int(existing.organization_id) != int(role.organization_id)
                 or int(existing.role_id) != int(role.id)
@@ -310,7 +308,9 @@ def run_cycle(
                 or intent_application_id(existing)
                 != (int(application_id) if application_id is not None else None)
             ):
-                raise ValueError("dispatching agent run scope mismatch")
+                raise ValueError("agent run dispatch scope mismatch")
+            if str(existing.status) != AGENT_RUN_DISPATCHING:
+                return existing
             dispatch_intent = existing
 
     def _new_run(**values: Any) -> AgentRun:
@@ -396,7 +396,11 @@ def run_cycle(
         organization_id=int(role.organization_id),
     )
     if workspace_paused:
-        run = AgentRun(
+        # A workspace pause can commit after the task wrapper's admission
+        # check but before this cycle fence.  Promote the durable pre-publish
+        # receipt to the terminal abort instead of creating an unrelated row
+        # and leaving the confirmed intent stuck in ``dispatching``.
+        run = _new_run(
             organization_id=role.organization_id,
             role_id=role.id,
             trigger=trigger,

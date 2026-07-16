@@ -111,6 +111,82 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(screen.getByRole('button', { name: /Send invite/i })).toHaveClass('taali-btn-primary');
   });
 
+  it('keeps inherited task context visible but cannot send it from a related role', async () => {
+    const onSendAssessment = vi.fn();
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={17}
+          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          isRelatedRole
+          agentRunning
+          onSendAssessment={onSendAssessment}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+
+    const assessmentNote = screen.getByRole('note');
+    expect(assessmentNote).toHaveTextContent(/related roles are score-only/i);
+    expect(assessmentNote).toHaveTextContent(/from the original role/i);
+    expect(screen.getByRole('button', { name: /Backend take-home.*view only/i })).toBeDisabled();
+    expect(screen.queryByText(/manual override/i)).not.toBeInTheDocument();
+
+    const unavailableButton = screen.getByRole('button', { name: 'Available in original role' });
+    expect(unavailableButton).toBeDisabled();
+    expect(unavailableButton).toHaveAttribute('aria-describedby', assessmentNote.id);
+    fireEvent.click(unavailableButton);
+    expect(onSendAssessment).not.toHaveBeenCalled();
+  });
+
+  it('explains assessment unavailability for a related role with no shared tasks', async () => {
+    const onSendAssessment = vi.fn();
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={18}
+          roleTasks={[]}
+          isRelatedRole
+          onSendAssessment={onSendAssessment}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+
+    expect(screen.getByText(/No shared assessment tasks are linked on the original role/i)).toBeInTheDocument();
+    const unavailableButton = screen.getByRole('button', { name: 'Available in original role' });
+    expect(unavailableButton).toBeDisabled();
+    fireEvent.click(unavailableButton);
+    expect(onSendAssessment).not.toHaveBeenCalled();
+  });
+
+  it('still sends the selected assessment from a standard role', async () => {
+    const onSendAssessment = vi.fn();
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          onSendAssessment={onSendAssessment}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    fireEvent.click(screen.getByRole('button', { name: 'Send invite' }));
+
+    expect(onSendAssessment).toHaveBeenCalledOnce();
+    expect(onSendAssessment).toHaveBeenCalledWith(application, '5');
+  });
+
   it('shows Bullhorn remote labels but submits the selected Taali intent', async () => {
     const onMoveToAtsStage = vi.fn();
     const bullhornApplication = {
@@ -174,6 +250,43 @@ describe('CandidateTriageDrawer shared motion', () => {
 
     expect(screen.getByText('Added in Taali')).toBeInTheDocument();
     expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
+  });
+
+  it('warns that rejecting a linked candidate rejects every related role', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+          isRelatedRole
+        />
+      </MotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/Reject everywhere/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /original role and every related role/i,
+    );
+  });
+
+  it('does not show an ATS warning for an unlinked candidate before handover', () => {
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it.each([

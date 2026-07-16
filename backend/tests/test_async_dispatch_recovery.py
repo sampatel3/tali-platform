@@ -816,6 +816,7 @@ def test_agent_cycle_dispatch_key_replays_original_paid_run(db):
         status="succeeded",
         model_version="m",
         prompt_version="p",
+        agent_state_snapshot={"dispatch_application_id": 123},
         finished_at=datetime.now(timezone.utc),
     )
     db.add(original)
@@ -891,6 +892,7 @@ def test_confirmed_manual_run_intent_is_durable_and_redispatch_is_bounded(db):
         role_id=int(role.id),
         application_id=None,
         dispatch_key=dispatch_key,
+        organization_id=int(org.id),
     )
     with patch("app.tasks.agent_tasks.agent_manual_run.delay") as delay:
         second = recover_dispatching_manual_agent_runs.run(limit=10)
@@ -973,6 +975,9 @@ def test_reevaluation_wrapper_recovers_crash_after_paid_run_commit(db):
             decisions_emitted=1,
             model_version="m",
             prompt_version="p",
+            agent_state_snapshot={
+                "dispatch_application_id": int(application.id),
+            },
             finished_at=datetime.now(timezone.utc),
         )
     )

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
+from ..models.organization import Organization
 from ..models.job_hiring_team import (
     TEAM_ROLE_HIRING_MANAGER,
     JobHiringTeam,
@@ -28,9 +29,14 @@ from ..tasks.sister_role_tasks import score_sister_role
 from .ats_role_lifecycle import ats_job_lifecycle
 from .requisition_chat_capture import compute_completeness
 from .related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
+from .related_role_payloads import (
+    related_role_created_payload,
+    related_role_draft_payload,
+)
 from .role_brief_service import create_brief, materialize_brief_to_role
 from .role_criteria_service import sync_derived_criteria
 from .sister_role_service import ensure_sister_evaluations
+from .agent_policy_settings import apply_workspace_agent_defaults
 
 logger = logging.getLogger("taali.related_roles")
 
@@ -153,8 +159,9 @@ def preview_related_role(
         ),
         "message": (
             f"The related role will share {counts['total']} candidates with "
-            f"{source.name}; {counts['with_cv']} can be scored now. Candidate "
-            f"stages and actions will continue to write back to the original {provider_label} job."
+            f"{source.name}; {counts['with_cv']} can be scored now. It will have "
+            "its own Taali funnel and scoring Agent. The ATS application remains "
+            f"shared in {provider_label}, so rejection applies to every linked role."
         ),
     }
 
@@ -310,24 +317,6 @@ def create_related_role_draft(
     return brief
 
 
-def related_role_draft_payload(brief: RoleBrief) -> dict[str, Any]:
-    source = brief.source_role
-    return {
-        "type": "related_role_draft",
-        "created": True,
-        "brief_id": int(brief.id),
-        "source_role_id": int(brief.source_role_id),
-        "source_role_name": source.name if source is not None else None,
-        "proposed_name": brief.title,
-        "completeness": int(brief.completeness or 0),
-        "frontend_url": f"/requisitions?brief={brief.id}",
-        "message": (
-            "Created a pre-populated related-role draft in the job-creation chat. "
-            "Review the cloned specification, describe any differences, then confirm creation and scoring there."
-        ),
-    }
-
-
 def create_related_role(
     db: Session,
     *,
@@ -381,12 +370,26 @@ def create_related_role(
         job_spec_text=clean_spec,
         job_spec_filename="Taali related role specification",
         auto_reject_threshold_mode="manual",
-        agentic_mode_enabled=False,
+        agentic_mode_enabled=True,
         auto_reject=False,
         auto_reject_pre_screen=False,
         auto_promote=False,
-        auto_skip_assessment=False,
+        auto_skip_assessment=True,
     )
+    # A related role is an independent Taali workflow with its own scoring
+    # authority and spend cap.  It does not inherit the source role's Agent
+    # switch or budget, and its irreversible actions remain human-confirmed.
+    apply_workspace_agent_defaults(
+        related, db.get(Organization, int(organization_id))
+    )
+    related.agentic_mode_enabled = True
+    related.auto_reject = False
+    related.auto_reject_pre_screen = False
+    related.auto_promote = False
+    related.auto_send_assessment = False
+    related.auto_resend_assessment = False
+    related.auto_advance = False
+    related.auto_skip_assessment = True
     db.add(related)
     try:
         db.flush()
@@ -462,28 +465,6 @@ def create_related_role(
                 type(exc).__name__,
             )
     return related, evaluation_counts
-
-
-def related_role_created_payload(
-    related: Role, evaluation_counts: dict[str, int]
-) -> dict[str, Any]:
-    owner = getattr(related, "ats_owner_role", None)
-    source_ats_provider = ats_job_lifecycle(owner).provider
-    provider_label = "Bullhorn" if source_ats_provider == "bullhorn" else "Workable"
-    return {
-        "type": "related_role_created",
-        "created": True,
-        "role_id": int(related.id),
-        "role_name": related.name,
-        "source_role_id": int(related.ats_owner_role_id),
-        "source_ats_provider": source_ats_provider,
-        "evaluation_counts": dict(evaluation_counts),
-        "frontend_url": f"/jobs/{related.id}",
-        "message": (
-            f"Created {related.name} and queued its shared candidate roster for scoring. "
-            f"Candidate stages and actions remain coupled to the original {provider_label} role."
-        ),
-    }
 
 
 __all__ = [

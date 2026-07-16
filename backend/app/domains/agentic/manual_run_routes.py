@@ -16,13 +16,15 @@ from ...domains.assessments_runtime.job_authorization import (
     JobPermission,
     require_job_permission,
 )
-from ...models.candidate_application import CandidateApplication
 from ...models.user import User
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
 from ...services.manual_agent_run_dispatch import (
     ManualRunDispatchConflict,
     publish_manual_run,
+)
+from ...services.manual_run_application_scope import (
+    resolve_manual_run_application,
 )
 from ...services.workspace_agent_control import workspace_agent_pause_state
 
@@ -152,16 +154,11 @@ def run_now(
         int(body.application_id) if body.application_id is not None else None
     )
     if application_id is not None:
-        application = (
-            db.query(CandidateApplication.id)
-            .filter(
-                CandidateApplication.id == application_id,
-                CandidateApplication.role_id == int(role.id),
-                CandidateApplication.organization_id
-                == int(current_user.organization_id),
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .one_or_none()
+        application = resolve_manual_run_application(
+            db,
+            role=role,
+            organization_id=int(current_user.organization_id),
+            application_id=application_id,
         )
         if application is None:
             raise HTTPException(

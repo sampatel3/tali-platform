@@ -13,7 +13,8 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 
 
@@ -356,8 +357,7 @@ def test_workable_note_refuses_unlinked_and_cross_role_applications(db):
 def test_manual_run_preview_and_enqueue_are_application_scoped(db):
     org = _org(db, "manual-run")
     user = _user(db, org, "manual-run")
-    # A manual run intentionally works while always-on mode is disabled.
-    role = _role(db, org, "manual-run", enabled=False)
+    role = _role(db, org, "manual-run")
     other_role = _role(db, org, "manual-run-other")
     app = _application(db, org, role, "manual-run")
     other_app = _application(db, org, other_role, "manual-run-other")
@@ -370,7 +370,7 @@ def test_manual_run_preview_and_enqueue_are_application_scoped(db):
     )
     assert preview["scope"] == "application"
     assert preview["application_id"] == int(app.id)
-    assert preview["agent_enabled"] is False
+    assert preview["agent_enabled"] is True
     assert preview["can_queue"] is True
 
     with patch(
@@ -399,6 +399,191 @@ def test_manual_run_preview_and_enqueue_are_application_scoped(db):
             )
         assert exc_info.value.code == "application_not_found"
         delay.assert_not_called()
+
+
+def test_manual_run_refuses_disabled_role_without_dispatch(db):
+    org = _org(db, "manual-disabled")
+    user = _user(db, org, "manual-disabled")
+    role = _role(db, org, "manual-disabled", enabled=False)
+    app = _application(db, org, role, "manual-disabled")
+
+    preview = commands.preview_manual_run(
+        db,
+        role,
+        user,
+        application_id=int(app.id),
+    )
+    assert preview["scope"] == "application"
+    assert preview["application_id"] is None
+    assert preview["candidate"] is None
+    assert preview["agent_enabled"] is False
+    assert preview["can_queue"] is False
+    assert preview["blocked_reason"] == "agent is not enabled for this role"
+
+    with patch("app.tasks.agent_tasks.agent_manual_run.delay") as delay:
+        result = commands.enqueue_manual_run(
+            db,
+            role,
+            user,
+            application_id=int(app.id),
+        )
+
+    assert result == {
+        "type": "manual_agent_run",
+        "status": "not_queued",
+        "queued": False,
+        "role_id": int(role.id),
+        "application_id": None,
+        "detail": "agent is not enabled for this role",
+    }
+    delay.assert_not_called()
+
+
+def test_related_role_manual_run_uses_source_roster_and_conceals_other_apps(db):
+    org = _org(db, "related-manual-run")
+    foreign_org = _org(db, "related-manual-run-foreign")
+    user = _user(db, org, "related-manual-run")
+    source_role = _role(db, org, "related-manual-run-source")
+    unrelated_role = _role(db, org, "related-manual-run-unrelated")
+    related_role = _role(db, org, "related-manual-run-related")
+    related_role.source = "sister"
+    related_role.role_kind = ROLE_KIND_SISTER
+    related_role.ats_owner_role_id = int(source_role.id)
+
+    visible_app = _application(db, org, source_role, "related-manual-run-visible")
+    unrelated_app = _application(
+        db,
+        org,
+        unrelated_role,
+        "related-manual-run-unrelated",
+    )
+    foreign_role = _role(db, foreign_org, "related-manual-run-foreign")
+    foreign_app = _application(
+        db,
+        foreign_org,
+        foreign_role,
+        "related-manual-run-foreign",
+    )
+    corrupt_candidate_app = _application(
+        db,
+        org,
+        source_role,
+        "related-manual-run-corrupt-candidate",
+    )
+    corrupt_candidate = db.get(Candidate, int(corrupt_candidate_app.candidate_id))
+    assert corrupt_candidate is not None
+    corrupt_candidate.organization_id = int(foreign_org.id)
+    deleted_candidate_app = _application(
+        db,
+        org,
+        source_role,
+        "related-manual-run-deleted-candidate",
+    )
+    deleted_candidate = db.get(Candidate, int(deleted_candidate_app.candidate_id))
+    assert deleted_candidate is not None
+    deleted_candidate.deleted_at = datetime.now(timezone.utc)
+    closed_app = _application(
+        db,
+        org,
+        source_role,
+        "related-manual-run-closed",
+    )
+    closed_app.application_outcome = "withdrawn"
+    disqualified_app = _application(
+        db,
+        org,
+        source_role,
+        "related-manual-run-disqualified",
+    )
+    disqualified_app.workable_disqualified = True
+
+    for index, application in enumerate(
+        (
+            visible_app,
+            corrupt_candidate_app,
+            deleted_candidate_app,
+            closed_app,
+            disqualified_app,
+        )
+    ):
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=int(org.id),
+                role_id=int(related_role.id),
+                source_application_id=int(application.id),
+                status="pending",
+                spec_fingerprint=f"related-manual-run-{index}",
+            )
+        )
+    db.flush()
+
+    preview = commands.preview_manual_run(
+        db,
+        related_role,
+        user,
+        application_id=int(visible_app.id),
+    )
+    assert preview["role_id"] == int(related_role.id)
+    assert preview["application_id"] == int(visible_app.id)
+    assert preview["candidate"] == "Candidate related-manual-run-visible"
+    assert preview["agent_enabled"] is True
+    assert preview["can_queue"] is True
+
+    queued = {
+        "type": "manual_agent_run",
+        "status": "queued",
+        "queued": True,
+        "role_id": int(related_role.id),
+        "application_id": int(visible_app.id),
+    }
+    with patch(
+        "app.agent_chat.application_commands.publish_manual_run",
+        return_value=queued,
+    ) as publish:
+        result = commands.enqueue_manual_run(
+            db,
+            related_role,
+            user,
+            application_id=int(visible_app.id),
+            dispatch_key="related-manual-run-dispatch",
+        )
+    assert result == queued
+    publish.assert_called_once_with(
+        role=related_role,
+        application_id=int(visible_app.id),
+        dispatch_key="related-manual-run-dispatch",
+    )
+
+    hidden_applications = (
+        unrelated_app,
+        foreign_app,
+        corrupt_candidate_app,
+        deleted_candidate_app,
+        closed_app,
+        disqualified_app,
+    )
+    with patch("app.agent_chat.application_commands.publish_manual_run") as publish:
+        for hidden_app in hidden_applications:
+            with pytest.raises(commands.ApplicationCommandError) as preview_error:
+                commands.preview_manual_run(
+                    db,
+                    related_role,
+                    user,
+                    application_id=int(hidden_app.id),
+                )
+            assert preview_error.value.code == "application_not_found"
+            assert hidden_app.candidate.full_name not in str(preview_error.value)
+
+            with pytest.raises(commands.ApplicationCommandError) as enqueue_error:
+                commands.enqueue_manual_run(
+                    db,
+                    related_role,
+                    user,
+                    application_id=int(hidden_app.id),
+                )
+            assert enqueue_error.value.code == "application_not_found"
+            assert hidden_app.candidate.full_name not in str(enqueue_error.value)
+        publish.assert_not_called()
 
 
 def test_manual_run_respects_role_pause_without_dispatch(db):

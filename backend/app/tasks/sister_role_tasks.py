@@ -91,7 +91,9 @@ def _set_terminal_error(evaluation, *, error_code: str) -> None:
 
 
 def _is_deterministic_failure(error_code: str) -> bool:
-    return any(error_code.startswith(prefix) for prefix in _DETERMINISTIC_FAILURE_PREFIXES)
+    return any(
+        error_code.startswith(prefix) for prefix in _DETERMINISTIC_FAILURE_PREFIXES
+    )
 
 
 def _provider_failure_code(value: object) -> str:
@@ -133,9 +135,7 @@ def dispatch_sister_evaluation(
 
     pending_due = evaluation.status == SISTER_EVAL_PENDING and (
         evaluation.dispatch_attempted_at is None
-        or _at_or_before(
-            evaluation.dispatch_attempted_at, now - _DISPATCH_STALE_AFTER
-        )
+        or _at_or_before(evaluation.dispatch_attempted_at, now - _DISPATCH_STALE_AFTER)
     )
     retry_due = evaluation.status == SISTER_EVAL_RETRY_WAIT and (
         evaluation.next_attempt_at is None
@@ -193,7 +193,6 @@ def dispatch_sister_evaluation(
 )
 def score_sister_evaluation(evaluation_id: int) -> dict:
     from ..cv_matching.holistic import run_holistic_match
-    from ..models.role import Role
     from ..models.sister_role_evaluation import (
         SISTER_EVAL_DONE,
         SISTER_EVAL_PENDING,
@@ -204,6 +203,10 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
     from ..platform.database import SessionLocal
     from ..services.claude_client_resolver import get_metered_client
     from ..services.job_page_lifecycle import role_allows_new_paid_ats_work
+    from ..services.related_role_roster import (
+        RELATED_ROSTER_EXCLUSION_CODE,
+        related_source_application_is_live,
+    )
     from ..services.sister_role_service import application_cv_text, text_fingerprint
     from ..services.workable_context_service import format_workable_context
 
@@ -220,12 +223,30 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
             return {"status": "skipped", "evaluation_id": evaluation_id}
 
         application = evaluation.source_application
-        source_role = (
-            db.get(Role, int(application.role_id)) if application is not None else None
-        )
+        role = evaluation.role
+        # Queue delivery is not ownership. The source application, candidate,
+        # canonical owner role, or their organization can change while a task
+        # waits. Revoke that stale row before any client/admission/provider work
+        # and retain it as an inspectable terminal evaluation.
+        if (
+            role is None
+            or evaluation.organization_id != role.organization_id
+            or not related_source_application_is_live(role, application)
+        ):
+            from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
+
+            evaluation.status = SISTER_EVAL_EXCLUDED
+            evaluation.error_message = "Source application left the owner roster"
+            evaluation.last_error_code = RELATED_ROSTER_EXCLUSION_CODE
+            evaluation.next_attempt_at = None
+            evaluation.dispatch_attempted_at = None
+            evaluation.started_at = None
+            evaluation.scored_at = _now()
+            db.commit()
+            return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
         # This is deliberately immediately before the paid-call claim. Pause,
         # Turn off, role closure, or ATS closure therefore revokes queued work.
-        if not role_allows_new_paid_ats_work(source_role, db=db):
+        if not role_allows_new_paid_ats_work(role, db=db):
             _set_retry(
                 evaluation,
                 error_code="authority_blocked",
@@ -237,14 +258,31 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 "evaluation_id": evaluation_id,
             }
 
-        role = evaluation.role
+        from ..services.sister_role_service import source_application_is_globally_closed
+
+        if source_application_is_globally_closed(application):
+            from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
+
+            evaluation.status = SISTER_EVAL_EXCLUDED
+            evaluation.error_message = (
+                "Shared ATS application is disqualified or closed"
+            )
+            evaluation.last_error_code = "shared_application_closed"
+            evaluation.next_attempt_at = None
+            evaluation.dispatch_attempted_at = None
+            evaluation.started_at = None
+            evaluation.scored_at = _now()
+            db.commit()
+            return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
         cv_text = application_cv_text(application) if application is not None else ""
         job_spec = (role.job_spec_text or "").strip() if role is not None else ""
         if not cv_text or not job_spec:
             code = "missing_cv_text" if not cv_text else "missing_job_specification"
             evaluation.status = SISTER_EVAL_UNSCORABLE
             evaluation.error_message = (
-                "No CV text available" if not cv_text else "No job specification available"
+                "No CV text available"
+                if not cv_text
+                else "No job specification available"
             )
             evaluation.last_error_code = code
             evaluation.next_attempt_at = None
@@ -263,19 +301,19 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
 
         try:
             client = get_metered_client(organization_id=int(evaluation.organization_id))
-            context = format_workable_context(application.candidate, application) or None
+            context = (
+                format_workable_context(application.candidate, application) or None
+            )
             output = run_holistic_match(
                 cv_text,
                 job_spec,
                 client=client,
                 metering_context={
                     "organization_id": int(evaluation.organization_id),
-                    # Related roles are score-only projections over the owning
-                    # ATS job. Charge and hard-admit every provider call against
-                    # that operational role so its Agent budget covers the
-                    # complete candidate workflow instead of creating an
-                    # uncapped spend bucket on the projection role.
-                    "role_id": int(source_role.id),
+                    # Every related role owns an independent Agent and budget.
+                    # The canonical application is shared, but this score/spend
+                    # belongs to the role whose specification produced it.
+                    "role_id": int(role.id),
                     # Stable across retries so metering/caches can deduplicate a
                     # worker death after provider success but before row ack.
                     "entity_id": f"sister_evaluation:{evaluation.id}",
@@ -342,24 +380,172 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
     name="app.tasks.sister_role_tasks.score_sister_role",
     queue="scoring",
 )
-def score_sister_role(role_id: int) -> dict:
-    from ..models.sister_role_evaluation import SISTER_EVAL_PENDING, SisterRoleEvaluation
+def score_sister_role(
+    role_id: int,
+    dispatch_key: str | None = None,
+    application_id: int | None = None,
+    organization_id: int | None = None,
+) -> dict:
+    from ..models.agent_run import AGENT_RUN_DISPATCHING
+    from ..models.role import ROLE_KIND_SISTER, Role
+    from ..models.sister_role_evaluation import (
+        SISTER_EVAL_PENDING,
+        SISTER_EVAL_RETRY_WAIT,
+        SisterRoleEvaluation,
+    )
     from ..platform.database import SessionLocal
+    from ..services.manual_agent_run_dispatch import (
+        finish_manual_run_intent,
+        manual_run_intent_for_scope,
+        manual_run_role_block_reason,
+    )
+    from ..services.manual_run_application_scope import (
+        resolve_manual_run_application,
+    )
 
     with SessionLocal() as db:
-        evaluation_ids = [
-            int(row_id)
-            for (row_id,) in db.query(SisterRoleEvaluation.id)
-            .filter(
-                SisterRoleEvaluation.role_id == int(role_id),
-                SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
+        role = db.get(Role, int(role_id))
+        try:
+            expected_organization_id = (
+                int(organization_id)
+                if organization_id is not None
+                else int(role.organization_id)
+                if role is not None
+                else None
             )
-            .all()
-        ]
+            focused_application_id = (
+                int(application_id) if application_id is not None else None
+            )
+        except (TypeError, ValueError):
+            expected_organization_id = None
+            focused_application_id = None
+        if (
+            role is not None
+            and organization_id is not None
+            and expected_organization_id != int(role.organization_id)
+        ):
+            return {
+                "status": "skipped",
+                "reason": "dispatch_scope_mismatch",
+                "role_id": role_id,
+            }
+        if dispatch_key and role is not None:
+            if expected_organization_id is None:
+                return {
+                    "status": "skipped",
+                    "reason": "dispatch_scope_mismatch",
+                    "role_id": role_id,
+                }
+            intent = manual_run_intent_for_scope(
+                db,
+                dispatch_key=dispatch_key,
+                organization_id=expected_organization_id,
+                role_id=role_id,
+                application_id=focused_application_id,
+            )
+            if intent is None:
+                return {
+                    "status": "skipped",
+                    "reason": "dispatch_scope_mismatch",
+                    "role_id": role_id,
+                }
+            if str(intent.status) != AGENT_RUN_DISPATCHING:
+                return {
+                    "status": "replayed",
+                    "role_id": role_id,
+                    "agent_run_id": int(intent.id),
+                    "run_status": str(intent.status),
+                }
+        block_reason = manual_run_role_block_reason(db, role=role)
+        if (
+            block_reason is None
+            and str(getattr(role, "role_kind", "") or "") != ROLE_KIND_SISTER
+        ):
+            block_reason = "role_not_related"
+        if block_reason is not None:
+            if expected_organization_id is not None:
+                finish_manual_run_intent(
+                    db,
+                    dispatch_key=dispatch_key,
+                    organization_id=expected_organization_id,
+                    role_id=role_id,
+                    application_id=focused_application_id,
+                    status="aborted",
+                    error=block_reason,
+                )
+            db.commit()
+            return {
+                "status": "skipped",
+                "reason": block_reason,
+                "role_id": role_id,
+            }
+        if application_id is not None and (
+            focused_application_id is None
+            or resolve_manual_run_application(
+                db,
+                role=role,
+                organization_id=expected_organization_id,
+                application_id=focused_application_id,
+            )
+            is None
+        ):
+            finish_manual_run_intent(
+                db,
+                dispatch_key=dispatch_key,
+                organization_id=expected_organization_id,
+                role_id=role_id,
+                application_id=focused_application_id,
+                status="aborted",
+                error="application_unavailable",
+            )
+            db.commit()
+            return {
+                "status": "skipped",
+                "reason": "application_unavailable",
+                "role_id": role_id,
+                "application_id": focused_application_id,
+            }
+
+        evaluation_query = db.query(SisterRoleEvaluation).filter(
+            SisterRoleEvaluation.organization_id == expected_organization_id,
+            SisterRoleEvaluation.role_id == int(role_id),
+            SisterRoleEvaluation.status.in_(
+                (SISTER_EVAL_PENDING, SISTER_EVAL_RETRY_WAIT)
+            ),
+        )
+        if focused_application_id is not None:
+            evaluation_query = evaluation_query.filter(
+                SisterRoleEvaluation.source_application_id
+                == focused_application_id
+            )
+        evaluations = evaluation_query.order_by(SisterRoleEvaluation.id.asc()).all()
+        # Turn on/Resume revokes an authority hold, but it does not revoke a
+        # provider or broker backoff. Explicit rescoring has already reset its
+        # rows in ``ensure_sister_evaluations`` before reaching this worker.
+        for evaluation in evaluations:
+            if (
+                evaluation.status == SISTER_EVAL_RETRY_WAIT
+                and evaluation.last_error_code == "authority_blocked"
+            ):
+                evaluation.status = SISTER_EVAL_PENDING
+                evaluation.next_attempt_at = None
+                evaluation.dispatch_attempted_at = None
+                evaluation.started_at = None
+        db.commit()
+        evaluation_ids = [int(evaluation.id) for evaluation in evaluations]
         results = [
             dispatch_sister_evaluation(db, evaluation_id=evaluation_id)
             for evaluation_id in evaluation_ids
         ]
+        if finish_manual_run_intent(
+            db,
+            dispatch_key=dispatch_key,
+            organization_id=expected_organization_id,
+            role_id=role_id,
+            application_id=focused_application_id,
+            status="succeeded",
+        ):
+            db.commit()
     return {
         "status": "queued",
         "role_id": role_id,

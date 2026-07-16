@@ -1,5 +1,6 @@
 import logging
 
+from ..services.ats_move_result_policy import terminalize_skipped_move_result
 from .celery_app import celery_app
 from ..components.integrations.workable.sync_runner import execute_workable_sync_run
 
@@ -424,6 +425,8 @@ def run_workable_op_task(
             return {"status": "failed", "op_type": op_type, "code": "unexpected"}
 
         result = result if isinstance(result, dict) else {}
+        if failed_move := terminalize_skipped_move_result(db, int(organization_id), op_type, payload, result, job_run_id):
+            return failed_move
         status = "completed"
         if result.get("requeued") or result.get("failed"):
             status = "completed_with_errors"

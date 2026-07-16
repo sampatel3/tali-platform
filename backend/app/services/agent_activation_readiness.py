@@ -9,6 +9,7 @@ from sqlalchemy.orm import object_session
 from ..models.organization import Organization
 from ..models.role import Role
 from ..platform.config import settings
+from .agent_activation_reservation import activation_minimum_credits
 from .task_approval_service import task_repository_readiness
 
 
@@ -291,19 +292,13 @@ def activation_readiness(
 
     # A configured meter with no funded balance is still not runnable: scoring
     # silently declines its reservation and assessment creation returns 402.
-    # Require enough for one conservative end-to-end funnel pass. Ongoing
+    # Require enough for one conservative dispatched-path pass. Ongoing
     # depletion remains a legitimate HITL top-up condition, but Turn on must
     # never start already unable to process its first candidate.
-    from .pricing_service import Feature, estimate_reservation
-
-    minimum_credits = (
-        estimate_reservation(Feature.CV_PARSE)
-        + estimate_reservation(Feature.PRESCREEN)
-        + estimate_reservation(Feature.SCORE)
-        + estimate_reservation(Feature.AGENT_AUTONOMOUS)
+    minimum_credits = activation_minimum_credits(
+        role,
+        uses_assessment=uses_assessment,
     )
-    if uses_assessment:
-        minimum_credits += estimate_reservation(Feature.ASSESSMENT)
     org = (
         session.query(Organization)
         .filter(Organization.id == int(role.organization_id))
@@ -564,6 +559,8 @@ def activation_readiness(
             month_to_date_spend_microcredits,
             remaining_role_admission_microcredits,
         )
+
+        from .pricing_service import Feature, estimate_reservation
 
         per_active_score_job = estimate_reservation(Feature.SCORE)
         if monthly_usd_budget_cents is None:

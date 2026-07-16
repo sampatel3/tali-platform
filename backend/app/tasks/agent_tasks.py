@@ -25,6 +25,9 @@ from .agent_scoring_dispatch import (
     _auto_enqueue_scoring,
     _requeue_deferred_agent_scores as _requeue_deferred_agent_scores,
 )
+from .manual_agent_run_recovery_tasks import (
+    recover_dispatching_manual_agent_runs as recover_dispatching_manual_agent_runs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1277,6 +1280,7 @@ def agent_manual_run(
     role_id: int,
     application_id: Optional[int] = None,
     dispatch_key: Optional[str] = None,
+    organization_id: Optional[int] = None,
 ) -> dict:
     """Recruiter-triggered (or CLI-triggered) one-shot run.
 
@@ -1285,61 +1289,24 @@ def agent_manual_run(
     production worker must never spend or queue recommendations while another
     recruiter has deliberately turned the agent off.
     """
-    from datetime import datetime, timezone
-
     from ..agent_runtime.orchestrator import run_cycle
-    from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
-    from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.role_execution_guard import automatic_role_action_block_reason
+    from ..services.manual_run_application_scope import (
+        admit_native_manual_run_worker,
+    )
 
     db = SessionLocal()
     try:
-        role = (
-            db.query(Role)
-            .filter(Role.id == role_id, Role.deleted_at.is_(None))
-            .first()
+        role, refusal = admit_native_manual_run_worker(
+            db,
+            role_id=role_id,
+            application_id=application_id,
+            dispatch_key=dispatch_key,
+            organization_id=organization_id,
         )
-        if role is None:
-            return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
-        if not bool(role.agentic_mode_enabled):
-            return {
-                "status": "skipped",
-                "reason": "agent_disabled",
-                "role_id": role_id,
-            }
-        if role.agent_paused_at is not None:
-            if dispatch_key:
-                intent = (
-                    db.query(AgentRun)
-                    .filter(
-                        AgentRun.dispatch_key == str(dispatch_key),
-                        AgentRun.role_id == int(role_id),
-                        AgentRun.status == AGENT_RUN_DISPATCHING,
-                    )
-                    .one_or_none()
-                )
-                if intent is not None:
-                    intent.status = "aborted"
-                    intent.error = "agent_paused"
-                    intent.finished_at = datetime.now(timezone.utc)
-                    db.commit()
-            return {
-                "status": "skipped",
-                "reason": "agent_paused",
-                "role_id": role_id,
-                "paused_reason": role.agent_paused_reason,
-            }
-        role_block = automatic_role_action_block_reason(role, db=db)
-        if role_block:
-            return {
-                "status": "skipped",
-                "reason": "workspace_paused"
-                if role_block == "workspace agent is paused"
-                else "role_not_runnable",
-                "detail": role_block,
-                "role_id": role_id,
-            }
+        if refusal is not None:
+            return refusal
+        assert role is not None
         try:
             run = run_cycle(
                 db,
@@ -1362,57 +1329,6 @@ def agent_manual_run(
             return {"status": "error", "role_id": role_id}
     finally:
         db.close()
-
-
-@celery_app.task(
-    name="app.tasks.agent_tasks.recover_dispatching_manual_agent_runs"
-)
-def recover_dispatching_manual_agent_runs(limit: int = 100) -> dict:
-    """Re-publish confirmed manual-run intents left before broker acceptance."""
-
-    from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
-    from ..platform.database import SessionLocal
-    from ..services.manual_agent_run_dispatch import claim_publish, publish_due_filter
-
-    with SessionLocal() as db:
-        rows = (
-            db.query(AgentRun)
-            .filter(
-                AgentRun.status == AGENT_RUN_DISPATCHING,
-                publish_due_filter(),
-            )
-            .order_by(AgentRun.id.asc())
-            .limit(max(1, int(limit)))
-            .with_for_update(skip_locked=True)
-            .all()
-        )
-        payloads = []
-        for row in rows:
-            payload = claim_publish(row)
-            if payload is not None:
-                payloads.append(payload)
-            if len(payloads) >= max(1, int(limit)):
-                break
-        # Reserve the next attempt before touching the broker. Another Beat
-        # pod that acquires these rows after commit sees them as not due.
-        db.commit()
-
-    kicked = publish_failed = 0
-    for payload in payloads:
-        try:
-            agent_manual_run.delay(**payload)
-            kicked += 1
-        except Exception:
-            publish_failed += 1
-            logger.exception(
-                "manual agent run recovery publish failed dispatch_key=%s",
-                payload["dispatch_key"],
-            )
-    return {
-        "scanned": len(payloads),
-        "kicked": kicked,
-        "publish_failed": publish_failed,
-    }
 
 
 # Stuck cycles. A worker crash mid-cycle (OOM, deploy restart, dyno reschedule)

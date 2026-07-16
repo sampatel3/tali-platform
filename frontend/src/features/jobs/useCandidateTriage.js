@@ -188,7 +188,15 @@ export function useCandidateTriage({
     if (!application?.id || !nextStage) return;
     setStageBusy(true);
     try {
-      await rolesApi.updateApplicationStage(application.id, { pipeline_stage: nextStage });
+      if (role?.role_kind === 'sister' && rolesApi.updateRelatedApplicationStage) {
+        await rolesApi.updateRelatedApplicationStage(
+          role.id,
+          application.id,
+          { pipeline_stage: nextStage },
+        );
+      } else {
+        await rolesApi.updateApplicationStage(application.id, { pipeline_stage: nextStage });
+      }
       showToast(`Moved to ${String(nextStage).replace(/_/g, ' ')}.`, 'success');
       await refreshRow(application.id);
     } catch (error) {
@@ -196,10 +204,17 @@ export function useCandidateTriage({
     } finally {
       setStageBusy(false);
     }
-  }, [rolesApi, refreshRow, showToast]);
+  }, [role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleSendAssessment = useCallback(async (application, taskId) => {
     if (!application?.id || !taskId) return;
+    if (role?.role_kind === 'sister') {
+      showToast(
+        'Related roles are score-only. Send assessments from the original role; no invite was sent.',
+        'info',
+      );
+      return;
+    }
     setAssessmentBusy(true);
     try {
       // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
@@ -219,7 +234,7 @@ export function useCandidateTriage({
     } finally {
       setAssessmentBusy(false);
     }
-  }, [rolesApi, refreshRow, showToast]);
+  }, [role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleReject = useCallback(async (application) => {
     if (!application?.id) return;
@@ -277,9 +292,38 @@ export function useCandidateTriage({
     setAtsMoveBusy(true);
     const providerLabel = atsProviderLabel(atsProvider);
     try {
-      const request = { target_stage: targetStage };
+      const request = {
+        target_stage: targetStage,
+        ...(role?.role_kind === 'sister' ? { acting_role_id: role.id } : {}),
+      };
       let moveResponse;
-      if (rolesApi.moveApplicationToAtsStage) {
+      if (role?.role_kind === 'sister') {
+        if (!rolesApi.moveRelatedApplicationToAtsStage) {
+          showToast(
+            'Related-role ATS moves require the managed server transition endpoint. '
+            + 'No provider update was sent; retry after the backend rollout completes.',
+            'error',
+          );
+          return;
+        }
+        moveResponse = await rolesApi.moveRelatedApplicationToAtsStage(
+          role.id,
+          application.id,
+          request,
+        );
+        const managedReceipt = moveResponse?.data || moveResponse || {};
+        if (
+          Number(managedReceipt.ats_related_transition_protocol) !== 1
+          || managedReceipt.ats_related_stage_managed !== true
+        ) {
+          showToast(
+            'The server did not confirm durable related-stage management. '
+            + 'Check background jobs before attempting another provider move.',
+            'error',
+          );
+          return;
+        }
+      } else if (rolesApi.moveApplicationToAtsStage) {
         try {
           moveResponse = await rolesApi.moveApplicationToAtsStage(application.id, request);
         } catch (error) {
@@ -309,6 +353,7 @@ export function useCandidateTriage({
 
       const terminalStatus = String(terminalRun?.status || '').trim().toLowerCase();
       if (terminalStatus === ATS_MOVE_SUCCESS_STATUS) {
+        // Pull the worker's confirmed provider and local projection state.
         await refreshRow(application.id);
         showToast(`Moved in ${providerLabel}: ${targetLabel || targetStage}.`, 'success');
       } else if (ATS_MOVE_FAILURE_STATUSES.has(terminalStatus)) {
@@ -328,7 +373,7 @@ export function useCandidateTriage({
     } finally {
       setAtsMoveBusy(false);
     }
-  }, [atsProvider, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   // Plain click on a candidate row opens the drawer in-place. Modifier-
   // click (cmd/ctrl/shift/alt) and middle-click keep the anchor's
@@ -358,6 +403,8 @@ export function useCandidateTriage({
   const drawerProps = useMemo(() => ({
     application: triageApplication,
     roleId: role?.id ?? null,
+    isRelatedRole: role?.role_kind === 'sister',
+    hasRelatedRoles: Number(role?.sister_role_count || 0) > 0,
     roleTasks,
     mode: 'inline',
     stageBusy,
@@ -376,6 +423,8 @@ export function useCandidateTriage({
   }), [
     triageApplication,
     role?.id,
+    role?.role_kind,
+    role?.sister_role_count,
     roleTasks,
     stageBusy,
     assessmentBusy,

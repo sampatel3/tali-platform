@@ -634,7 +634,7 @@ describe('JobPipelinePage', () => {
       },
       withdrawn: {
         ...baseApplications[0], id: 5, candidate_id: 55, candidate_name: 'Withdrawn Sister',
-        application_outcome: 'withdrawn', taali_score: 79,
+        application_outcome: 'withdrawn', related_role_availability: 'closed', taali_score: 79,
       },
     };
     apiClient.roles.listApplications.mockImplementation((_, params) => (
@@ -654,6 +654,7 @@ describe('JobPipelinePage', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Closed2/i }));
     expect(screen.getByText('Rejected Sister')).toBeInTheDocument();
     expect(screen.getByText('Withdrawn Sister')).toBeInTheDocument();
+    expect(screen.getByText('Withdrawn Sister').closest('tr')).toHaveClass('related-role-locked');
     expect(screen.getByRole('alert')).toHaveTextContent('Some candidates could not be loaded.');
     expect(apiClient.roles.listApplications.mock.calls.map(([, params]) => (
       params.application_outcome
@@ -707,7 +708,8 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByText(/Related-role scoring is waiting · 0%/i)).toBeInTheDocument();
     expect(screen.getByText(/workspace Agent is paused/i)).toBeInTheDocument();
     expect(screen.getByText(/0 of 800 scoreable candidates/i)).toBeInTheDocument();
-    expect(screen.getByText(/Original Workable pipeline · shared ATS stages, not related-role score progress/i)).toBeInTheDocument();
+    expect(screen.getByText(/Related-role Taali pipeline · independent stages/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /turn on/i })).toBeInTheDocument();
     expect(screen.getByText('Shared candidates')).toBeInTheDocument();
     expect(screen.getByText('806')).toBeInTheDocument();
     expect(screen.getByText('Awaiting score')).toBeInTheDocument();

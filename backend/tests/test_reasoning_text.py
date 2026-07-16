@@ -8,9 +8,10 @@ def test_strips_parenthesized_internal_ids():
 
 
 def test_keeps_legitimate_parenthesized_numbers():
-    # Thresholds/scores in parens are meaningful — only bare IDs (4+ digits) go.
+    # Thresholds, scores, and plausible years are meaningful rather than IDs.
     assert humanize_reasoning("well above send threshold (70)") == "well above send threshold (70)"
     assert humanize_reasoning("a perfect pre-screen (100)") == "a perfect pre-screen (100)"
+    assert humanize_reasoning("AWS certified (2024)") == "AWS certified (2024)"
 
 
 def test_scorer_keys_become_words():

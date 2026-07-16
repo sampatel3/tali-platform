@@ -557,6 +557,7 @@ def test_workable_note_crash_replay_reuses_one_durable_dispatch(db):
 
 def test_manual_run_crash_replay_propagates_same_paid_cycle_key(db):
     user, role, conversation = _world(db)
+    role.agentic_mode_enabled = True
     db.commit()
     preview = dispatch_tool(
         "run_agent_now",
@@ -599,12 +600,45 @@ def test_manual_run_crash_replay_propagates_same_paid_cycle_key(db):
         db.commit()
 
     assert receipt["status"] == "queued"
+    assert receipt["result"]["queued"] is False
+    assert receipt["result"]["broker_accepted"] is None
+    assert receipt["result"]["dispatch_pending"] is True
+    assert receipt["result"]["intent_persisted"] is True
+    assert receipt["result"]["replayed"] is True
+    assert "automatic queue recovery" in receipt["message"].lower()
+    assert "is queued" not in receipt["message"].lower()
     # The replay reuses the same durable intent but its two-minute dispatch
     # reservation prevents a second broker delivery from flooding the queue.
     assert delay.call_count == 1
     keys = [call.kwargs["dispatch_key"] for call in delay.call_args_list]
     assert keys[0].startswith("chat-command/")
     assert db.query(ChatCommandReceipt).count() == 1
+
+
+def test_disabled_manual_run_is_reported_blocked_without_a_queue_claim(db):
+    user, role, conversation = _world(db)
+    db.commit()
+
+    with patch("app.tasks.agent_tasks.agent_manual_run.delay") as delay:
+        result = dispatch_tool(
+            "run_agent_now",
+            {},
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+
+    assert result["type"] == "operation_blocked"
+    assert result["operation"] == "run_agent_now"
+    assert result["preview"]["agent_enabled"] is False
+    assert result["preview"]["can_queue"] is False
+    assert result["preview"]["blocked_reason"] == (
+        "agent is not enabled for this role"
+    )
+    assert "blocked" in result["message"].lower()
+    assert "queued" not in result["message"].lower()
+    delay.assert_not_called()
 
 
 def test_confirmed_role_rescreen_replay_uses_completed_command_receipt(db):

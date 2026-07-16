@@ -32,6 +32,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import Role
+from app.services.ats_operation_guards import lock_live_application_move
 from app.services.provider_usage_admission import serialize_provider_work
 from tests.postgres_support import (
     configured_test_postgres_url,
@@ -53,7 +54,7 @@ def postgres_runtime_engine() -> Iterator[Engine]:
             with engine.connect() as connection:
                 assert connection.execute(
                     text("SELECT version_num FROM alembic_version")
-                ).scalar_one() == "179_restore_schema_metadata_invariants"
+                ).scalar_one() == "180_merge_related_role_workflow"
             yield engine
         finally:
             engine.dispose()
@@ -113,6 +114,54 @@ def _seed_application(db: Session, *, prefix: str) -> CandidateApplication:
     db.add(application)
     db.flush()
     return application
+
+
+def test_ats_move_lock_serializes_a_concurrent_close(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """A close cannot commit between the worker's live check and provider I/O."""
+
+    with Session(postgres_runtime_engine, expire_on_commit=False) as seed_db:
+        application = _seed_application(
+            seed_db,
+            prefix=f"pg-ats-lock-{uuid4().hex}",
+        )
+        seed_db.commit()
+        organization_id = int(application.organization_id)
+        application_id = int(application.id)
+
+    with (
+        Session(postgres_runtime_engine) as move_db,
+        Session(postgres_runtime_engine) as close_db,
+    ):
+        locked = lock_live_application_move(
+            move_db,
+            organization_id=organization_id,
+            application_id=application_id,
+        )
+        assert int(locked.id) == application_id
+
+        close_db.execute(text("SET LOCAL lock_timeout = '150ms'"))
+        with pytest.raises(DBAPIError):
+            close_db.execute(
+                text(
+                    "UPDATE candidate_applications "
+                    "SET application_outcome = 'withdrawn' WHERE id = :app_id"
+                ),
+                {"app_id": application_id},
+            )
+        close_db.rollback()
+
+        # Provider confirmation/local projection would commit at this point.
+        move_db.commit()
+        close_db.execute(
+            text(
+                "UPDATE candidate_applications "
+                "SET application_outcome = 'withdrawn' WHERE id = :app_id"
+            ),
+            {"app_id": application_id},
+        )
+        close_db.commit()
 
 
 def test_postgres_executes_candidate_json_array_filters(postgres_db: Session) -> None:

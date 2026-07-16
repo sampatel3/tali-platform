@@ -274,13 +274,10 @@ def resume_all_agents(
             dispatch_failed += 1
             continue
         try:
-            from ...tasks.agent_tasks import agent_cohort_tick_role
+            from ...services.role_agent_dispatch import dispatch_role_agent_cycle
 
-            agent_cohort_tick_role.delay(
-                int(role.id),
-                activation=False,
-                dispatch_role_version=int(role.version or 1),
-                dispatch_workspace_version=workspace_resume_version,
+            dispatch_role_agent_cycle(
+                role, workspace_version=workspace_resume_version
             )
         except Exception:
             logger.exception(

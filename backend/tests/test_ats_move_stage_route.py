@@ -7,14 +7,16 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.candidate_application import CandidateApplication
-from app.models.job_hiring_team import JobHiringTeam
+from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.platform.config import settings
 from app.domains.assessments_runtime.applications_routes import (
     WorkableMoveStageRequest,
     move_application_in_active_ats,
+    move_application_in_workable,
 )
 from app.services.workable_op_runner import AtsJobRunPersistenceError
 from tests.conftest import TestingSessionLocal, auth_headers
@@ -88,6 +90,214 @@ def test_generic_move_stage_routes_bullhorn_intent_through_shared_runner(
     assert payload["application_id"] == app.id
     assert payload["target_stage"] == "advanced"
     assert payload["target_intent"] == "advanced"
+
+
+def test_related_role_attribution_is_propagated_to_durable_move_payload(client, db):
+    headers, org, owner, app = _application(client, db)
+    user = db.query(User).filter(User.organization_id == org.id).one()
+    org.workable_connected = True
+    org.workable_access_token = "workable-token"
+    org.workable_subdomain = "deep-light"
+    org.workable_config = {
+        "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_writeback": True,
+        "workable_actor_member_id": "member-1",
+    }
+    owner.source = "workable"
+    owner.workable_job_id = "job-related-attribution"
+    app.source = "workable"
+    app.workable_candidate_id = "candidate-related-attribution"
+    related = Role(
+        organization_id=org.id,
+        name="Related backend role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.flush()
+    db.add_all(
+        [
+            JobHiringTeam(
+                organization_id=org.id,
+                role_id=related.id,
+                user_id=user.id,
+                team_role=TEAM_ROLE_RECRUITER,
+            ),
+            SisterRoleEvaluation(
+                organization_id=org.id,
+                role_id=related.id,
+                source_application_id=app.id,
+                status="done",
+                spec_fingerprint="related-attribution",
+            ),
+        ]
+    )
+    db.commit()
+
+    capability = client.get(
+        f"/api/v1/roles/{related.id}/related-ats-transition-capability",
+        headers=headers,
+    )
+    assert capability.status_code == 200, capability.text
+    assert capability.json() == {
+        "protocol_version": 1,
+        "provider_confirmation_managed": True,
+        "related_stage_projection_managed": True,
+    }
+
+    with patch(
+        "app.services.workable_op_runner.enqueue_workable_op", return_value=124
+    ) as enqueue:
+        response = client.post(
+            f"/api/v1/roles/{related.id}/applications/{app.id}"
+            "/ats/managed-move-stage-v1",
+            headers=headers,
+            json={"target_stage": "Technical Interview", "acting_role_id": related.id},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ats_writeback_job_run_id"] == 124
+    assert response.json()["ats_related_transition_protocol"] == 1
+    assert response.json()["ats_related_stage_managed"] is True
+    assert enqueue.call_args.kwargs["payload"]["acting_role_id"] == related.id
+
+    mismatch = client.post(
+        f"/api/v1/roles/{related.id}/applications/{app.id}"
+        "/ats/managed-move-stage-v1",
+        headers=headers,
+        json={
+            "target_stage": "Technical Interview",
+            "acting_role_id": related.id + 1,
+        },
+    )
+    assert mismatch.status_code == 422, mismatch.text
+    assert enqueue.call_count == 1
+
+
+def _legacy_related_role_actor(db, *, org, owner, app, related_access: bool):
+    actor = User(
+        email=f"legacy-related-{'allowed' if related_access else 'denied'}@example.com",
+        hashed_password="x",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    related = Role(
+        organization_id=org.id,
+        name="Legacy Workable related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add_all([actor, related])
+    db.flush()
+    db.add(
+        JobHiringTeam(
+            organization_id=org.id,
+            role_id=owner.id,
+            user_id=actor.id,
+            team_role=TEAM_ROLE_RECRUITER,
+        )
+    )
+    if related_access:
+        db.add(
+            JobHiringTeam(
+                organization_id=org.id,
+                role_id=related.id,
+                user_id=actor.id,
+                team_role=TEAM_ROLE_RECRUITER,
+            )
+        )
+    app.workable_candidate_id = "legacy-related-candidate"
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=org.id,
+            role_id=related.id,
+            source_application_id=app.id,
+            status="done",
+            spec_fingerprint="legacy-related-authorization",
+        )
+    )
+    db.commit()
+    return actor, related
+
+
+def test_legacy_workable_related_move_requires_related_role_edit_access(client, db):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=False,
+    )
+
+    with (
+        patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        move_application_in_workable(
+            application_id=int(app.id),
+            data=WorkableMoveStageRequest(
+                target_stage="final-interview",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Forbidden"
+    enqueue.assert_not_called()
+
+
+def test_legacy_workable_related_move_allows_related_role_recruiter(client, db):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=True,
+    )
+
+    with patch(
+        "app.services.workable_op_runner.enqueue_workable_op", return_value=125
+    ) as enqueue:
+        response = move_application_in_workable(
+            application_id=int(app.id),
+            data=WorkableMoveStageRequest(
+                target_stage="final-interview",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+
+    assert response.ats_writeback_status == "queued"
+    assert response.ats_writeback_job_run_id == 125
+    assert enqueue.call_args.kwargs["payload"]["acting_role_id"] == related.id
+
+
+def test_closed_application_is_rejected_before_move_is_queued(client, db):
+    headers, _org, _role, app = _application(client, db)
+    app.application_outcome = "withdrawn"
+    app.workable_candidate_id = "closed-workable-candidate"
+    db.commit()
+
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+        response = client.post(
+            f"/api/v1/applications/{app.id}/workable/move-stage",
+            headers=headers,
+            json={"target_stage": "Technical Interview"},
+        )
+
+    assert response.status_code == 409, response.text
+    assert "closed or disqualified" in response.json()["detail"]
+    enqueue.assert_not_called()
 
 
 @pytest.mark.parametrize("team_role", [None, "interviewer", "coordinator"])
@@ -302,9 +512,7 @@ def test_manual_workable_reject_persists_confirmed_provider_receipt(client, db):
     assert receipt["target_outcome"] == "rejected"
 
 
-def test_manual_bullhorn_outcome_recovers_a_lost_broker_kick(
-    client, db, monkeypatch
-):
+def test_manual_bullhorn_outcome_recovers_a_lost_broker_kick(client, db, monkeypatch):
     from app.models.background_job_run import BackgroundJobRun, JOB_KIND_WORKABLE_OP
     from app.tasks.workable_tasks import (
         recover_dispatching_workable_ops,
@@ -351,9 +559,7 @@ def test_manual_bullhorn_outcome_recovers_a_lost_broker_kick(
     assert "recovery_payload" in (run.counters or {})
 
     with patch.object(run_workable_op_task, "apply_async") as replay:
-        recovered = recover_dispatching_workable_ops.run(
-            limit=10, older_than_seconds=0
-        )
+        recovered = recover_dispatching_workable_ops.run(limit=10, older_than_seconds=0)
 
     assert recovered == {"scanned": 1, "recovered": 1, "failed": 0}
     replay_payload = replay.call_args.kwargs["kwargs"]
@@ -471,9 +677,11 @@ def test_manual_bullhorn_outcome_commit_failure_never_publishes(db, monkeypatch)
     db.commit()
     monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
 
-    with patch.object(db, "commit", side_effect=RuntimeError("forced commit failure")), patch(
-        "app.services.workable_op_runner.enqueue_workable_op"
-    ) as enqueue, pytest.raises(HTTPException) as exc:
+    with (
+        patch.object(db, "commit", side_effect=RuntimeError("forced commit failure")),
+        patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue,
+        pytest.raises(HTTPException) as exc,
+    ):
         update_application_outcome(
             int(app.id),
             ApplicationOutcomeUpdate(application_outcome="rejected"),
@@ -484,7 +692,10 @@ def test_manual_bullhorn_outcome_commit_failure_never_publishes(db, monkeypatch)
     assert exc.value.status_code == 500
     enqueue.assert_not_called()
     db.expire_all()
-    assert db.query(CandidateApplication).filter_by(id=app.id).one().application_outcome == "open"
+    assert (
+        db.query(CandidateApplication).filter_by(id=app.id).one().application_outcome
+        == "open"
+    )
 
 
 def test_legacy_workable_move_stage_endpoint_is_preserved(client, db):

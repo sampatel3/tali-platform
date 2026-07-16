@@ -486,6 +486,11 @@ class ApplicationResponse(BaseModel):
     # treat them as queued until the tracked run reaches a terminal state.
     ats_writeback_status: Optional[Literal["queued"]] = None
     ats_writeback_job_run_id: Optional[int] = None
+    # Set only by the versioned related-role move endpoint. Its presence proves
+    # the server-side worker owns provider confirmation and local projection;
+    # older rolling-deploy backends cannot silently accept this route.
+    ats_related_transition_protocol: Optional[int] = None
+    ats_related_stage_managed: Optional[bool] = None
     pipeline_external_drift: bool = False
     version: int = 1
     notes: Optional[str] = None
@@ -527,6 +532,7 @@ class ApplicationResponse(BaseModel):
         "stale",
         "cancelled",
         "unscorable",
+        "excluded",
     ]] = None
     # Present when this row is projected into a sister role. ``id`` remains the
     # canonical source application id so every stage/outcome action routes to
@@ -535,6 +541,9 @@ class ApplicationResponse(BaseModel):
     operational_role_name: Optional[str] = None
     sister_role_id: Optional[int] = None
     source_role_score: Optional[float] = None
+    related_role_availability: Optional[Literal[
+        "active", "external_advanced", "disqualified", "closed"
+    ]] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
     workable_stage: Optional[str] = None
@@ -633,6 +642,19 @@ class ApplicationStageUpdate(BaseModel):
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
+
+
+class WorkableMoveStageRequest(BaseModel):
+    """Recruiter hand-back to the active ATS.
+
+    Workable receives its remote stage slug. Bullhorn receives Taali's stage
+    intent and resolves it through the organization's explicit stage map.
+    ``acting_role_id`` attributes a shared-application move to a related role.
+    """
+
+    target_stage: str = Field(min_length=1, max_length=200)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    acting_role_id: Optional[int] = Field(default=None, ge=1)
 
 
 class ApplicationOutcomeUpdate(BaseModel):

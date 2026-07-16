@@ -39,6 +39,9 @@ from ..models.user import User
 from ..schemas.role import ApplicationCreate, ApplicationNoteCreate
 from ..services.application_notes import create_recruiter_note
 from ..services.manual_agent_run_dispatch import publish_manual_run
+from ..services.manual_run_application_scope import (
+    resolve_manual_run_application,
+)
 from ..services.workspace_agent_control import workspace_agent_control_snapshot
 
 
@@ -134,6 +137,31 @@ def _scoped_application(
             CandidateApplication.deleted_at.is_(None),
         )
         .one_or_none()
+    )
+    if app is None:
+        raise ApplicationCommandError(
+            "application_not_found",
+            f"Application {app_id} was not found in this role.",
+        )
+    return app
+
+
+def _scoped_manual_run_application(
+    db: Session,
+    role: Role,
+    user: User,
+    application_id: Any,
+) -> CandidateApplication:
+    """Load one application from a native or related executable roster."""
+
+    org_id = _ensure_context(role, user)
+    app_id = _positive_id(application_id, field="application_id")
+    app = resolve_manual_run_application(
+        db,
+        role=role,
+        organization_id=org_id,
+        application_id=app_id,
+        include_candidate=True,
     )
     if app is None:
         raise ApplicationCommandError(
@@ -518,31 +546,34 @@ def preview_manual_run(
     """Preview a role-wide or application-focused one-shot agent cycle."""
 
     _ensure_context(role, user)
-    app = None
-    if application_id is not None:
-        app = _scoped_application(db, role, user, application_id)
     workspace_paused, _workspace_version = workspace_agent_control_snapshot(
         db,
         organization_id=int(role.organization_id),
     )
+    agent_enabled = bool(role.agentic_mode_enabled)
     role_paused = role.agent_paused_at is not None
     paused = workspace_paused or role_paused
     pause_scope = "workspace" if workspace_paused else ("role" if role_paused else None)
     blocked_reason = None
-    if workspace_paused:
+    if not agent_enabled:
+        blocked_reason = "agent is not enabled for this role"
+    elif workspace_paused:
         blocked_reason = "workspace agent is paused"
     elif role_paused:
         blocked_reason = str(role.agent_paused_reason or "agent is paused")
+    app = None
+    if blocked_reason is None and application_id is not None:
+        app = _scoped_manual_run_application(db, role, user, application_id)
     return {
         "type": "manual_agent_run_preview",
         "role_id": int(role.id),
-        "scope": "application" if app is not None else "role",
+        "scope": "application" if application_id is not None else "role",
         "application_id": int(app.id) if app is not None else None,
         "candidate": _candidate_label(app) if app is not None else None,
-        "agent_enabled": bool(role.agentic_mode_enabled),
+        "agent_enabled": agent_enabled,
         "agent_paused": paused,
         "pause_scope": pause_scope,
-        "can_queue": not paused,
+        "can_queue": agent_enabled and not paused,
         "blocked_reason": blocked_reason,
     }
 
@@ -558,9 +589,15 @@ def enqueue_manual_run(
     """Enqueue the existing manual-cycle task after rechecking role scope."""
 
     _ensure_context(role, user)
-    app = None
-    if application_id is not None:
-        app = _scoped_application(db, role, user, application_id)
+    if not bool(role.agentic_mode_enabled):
+        return {
+            "type": "manual_agent_run",
+            "status": "not_queued",
+            "queued": False,
+            "role_id": int(role.id),
+            "application_id": None,
+            "detail": "agent is not enabled for this role",
+        }
     workspace_paused, _workspace_version = workspace_agent_control_snapshot(
         db,
         organization_id=int(role.organization_id),
@@ -579,11 +616,14 @@ def enqueue_manual_run(
             "status": "not_queued",
             "queued": False,
             "role_id": int(role.id),
-            "application_id": int(app.id) if app is not None else None,
+            "application_id": None,
             "pause_scope": pause_scope,
             "detail": f"agent is paused: {pause_reason}",
         }
 
+    app = None
+    if application_id is not None:
+        app = _scoped_manual_run_application(db, role, user, application_id)
     return publish_manual_run(
         role=role,
         application_id=int(app.id) if app is not None else None,

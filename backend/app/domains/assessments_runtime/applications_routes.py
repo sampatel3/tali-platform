@@ -59,6 +59,7 @@ from ...schemas.role import (
     AssessmentRetakeCreate,
     FirefliesInterviewLinkCreate,
     ManualApplicationInterviewCreate,
+    WorkableMoveStageRequest,
 )
 from ...services.evaluation_result_service import (
     author_from_user,
@@ -108,6 +109,7 @@ from ...services.cv_score_orchestrator import (
 )
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
+from ...services import related_role_pipeline_queries as related_pipeline
 from ...services.taali_scoring import normalize_score_100
 from ...services.sister_role_service import project_sister_application
 from ...services.workable_op_runner import AtsJobRunPersistenceError
@@ -147,6 +149,7 @@ from .application_process_support import (
     _matches_stage_filter as _matches_stage_filter,
     _process_dry_run as _process_dry_run,
 )
+from .ats_move_dispatch import queue_application_ats_move
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
@@ -979,13 +982,16 @@ def list_role_applications(
                 SisterRoleEvaluation.role_id == role.id,
                 SisterRoleEvaluation.source_application_id == CandidateApplication.id,
             ),
-        )
+        ).filter(related_pipeline.valid_source_scope(
+            organization_id=current_user.organization_id, owner_role_id=applications_role_id,
+        ))
     if source:
         query = query.filter(CandidateApplication.source == source)
     if status and status.strip().lower() != "all":
         query = query.filter(CandidateApplication.status.ilike(status.strip()))
     if pipeline_stage and pipeline_stage.strip().lower() != "all":
-        query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage.strip().lower())
+        stage_column = related_pipeline.stage_column(related=is_sister)
+        query = query.filter(stage_column == pipeline_stage.strip().lower())
     if application_outcome and application_outcome.strip().lower() != "all":
         query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
     if min_pre_screen_score is not None:
@@ -2030,7 +2036,10 @@ def get_role_pipeline(
                 SisterRoleEvaluation.role_id == role.id,
                 SisterRoleEvaluation.source_application_id == CandidateApplication.id,
             ),
-        )
+        ).filter(related_pipeline.valid_source_scope(
+            organization_id=current_user.organization_id, owner_role_id=applications_role_id,
+        ))
+    stage_column = related_pipeline.stage_column(related=is_sister)
     base_query = _apply_application_source_filter(base_query, source)
     if search:
         term = f"%{search.strip()}%"
@@ -2059,19 +2068,17 @@ def get_role_pipeline(
             score_column.is_not(None),
             score_column >= pre_screen_threshold,
         )
-
     stage_counts = _empty_stage_counts()
     if include_stage_counts:
         stage_rows = (
             base_query.with_entities(
-                CandidateApplication.pipeline_stage,
+                stage_column,
                 func.count(CandidateApplication.id),
             )
-            .group_by(CandidateApplication.pipeline_stage)
+            .group_by(stage_column)
             .all()
         )
         stage_counts = _build_stage_counts(stage_rows)
-
     requested_stages = _parse_choice_csv_filter(
         stages,
         allowed=PIPELINE_STAGE_VALUES,
@@ -2083,18 +2090,15 @@ def get_role_pipeline(
             raise HTTPException(status_code=422, detail=f"Invalid stage value '{single_stage}'")
         if single_stage not in requested_stages:
             requested_stages.append(single_stage)
-
     filtered_query = base_query
     if requested_stages:
-        filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
-
+        filtered_query = filtered_query.filter(stage_column.in_(requested_stages))
     total = filtered_query.order_by(None).count()
     order_columns = (
-        (
-            (asc if sort_order == "asc" else desc)(SisterRoleEvaluation.role_fit_score).nullslast(),
-            (asc if sort_order == "asc" else desc)(CandidateApplication.created_at).nullslast(),
-        )
-        if is_sister and sort_by in {"pre_screen_score", "taali_score", "cv_match_score"}
+        related_pipeline.order_columns(sort_by=sort_by, sort_order=sort_order)
+        if is_sister and sort_by in {
+            "pre_screen_score", "taali_score", "cv_match_score", "pipeline_stage_updated_at"
+        }
         else _application_order_columns(sort_by, sort_order)
     )
     page_ids = [
@@ -2155,23 +2159,12 @@ def get_role_pipeline(
         if include_stage_counts
         else int(base_query.order_by(None).count())
     )
-    last_candidate_activity_at = (
-        db.query(
-            func.max(
-                func.coalesce(
-                    CandidateApplication.pipeline_stage_updated_at,
-                    CandidateApplication.updated_at,
-                    CandidateApplication.created_at,
-                )
-            )
-        )
-        .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == applications_role_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-        )
-        .scalar()
+    last_candidate_activity_at = related_pipeline.last_activity_at(
+        db,
+        organization_id=current_user.organization_id,
+        roster_role_id=applications_role_id,
+        view_role_id=role.id,
+        related=is_sister,
     )
     duration_ms = (perf_counter() - started_at) * 1000.0
     logger.info(
@@ -2460,82 +2453,8 @@ def update_application_outcome(
     return response
 
 
-class WorkableMoveStageRequest(BaseModel):
-    """Body for the recruiter-initiated hand-back to the active ATS.
-
-    For Workable, ``target_stage`` is the remote stage slug/kind displayed by
-    the picker. For Bullhorn, it is the Taali stage intent (normally
-    ``"advanced"``); the provider resolves that intent through the org's
-    explicit stage map and never accepts/guesses a free-text remote status.
-    """
-
-    target_stage: str = Field(min_length=1, max_length=200)
-    reason: Optional[str] = Field(default=None, max_length=2000)
-
-
 class ApplicationWorkableNoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
-
-
-def _queue_application_ats_move(
-    *,
-    app: CandidateApplication,
-    data: WorkableMoveStageRequest,
-    db: Session,
-    current_user: User,
-    provider_name: str,
-) -> ApplicationResponse:
-    """Initialize the local pipeline and queue one provider-routed move."""
-    target_stage = str(data.target_stage or "").strip()
-    try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason=f"Pipeline initialized before {provider_name.title()} hand-back",
-        )
-        db.commit()
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(
-            status_code=500, detail="Failed to initialize pipeline for hand-back"
-        )
-
-    # The historical runner name is retained, but it resolves the connected
-    # provider before executing. Bullhorn receives a Taali intent and reverse-
-    # maps it through AtsStageMap; Workable receives its remote stage directly.
-    from ...services.workable_op_runner import OP_MOVE_STAGE, enqueue_workable_op
-
-    try:
-        job_run_id = enqueue_workable_op(
-            organization_id=current_user.organization_id,
-            op_type=OP_MOVE_STAGE,
-            payload={
-                "application_id": int(app.id),
-                "user_id": current_user.id,
-                "target_stage": target_stage,
-                "target_intent": target_stage if provider_name == "bullhorn" else None,
-                "reason": data.reason,
-            },
-        )
-    except AtsJobRunPersistenceError:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "ATS operation was not queued because durable tracking is "
-                "temporarily unavailable. No provider update was sent; try again."
-            ),
-        )
-    db.refresh(app)
-    response = application_to_response(app, use_cached_score_summary=True)
-    response.ats_writeback_status = "queued"
-    response.ats_writeback_job_run_id = job_run_id
-    return response
 
 
 @router.post("/applications/{application_id}/ats/move-stage", response_model=ApplicationResponse)
@@ -2552,6 +2471,13 @@ def move_application_in_active_ats(
         application_id=application_id,
         permission=JobPermission.EDIT_ROLE,
     )
+    if data.acting_role_id is not None:
+        from .related_role_actions import require_related_role_application_action
+
+        require_related_role_application_action(
+            db, current_user=current_user,
+            related_role_id=data.acting_role_id, application=app,
+        )
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)
@@ -2586,7 +2512,7 @@ def move_application_in_active_ats(
             status_code=400,
             detail="No writable ATS is connected for this workspace",
         )
-    return _queue_application_ats_move(
+    return queue_application_ats_move(
         app=app,
         data=data,
         db=db,
@@ -2619,12 +2545,19 @@ def move_application_in_workable(
         application_id=application_id,
         permission=JobPermission.EDIT_ROLE,
     )
+    if data.acting_role_id is not None:
+        from .related_role_actions import require_related_role_application_action
+
+        require_related_role_application_action(
+            db, current_user=current_user,
+            related_role_id=data.acting_role_id, application=app,
+        )
     if not app.workable_candidate_id:
         raise HTTPException(
             status_code=400,
             detail="Application is not linked to a Workable candidate",
         )
-    return _queue_application_ats_move(
+    return queue_application_ats_move(
         app=app,
         data=data,
         db=db,

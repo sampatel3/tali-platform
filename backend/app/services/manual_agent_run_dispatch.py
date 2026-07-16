@@ -121,6 +121,7 @@ def dispatch_payload(run: AgentRun) -> dict[str, Any]:
     if str(run.status) != AGENT_RUN_DISPATCHING or not run.dispatch_key:
         raise ManualRunDispatchConflict("agent run is not awaiting dispatch")
     return {
+        "organization_id": int(run.organization_id),
         "role_id": int(run.role_id),
         "application_id": intent_application_id(run),
         "dispatch_key": str(run.dispatch_key),
@@ -172,6 +173,97 @@ def publish_due_filter(*, now: datetime | None = None):
     return or_(next_attempt.is_(None), next_attempt <= current)
 
 
+def manual_run_role_block_reason(db: Session, *, role: Role | None) -> str | None:
+    """Return the stable reason a manual-run worker must refuse current work.
+
+    HTTP and Agent Chat check the same switches before publishing, but a
+    queued delivery can outlive any of them.  Workers and the recovery outbox
+    therefore re-read this fail-closed baseline immediately before dispatch.
+    """
+
+    if role is None or getattr(role, "deleted_at", None) is not None:
+        return "role_not_found"
+    if not bool(getattr(role, "agentic_mode_enabled", False)):
+        return "agent_disabled"
+
+    from .workspace_agent_control import workspace_agent_is_paused
+
+    if workspace_agent_is_paused(
+        db,
+        organization_id=int(role.organization_id),
+    ):
+        return "workspace_paused"
+    if getattr(role, "agent_paused_at", None) is not None:
+        return "agent_paused"
+    return None
+
+
+def manual_run_intent_for_scope(
+    db: Session,
+    *,
+    dispatch_key: str | None,
+    organization_id: int,
+    role_id: int,
+    application_id: int | None,
+    lock: bool = False,
+) -> AgentRun | None:
+    """Resolve one receipt only when every durable authority field matches."""
+
+    key = str(dispatch_key or "").strip()
+    if not key:
+        return None
+    try:
+        expected_organization_id = int(organization_id)
+        expected_role_id = int(role_id)
+        expected_application_id = _normalise_application_id(application_id)
+    except (TypeError, ValueError):
+        return None
+    query = db.query(AgentRun).filter(AgentRun.dispatch_key == key)
+    if lock:
+        query = query.with_for_update()
+    intent = query.one_or_none()
+    if intent is None:
+        return None
+    if (
+        int(intent.organization_id) != expected_organization_id
+        or int(intent.role_id) != expected_role_id
+        or str(intent.trigger) != "manual"
+        or intent_application_id(intent) != expected_application_id
+    ):
+        return None
+    return intent
+
+
+def finish_manual_run_intent(
+    db: Session,
+    *,
+    dispatch_key: str | None,
+    organization_id: int,
+    role_id: int,
+    application_id: int | None,
+    status: str,
+    error: str | None = None,
+) -> bool:
+    """Finish one still-dispatching receipt without overwriting a newer result."""
+
+    if status not in {"succeeded", "failed", "aborted"}:
+        raise ValueError("manual-run terminal status is invalid")
+    intent = manual_run_intent_for_scope(
+        db,
+        dispatch_key=dispatch_key,
+        organization_id=organization_id,
+        role_id=role_id,
+        application_id=application_id,
+        lock=True,
+    )
+    if intent is None or str(intent.status) != AGENT_RUN_DISPATCHING:
+        return False
+    intent.status = status
+    intent.error = error
+    intent.finished_at = datetime.now(timezone.utc)
+    return True
+
+
 def publish_manual_run(
     *,
     role: Role,
@@ -180,12 +272,13 @@ def publish_manual_run(
 ) -> dict[str, Any]:
     """Persist a keyed intent, reserve one publish window, then kick Celery."""
 
-    from ..tasks.agent_tasks import agent_manual_run
+    from .role_agent_dispatch import dispatch_role_agent_cycle
 
     task_kwargs: dict[str, Any] = {
         "role_id": int(role.id),
         "application_id": _normalise_application_id(application_id),
     }
+    publish_role = role
     intent_id = None
     key = str(dispatch_key or "").strip() or None
     if key is not None:
@@ -240,7 +333,12 @@ def publish_manual_run(
             }
         task_kwargs = claimed_payload
     try:
-        async_result = agent_manual_run.delay(**task_kwargs)
+        async_result = dispatch_role_agent_cycle(
+            publish_role,
+            manual=True,
+            application_id=_normalise_application_id(task_kwargs.get("application_id")),
+            dispatch_key=str(task_kwargs.get("dispatch_key") or "").strip() or None,
+        )
     except Exception:
         if key is None:
             raise
@@ -284,7 +382,10 @@ __all__ = [
     "claim_publish",
     "dispatch_payload",
     "ensure_manual_run_intent",
+    "finish_manual_run_intent",
     "intent_application_id",
+    "manual_run_intent_for_scope",
+    "manual_run_role_block_reason",
     "publish_manual_run",
     "publish_due_filter",
     "with_dispatch_metadata",

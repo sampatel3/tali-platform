@@ -81,16 +81,16 @@ describe('AgentDecisionCard post-handover warning', () => {
 
 describe('AgentDecisionCard reject consequence copy', () => {
   // Parity with the candidate-report rail: a one-click reject must show what
-  // confirming does (disqualify in Workable; the ATS — not Taali — emails).
+  // confirming does to the one shared ATS application and linked role family.
   // Previously the hub card showed nothing.
   it('shows the shared reject consequence under the recommendation', () => {
     renderCard(baseDecision);
     expect(
-      screen.getByText(/Disqualifies them in Workable\./i),
+      screen.getByText(/Rejects the shared ATS application across the original and every related role\./i),
     ).toBeInTheDocument();
     const recommendation = screen.getByRole('button', { name: /reject/i });
     expect(recommendation)
-      .toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));
+      .toHaveAttribute('title', expect.stringMatching(/shared ATS application/i));
     expect(recommendation).toHaveAttribute('data-motion-loop', 'flow');
     expect(recommendation).toHaveAttribute('data-motion-state', 'rest');
   });

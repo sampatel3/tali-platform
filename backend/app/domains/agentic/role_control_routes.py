@@ -316,13 +316,9 @@ def resume_role_agent(
         )
         if not workspace_held:
             try:
-                from ...tasks.agent_tasks import agent_cohort_tick_role
+                from ...services.role_agent_dispatch import dispatch_role_agent_cycle
 
-                agent_cohort_tick_role.delay(
-                    int(role.id),
-                    activation=False,
-                    dispatch_role_version=int(audit_to),
-                )
+                dispatch_role_agent_cycle(role, role_version=int(audit_to))
             except Exception:
                 logger.exception(
                     "Failed to enqueue resume cycle for role_id=%s", role.id

@@ -10,7 +10,7 @@ from app.models.assessment_experiment import (
 )
 from app.models.ats_stage_map import AtsStageMap
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.task import Task
 from app.services.agent_activation_readiness import activation_readiness
 
@@ -333,6 +333,35 @@ def test_readiness_blocks_an_unfunded_agent_before_turn_on(_beat, db):
         if item["code"] == "billing_credits_insufficient"
     )
     assert "0 are available" in reason["detail"]
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_related_role_reserves_only_the_score_capability(_beat, db):
+    from app.services.pricing_service import Feature, estimate_reservation
+
+    role = _role(db, source="sister", active_task=True)
+    role.role_kind = ROLE_KIND_SISTER
+    score_reservation = estimate_reservation(Feature.SCORE)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.credits_balance = score_reservation
+    role.monthly_usd_budget_cents = score_reservation // 10_000
+    db.flush()
+
+    from app.services.agent_activation_reservation import (
+        activation_minimum_credits,
+    )
+
+    assert activation_minimum_credits(role, uses_assessment=True) == score_reservation
+
+    result = activation_readiness(role, settings_obj=_settings())
+
+    assert result["ready"] is True
+    assert {
+        item["code"] for item in result["reasons"]
+    }.isdisjoint({"billing_credits_insufficient", "role_monthly_budget_insufficient"})
 
 
 @patch(

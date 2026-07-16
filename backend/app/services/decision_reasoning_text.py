@@ -13,9 +13,11 @@ _TERM_MAP = [
     (re.compile(r"\bPolicy fires\b"), "Policy triggered"),
 ]
 
-# Parenthesized application IDs. Scores and thresholds top out at 100, so four
-# or more digits are unambiguously internal IDs in this stored-reasoning shape.
-_PAREN_ID = re.compile(r"\s*\(\d{4,}\)")
+# Parenthesized application IDs. Preserve plausible four-digit years: a
+# certification or project date such as ``(2024)`` is candidate evidence, not
+# an implementation detail. Non-year four-digit values and every longer value
+# retain the legacy internal-ID cleanup.
+_PAREN_ID = re.compile(r"\s*\((?!(?:19|20)\d{2}\))\d{4,}\)")
 
 # Preserve quoted and multi-word stage values through the next delimiter.
 _WORKABLE_STAGE = re.compile(r"workable_stage\s*=\s*\"?([^\",).;\n]+)\"?")

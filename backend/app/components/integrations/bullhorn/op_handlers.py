@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
+from ....services.ats_operation_guards import lock_live_application_move
 from ....services.workable_actions_service import WorkableWritebackError
 from .provider import BullhornProvider
 
@@ -77,11 +78,26 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
     from ....services.workable_actions_service import strict_workable_writes
 
     application_id = int(app.id)
+    app = lock_live_application_move(
+        db,
+        organization_id=int(org.id),
+        application_id=application_id,
+    )
     if not app.bullhorn_job_submission_id:
-        return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
+        raise WorkableWritebackError(
+            action="move",
+            code="not_linked",
+            message="The application is no longer linked to Bullhorn",
+            retriable=False,
+        )
     provider = _bullhorn_provider(db, org, app)
     if provider is None:
-        return {"status": "skipped", "reason": "not_connected", "application_id": application_id}
+        raise WorkableWritebackError(
+            action="move",
+            code="not_configured",
+            message="Bullhorn is no longer connected for this application",
+            retriable=False,
+        )
 
     reason = payload.get("reason")
     user_id = payload.get("user_id")
@@ -89,6 +105,18 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
     actor_id = payload.get("actor_id", user_id)
     source = str(payload.get("source") or actor_type)
     target_intent = str(payload.get("target_intent") or "advanced").strip().lower()
+    acting_role_id = payload.get("acting_role_id")
+    prepared_related_transition = None
+    if acting_role_id is not None:
+        from ....services.related_role_ats_transition import (
+            prepare_related_role_ats_transition,
+        )
+
+        prepared_related_transition = prepare_related_role_ats_transition(
+            db,
+            acting_role_id=int(acting_role_id),
+            application=app,
+        )
     with strict_workable_writes():
         result = provider.move_application(
             candidate_id=str(app.bullhorn_job_submission_id),
@@ -96,6 +124,34 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
             role=getattr(app, "role", None),
         )
     _raise_if_failed(result, default_action="move")
+    if prepared_related_transition is not None:
+        from ....services.related_role_ats_transition import (
+            advance_prepared_related_role_transition,
+        )
+        from ....services.sister_role_service import related_role_advance_note
+
+        acting_role = advance_prepared_related_role_transition(
+            prepared_related_transition
+        )
+        if acting_role is not None:
+            candidate = getattr(app, "candidate", None)
+            bullhorn_candidate_id = str(
+                getattr(candidate, "bullhorn_candidate_id", None) or ""
+            ).strip()
+            if bullhorn_candidate_id:
+                # Bullhorn has no idempotency key for Note creation. The
+                # persisted related stage suppresses ordinary redelivery, but
+                # a crash after provider acceptance is an explicitly
+                # at-least-once informational-note boundary.
+                note_result = provider.post_note(
+                    candidate_id=bullhorn_candidate_id,
+                    member_id="",
+                    body=related_role_advance_note(
+                        acting_role, getattr(app, "role", None)
+                    ),
+                    role=getattr(app, "role", None),
+                )
+                _raise_if_failed(note_result, default_action="note")
     append_application_event(
         db,
         app=app,
