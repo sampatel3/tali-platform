@@ -102,11 +102,8 @@ export const DecisionNarrative = ({
   if (!decisionReason && !candidateSummary && !context) return null;
 
   // Legacy cached payloads have no structured explanation — degrade to the
-  // pre-redesign plain reasoning paragraph. Card density drops the candidate
-  // summary (it lives in the candidate report); report density keeps it.
+  // pre-redesign plain reasoning paragraph plus the compact candidate summary.
   if (!explanation) {
-    if (resolvedDensity === 'card' && !decisionReason) return null;
-    const showLegacySummary = resolvedDensity !== 'card' && showCandidateSummary;
     return (
       <div className={`decision-narrative is-${resolvedDensity}`}>
         {decisionReason ? (
@@ -117,7 +114,7 @@ export const DecisionNarrative = ({
             <p className="decision-narrative-primary">{decisionReason}</p>
           </section>
         ) : null}
-        {showLegacySummary ? (
+        {showCandidateSummary ? (
           <section className="decision-narrative-block decision-narrative-candidate" aria-label="Candidate summary">
             <div className="decision-narrative-kicker">CANDIDATE SUMMARY</div>
             <p className="decision-narrative-summary">{candidateSummary}</p>
@@ -128,10 +125,10 @@ export const DecisionNarrative = ({
   }
 
   if (resolvedDensity === 'card') {
-    // Cards carry only the cause: must-have chips (policy) and the agent's own
-    // reasoning. The candidate summary is dropped — it's in the candidate
-    // report — so a policy card with no factors renders nothing here (the
-    // chip + "why?" on the AgentDecisionCard kicker row carry the cause).
+    // Cards carry the cause (must-have chips for policy, the agent's own
+    // reasoning for agent judgments) PLUS a compact candidate overview — the
+    // verdict pill and a 2-line clamped synthesis of why they scored what they
+    // scored. The full un-clamped summary stays on the candidate report.
     const showMustHaveChips = source === 'policy'
       && explanation.rule === 'must_have_blocked'
       && factors.length > 0;
@@ -140,7 +137,9 @@ export const DecisionNarrative = ({
     // "why?"), but resolved/processing cards have no slab — the caller sets
     // showPolicyReason so the cause still renders on history surfaces.
     const showPolicyReasonBlock = showPolicyReason && source === 'policy' && Boolean(policyReason);
-    if (!showMustHaveChips && !showAgentReason && !showPolicyReasonBlock) return null;
+    if (!showMustHaveChips && !showAgentReason && !showPolicyReasonBlock && !showCandidateSummary) {
+      return null;
+    }
     return (
       <div className="decision-narrative is-card">
         {showMustHaveChips ? (
@@ -159,6 +158,14 @@ export const DecisionNarrative = ({
               text={source === 'policy' ? policyReason : agentReason}
               className="decision-narrative-primary"
             />
+          </section>
+        ) : null}
+
+        {showCandidateSummary ? (
+          <section className="decision-narrative-block decision-narrative-candidate" aria-label="Candidate summary">
+            <div className="decision-narrative-kicker">CANDIDATE SUMMARY</div>
+            {verdict ? <span className="decision-narrative-pill">{verdict}</span> : null}
+            <ClampBlock text={body} className="decision-narrative-summary" />
           </section>
         ) : null}
       </div>
