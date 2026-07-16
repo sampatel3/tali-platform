@@ -182,6 +182,26 @@ def test_legacy_hard_rule_does_not_invent_missing_factor_details():
     assert "marked missing" not in result["summary"]
 
 
+def test_agent_explanation_reuses_canonical_legacy_reasoning_humanizer():
+    decision = SimpleNamespace(
+        decision_type="advance_to_interview",
+        evidence={"decision_source": "agent"},
+        reasoning=(
+            'Candidate (1042) has role_fit evidence; workable_stage = "Technical Interview"; '
+            'pipeline_stage="advanced".'
+        ),
+        model_version="agent",
+    )
+
+    result = build_decision_explanation(decision, None)
+
+    assert result["source"] == "agent"
+    assert result["summary"] == (
+        'Candidate has role fit evidence; already at "Technical Interview" in Workable; '
+        'pipeline stage "advanced".'
+    )
+
+
 def test_policy_fallback_is_not_relabelled_as_candidate_summary():
     decision = _decision(
         reasoning="Deterministic policy: role-fit 42 vs threshold 55 -> reject",

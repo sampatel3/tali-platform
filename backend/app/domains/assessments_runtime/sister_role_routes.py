@@ -37,6 +37,7 @@ from ...services.related_role_service import (
     related_role_roster_counts,
 )
 from ...services.ats_role_lifecycle import ats_job_lifecycle
+from ...services.job_page_lifecycle import role_paid_ats_work_block_reason
 from ...services.sister_role_service import ensure_sister_evaluations
 from ...tasks.sister_role_tasks import score_sister_role
 from .roles_management_routes import _serialize_role_detail
@@ -186,12 +187,36 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
         counts.setdefault(key, 0)
     total = sum(counts.values())
     completed = counts[SISTER_EVAL_DONE] + counts[SISTER_EVAL_ERROR] + counts[SISTER_EVAL_UNSCORABLE]
+    scoreable_total = max(total - counts[SISTER_EVAL_UNSCORABLE], 0)
+    scoreable_completed = counts[SISTER_EVAL_DONE] + counts[SISTER_EVAL_ERROR]
+    authority_waiting = int(
+        db.query(func.count(SisterRoleEvaluation.id))
+        .filter(
+            SisterRoleEvaluation.role_id == role.id,
+            SisterRoleEvaluation.status == SISTER_EVAL_RETRY_WAIT,
+            SisterRoleEvaluation.last_error_code == "authority_blocked",
+        )
+        .scalar()
+        or 0
+    )
+    waiting_reason = None
+    if authority_waiting:
+        source = getattr(role, "ats_owner_role", None)
+        if source is None and role.ats_owner_role_id:
+            source = db.get(Role, int(role.ats_owner_role_id))
+        waiting_reason = (
+            role_paid_ats_work_block_reason(source, db=db)
+            or "authority_blocked"
+        )
+    elif counts[SISTER_EVAL_RETRY_WAIT]:
+        waiting_reason = "temporary_retry"
     if (
         counts[SISTER_EVAL_RUNNING]
         or counts[SISTER_EVAL_PENDING]
-        or counts[SISTER_EVAL_RETRY_WAIT]
     ):
         overall = "running"
+    elif counts[SISTER_EVAL_RETRY_WAIT]:
+        overall = "waiting"
     elif counts[SISTER_EVAL_ERROR] and not counts[SISTER_EVAL_DONE]:
         overall = "error"
     else:
@@ -220,8 +245,16 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
         status=overall,
         counts=dict(counts),
         total=total,
+        scoreable_total=scoreable_total,
+        scored=counts[SISTER_EVAL_DONE],
         completed=completed,
-        progress_percent=round((completed / total * 100.0) if total else 100.0, 1),
+        progress_percent=round(
+            (scoreable_completed / scoreable_total * 100.0)
+            if scoreable_total
+            else 100.0,
+            1,
+        ),
+        waiting_reason=waiting_reason,
         top_candidates=[
             {"application_id": app_id, "candidate_name": name, "score": score}
             for app_id, score, name in top

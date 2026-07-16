@@ -1,6 +1,10 @@
 import { GitFork, MessageSquare, RefreshCw } from 'lucide-react';
 
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import {
+  isRelatedRoleScoringActive,
+  relatedRoleScoringActionLabel,
+} from './relatedRoleScoringUi';
 
 const ACTIVE_PROCESS_STATUSES = new Set([
   'pending',
@@ -29,6 +33,8 @@ export function JobPipelineHeaderActions({
 }) {
   const isSister = role?.role_kind === 'sister';
   const processActive = ACTIVE_PROCESS_STATUSES.has(String(processStatus || '').toLowerCase());
+  const sisterScoringState = String(sisterScoringStatus?.status || '').toLowerCase();
+  const sisterScoringActive = isRelatedRoleScoringActive(sisterScoringStatus);
 
   return (
     <>
@@ -54,14 +60,12 @@ export function JobPipelineHeaderActions({
           type="button"
           className="btn btn-outline btn-sm"
           onClick={onRescoreSister}
-          disabled={sisterRescoring || sisterScoringStatus?.status === 'running'}
+          disabled={sisterRescoring || sisterScoringActive}
         >
-          {sisterRescoring || sisterScoringStatus?.status === 'running'
+          {sisterRescoring || sisterScoringState === 'running' || sisterScoringState === 'retrying'
             ? <Spinner size={12} />
-            : <RefreshCw size={12} />}
-          {sisterScoringStatus?.status === 'running'
-            ? `Scoring ${sisterScoringStatus.progress_percent || 0}%`
-            : 'Re-score roster'}
+            : (sisterScoringState === 'waiting' ? null : <RefreshCw size={12} />)}
+          {relatedRoleScoringActionLabel(sisterScoringStatus)}
         </button>
       ) : (
         <>

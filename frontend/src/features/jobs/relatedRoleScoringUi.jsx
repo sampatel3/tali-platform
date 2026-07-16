@@ -1,0 +1,219 @@
+import React, { useEffect } from 'react';
+import { Link2 } from 'lucide-react';
+
+import { formatCount } from '../../shared/metrics';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
+
+const ACTIVE_SCORING_STATES = new Set(['running', 'waiting', 'retrying']);
+
+export const isRelatedRoleScoringActive = (status) => (
+  ACTIVE_SCORING_STATES.has(String(status?.status || '').toLowerCase())
+);
+
+export const useRelatedRoleScoringPolling = (
+  enabled,
+  roleId,
+  rolesApi,
+  refreshKey,
+  onStatus,
+) => {
+  useEffect(() => {
+    if (!enabled || !rolesApi?.sisterScoringStatus) {
+      onStatus(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      try {
+        const res = await rolesApi.sisterScoringStatus(roleId);
+        if (cancelled) return;
+        const next = res?.data || null;
+        onStatus(next);
+        if (isRelatedRoleScoringActive(next)) {
+          timer = window.setTimeout(poll, next?.status === 'running' ? 3000 : 15_000);
+        }
+      } catch {
+        if (!cancelled) onStatus(null);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [enabled, onStatus, refreshKey, roleId, rolesApi]);
+};
+
+export const relatedRoleScoringActionLabel = (status) => {
+  const progress = Number(status?.progress_percent || 0);
+  switch (String(status?.status || '').toLowerCase()) {
+    case 'running': return `Scoring ${progress}%`;
+    case 'waiting': return `Waiting ${progress}%`;
+    case 'retrying': return `Retrying ${progress}%`;
+    default: return 'Re-score roster';
+  }
+};
+
+export const shouldRefreshRelatedRoleWorkspace = (previousStatus, currentStatus) => {
+  const previous = String(previousStatus || '').toLowerCase();
+  const current = String(currentStatus || '').toLowerCase();
+  if (!current) return false;
+  const previousActive = ACTIVE_SCORING_STATES.has(previous);
+  const currentActive = ACTIVE_SCORING_STATES.has(current);
+  return (previousActive && !currentActive)
+    || (previous === 'running' && current !== 'running');
+};
+
+const waitCopy = (reason) => {
+  switch (reason) {
+    case 'workspace_paused':
+      return 'The workspace Agent is paused. Resume it to continue scoring automatically.';
+    case 'agent_off':
+      return 'The original role’s Agent is off. Turn it on to continue scoring automatically.';
+    case 'agent_paused':
+      return 'The original role’s Agent is paused. Resume it to continue scoring automatically.';
+    case 'job_not_open':
+      return 'The original role is not open. Reopen it before related-role scoring can continue.';
+    case 'ats_job_not_live':
+      return 'The original ATS job is no longer live. Related-role scoring is held until it is reopened.';
+    case 'temporary_retry':
+      return 'Scoring is waiting to retry after a temporary service issue.';
+    default:
+      return 'Scoring is waiting for the original role to allow model-backed work.';
+  }
+};
+
+const scoringNotice = (status) => {
+  if (!status) return null;
+  const counts = status?.counts || {};
+  const total = Math.max(0, Number(status?.total || 0));
+  const unscorable = Math.max(0, Number(counts?.unscorable || 0));
+  const scoreable = Math.max(0, Number(status?.scoreable_total ?? (total - unscorable)));
+  const scored = Math.max(0, Number(status?.scored ?? counts?.done ?? 0));
+  const errors = Math.max(0, Number(counts?.error || 0));
+  const progress = Math.max(0, Number(status?.progress_percent || 0));
+  const scoreSummary = `${formatCount(scored)} of ${formatCount(scoreable)} scoreable candidates have a related-role score`;
+  const unavailableSummary = unscorable > 0
+    ? ` ${formatCount(unscorable)} ${unscorable === 1 ? 'candidate has' : 'candidates have'} no usable CV text.`
+    : '';
+  switch (String(status?.status || '').toLowerCase()) {
+    case 'running':
+      return { title: `Related-role scoring in progress · ${progress}%`, body: `${scoreSummary}.${unavailableSummary}` };
+    case 'waiting':
+    case 'retrying':
+      return {
+        title: `Related-role scoring is waiting · ${progress}%`,
+        body: `${waitCopy(status?.waiting_reason)} ${scoreSummary}.${unavailableSummary}`,
+      };
+    case 'error':
+      return {
+        title: 'Related-role scoring needs attention',
+        body: `${formatCount(errors)} ${errors === 1 ? 'candidate could' : 'candidates could'} not be scored. ${scoreSummary}.${unavailableSummary}`,
+      };
+    case 'completed':
+      return { title: 'Related-role scoring complete', body: `${scoreSummary}.${unavailableSummary}` };
+    default:
+      return null;
+  }
+};
+
+export const buildRelatedRolePipelineStats = ({
+  status,
+  rosterFallback,
+  belowThresholdCount,
+  thresholdValue,
+  budget,
+  monthlyBudgetCents,
+}) => {
+  const counts = status?.counts || {};
+  const total = Math.max(0, Number(status?.total ?? rosterFallback));
+  const unscorable = Math.max(0, Number(counts?.unscorable || 0));
+  const errors = Math.max(0, Number(counts?.error || 0));
+  const scored = Math.max(0, Number(status?.scored ?? counts?.done ?? 0));
+  const awaitingScore = Math.max(
+    0,
+    Number(counts?.pending || 0)
+      + Number(counts?.running || 0)
+      + Number(counts?.retry_wait || 0),
+  );
+  const waiting = String(status?.status || '').toLowerCase() === 'waiting';
+  return [
+    { key: 'shared', label: 'Shared candidates', value: formatCount(total), sub: `${formatCount(scored)} related scores complete` },
+    {
+      key: 'unscored',
+      label: 'Awaiting score',
+      value: formatCount(awaitingScore),
+      sub: waiting ? 'scoring is waiting' : (awaitingScore > 0 ? 'related-role scoring queue' : 'queue clear'),
+    },
+    {
+      key: 'below-threshold',
+      label: 'Below threshold',
+      value: formatCount(belowThresholdCount),
+      sub: thresholdValue != null ? `flagged at < ${thresholdValue}` : 'set a reject threshold',
+    },
+    {
+      key: 'not-scored',
+      label: 'Cannot score',
+      value: formatCount(unscorable + errors),
+      sub: [
+        unscorable > 0 ? `${formatCount(unscorable)} without CV text` : null,
+        errors > 0 ? `${formatCount(errors)} errors` : null,
+      ].filter(Boolean).join(' · ') || 'none',
+    },
+    {
+      key: 'spend',
+      label: 'Role budget · MTD',
+      value: budget.value,
+      unit: monthlyBudgetCents > 0 ? budget.unit : null,
+      bar: monthlyBudgetCents > 0 ? budget : null,
+      sub: budget.sub,
+    },
+  ];
+};
+
+export const RelatedRoleContextBanner = ({ role, providerLabel, status, onOpenOriginal }) => {
+  const notice = scoringNotice(status);
+  return (
+    <div className="mx-auto mt-4 flex max-w-[1440px] flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3 text-sm">
+      <div className="flex items-start gap-2">
+        <Link2 size={15} className="text-[var(--taali-purple)]" />
+        <div>
+          <div>
+            This is a scoring view coupled to <strong>{role.ats_owner_role_name || `the original ${providerLabel} role`}</strong>.
+            Stages and candidate actions write back through that original application.
+          </div>
+          {notice ? (
+            <div className="mt-1 text-[var(--taali-muted)]" role="status">
+              <strong className="text-[var(--taali-text)]">{notice.title}.</strong>{' '}
+              {notice.body}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <button type="button" className="btn btn-outline btn-sm" onClick={onOpenOriginal}>
+        Open original role
+      </button>
+    </div>
+  );
+};
+
+export const RelatedRolePipelineLabel = ({ providerLabel }) => (
+  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--taali-muted)]">
+    Original {providerLabel} pipeline · shared ATS stages, not related-role score progress
+  </div>
+);
+
+export const RelatedRoleScoringInlineStatus = ({ status }) => {
+  if (!isRelatedRoleScoringActive(status)) return null;
+  const state = String(status?.status || '').toLowerCase();
+  const progress = Number(status?.progress_percent || 0);
+  return (
+    <span className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
+      {state === 'running' || state === 'retrying' ? <Spinner size={12} /> : null}
+      {state === 'waiting'
+        ? `Related-role scoring waiting at ${progress}%`
+        : `Related-role scoring ${progress}%`}
+    </span>
+  );
+};

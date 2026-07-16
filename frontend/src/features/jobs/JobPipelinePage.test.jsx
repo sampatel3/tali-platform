@@ -646,10 +646,7 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     expect(await screen.findByText('Related · Workable')).toBeInTheDocument();
-    expect(screen.getByText((_, element) => (
-      element?.tagName === 'SPAN'
-      && element.textContent.includes('This is a scoring view coupled to AI Engineer · Workable')
-    ))).toBeInTheDocument();
+    expect(screen.getByText('AI Engineer · Workable', { selector: 'strong' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Original fit/i })).toBeInTheDocument();
     const row = screen.getByText('Sam Patel').closest('tr');
     expect(within(row).getByText('91')).toBeInTheDocument();
@@ -670,6 +667,53 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByRole('heading', { name: /^Role specification$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
     expect(apiClient.roles.updateJobSpec).not.toHaveBeenCalled();
+  });
+
+  it('shows shared candidates while related scoring waits and labels the original pipeline clearly', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        effective_workable_job_id: 'AI-ENG',
+        stage_counts: { applied: 119, review: 172, invited: 8, advanced: 8, rejected: 498 },
+      },
+    });
+    apiClient.roles.listApplications.mockResolvedValue({
+      data: [{
+        ...baseApplications[0],
+        taali_score: null,
+        source_role_score: 72,
+        score_status: 'retry_wait',
+      }],
+    });
+    apiClient.roles.sisterScoringStatus.mockResolvedValue({
+      data: {
+        status: 'waiting',
+        waiting_reason: 'workspace_paused',
+        total: 806,
+        scoreable_total: 800,
+        scored: 0,
+        completed: 6,
+        progress_percent: 0,
+        counts: { pending: 0, running: 0, retry_wait: 800, done: 0, error: 0, unscorable: 6 },
+      },
+    });
+
+    renderPipeline();
+
+    expect(await screen.findByText(/Related-role scoring is waiting · 0%/i)).toBeInTheDocument();
+    expect(screen.getByText(/workspace Agent is paused/i)).toBeInTheDocument();
+    expect(screen.getByText(/0 of 800 scoreable candidates/i)).toBeInTheDocument();
+    expect(screen.getByText(/Original Workable pipeline · shared ATS stages, not related-role score progress/i)).toBeInTheDocument();
+    expect(screen.getByText('Shared candidates')).toBeInTheDocument();
+    expect(screen.getByText('806')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting score')).toBeInTheDocument();
+    expect(screen.getByText('Waiting…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Waiting 0%' })).toBeDisabled();
+    expect(screen.queryByText('AGENT OFF')).not.toBeInTheDocument();
   });
 
   it('opens related-role creation directly from the job header', async () => {

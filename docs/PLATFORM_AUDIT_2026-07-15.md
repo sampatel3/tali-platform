@@ -2,7 +2,7 @@
 
 - **Audit period:** 2026-07-15–2026-07-16
 - **Repository:** `sampatel3/tali-platform`
-- **Integrated baseline:** `95c44c9224cbbbbec1cd648f52850c8dc5aa9d82` (merged PR #1034, after PR #1040) plus the final `codex/platform-audit-remediation` branch
+- **Integrated baseline:** `8f7b47e96d236d694997f97460a55712a0d4d7c4` (merged PR #1042, after PRs #1040 and #1034) plus the final `codex/platform-audit-remediation` branch
 - **Release status:** **not released and not deployed**
 
 ## Executive verdict
@@ -18,7 +18,7 @@ work, lost work, excess round trips, unnecessary provider calls, unbounded
 reads, and misleading feature states rather than deleting useful capability.
 
 This is not yet a release claim. The remediation has been reconciled through
-current `main` at merged PR #1034 and is prepared for a draft PR; it has not been
+current `main` at merged PR #1042 and is prepared for a draft PR; it has not been
 reviewed, approved, or deployed. The complete default non-production suites,
 separate retained-PostgreSQL contracts, and measured coverage are green
 locally. Supported-runtime CI, a production-shaped migration rehearsal, and
@@ -72,21 +72,26 @@ open GitHub pull-request queue. The initial frozen snapshot included 22 paths
 that had been removed; the final integration preserves every one as a bounded
 compatibility artifact. When upstream work later removed two Sister Role dialog
 paths that remained in the original audit branch, those were restored unchanged
-as well. The branch has zero deleted paths versus both current `main` and the
-original audit branch; no tracked/source file was deleted to improve a metric.
+as well. A later upstream rename of `jobPipelinePageUtils.js` was restored as a
+forwarding compatibility facade with contract tests. The branch has zero
+deleted paths under strict rename-disabled comparison versus both current
+`main` and the original audit branch; no tracked/source file was deleted to
+improve a metric.
 That breadth is one reason the supported-runtime and reviewable-PR release gates
 remain mandatory.
 
 The audit began at `0e562f2f` (`Redesign agent prompts and unblock task setup
 (#1026)`, 2026-07-15), moved onto `codex/platform-audit-remediation`, and was
-reconciled through current `main` at `95c44c92` / merged PR #1034, after the
-related-role integration in PR #1040. The branch is
+reconciled through current `main` at `8f7b47e9` / merged PR #1042, after the
+related-role integration in PR #1040 and decision-presentation integration in
+PR #1034. The branch is
 prepared for draft-PR publication and remains undeployed.
 
-Local verification used Python 3.12.3 and Node 24.7, while CI now pins the
-supported runtime contract to Python 3.11.9 and Node 22.23.1. The backend
-deployment image also pins Python 3.11.9; the frontend deployment contract
-currently declares Node `>=22.12.0`, not an exact patch. Local Compose,
+The authoritative final backend run used the exact locked Python 3.11.9
+environment with all 157 hashed development pins; frontend verification used
+Node 24.7 while CI pins Node 22.23.1. The backend deployment image also pins
+Python 3.11.9; the frontend deployment contract currently declares Node
+`>=22.12.0`, not an exact patch. Local Compose,
 deployment documentation, and migration verification agree on PostgreSQL 16.
 Supported-runtime CI is therefore a release gate even when a local check is
 green.
@@ -107,7 +112,10 @@ on each reviewed page, no horizontal overflow, working mobile navigation, and
 no browser-console errors. The final read-only production homepage check at
 1280px also found one H1 and one main landmark after load, no horizontal
 overflow, and no console warnings/errors. Production mobile was not freshly
-repeated. Navigation to the legacy `api.taali.ai/health` endpoint did not
+repeated. A fresh post-#1042 local attempt could not keep an in-app browser tab
+attached, so no unrelated browser workaround was substituted; the full
+frontend suite, route tests, build, and bundle gates are the fresh evidence for
+that merge. Navigation to the legacy `api.taali.ai/health` endpoint did not
 complete, so backend readiness and queue heartbeats were not verified. Nothing
 was deployed by this audit. No physical-device,
 assistive-technology/screen-reader, automated accessibility, or field/Core Web
@@ -133,6 +141,7 @@ Vitals run was performed.
 | Holistic `overall` was optional and defaulted to zero. | A degraded but schema-valid model response could become a silent zero-score rejection across the holistic default path. | `overall` is required. Missing output enters structured retry/failure handling and persists no score; a genuine model-emitted zero remains valid. | **Fixed locally and regression-tested.** |
 | Pre-screen and downstream consumers used divergent role/JD/criteria representations and sometimes non-authoritative score fields. | The same candidate could be judged against different recruiter intent, or a later full score could contaminate a pre-screen decision. | Stage 1, both scoring sub-agents, and full scoring share canonical role inputs while preserving constraints, authored intent, and teach examples. Decisions and snapshots read only the durable penalized `genuine_pre_screen_score_100`; legacy rows without provenance fail open to full scoring. | **Fixed locally.** |
 | Gate cards could use a downstream role threshold instead of the Stage-1 cutoff. | A candidate who passed pre-screen could be represented as a pre-screen reject. | The enforced/stamped gate threshold owns the Stage-1 decision; the role send bar stays a separate downstream policy. | **Fixed locally.** |
+| New decision-explanation summaries bypassed the existing legacy-reasoning humanizer. | Recruiters could see internal application IDs or raw `workable_stage`/`pipeline_stage`/scorer keys on older queued decisions. | The complete humanizer now lives in a shared service, the old domain import remains as a compatibility facade, and decision explanations reuse it before presentation. Four-digit IDs, quoted multi-word stages, and clean-text pass-through are regression-tested. | **Fixed locally; the corresponding PR #1041 review remains unresolved on its source branch.** |
 | Pre-screen false rejects were structurally difficult to measure. | Cost savings could hide the most harmful scoring error. | A bounded shadow sampler full-scores actual filtered candidates, and both divergence reporting and gate calibration consume survivor plus shadow-reject pairs. Live enforcement stays explicit. | **Fixed locally; operational enablement and adequate sample volume remain external.** |
 | Copy/paste overlap could hard-cap by default and tokenization skipped non-Latin text. | False-positive or language-dependent harm. | Detection is always recorded but defaults to a neutral recruiter flag; the legacy cap is opt-in through `FRAUD_COPY_PASTE_ACTION=cap`. Tokenization is Unicode letter/number aware. | **Fixed locally.** |
 | Full-score engines applied different integrity handling and prompt-cache layouts. | Inconsistent score behavior and unnecessary model input cost. | Both engines apply the bounded timeline/unverified-claim layer. Both holistic calls use the same one-hour ephemeral cache layout for stable role context. | **Fixed locally and focused-request-tested.** |
@@ -149,8 +158,9 @@ Vitals run was performed.
 | Other upload paths read bodies before enforcing bounds. | Avoidable memory, parser, storage, and database work. | Document uploads read at most 5 MiB plus one byte before storage/extraction; prospect CSV reads at most 10 MiB plus one byte before decoding/parsing and retains the 500-row cap. | **Fixed locally; repository scan found only bounded direct reads.** |
 | Client-intake list/detail responses exposed more state than each consumer needed. | Larger payloads and leakage of internal hydration/source metadata. | The paged six-key list summary omits agent state; detail retains needed behavior while redacting internal source keys. Load-more preserves complete access. | **Fixed locally and privacy-tested.** |
 | Candidate upload UI advertised legacy `.doc` while the actual parser supported PDF/DOCX. | Users could select a file that could never work. | Picker and drag/drop now agree on PDF/DOCX and reject unsupported input with a visible error. | **Fixed locally; compatibility component and test retained.** |
-| Requisition chat/page growth was being handled inside oversized modules. | Higher change risk and repeated merge conflicts. | Attachment, grounding, capture-support, source, and upload responsibilities were extracted behind import-compatible re-exports. Service is 500 lines, capture 472, prompt 298, route 474, attachment service 300, and capture support 209; the page remains 1,185 lines after PR #1040 and is unchanged through PR #1034, below its 1,201 cap. | **Improved locally; size/architecture gates pass.** |
-| Related-role drafts could show a blank/stale header and cramped relationship card. | Sidebar and main panel could disagree or hide context. | PR #1040's title/status fallback and responsive header behavior were preserved in the modular architecture; grounded chat, related-role hydration, intent-aware specification updates, Jobs catalogue, and release safeguards from PRs #1027–#1040 were reconciled before the later PR #1034 decision-presentation integration. | **Fixed locally; focused and full frontend suites pass.** |
+| Requisition chat/page growth was being handled inside oversized modules. | Higher change risk and repeated merge conflicts. | Attachment, grounding, capture-support, source, and upload responsibilities were extracted behind import-compatible re-exports. Service is 500 lines, capture 472, prompt 298, route 474, attachment service 300, and capture support 209; the page remains 1,185 lines after PR #1040 and is unchanged through PR #1042, below its 1,201 cap. | **Improved locally; size/architecture gates pass.** |
+| Related-role drafts could show a blank/stale header and cramped relationship card. | Sidebar and main panel could disagree or hide context. | PR #1040's title/status fallback and responsive header behavior were preserved in the modular architecture; grounded chat, related-role hydration, intent-aware specification updates, Jobs catalogue, and release safeguards from PRs #1027–#1040 were reconciled before the later PR #1034 decision-presentation and PR #1042 scoring-state integrations. | **Fixed locally; focused and full frontend suites pass.** |
+| Related-role scoring treated waiting/retrying as a thin running-state variant and refreshed only after a visible running transition. | The roster and score totals could remain stale when polling observed waiting/retrying directly before completion, while the action label invited duplicate work. | Waiting/retrying are first-class polled states with reasoned notices, accurate scoreable totals and disabled progress actions. The roster refreshes when any active state becomes terminal, including a skipped `waiting→completed` transition, while preserving the governed Process Candidates header extraction. An undefined upstream UI token was also replaced with the established semantic muted token. | **Fixed locally; PR #1042 regression, token, architecture, and full-suite gates pass.** |
 
 ### Authentication, authorization, security, and error disclosure
 
@@ -232,6 +242,9 @@ Current frontend changes include:
   errors, plus consistent PDF/DOCX candidate picker and drop behavior;
 - related-role title/status fallback and a responsive relationship header that
   preserves the extracted page architecture;
+- related-role waiting/retrying notices, terminal roster refresh, truthful
+  progress actions, and an additive legacy job-pipeline utility facade; the
+  modular page is 2,609 lines against its unchanged 2,620-line ratchet;
 - concise decision reasons and candidate summaries that retain true factor
   totals, display the fired rule's actual comparison operator, preserve policy
   rationale on approved/overridden read-only cards, and expose unknown factors
@@ -246,7 +259,7 @@ Current frontend changes include:
 
 The machine UI guard reports zero unresolved token or component-policy
 violations. Frontend architecture and motion-system gates pass. The final
-151-file/1,081-test gated run is warning-free: React scheduling warnings fell
+154-file/1,087-test gated run is warning-free: React scheduling warnings fell
 from 58 to zero, Router future-flag warnings from 30 to zero, and Motion
 diagnostics from two to zero. No console suppression was added, and CI now
 rejects those warning classes so the clean signal cannot silently regress.
@@ -478,11 +491,11 @@ Do not sum these figures; several sets overlap.
 | Frontend architecture + motion | Passed |
 | Frontend UI token/component policy | Passed with zero violations |
 | Frontend ESLint + TypeScript contract | Passed |
-| Full frontend gated Vitest | 151 files / 1,081 tests passed in 34.30 seconds (34.70 seconds wall); zero warning diagnostics (58 React scheduling, 30 Router, and 2 Motion diagnostics reduced to zero). CI preserves Vitest failures and independently fails on those warning classes. |
-| Frontend production build + bundle budget | 3,409 modules built in 1.91 seconds (2.13 seconds wall); 209 files, 5,730,804 bytes raw (5.4653 MiB), 2,651,255 bytes gzip level 9 (2.5284 MiB), and 6,369,280 allocated bytes (6.0742 MiB). Raw/gzip bytes: main JS 73,238/19,957, CSS 231,546/39,670, graph 434,159/135,770, charts 412,998/105,280, Requisitions 45,633/13,057, Client Intake 12,641/4,298, and Candidate Standing Report 80,699/23,008. |
+| Full frontend gated Vitest | 154 files / 1,087 tests passed in 24.97 seconds; zero warning diagnostics (58 React scheduling, 30 Router, and 2 Motion diagnostics reduced to zero). CI preserves Vitest failures and independently fails on those warning classes. |
+| Frontend production build + bundle budget | 3,410 modules built in 1.48 seconds; 209 files, 5,735,139 bytes raw (5.4695 MiB), 2,652,603 bytes gzip level 9 (2.5297 MiB), and 6,205,440 allocated bytes (5.9180 MiB). Raw/gzip bytes: main JS 73,238/19,952, CSS 231,546/39,670, graph 434,159/135,770, charts 412,998/105,280, Job Pipeline 174,040/49,148, Requisitions 45,633/13,059, Client Intake 12,641/4,299, and Candidate Standing Report 80,699/23,008. |
 | Frontend dependency audit | 0 vulnerabilities |
-| Complete default non-production backend pytest selection | 5,931 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 399.57-second final-integration-tree run. PostgreSQL behavior is covered separately below. |
-| Backend coverage | 75.983428% combined line-and-branch coverage (70,426/92,686 covered units): 56,594/71,298 lines (79.376701%) and 13,832/21,388 branches (64.671779%). The enforced combined floor remains 74%; the ignored originals were left intact and copies were preserved outside the worktree after measurement, with neither committed. |
+| Complete default non-production backend pytest selection | Locked CPython 3.11.9: 5,932 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 246.65-second final-integration-tree run. PostgreSQL behavior is covered separately below. |
+| Backend coverage | 75.927783% combined line-and-branch coverage (70,401/92,721 covered units): 56,579/71,323 lines (79.327847%) and 13,822/21,398 branches (64.594822%). The enforced combined floor remains 74%; the ignored originals were left intact and copies were preserved outside the worktree after measurement, with neither committed. |
 | Backend dependency integrity/audit | Both exact locks passed integrity/parity; runtime import and `pip-audit` verification found zero known vulnerabilities |
 | Static/syntax/diff checks | Full backend `compileall` and Ruff scopes passed; both workflow YAML files, all 34 tracked shell scripts, and 12 action pins passed their checks; tracked and staged diff checks were clean |
 | PostgreSQL migration/invariants | Fresh `000→179`, existing `178→179`, and `179→178→179` passed on retained PostgreSQL 16.14; raw autogenerate parity was zero twice, schema invariants passed, and orphan preflight failed before writes with revision/data unchanged |
@@ -491,8 +504,8 @@ Do not sum these figures; several sets overlap.
 
 ### Insufficient-test and governance gaps
 
-1. The final backend run measured 75.983428% combined line-and-branch coverage:
-   79.376701% line coverage and 64.671779% branch coverage. The combined ratchet
+1. The final backend run measured 75.927783% combined line-and-branch coverage:
+   79.327847% line coverage and 64.594822% branch coverage. The combined ratchet
    enforces 74%, up from 35%. Aggregate coverage is not sufficient assurance for
    every payment, authorization, provider-failure, worker, and hiring-decision
    branch; raise it incrementally with risk-focused tests without deleting hard
@@ -527,24 +540,28 @@ Do not sum these figures; several sets overlap.
    is live. Scanner-root or AST-policy changes require review; arbitrary main
    guards, prefixes, type-only imports, dead branches, and non-empty package
    initializers are already covered by focused regressions.
-8. Local Python 3.12/Node 24 verification does not replace the supported
-   Python 3.11.9/Node 22.23.1 CI matrix, especially after broad
-   framework/dependency upgrades.
+8. The final backend suite passed in a locked Python 3.11.9 environment. Local
+   frontend verification still used Node 24 and does not replace the supported
+   Node 22.23.1 CI run, especially after broad framework/dependency upgrades.
 
 ## Outstanding Codex/GitHub review work
 
-The pre-publication 2026-07-16 snapshot contained 25 open PRs: 11 drafts and 14
-non-drafts. Those open PRs contain 16 unresolved review threads: 11 on current
-diffs and 5 outdated. Nine remain actionable (5 P1 and 4 P2); seven are fixed or
-superseded but still unresolved (all five outdated threads plus both #852
-threads). Merged PR #1034 has two additional current P2 threads, both fixed in
-this reconciliation without changing their source-thread status. Across all
-six PRs listed below, that is 18 unresolved threads: 13 current and 5 outdated.
-Publishing this audit's own draft PR would make 26 open PRs: 12 drafts and 14
-non-drafts; that mechanical change does not alter the snapshot below.
+The pre-publication 2026-07-16 snapshot contained 26 open PRs: 11 drafts and 15
+non-drafts. Those open PRs contain 17 unresolved review threads: 12 on current
+diffs and 5 outdated. Ten remain actionable on their source branches (5 P1 and
+5 P2); seven are fixed or superseded but still unresolved (all five outdated
+threads plus both #852 threads). PR #1041's current P2 is also fixed in this
+audit but remains actionable on its source branch. Merged PRs #1034 and #1042
+have three additional current P2 threads, all fixed in this reconciliation
+without changing their source-thread status. Across all eight PRs listed below,
+that is 20 unresolved threads: 15 current and 5 outdated. Publishing this
+audit's own draft PR would make 27 open PRs: 12 drafts and 15 non-drafts; that
+mechanical change does not alter the snapshot below.
 
 | PR | Unresolved threads and current assessment |
 |---|---|
+| [#1042](https://github.com/sampatel3/tali-platform/pull/1042) | Merged; 1 current P2: refresh the roster when waiting related-role scoring finishes without an observed running state. Fixed with active-to-terminal transition coverage in this reconciliation. |
+| [#1041](https://github.com/sampatel3/tali-platform/pull/1041) | Open; 1 current P2: align the new explanation summary with the complete existing reasoning humanizer. Fixed here through one shared implementation and a retained compatibility import; the source thread remains unresolved. |
 | [#1034](https://github.com/sampatel3/tali-platform/pull/1034) | Merged; 2 current P2 threads: the fired-rule max/min operator direction and omitted policy rationale on approved/overridden read-only cards. Both are fixed and regression-tested in this reconciliation; the source threads remain unresolved pending branch-specific review authority. |
 | [#876](https://github.com/sampatel3/tali-platform/pull/876) | 2 current: reject-sweep validation P1 and sweep-offer reuse P2. |
 | [#855](https://github.com/sampatel3/tali-platform/pull/855) | 1 current P2: spec-derived criteria drag gating. |
@@ -552,13 +569,14 @@ non-drafts; that mechanical change does not alter the snapshot below.
 | [#638](https://github.com/sampatel3/tali-platform/pull/638) | 5 total: 3 current P1, 1 current P2, and 1 outdated workflow/vendor-drift thread. |
 | [#557](https://github.com/sampatel3/tali-platform/pull/557) | 6 total: 1 current P1, 1 current P2, and 4 outdated migration/cutover threads. |
 
-Four open-PR threads reference three paths also modified here, but their
-branch-only features are absent or superseded: PR #876's pending-reject sweep
-does not exist in this tree, PR #855's `CriteriaEditor` has no drag
-implementation, and PR #852's specification-edit behavior is superseded. No
-reviewed thread exposes an unfixed current-tree behavior. The two merged-#1034
-threads intersect current files and are fixed locally here. That does not
-resolve feedback on the affected PR branches. Do not bulk-comment,
+Five open-PR threads reference four paths also modified here. PR #1041's
+humanizer mismatch is fixed locally; the other branch-only features are absent
+or superseded: PR #876's pending-reject sweep does not exist in this tree, PR
+#855's `CriteriaEditor` has no drag implementation, and PR #852's
+specification-edit behavior is superseded. No reviewed thread exposes an
+unfixed current-tree behavior. The three merged-#1034/#1042 threads intersect
+current files and are fixed locally here. That does not resolve feedback on the
+affected PR branches. Do not bulk-comment,
 resolve, or merge those threads without branch-specific review authority. For
 each branch, assign an owner and update it, extract a still-needed small change,
 or close it explicitly as superseded with replacement evidence. This audit's
@@ -577,7 +595,7 @@ less useful.
 | P1 / cost and capability | **Fitted-policy shadow/promotion is dormant while the nightly fitter is scheduled.** Equivalent ordered inputs now reuse the current fingerprinted candidate before expensive search, per-organization work is serialized, and pending output is bounded. Changed evidence can still consume DB/CPU to fit a candidate, but the production engine never loads it and no scheduler opens, records, or concludes durable shadow runs. | Fitted output is currently only a fail-closed safety input to governed rule retunes. Automatically wiring the bookkeeping would still lack durable per-decision shadow identity, realised-outcome linkage, and operator activation; compute deduplication is not feature activation. | Measure the remaining scheduled fit's cost and safety value. Keep it only if that value is justified; otherwise disable the dormant fit schedule without weakening the live rule retuner. Before learned-policy activation, implement the durable shadow lifecycle, bias/outcome gates, observability, and explicit operator promotion. |
 | Medium / scaffold | **`GRAPH_OUTCOME_PRIOR_ENABLED` is not a functional feature.** Bounded shadow math exists, but the fetch returns `None` and configuration rejects enablement. | Outcome-learned graph signals can reproduce historical bias; a numeric nudge without evidence and governance would make matching less trustworthy. | Keep it unavailable in product/configuration. Activate only after graph retrieval is durable, the shadow distribution and predictive value are reviewed, the autoresearch bias gate passes, and rollback/monitoring exist. |
 | Medium / security migration | **Legacy integration credentials may still use the unversioned/plaintext read fallback.** | The fallback prevents breaking existing Workable/Fireflies rows during rollout; new encrypted writes alone do not transform old data. | Inventory existing rows, re-encrypt or rotate them with the production integration key, verify previous-key rollback, and remove plaintext reads only after telemetry proves the migration complete. |
-| Medium / runtime | **Local and supported runtimes differ:** local checks used Python 3.12/Node 24; CI targets Python 3.11.9/Node 22.23.1, the backend image pins Python 3.11.9, and frontend deployment declares Node `>=22.12.0`. | Parser, dependency, event-loop, build-tool, and native-package behavior can differ even when unit tests pass locally; the frontend host can select a different Node 22 patch than CI. | Require the full supported-runtime CI matrix before the release candidate and align the frontend hosting runtime as tightly as the provider supports. |
+| Medium / runtime | **Frontend local and supported runtimes differ:** the backend passed in the exact locked Python 3.11.9 environment, while local frontend checks used Node 24 and CI targets Node 22.23.1; frontend deployment declares Node `>=22.12.0`. | Build-tool and native-package behavior can differ even with green local tests, and the frontend host can select a different Node 22 patch than CI. | Require the supported Node CI run before the release candidate and align the frontend hosting runtime as tightly as the provider supports. |
 | Medium / staging | **Broad framework/dependency upgrades have cross-cutting compatibility risk.** | Unit mocks cannot fully exercise server lifecycle, auth/security middleware, provider SDKs, PDF/browser tooling, or deployment packaging under real infrastructure. | Stage the complete upgraded graph on supported runtimes; run migration, auth, provider, file/PDF, worker, and rollback smoke before production. Do not “optimize” by deleting supported behavior to make the upgrade easier. |
 | Medium / accessibility | **The website pass did not include physical devices, automated accessibility tooling, or assistive-technology/screen-reader use.** | Source review, desktop/mobile browser smoke, keyboard focus, and reduced-motion checks do not prove semantic announcements, focus order, touch behavior, or real-device rendering. | Run automated accessibility checks plus keyboard and screen-reader smoke on representative public, auth, candidate, assessment, and recruiter flows after the release candidate is deployed to staging. |
 | Medium | **A5 input-window divergence:** pre-screen sees untruncated CV/JD while holistic uses 14k/8k windows. | Silently truncating the gate could miss late must-haves; silently expanding holistic may raise token cost and latency. | Choose a canonical evidence-window policy, test long-document must-have placement, and measure accuracy/cost before rollout. |
@@ -588,21 +606,22 @@ less useful.
 | Medium / policy | **F4 automated-decision notice/explanation/appeal:** internal provenance exists but candidate-facing process is incomplete. | This is product/legal workflow, not a safe backend-only guess. | For opted-in auto-disqualify orgs, design candidate notice, job-relevant explanation, human review/appeal, and jurisdiction policy. |
 | Medium / evidence | Adverse-impact monitor can be enabled with insufficient voluntary data. | Code cannot manufacture lawful representative data. | Define voluntary-data process, owner, alert response, retention, and minimum sample policy before enabling. |
 | Medium / maintainability | 43 backend oversized legacy files, the frontend `AppShell`, and 11 oversized frontend pages remain ratcheted. Backend policy is strict at 500 lines for route/service modules and 1,000 for all others. | Large-scale mechanical splitting inside an already broad behavioral remediation would increase merge and regression risk. | Burn down incrementally behind exact parity tests; lower baselines whenever files shrink and do not add new exemptions. |
-| Low / test quality | The frontend warning backlog is closed and the combined backend floor is 74%, but backend branch coverage is still 64.671779%. | Aggregate coverage can hide weak failure-path coverage even with a green suite. | Raise branch coverage incrementally around payment, authorization, provider failure, worker recovery, and hiring-decision risk; do not delete hard branches or exclude them merely to improve the number. |
+| Low / test quality | The frontend warning backlog is closed and the combined backend floor is 74%, but backend branch coverage is still 64.594822%. | Aggregate coverage can hide weak failure-path coverage even with a green suite. | Raise branch coverage incrementally around payment, authorization, provider failure, worker recovery, and hiring-decision risk; do not delete hard branches or exclude them merely to improve the number. |
 | Product validation | Assessment/scoring instrument has limited real-outcome evidence. | Unit tests prove software behavior, not hiring validity or candidate experience. | Resume governed volume, monitor funnel and outcome calibration, validate predictive/fairness claims, and keep irreversible AI reject recommendations human-confirmed by default. |
 
 ## Release and production status
 
 ### Local verification results
 
-Complete default non-production backend suite: **5,931 passed, 8 skipped, 16
-live production-smoke tests deselected, zero failures, and zero warnings** in
-one uninterrupted final-integration-tree run (399.57 seconds). Live production
+Complete default non-production backend suite on locked Python 3.11.9:
+**5,932 passed, 8 skipped, 16 live production-smoke tests deselected, zero
+failures, and zero warnings** in
+one uninterrupted final-integration-tree run (246.65 seconds). Live production
 smoke was not run from this unreviewed tree.
 
-Backend coverage: **75.983428% combined line-and-branch** — 70,426/92,686
-covered units, comprising 56,594/71,298 lines
-(79.376701%) and 13,832/21,388 branches (64.671779%). The enforced combined
+Backend coverage: **75.927783% combined line-and-branch** — 70,401/92,721
+covered units, comprising 56,579/71,323 lines
+(79.327847%) and 13,822/21,398 branches (64.594822%). The enforced combined
 floor remains **74%** (raised from 35%) and passed. The ignored originals were
 left intact and copies were preserved outside the worktree after measurement;
 neither was committed.
