@@ -156,6 +156,7 @@ export const getPrimaryScorePayload = (application) => {
 import React from 'react';
 export const renderJobPipelineScoreCell = (score, scoreClass, status) => {
   const isInFlight = status === 'pending' || status === 'running';
+  const isWaiting = status === 'retry_wait';
   const isStale = status === 'stale';
   if (score == null) {
     if (isInFlight) {
@@ -163,6 +164,13 @@ export const renderJobPipelineScoreCell = (score, scoreClass, status) => {
         'span',
         { className: 'score-pill mid', title: 'Scoring in progress' },
         'Scoring…',
+      );
+    }
+    if (isWaiting) {
+      return React.createElement(
+        'span',
+        { className: 'score-pill mid', title: 'Scoring is waiting to retry' },
+        'Waiting…',
       );
     }
     return React.createElement(
