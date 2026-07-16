@@ -97,12 +97,12 @@ class Organization(Base):
     fireflies_single_account_mode = Column(Boolean, default=True, nullable=False)
     stripe_customer_id = Column(String)
     stripe_subscription_id = Column(String)
-    billing_provider = Column(String, default="stripe")
+    billing_provider = Column(String, default="stripe", nullable=False)
     billing_config = Column(JSON, nullable=True)
     # Balance in micro-credits (1 credit = $0.000001 USD). Was Integer (whole
     # credits, 25 AED each) under the legacy Lemon-Squeezy model; switched to
     # BigInteger usage-based on 2026-04-29.
-    credits_balance = Column(BigInteger, default=0)
+    credits_balance = Column(BigInteger, default=0, nullable=False)
     # Anthropic Workspace key (Admin-API-provisioned, Taali-owned). All Claude
     # calls for this org route through this key; Anthropic dashboard reports
     # cost per workspace. Provisioned lazily on first billed action.
@@ -167,8 +167,8 @@ class Organization(Base):
     plan = Column(String, default="pay_per_use")
     # Enterprise access controls
     allowed_email_domains = Column(JSON, nullable=True)  # ["company.com", "subsidiary.org"]
-    sso_enforced = Column(Boolean, default=False)
-    saml_enabled = Column(Boolean, default=False)
+    sso_enforced = Column(Boolean, default=False, nullable=False)
+    saml_enabled = Column(Boolean, default=False, nullable=False)
     two_factor_required = Column(Boolean, default=False, nullable=False)
     saml_metadata_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

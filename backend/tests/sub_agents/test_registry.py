@@ -1,8 +1,8 @@
 """The canonical five sub-agents auto-register on import.
 
 Per §2 of recruitment_system_architecture.md.
-The superseded ``intent_parser`` worker was removed; recruiter intent is
-captured via RoleIntent A1.
+The superseded ``intent_parser`` execution path is retired; its provider-free
+compatibility facade stays unregistered and recruiter intent uses RoleIntent A1.
 """
 
 from __future__ import annotations

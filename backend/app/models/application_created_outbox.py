@@ -9,7 +9,7 @@ the same transaction as the application and drained only after commit.
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.sql import func
 from sqlalchemy.sql.expression import false as sql_false
 from sqlalchemy.sql.expression import true as sql_true
@@ -31,6 +31,11 @@ class ApplicationCreatedOutbox(Base):
     """One idempotent post-commit intake event per application."""
 
     __tablename__ = "application_created_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "application_id", name="application_created_outbox_application_id_key"
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(

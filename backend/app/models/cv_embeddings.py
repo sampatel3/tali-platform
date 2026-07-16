@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, JSON, String
+from sqlalchemy import Column, DateTime, Index, JSON, String
 from sqlalchemy.sql import func
 
 from ..platform.database import Base
@@ -22,6 +22,7 @@ class CvEmbedding(Base):
     """
 
     __tablename__ = "cv_embeddings"
+    __table_args__ = (Index("ix_cv_embeddings_provider_model", "provider", "model"),)
 
     content_hash = Column(String, primary_key=True)
     provider = Column(String, nullable=False)

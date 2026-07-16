@@ -9,8 +9,8 @@ All five share the same ``run(req: SubAgentRequest) -> SubAgentResult``
 protocol so the orchestrator can dispatch them identically.
 
 Recruiter intent is captured as ``RoleIntent`` (Amendment A1) and read by
-every sub-agent at score time. The superseded, unregistered
-``intent_parser`` worker was removed once no production caller remained.
+every sub-agent at score time. The superseded ``intent_parser`` execution path
+is retired; its provider-free compatibility facade remains unregistered.
 """
 
 from .base import SubAgent, SubAgentRequest, SubAgentResult

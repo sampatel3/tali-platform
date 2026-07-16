@@ -3,6 +3,8 @@
 # Shared, side-effect-free helpers for the Railway deployment wrappers.
 # Callers own `set -euo pipefail` and select the Railway environment first.
 
+readonly TALI_NIXPACKS_INSTALL_CMD="python -m venv --copies /opt/venv && . /opt/venv/bin/activate && python scripts/check_requirements_lock.py --runtime-only && python -m pip install --require-hashes --no-deps -r requirements-runtime-lock.txt && python -m pip check"
+
 railway_begin_coordinated_release() {
   local root_dir="$1"
   local release_sha="$2"
@@ -371,6 +373,7 @@ railway_validate_service_variable() {
   local service="$2"
   local key="$3"
   local expected="$4"
+  local comparison="${5:-case-insensitive}"
   local variables_file result=0
   variables_file="$(mktemp)"
   if ! railway variable list \
@@ -382,17 +385,29 @@ railway_validate_service_variable() {
     return 1
   fi
 
-  python3 - "$variables_file" "$service" "$key" "$expected" <<'PY' || result=$?
+  python3 - "$variables_file" "$service" "$key" "$expected" "$comparison" <<'PY' || result=$?
 import json
 import sys
 
-variables_file, service, key, expected = sys.argv[1:]
+variables_file, service, key, expected, comparison = sys.argv[1:]
 payload = json.load(open(variables_file))
 if not isinstance(payload, dict):
     print(f"error: unexpected Railway variable payload for {service!r}.", file=sys.stderr)
     raise SystemExit(1)
-actual = str(payload.get(key) or "").strip()
-if actual.lower() != expected.lower():
+raw_actual = str(payload.get(key) or "")
+if comparison == "exact":
+    actual = raw_actual
+    matches = actual == expected
+elif comparison == "case-insensitive":
+    actual = raw_actual.strip()
+    matches = actual.lower() == expected.lower()
+else:
+    print(
+        f"error: unsupported Railway variable comparison: {comparison!r}.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not matches:
     print(
         f"error: {service}: {key} must be {expected!r} (got {actual!r}).",
         file=sys.stderr,
@@ -402,6 +417,10 @@ print(f"- {service}: {key}={actual}")
 PY
   rm -f "$variables_file"
   return "$result"
+}
+
+railway_validate_service_variable_exact() {
+  railway_validate_service_variable "$1" "$2" "$3" "$4" exact
 }
 
 railway_scoring_policy_from_file() {

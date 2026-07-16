@@ -29,6 +29,7 @@ if [[ ! -f "$BACKEND_DIR/railway.json" ]]; then
   echo "error: missing backend/railway.json; refusing to deploy from repo root layout" >&2
   exit 1
 fi
+python3 "$BACKEND_DIR/scripts/check_requirements_lock.py" --runtime-only
 
 # The same repository config is consumed by web and both Celery services.
 # An HTTP healthcheck here would make the workers fail every deployment because
@@ -53,6 +54,9 @@ railway_assert_distinct_services \
 railway environment "$ENV_NAME" >/dev/null
 railway_assert_production_database_provenance \
   "$ENV_NAME" "$WEB_SERVICE" "$BACKEND_DIR"
+railway_validate_service_variable_exact \
+  "$ENV_NAME" "$WEB_SERVICE" \
+  "NIXPACKS_INSTALL_CMD" "$TALI_NIXPACKS_INSTALL_CMD"
 
 # A web-only deployment must never report success while either required worker
 # is missing, failed, or configured for the wrong queue/Beat ownership.
@@ -72,11 +76,10 @@ previous_id="$(
 )"
 
 railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
-echo "Deploying web service '$WEB_SERVICE' from $BACKEND_DIR (environment: $ENV_NAME)..."
+echo "Deploying web service '$WEB_SERVICE' from repository root $ROOT_DIR (Railway service root: /backend; environment: $ENV_NAME)..."
 (
   cd "$ROOT_DIR"
-  railway up ./backend \
-    --path-as-root \
+  railway up \
     --service "$WEB_SERVICE" \
     --environment "$ENV_NAME" \
     --detach

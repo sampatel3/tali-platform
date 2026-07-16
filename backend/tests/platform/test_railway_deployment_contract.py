@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -23,6 +24,17 @@ SHELL_FILES = [
     RAILWAY_DIR / "deploy_backend.sh",
     RAILWAY_DIR / "deploy_production.sh",
 ]
+RUNTIME_VENV_CREATE = (
+    "python -m venv --copies /opt/venv && . /opt/venv/bin/activate"
+)
+RUNTIME_LOCK_CHECK = "python scripts/check_requirements_lock.py --runtime-only"
+RUNTIME_HASH_INSTALL = (
+    "python -m pip install --require-hashes --no-deps "
+    "-r requirements-runtime-lock.txt"
+)
+RUNTIME_INSTALL_COMMAND = " && ".join(
+    [RUNTIME_VENV_CREATE, RUNTIME_LOCK_CHECK, RUNTIME_HASH_INSTALL, "python -m pip check"]
+)
 
 
 @pytest.mark.parametrize("script", SHELL_FILES)
@@ -37,6 +49,95 @@ def test_shared_railway_config_has_no_http_healthcheck():
 
     assert "healthcheckPath" not in deploy
     assert "healthcheckTimeout" not in deploy
+
+
+def test_every_railway_config_uses_the_explicit_locked_nixpacks_plan():
+    for filename in ("railway.json", "railway.worker.json"):
+        payload = json.loads((ROOT / "backend" / filename).read_text())
+        assert payload["$schema"] == "https://railway.com/railway.schema.json"
+        assert payload["build"] == {
+            "builder": "NIXPACKS",
+            "nixpacksConfigPath": "nixpacks.toml",
+        }
+
+    plan = tomllib.loads((ROOT / "backend" / "nixpacks.toml").read_text())
+    assert plan["phases"]["install"]["cmds"] == [RUNTIME_INSTALL_COMMAND]
+    assert "pip install -r requirements.txt" not in str(plan)
+
+
+def test_production_wrappers_pin_and_revalidate_locked_runtime_install():
+    prepare = (RAILWAY_DIR / "prepare_production.sh").read_text()
+    worker = (RAILWAY_DIR / "deploy_worker.sh").read_text()
+    web = (RAILWAY_DIR / "deploy_backend.sh").read_text()
+    library = (RAILWAY_DIR / "lib.sh").read_text()
+    assert f'TALI_NIXPACKS_INSTALL_CMD="{RUNTIME_INSTALL_COMMAND}"' in library
+    assert 'NIXPACKS_INSTALL_CMD="$TALI_NIXPACKS_INSTALL_CMD"' in prepare
+    assert library.index("python -m venv --copies /opt/venv") < library.index(
+        "check_requirements_lock.py"
+    )
+    assert library.index("check_requirements_lock.py") < library.index(
+        "pip install --require-hashes"
+    )
+    assert prepare.index("check_requirements_lock.py") < prepare.index(
+        "railway variable set"
+    )
+    assert prepare.count('"NIXPACKS_INSTALL_CMD"') == 1
+    assert prepare.count("railway_validate_service_variable_exact") == 1
+    assert worker.count("railway_validate_service_variable_exact") == 2
+    assert web.count("railway_validate_service_variable_exact") == 1
+    for script in (worker, web):
+        assert script.index("check_requirements_lock.py") < script.index(
+            "railway environment"
+        )
+        assert script.index('"NIXPACKS_INSTALL_CMD"') < script.index("railway up \\")
+
+
+def test_locked_install_command_readback_is_exact_but_boolean_readback_is_not(
+    tmp_path: Path,
+):
+    variables_file = tmp_path / "variables.json"
+    env = {
+        **os.environ,
+        "RAILWAY_VARIABLES_FIXTURE": str(variables_file),
+        "EXPECTED_VARIABLE": RUNTIME_INSTALL_COMMAND,
+    }
+    railway_stub = """
+railway() {
+  cat "$RAILWAY_VARIABLES_FIXTURE"
+}
+"""
+
+    variables_file.write_text(
+        json.dumps({"NIXPACKS_INSTALL_CMD": RUNTIME_INSTALL_COMMAND.upper()})
+    )
+    exact_result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'source "{RAILWAY_DIR / "lib.sh"}"; {railway_stub} '
+            "railway_validate_service_variable_exact production web "
+            'NIXPACKS_INSTALL_CMD "$EXPECTED_VARIABLE"',
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert exact_result.returncode != 0
+
+    variables_file.write_text(json.dumps({"USAGE_METER_LIVE": "TRUE"}))
+    boolean_result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'source "{RAILWAY_DIR / "lib.sh"}"; {railway_stub} '
+            "railway_validate_service_variable production web "
+            "USAGE_METER_LIVE true",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert boolean_result.returncode == 0, boolean_result.stderr
 
 
 def test_coordinated_rollout_order_is_prepare_workers_then_web():
@@ -280,8 +381,10 @@ def test_worker_wrapper_enforces_split_queue_and_single_beat_topology():
     assert "TALI_WORKER_QUEUES=scoring" in script
     assert "TALI_WORKER_BEAT=false" in script
     assert script.count("deploy_worker_service") == 3  # definition + two calls
-    assert "railway up ./backend" in script
-    assert "--path-as-root" in script
+    assert 'cd "$ROOT_DIR"' in script
+    assert "railway up \\" in script
+    assert "railway up ./backend" not in script
+    assert "--path-as-root" not in script
     assert 'cd "$BACKEND_DIR"' not in script
 
 
@@ -293,8 +396,10 @@ def test_web_wrapper_checks_workers_and_polls_readiness():
     assert "railway_wait_for_readiness" in script
     assert "railway_validate_default_agent_capabilities" in script
     assert 'payload.get("ADMIN_SECRET")' in script
-    assert "railway up ./backend" in script
-    assert "--path-as-root" in script
+    assert 'cd "$ROOT_DIR"' in script
+    assert "railway up \\" in script
+    assert "railway up ./backend" not in script
+    assert "--path-as-root" not in script
     assert 'cd "$BACKEND_DIR"' not in script
 
 

@@ -68,12 +68,11 @@ The highest-risk local defects now addressed are:
 The review covered backend application and worker paths, migrations, frontend
 routes and feature modules, CI and deployment scripts, environment contracts,
 tests, architecture ratchets, product/deployment/audit documentation, and the
-open GitHub pull-request queue. The frozen pre-packaging snapshot spanned 652
-tracked paths (630 modified and 22 deleted) plus 121 untracked paths. The
-tracked diff contained 18,808 additions and 11,975 deletions with no binary
-changes; nothing was staged at capture. Those paths are now preserved in seven
-local commits. That breadth is one reason the supported-runtime and
-reviewable-PR release gates remain mandatory.
+open GitHub pull-request queue. The initial frozen snapshot included 22 paths
+that had been removed. The final integration preserves every one as a bounded
+compatibility artifact, so the branch has zero deleted paths versus its current
+base. That breadth is one reason the supported-runtime and reviewable-PR
+release gates remain mandatory.
 
 The audited base was detached at `0e562f2f` (`Redesign agent prompts and unblock
 task setup (#1026)`, 2026-07-15). The remediation now lives on local branch
@@ -171,9 +170,9 @@ proof of capability.
 |---|---|---|
 | Enterprise SAML SSO | **Unavailable**, not partly functional. There is no assertion-consumer endpoint, signed AuthnRequest, audience/issuer validation, or replay protection. | API reports unavailable, enable attempts return 501, and legacy enforcement flags are cleared on the next owner save. It must not be marketed as working. |
 | Workspace-enforced 2FA | **Unavailable** because no second-factor challenge exists. | Enable attempts return 501 and stored legacy enforcement cannot lock users out. |
-| `portfolio_agent` | **Reserved, unavailable capability name**; cohort features are not implemented. Its inert package was deleted rather than preserving a fake runtime scaffold. | The canonical registry entry remains `available=False`; production flag evaluation fails closed even if a database row is enabled. |
-| `capability_auditor` | **Reserved, unavailable capability name**; it produces no findings. Its inert package was deleted. | The canonical registry entry remains `available=False`; fail closed. |
-| `causal_mode` | **Reserved, unavailable capability name**; causal inference/claim validation is absent. Its inert package was deleted. | The canonical registry entry remains `available=False`; fail closed. |
+| `portfolio_agent` | **Reserved, unavailable capability name**; cohort features are not implemented. Its historical package is import-compatible but raises an explicit unavailable error. | The canonical registry entry remains `available=False`; production flag evaluation and compatibility calls both fail closed. |
+| `capability_auditor` | **Reserved, unavailable capability name**; it produces no findings. Its historical package is import-compatible but never returns a fake empty audit. | The canonical registry entry remains `available=False`; fail closed. |
+| `causal_mode` | **Reserved, unavailable capability name**; causal inference/claim validation is absent. Its historical package is import-compatible but never emits placeholder claims. | The canonical registry entry remains `available=False`; fail closed. |
 | `GRAPH_OUTCOME_PRIOR_ENABLED` | **Scaffold only**. Bounded shadow-payload math exists, but the graph fetch deliberately returns no prior. | Configuration rejects `true`; no score nudge can be applied until a bias-gated shadow-data review and durable activation path exist. |
 | Fitted-policy shadow/promotion | **Dormant**. Nightly fitting and manual/test bookkeeping primitives exist, but the production decision engine remains rule-driven. | Equivalent ordered training inputs have a deterministic fingerprint and reuse the current fitted row before grid/agentic search; per-organization advisory locking and bounded pending output prevent duplicate compute/rows. No production path loads or promotes it, and no scheduler opens/records/concludes shadow runs, so candidates still fail closed pending the durable lifecycle and explicit operator activation. |
 | `bias_monitor_continuous` | **Reserved per-org capability flag, unavailable.** This is distinct from the real adverse-impact aggregate service/task, which is implemented behind the environment-level `PRESCREEN_ADVERSE_IMPACT_MONITOR_ENABLED` control. | The registry stays `available=False` because the per-org flag is not wired to scheduling or alert delivery. The actual opt-in monitor uses segregated voluntary EEO self-ID, small-cell suppression, aggregate-only persistence/API output, and honest `insufficient_data`; production enablement still requires governance and an alert owner. |
@@ -304,18 +303,18 @@ less defensible.
 
 ## Redundancy, superseded features, and workarounds
 
-### Removed or replaced locally
+### Superseded paths preserved safely
 
 | Item | Resolution |
 |---|---|
-| Historical `intent_parser` sub-agent and its obsolete test | Removed; durable `RoleIntent` is canonical. Phase documentation now says so. |
-| Duplicate scoring schema surface | The old component schema file was removed; `app.cv_matching.schemas` is canonical. |
-| Four stale static preview HTML pages | Removed where React preview/product routes supersede them. |
+| Historical `intent_parser` sub-agent and its obsolete test | Durable `RoleIntent` is canonical. The old path is a provider-free, unregistered facade with tests proving it cannot become a sixth sub-agent or issue model calls. |
+| Duplicate scoring schema surface | Retained only as safe Pydantic payload views with isolated default factories; scoring logic remains canonical in the active service. |
+| Four stale static preview HTML pages | Replaced with tiny noindex redirect/fallback documents to the React preview routes; the Jobs fallback preserves only `agent=paused|loading`. |
 | Query-string/window-location auth bypass for the investor Jobs demo | Removed; `/showcase/jobs` is a dedicated public fixture route. |
 | `_RateLimitStoreCompatibility` | Removed; it existed only to accommodate old tests and complicated production behavior. |
-| Orphan credit-ledger helper | Deleted after import-graph inspection showed no production consumer and duplicate ledger-mutation responsibility. Canonical credit behavior remains covered by its existing service/tests. |
-| Inert capability packages and shared stub helper | Deleted the no-op packages for the four reserved names (`portfolio_agent`, `capability_auditor`, `bias_monitor_continuous`, and `causal_mode`) plus `_stub_helpers`. Their canonical registry reservations remain unavailable/fail-closed. This did not delete the real adverse-impact aggregate service/task; that separate monitor remains environment-controlled and governance-gated. |
-| Broken root demo-data seeder | Deleted `scripts/seed_data.py`: it had no consumer, imported the retired `app.core` layout, could not run against the current models, and embedded a demo credential. Current bootstrap/experiment seed paths remain intact. |
+| Orphan credit-ledger helper | Retained as an explicit fail-closed facade. It rejects before touching the database and directs callers to reservation/metering or grant flows, avoiding the superseded non-locking generic mutation. |
+| Inert capability packages and shared helper | Retained as import-compatible APIs that always raise registry-backed unavailable errors instead of returning placeholder output. The real adverse-impact aggregate service/task remains separate, environment-controlled, and governance-gated. |
+| Broken root demo-data seeder | Replaced `scripts/seed_data.py` with a credential-free, no-write compatibility command that fails safely and points to the supported scoped seeders. Current bootstrap/experiment seed paths remain intact. |
 | Two pass-only “tests” | Replaced with real assertions: role-intent prompt length is capped at 1,200 characters, and exemplar selection proves `k=2` prompt/side-effect bounds. |
 | Historical plan presented as active backlog | `RALPH_TASK.md`, README, and `PRODUCT_PLAN.md` now consistently identify it as a historical implementation record and point executable work to issues/PRs. |
 | Stale deployment/environment instructions | Direct `railway up` is explicitly unsupported for production; health endpoints, `ADMIN_SECRET`, PostgreSQL 16 Compose/README guidance, Vite 8, `VITE_PUBLIC_API_BASE_URL`, Stripe grant event, UTF-8 password-byte copy, and disk-SQLite guidance now match code. |

@@ -151,6 +151,13 @@ const PREVIEW_REDIRECTS = [
   { source: '/analytics-preview.html', destination: '/analytics-preview', permanent: false },
 ];
 
+const PREVIEW_FALLBACKS = [
+  ['home-preview.html', '/home-preview'],
+  ['jobs-preview.html', '/jobs-preview'],
+  ['report-preview.html', '/report-preview'],
+  ['analytics-preview.html', '/analytics-preview'],
+];
+
 const CONTENT_PAGES = [
   { file: 'public/agentic-hiring.html', slug: '/agentic-hiring', topic: 'agentic hiring' },
   { file: 'public/ai-native-hiring.html', slug: '/ai-native-hiring', topic: 'ai-native hiring' },
@@ -274,6 +281,26 @@ describe('legacy preview redirects', () => {
       );
     }
     expect('unknown'.match(agentPattern)).toBeNull();
+  });
+
+  it('keeps tiny noindex compatibility documents for non-Vercel static hosts', () => {
+    for (const [file, destination] of PREVIEW_FALLBACKS) {
+      const html = read(`public/${file}`);
+      expect(html.length).toBeLessThan(1500);
+      expect(html).toContain('name="robots" content="noindex, follow"');
+      expect(html).toContain(`content="0; url=${destination}"`);
+      expect(html).toContain(`href="${destination}"`);
+      expect(html).not.toContain('id="root"');
+      expect(html).not.toContain('src="/src/main.jsx"');
+    }
+  });
+
+  it('whitelists only paused/loading in the jobs static-host fallback', () => {
+    const html = read('public/jobs-preview.html');
+    expect(html).toContain("agent === 'paused' || agent === 'loading'");
+    expect(html).toContain("window.location.replace(destination)");
+    expect(html).toContain(": '/jobs-preview'");
+    expect(html).not.toContain('window.location.search');
   });
 });
 

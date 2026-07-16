@@ -54,9 +54,9 @@ Why this matters:
   a database revision absent from or unreachable in the exact release tree.
   A genuinely empty new database is accepted as Alembic base; a database with
   user tables but no `alembic_version` table fails closed.
-- CLI deploys preserve `backend/` as the upload prefix so Railway's configured
-  `/backend` service root and `/backend/railway.json` resolve exactly as they do
-  for GitHub-triggered deployments.
+- CLI deploys run `railway up` from the repository root without a path argument.
+  Railway then uploads the monorepo and applies the configured `/backend` service
+  root and `/backend/railway.json`, exactly as GitHub-triggered deployments do.
 - Web, general-worker, and scoring-worker services are validated by exact name.
 - The coordinated wrapper pins live metering and native apply, migrates
   production, deploys both workers, deploys web, waits for public `/ready`, and
@@ -154,6 +154,33 @@ runs a second scheduler.
 declare Railway's HTTP `healthcheckPath`: Celery processes do not serve HTTP.
 Public web readiness is polled explicitly after deployment instead.
 
+Both Railway config files select `backend/nixpacks.toml` explicitly. Its install
+phase replaces Nixpacks' generated `pip install -r requirements.txt` command;
+it first creates and activates Nixpacks' canonical `/opt/venv`, verifies the
+runtime lock's source digest, installs the complete production graph with
+`python -m pip install --require-hashes --no-deps -r
+requirements-runtime-lock.txt`, and finishes with `pip check`. Creating that
+virtual environment is part of the locked command: Nixpacks places
+`/opt/venv/bin` on the runtime path but does not create it after its generated
+install command is replaced. The production preparation step also pins the
+same byte-for-byte command as `NIXPACKS_INSTALL_CMD` on web and both workers,
+because Nixpacks environment configuration has higher priority than its file
+plan. Each service wrapper uses a case-sensitive exact readback before
+`railway up`, so an old dashboard override cannot restore the mutable provider
+install.
+
+`backend/requirements-runtime-lock.txt` is compiled from `requirements.txt`
+for the exact Python patch release in `backend/runtime.txt` on x86-64 Linux;
+both files are bound into its freshness digest. The existing
+`backend/requirements-lock.txt` remains the dev-inclusive CI/test lock. After a
+runtime dependency or Python runtime change, regenerate both from `backend/`;
+the helper invokes `uv` without a shell and embeds the exact source digest in
+each generated header:
+
+```bash
+python scripts/check_requirements_lock.py --compile
+```
+
 ### 5. Run the coordinated production rollout
 
 Use the single orchestrator from repo root. Substitute names only if the
@@ -194,13 +221,13 @@ The order is enforced:
    wait for a new `SUCCESS` deployment ID.
 5. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
    deploy it and wait for its own new `SUCCESS` deployment ID.
-6. Deploy web from the repository root with Railway's `--path-as-root`, wait for
-   its new deployment to succeed, poll public
-   `/ready`, then use `ADMIN_SECRET` against `/admin/health` and require the
-   default worker's live Anthropic, E2B, Resend delivery, and GitHub capability
-   checks to pass. The secret is read from Railway without printing the
-   variable payload and is passed to curl through a mode-0600 temporary header
-   file rather than a process-list argument.
+6. Deploy web with bare `railway up` from the repository root so Railway applies
+   the configured `/backend` service root, wait for its new deployment to
+   succeed, poll public `/ready`, then use `ADMIN_SECRET` against `/admin/health`
+   and require the default worker's live Anthropic, E2B, Resend delivery, and
+   GitHub capability checks to pass. The secret is read from Railway without
+   printing the variable payload and is passed to curl through a mode-0600
+   temporary header file rather than a process-list argument.
 7. Revalidate the unchanged attested source, deploy the linked Vercel production
    project from `frontend/`, and revalidate the same SHA once more.
 

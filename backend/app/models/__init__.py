@@ -52,6 +52,7 @@ from .role_criterion import (
     CRITERION_SOURCE_RECRUITER_CONSTRAINT,
     RoleCriterion,
 )
+from .cv_embeddings import CvEmbedding
 from .cv_match_override import CvMatchOverride
 from .cv_parse_cache import CvParseCache
 from .cv_score_cache import CvScoreCache
@@ -205,11 +206,7 @@ from .share_link import (
 from .top_candidates_report import TopCandidatesReport
 from .submittal_pack import SubmittalPack
 from .threshold_calibration import ThresholdCalibration
-from .api_key import (
-    API_KEY_SCOPES,
-    DEFAULT_API_KEY_SCOPES,
-    ApiKey,
-)
+from .api_key import API_KEY_SCOPES, DEFAULT_API_KEY_SCOPES, ApiKey
 from .workable_webhook_outbox import (
     WORKABLE_OUTBOX_KINDS,
     WORKABLE_OUTBOX_STATUSES,
@@ -221,10 +218,7 @@ from .email_suppression import (
     SUPPRESSION_REASON_RANK,
     EmailSuppression,
 )
-from .prospect import (
-    PROSPECT_STATUSES,
-    Prospect,
-)
+from .prospect import PROSPECT_STATUSES, Prospect
 from .job_hiring_team import (
     TEAM_ROLE_COORDINATOR,
     TEAM_ROLE_HIRING_MANAGER,
@@ -281,6 +275,7 @@ __all__ = [
     "BUCKET_PREFERRED",
     "BUCKET_CONSTRAINT",
     "CRITERION_BUCKETS",
+    "CvEmbedding",
     "CvMatchOverride",
     "CvParseCache",
     "CvScoreCache",

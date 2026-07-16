@@ -15,9 +15,9 @@ registry is the source of truth.
 Adding a new capability is a code change with PR review; the static dict here
 is loaded once at import time by the flag client. Registry entries describe
 rollout contracts, not implementations. An entry stays unavailable until a
-production caller is wired and tested. Inert ``agent.py`` scaffolds were
-removed because they made an unimplemented feature look more complete while
-adding no runtime behavior.
+production caller is wired and tested. Historical package paths expose only
+explicit fail-closed compatibility APIs so imports remain stable without
+making an unimplemented feature look active.
 """
 
 from __future__ import annotations

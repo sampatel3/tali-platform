@@ -30,6 +30,7 @@ if [[ ! -f "$BACKEND_DIR/alembic.ini" ]]; then
   echo "error: missing backend/alembic.ini: $BACKEND_DIR/alembic.ini" >&2
   exit 1
 fi
+python3 "$BACKEND_DIR/scripts/check_requirements_lock.py" --runtime-only
 
 railway_assert_distinct_services \
   "$WEB_SERVICE" "$GENERAL_WORKER_SERVICE" "$SCORING_WORKER_SERVICE"
@@ -77,7 +78,8 @@ for service in \
     MVP_DISABLE_WORKABLE=false \
     TRUST_RAILWAY_X_REAL_IP=true \
     PRE_SCREEN_THRESHOLD="$PRE_SCREEN_THRESHOLD" \
-    ENABLE_PRE_SCREEN_GATE="$ENABLE_PRE_SCREEN_GATE" >/dev/null
+    ENABLE_PRE_SCREEN_GATE="$ENABLE_PRE_SCREEN_GATE" \
+    NIXPACKS_INSTALL_CMD="$TALI_NIXPACKS_INSTALL_CMD" >/dev/null
 done
 for service in \
   "$WEB_SERVICE" \
@@ -97,6 +99,8 @@ for service in \
     "$ENV_NAME" "$service" "PRE_SCREEN_THRESHOLD" "$PRE_SCREEN_THRESHOLD"
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "ENABLE_PRE_SCREEN_GATE" "$ENABLE_PRE_SCREEN_GATE"
+  railway_validate_service_variable_exact \
+    "$ENV_NAME" "$service" "NIXPACKS_INSTALL_CMD" "$TALI_NIXPACKS_INSTALL_CMD"
 done
 
 # Fetch the resolved public database URL without printing any Railway variables.

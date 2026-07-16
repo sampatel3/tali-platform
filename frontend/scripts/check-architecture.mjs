@@ -34,7 +34,7 @@ export const RATCHETED_SOURCE_LIMITS = new Map([
   ['src/features/dev/ButtonShowcasePage.jsx', 684],
   ['src/features/home/HomePage.jsx', 685],
   ['src/features/jobs/JobPipelinePage.jsx', 2620],
-  ['src/features/jobs/JobsPage.jsx', 962],
+  ['src/features/jobs/JobsPage.jsx', 952],
   ['src/features/requisitions/RequisitionsPage.jsx', 1201],
   ['src/features/settings/RecruiterSettingsPage.jsx', 2495],
   ['src/features/settings/RequisitionTemplatePage.jsx', 536],

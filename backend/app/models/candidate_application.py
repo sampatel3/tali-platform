@@ -36,10 +36,11 @@ class CandidateApplication(Base):
         ),
         Index("ix_candidate_applications_cv_uploaded_at", "cv_uploaded_at"),
         Index("ix_candidate_applications_deleted_at", "deleted_at"),
+        Index("ix_candidate_applications_org_id", "organization_id"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     candidate_id = Column(Integer, ForeignKey("candidates.id"), index=True, nullable=False)
     role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
     status = Column(String, default="applied", nullable=False)

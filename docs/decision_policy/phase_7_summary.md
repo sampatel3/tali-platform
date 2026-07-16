@@ -90,7 +90,8 @@ Net delta from the design I sketched: ~700 lines instead of ~1500.
 - **No additional sub-agents.** At the time, Phase 7 added cohort tools rather
   than specialists. The later canonical five are `pre_screen`, `cv_scoring`,
   `assessment_scoring`, `graph_priors`, and `task_selection`; the unregistered
-  `intent_parser` worker was superseded by `RoleIntent` and removed.
+  `intent_parser` execution path was superseded by `RoleIntent`. Its import path
+  now exposes only a provider-free, fail-closed compatibility facade.
 - **No new orchestration framework.** The single-agent loop with `MAX_TOOL_ROUNDS` already gives the orchestrator stopping conditions. Anthropic's guide is explicit: "reduce abstraction layers and build with basic components."
 
 ## Validation

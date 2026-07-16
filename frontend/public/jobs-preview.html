@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex, follow" />
+    <meta http-equiv="refresh" content="0; url=/jobs-preview" />
+    <link rel="canonical" href="https://www.taali.ai/jobs-preview" />
+    <title>Redirecting to the Taali jobs preview</title>
+    <script>
+      const agent = new URL(window.location.href).searchParams.get('agent');
+      const destination = agent === 'paused' || agent === 'loading'
+        ? `/jobs-preview?agent=${agent}`
+        : '/jobs-preview';
+      window.location.replace(destination);
+    </script>
+  </head>
+  <body>
+    <p>This preview moved to <a href="/jobs-preview">the canonical jobs preview</a>.</p>
+  </body>
+</html>

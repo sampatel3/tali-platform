@@ -21,9 +21,8 @@ class SubAgentRequest:
     application_id: int
     role_id: int
     skip_cache: bool = False
-    # Free-form extension slot. Sub-agents that need more (e.g.
-    # intent_parser needs the slot dictionary it should parse) read
-    # from here. Keeps the public signature stable across sub-agents.
+    # Free-form extension slot for agent-specific, non-core request data.
+    # Keeps the public signature stable across sub-agents.
     extra: dict[str, Any] = field(default_factory=dict)
     # Forwarded to Anthropic clients via their ``metering`` kwarg —
     # never mutated by the sub-agent.

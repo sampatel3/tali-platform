@@ -15,6 +15,18 @@ PRODUCTION_SMOKE_WORKFLOW = (
     / "workflows"
     / "production-smoke.yml"
 )
+COMPOSE_FILE = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+
+IMMUTABLE_COMPOSE_IMAGES = {
+    "postgres": (
+        "postgres:16.14@sha256:"
+        "17e67d7b9890c99b055ba1e0d5c5be4ec27c9d3a72bda32db24a5e5d8a85af0c"
+    ),
+    "redis": (
+        "redis:7.4.9-alpine@sha256:"
+        "6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
+    ),
+}
 
 
 def _source() -> str:
@@ -32,6 +44,18 @@ def test_ci_workflow_parses_and_pins_external_execution_inputs() -> None:
     assert "node-version: '22.23.1'" in source
 
 
+def test_local_compose_uses_exact_digest_pinned_service_images() -> None:
+    compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    images = {
+        service_name: service["image"]
+        for service_name, service in compose["services"].items()
+    }
+
+    # Exact-map equality makes a mutable replacement or an unreviewed new
+    # service fail closed instead of silently expanding the supply-chain edge.
+    assert images == IMMUTABLE_COMPOSE_IMAGES
+
+
 def test_ci_uses_fresh_hashed_python_lock_in_both_backend_jobs() -> None:
     source = _source()
     install = "python -m pip install --require-hashes -r requirements-lock.txt"
@@ -42,12 +66,37 @@ def test_ci_uses_fresh_hashed_python_lock_in_both_backend_jobs() -> None:
 
 def test_ci_deduplicates_branch_events_and_skips_unaffected_expensive_jobs() -> None:
     source = _source()
+    workflow = yaml.safe_load(source)
+    jobs = workflow["jobs"]
+
     assert "github.head_ref || github.ref_name" in source
     assert "github.event.pull_request.head.repo.full_name || github.repository" in source
     assert "docs/*|*.md" in source
-    assert source.count("needs: changes") == 3
-    assert "needs.changes.outputs.backend == 'true'" in source
-    assert "needs.changes.outputs.frontend == 'true'" in source
+
+    backend = jobs["backend"]
+    assert backend["needs"] == ["changes", "merge-safety"]
+    assert "needs.changes.outputs.backend == 'true'" in backend["if"]
+    assert "needs.changes.result == 'success'" in backend["if"]
+
+    merge_safety = jobs["merge-safety"]
+    assert merge_safety["if"] == "github.event_name == 'pull_request'"
+    merge_safety_gate = next(
+        step
+        for step in backend["steps"]
+        if step["name"] == "Require merge-safety success for pull requests"
+    )
+    assert merge_safety_gate["if"] == "github.event_name == 'pull_request'"
+    assert merge_safety_gate["env"]["MERGE_SAFETY_RESULT"] == (
+        "${{ needs.merge-safety.result }}"
+    )
+
+    postgres = jobs["postgres-contract"]
+    assert postgres["needs"] == "changes"
+    assert "needs.changes.outputs.backend == 'true'" in postgres["if"]
+
+    frontend = jobs["frontend"]
+    assert frontend["needs"] == "changes"
+    assert "needs.changes.outputs.frontend == 'true'" in frontend["if"]
 
 
 def test_frontend_ci_fails_on_test_warnings() -> None:

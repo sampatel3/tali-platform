@@ -92,6 +92,91 @@ def test_arbitrary_main_guard_does_not_exempt_dead_library(tmp_path: Path) -> No
     assert "app.unused" in candidates
 
 
+def test_compatibility_roots_are_exact_and_do_not_exempt_lookalikes(
+    tmp_path: Path,
+) -> None:
+    app = tmp_path / "app"
+    services = app / "services"
+    services.mkdir(parents=True)
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (services / "__init__.py").write_text("", encoding="utf-8")
+    (services / "credit_ledger_service.py").write_text(
+        "VALUE = 'compatibility'\n",
+        encoding="utf-8",
+    )
+    (services / "credit_ledger_service_old.py").write_text(
+        "VALUE = 'unreviewed'\n",
+        encoding="utf-8",
+    )
+
+    graph = dead_code_candidates.build_graph(app)
+    roots = dead_code_candidates.entrypoint_roots(graph)
+    candidates = {
+        row["module"]
+        for row in dead_code_candidates.compute_candidates(graph, roots=roots)
+    }
+
+    assert "app.services.credit_ledger_service" in roots
+    assert "app.services.credit_ledger_service" not in candidates
+    assert "app.services.credit_ledger_service_old" in candidates
+
+
+def test_alembic_tooling_root_is_exact_and_does_not_exempt_lookalikes(
+    tmp_path: Path,
+) -> None:
+    app = tmp_path / "app"
+    platform = app / "platform"
+    platform.mkdir(parents=True)
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (platform / "__init__.py").write_text("", encoding="utf-8")
+    (platform / "alembic_autogenerate_policy.py").write_text(
+        "VALUE = 'reviewed-tooling'\n",
+        encoding="utf-8",
+    )
+    (platform / "alembic_autogenerate_policy_old.py").write_text(
+        "VALUE = 'unreviewed'\n",
+        encoding="utf-8",
+    )
+
+    graph = dead_code_candidates.build_graph(app)
+    roots = dead_code_candidates.entrypoint_roots(graph)
+    candidates = {
+        row["module"]
+        for row in dead_code_candidates.compute_candidates(graph, roots=roots)
+    }
+
+    assert "app.platform.alembic_autogenerate_policy" in roots
+    assert "app.platform.alembic_autogenerate_policy" not in candidates
+    assert "app.platform.alembic_autogenerate_policy_old" in candidates
+
+
+def test_compatibility_root_inventory_is_reason_bearing() -> None:
+    inventory = dead_code_candidates.COMPATIBILITY_IMPORT_ROOTS
+
+    assert inventory
+    assert all(module.startswith("app.") for module in inventory)
+    assert all(reason.strip() for reason in inventory.values())
+
+
+def test_alembic_tooling_root_inventory_is_reason_bearing() -> None:
+    inventory = dead_code_candidates.ALEMBIC_TOOLING_ROOTS
+
+    assert inventory == {
+        "app.platform.alembic_autogenerate_policy": (
+            "imported by backend/alembic/env.py to enforce migration diff policy"
+        )
+    }
+
+
+def test_reviewed_compatibility_roots_exist_in_repository() -> None:
+    app = Path(__file__).resolve().parents[1] / "app"
+    graph = dead_code_candidates.build_graph(app)
+
+    assert set(dead_code_candidates.COMPATIBILITY_IMPORT_ROOTS) <= set(graph)
+
+
 def test_dead_import_cycle_is_reported(tmp_path: Path) -> None:
     app = tmp_path / "app"
     app.mkdir()

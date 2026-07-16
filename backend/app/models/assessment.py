@@ -77,7 +77,7 @@ class Assessment(Base):
     clone_command = Column(Text, nullable=True)
     final_repo_state = Column(String, nullable=True)
     git_evidence = Column(JSON, nullable=True)
-    completed_due_to_timeout = Column(Boolean, default=False)
+    completed_due_to_timeout = Column(Boolean, default=False, nullable=False)
     ai_mode = Column(String, default="claude_cli_terminal", nullable=False)
     cli_transcript = Column(JSON, nullable=True)
     is_timer_paused = Column(Boolean, default=False, nullable=False)

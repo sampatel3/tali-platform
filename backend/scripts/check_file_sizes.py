@@ -37,7 +37,7 @@ LEGACY_SIZE_BASELINES: dict[str, int] = {
     "app/components/integrations/workable/service.py": 809,
     "app/components/notifications/tasks.py": 1061,
     "app/main.py": 1336,
-    "app/models/__init__.py": 419,
+    "app/models/__init__.py": 414,
     "app/domains/agentic/routes.py": 1526,
     "app/domains/assessments_runtime/analytics_routes.py": 1901,
     "app/domains/assessments_runtime/applications_routes.py": 5765,

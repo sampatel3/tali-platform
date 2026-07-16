@@ -34,7 +34,7 @@ def test_migration_graph_has_canonical_initial_schema_and_one_head():
     assert script.get_bases() == ["000_initial_schema"]
     assert script.get_revision("000_initial_schema").down_revision is None
     assert script.get_revision("001").down_revision == "000_initial_schema"
-    assert script.get_heads() == ["178_cv_score_dispatch_approval"]
+    assert script.get_heads() == ["179_restore_schema_metadata_invariants"]
 
 
 def test_preflight_allows_a_genuinely_empty_schema():
@@ -118,7 +118,7 @@ def test_fresh_postgres_schema_runs_full_chain_and_preserves_invariants(
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "177_agent_chat_turn_role_version"
+            ).scalar_one() == "179_restore_schema_metadata_invariants"
 
             indexes = set(
                 connection.execute(

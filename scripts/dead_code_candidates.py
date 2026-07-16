@@ -33,6 +33,45 @@ APPROVED_NON_SCRIPT_CLI_ROOTS = frozenset(
     }
 )
 
+# Alembic's ``env.py`` lives outside the scanned ``app`` package, so its app
+# imports cannot appear as graph edges. Model only the reviewed module it loads;
+# nearby platform modules must still prove ordinary runtime reachability.
+ALEMBIC_TOOLING_ROOTS: dict[str, str] = {
+    "app.platform.alembic_autogenerate_policy": (
+        "imported by backend/alembic/env.py to enforce migration diff policy"
+    ),
+}
+
+# Public Python import paths can outlive their runtime callers. Keep this
+# inventory exact and reason-bearing: each entry is a deliberately retained
+# compatibility API with focused fail-closed/alias tests. A prefix exemption
+# (for example every ``app.services.*`` module) would let unrelated dead code
+# disappear from the CI report, so only these fully-qualified modules are
+# eligible.
+COMPATIBILITY_IMPORT_ROOTS: dict[str, str] = {
+    "app.capabilities.bias_monitor_continuous": (
+        "fail-closed import compatibility for a registry-unavailable capability"
+    ),
+    "app.capabilities.capability_auditor": (
+        "fail-closed import compatibility for a registry-unavailable capability"
+    ),
+    "app.capabilities.causal_mode": (
+        "fail-closed import compatibility for a registry-unavailable capability"
+    ),
+    "app.capabilities.portfolio_agent": (
+        "fail-closed import compatibility for a registry-unavailable capability"
+    ),
+    "app.components.scoring.schemas": (
+        "typed compatibility view over the canonical dictionary scoring payload"
+    ),
+    "app.services.credit_ledger_service": (
+        "fail-closed facade for the retired unsafe generic ledger writer"
+    ),
+    "app.sub_agents.intent_parser": (
+        "provider-free facade preserving schemas without registering a sixth agent"
+    ),
+}
+
 
 @dataclass
 class ModuleInfo:
@@ -227,6 +266,10 @@ def build_graph(app_root: Path) -> Dict[str, ModuleInfo]:
 
 def entrypoint_roots(graph: Dict[str, ModuleInfo]) -> Set[str]:
     roots = {module for module in DEFAULT_RUNTIME_ROOTS if module in graph}
+    roots.update(module for module in ALEMBIC_TOOLING_ROOTS if module in graph)
+    roots.update(
+        module for module in COMPATIBILITY_IMPORT_ROOTS if module in graph
+    )
     for module, info in graph.items():
         if not info.is_entrypoint:
             continue

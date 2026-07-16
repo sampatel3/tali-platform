@@ -25,7 +25,16 @@ class TaaliChatConversation(Base):
     # agent-aware tools (get_recent_agent_decisions etc.) default to this
     # role_id without the recruiter having to specify it. Null = global
     # cross-role chat (existing behavior).
-    role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=True)
+    role_id = Column(
+        Integer,
+        ForeignKey(
+            "roles.id",
+            name="fk_taali_chat_conversations_role_id_roles",
+            ondelete="SET NULL",
+        ),
+        index=True,
+        nullable=True,
+    )
     title = Column(String, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

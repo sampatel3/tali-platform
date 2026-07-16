@@ -47,11 +47,10 @@ import {
 import {
   isRoleDraft,
   isRoleLive,
-  JobsRoleGrid,
 } from './JobsRoleGrid';
+import { JobsRoleCatalogue } from './JobsRoleCatalogue';
 
-// Paint active/recently synced roles first; additional pages stay explicit so
-// large tenants avoid long-tail query/serialization until requested.
+// Paint a bounded first page; keep every additional page explicitly requested.
 const JOBS_FIRST_PAGE = 24;
 
 const SOURCE_FILTERS = [
@@ -464,6 +463,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
   };
 
   const sourceCounts = useMemo(() => buildSourceCounts(roles), [roles]);
+  const countScopeSuffix = rolesPartial ? ' (loaded)' : '';
   const activeAtsLabel = atsProviderLabel(activeAts);
   const activeAtsRolesCount = activeAts ? sourceCounts[activeAts] : 0;
   const activeAtsLastSyncAt = activeAts === 'bullhorn'
@@ -647,8 +647,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
           tall. */}
       <AgentHeader
         breadcrumbs={[{ label: 'Jobs' }]}
-        kicker={`JOBS · ${sourceCounts.live} LIVE ROLE${sourceCounts.live === 1 ? '' : 'S'}`}
-        title={<>{sourceCounts.live} live <em>roles</em></>}
+        kicker={`JOBS · ${sourceCounts.live} LIVE ROLE${sourceCounts.live === 1 ? '' : 'S'}${countScopeSuffix.toUpperCase()}`}
+        title={<>{sourceCounts.live} live <em>roles</em>{countScopeSuffix}</>}
         period={false}
         subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
         actions={(
@@ -722,7 +722,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
             </div>
             <div>
               <div style={{ fontSize: 'var(--fs-h3)', fontWeight: 600, marginBottom: '2px' }}>
-                Synced from {activeAtsLabel} · {activeAtsRolesCount} role{activeAtsRolesCount === 1 ? '' : 's'}{sourceCounts.full_ats > 0 ? ` · ${sourceCounts.full_ats} created in Taali` : ''}
+                Synced from {activeAtsLabel} · {activeAtsRolesCount} role{activeAtsRolesCount === 1 ? '' : 's'}{countScopeSuffix}{sourceCounts.full_ats > 0 ? ` · ${sourceCounts.full_ats} created in Taali${countScopeSuffix}` : ''}
               </div>
               <div className="meta">
                 <span>
@@ -799,22 +799,22 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
                   key: 'pipeline',
                   label: 'In pipeline',
                   value: formatCount(pipelineCount),
-                  sub: `across ${formatCount(liveRoles)} live role${liveRoles === 1 ? '' : 's'}`,
+                  sub: `across ${formatCount(liveRoles)} live role${liveRoles === 1 ? '' : 's'}${countScopeSuffix}`,
                 },
                 {
                   key: 'roles',
-                  label: 'Live roles',
+                  label: `Live roles${countScopeSuffix}`,
                   value: formatCount(liveRoles),
-                  sub: starredCount > 0 ? `${formatCount(starredCount)} starred` : 'none starred',
+                  sub: starredCount > 0 ? `${formatCount(starredCount)} starred${countScopeSuffix}` : `none starred${countScopeSuffix}`,
                 },
                 {
                   key: 'awaiting',
-                  label: 'Awaiting you',
+                  label: `Awaiting you${countScopeSuffix}`,
                   value: formatCount(awaitingCount),
                   emph: awaitingCount > 0,
                   sub: awaitingCount === 0
                     ? 'queue clear'
-                    : `across ${formatCount(awaitingRoleCount)} role${awaitingRoleCount === 1 ? '' : 's'}`,
+                    : `across ${formatCount(awaitingRoleCount)} role${awaitingRoleCount === 1 ? '' : 's'}${countScopeSuffix}`,
                 },
                 {
                   key: 'budget',
@@ -837,7 +837,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
           aria-label="Filter jobs"
           delay={0.16}
         >
-          <span className="filter-row-label">Show</span>
+          <span className="filter-row-label">Show{countScopeSuffix}</span>
           {SOURCE_FILTERS.map((filter) => (
             <button
               key={filter.key}
@@ -878,14 +878,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
               disabled={loadingMoreRoles}
             >
               {loadingMoreRoles ? <Spinner size={11} /> : null}
-              {loadingMoreRoles ? 'Loading more…' : `Load more roles (${roles.length} shown)`}
+              {loadingMoreRoles ? 'Loading more…' : `Load more roles (${roles.length} loaded)`}
             </button>
           ) : null}
         </Reveal>
 
         {clientRollup ? (
           <div className="client-rollup" role="status">
-            <span className="client-rollup-name">{selectedClientName}</span>
+            <span className="client-rollup-name">{selectedClientName}{countScopeSuffix}</span>
             <span className="client-rollup-stat"><b>{clientRollup.active}</b> open / waiting</span>
             <span className="client-rollup-stat"><b>{clientRollup.filled}</b> filled</span>
             <span className="client-rollup-stat"><b>{clientRollup.filled_external}</b> filled externally</span>
@@ -921,38 +921,28 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
             )}
           />
         ) : (
-          <JobsRoleGrid
+          <JobsRoleCatalogue
             activeAts={activeAts}
             activeAtsLastSyncAt={activeAtsLastSyncAt}
             agentSpendByRole={agentSpendByRole}
+            autoExpandInactive={sourceFilter === 'draft'}
             gridStaggerDone={gridStaggerDone}
+            loadedRoleCount={roles.length}
             onNavigate={onNavigate}
+            onRefresh={loadJobsHub}
             onToggleStar={handleToggleStar}
             reduced={reduced}
+            refreshDisabled={loading || syncing}
             roles={filtered}
+            rolesPartial={rolesPartial}
+            sourceFilterLabel={
+              sourceFilter === 'all'
+                ? ''
+                : SOURCE_FILTERS.find((item) => item.key === sourceFilter)?.label || sourceFilter
+            }
             workspacePaused={Boolean(headerAgent?.workspacePaused)}
           />
         )}
-
-        {!loading && filtered.length > 0 ? (
-          <div className="card flat mt-5 flex flex-wrap items-center justify-between gap-3 px-5 py-4 text-xs text-[var(--mute)]">
-            <span>
-              Showing {filtered.length} of {roles.length} roles
-              {sourceFilter !== 'all' ? ` · filtered by ${SOURCE_FILTERS.find((item) => item.key === sourceFilter)?.label || sourceFilter}` : ''}
-            </span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={loadJobsHub}
-              disabled={loading || syncing}
-            >
-              <MotionLoop kind="spin" active={loading || syncing} className="inline-flex" aria-hidden="true">
-                <RefreshCw size={13} />
-              </MotionLoop>
-              Refresh hub
-            </button>
-          </div>
-        ) : null}
 
       </div>
       </main>

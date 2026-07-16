@@ -7,6 +7,8 @@ import MemoryRouter from '../../test/TestMemoryRouter';
 vi.mock('../../shared/api', () => ({
   roles: {
     list: vi.fn(),
+    star: vi.fn(),
+    unstar: vi.fn(),
     create: vi.fn(),
     uploadJobSpec: vi.fn(),
     addTask: vi.fn(),
@@ -101,6 +103,8 @@ describe('JobsPage Workable sync states', () => {
     // specific tests below override this to exercise the entrance animations.
     setReducedMotion(true);
     apiClient.roles.list.mockResolvedValue({ data: baseRoles });
+    apiClient.roles.star.mockResolvedValue({ data: null });
+    apiClient.roles.unstar.mockResolvedValue({ data: null });
     apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
     apiClient.agent.status.mockResolvedValue({ data: {} });
@@ -139,7 +143,15 @@ describe('JobsPage Workable sync states', () => {
 
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
-    const loadMore = await screen.findByRole('button', { name: /Load more roles \(24 shown\)/i });
+    const loadMore = await screen.findByRole('button', { name: /Load more roles \(24 loaded\)/i });
+    expect(screen.getByRole('main')).toBeInTheDocument();
+    expect(screen.getByText('Loaded roles · A–Z')).toBeInTheDocument();
+    expect(screen.getByText(/24 loaded roles · A–Z/i)).toBeInTheDocument();
+    expect(screen.getByText('Show (loaded)')).toBeInTheDocument();
+    expect(screen.getByText(/Synced from Workable · 24 roles \(loaded\)/i)).toBeInTheDocument();
+    expect(screen.getByText('Live roles (loaded)')).toBeInTheDocument();
+    expect(screen.getByText(/24 of 24 loaded roles match · more roles available/i))
+      .toBeInTheDocument();
     expect(apiClient.roles.list).toHaveBeenCalledTimes(1);
     fireEvent.click(loadMore);
 
@@ -151,6 +163,9 @@ describe('JobsPage Workable sync states', () => {
       });
     });
     expect(await screen.findByText('Role 25')).toBeInTheDocument();
+    expect(screen.getByText('Stable alphabetical order')).toBeInTheDocument();
+    expect(screen.getByText(/25 of 25 loaded roles match/i)).toBeInTheDocument();
+    expect(screen.queryByText(/more roles available/i)).not.toBeInTheDocument();
   });
 
   it('reattaches to an active sync on first load', async () => {
@@ -609,6 +624,185 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelectorAll('.job-agent-pill.is-on')).toHaveLength(0);
   });
 
+  it('orders active roles alphabetically instead of using the API activity order', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          id: 401,
+          name: 'Zulu Engineer',
+          source: 'manual',
+          job_status: 'open',
+        },
+        {
+          ...baseRoles[0],
+          id: 402,
+          name: 'Aardvark Archived',
+          workable_job_state: 'archived',
+        },
+        {
+          ...baseRoles[0],
+          id: 403,
+          name: 'alpha Engineer',
+          source: 'manual',
+          job_status: 'open',
+        },
+        {
+          ...baseRoles[0],
+          id: 404,
+          name: 'Middle Engineer',
+          workable_job_state: 'published',
+        },
+      ],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    await screen.findByText('Zulu Engineer');
+    expect(
+      Array.from(document.querySelectorAll('.job-card .role-name'), (node) => node.textContent),
+    ).toEqual(['alpha Engineer', 'Middle Engineer', 'Zulu Engineer']);
+    expect(screen.queryByText('Aardvark Archived')).not.toBeInTheDocument();
+  });
+
+  it('collapses inactive roles by default and expands them as compact cards', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          id: 411,
+          name: 'Active Engineer',
+          source: 'manual',
+          job_status: 'open',
+        },
+        {
+          ...baseRoles[0],
+          id: 412,
+          name: 'Archived Engineer',
+          workable_job_state: 'archived',
+        },
+        {
+          ...baseRoles[0],
+          id: 413,
+          name: 'Cancelled Engineer',
+          source: 'manual',
+          job_status: 'cancelled',
+        },
+      ],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText('Active Engineer')).toBeInTheDocument();
+    const inactiveToggle = screen.getByRole('button', {
+      name: 'Show archived and inactive roles (2)',
+    });
+    expect(inactiveToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Archived Engineer')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancelled Engineer')).not.toBeInTheDocument();
+
+    fireEvent.click(inactiveToggle);
+
+    const collapseInactive = screen.getByRole('button', {
+      name: 'Hide archived and inactive roles (2)',
+    });
+    expect(collapseInactive).toHaveAttribute('aria-expanded', 'true');
+    const archivedCard = (await screen.findByText('Archived Engineer')).closest('.job-card');
+    const cancelledCard = screen.getByText('Cancelled Engineer').closest('.job-card');
+    [archivedCard, cancelledCard].forEach((card) => {
+      expect(card).toHaveClass('not-live', 'is-compact');
+      expect(card.querySelector('.job-stats')).toBeNull();
+      expect(card.querySelector('.job-foot')).toBeNull();
+    });
+
+    fireEvent.click(collapseInactive);
+    expect(screen.getByRole('button', {
+      name: 'Show archived and inactive roles (2)',
+    })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Archived Engineer')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancelled Engineer')).not.toBeInTheDocument();
+  });
+
+  it('preserves compact-card agent, spend, relationship, client, star, and queue signals', async () => {
+    const onNavigate = vi.fn();
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          id: 421,
+          version: 8,
+          name: 'Archived Coupled Role',
+          workable_job_state: 'archived',
+          role_kind: 'sister',
+          ats_owner_role_name: 'Primary Workable Role',
+          client_name: 'Northwind',
+          department: 'Platform',
+          location: 'Dubai',
+          agentic_mode_enabled: true,
+          monthly_usd_budget_cents: 5000,
+          starred_for_auto_sync: true,
+          stage_counts: { applied: 3, scored: 2 },
+        },
+        {
+          ...baseRoles[0],
+          id: 422,
+          name: 'Archived Queued Role',
+          workable_job_state: 'archived',
+          agentic_mode_enabled: false,
+          assessment_task_provisioning: { activation_intent: { status: 'retry_wait' } },
+        },
+        {
+          ...baseRoles[0],
+          id: 423,
+          name: 'Archived Blocked Role',
+          workable_job_state: 'closed',
+          agentic_mode_enabled: false,
+          assessment_task_provisioning: {
+            activation_intent: { status: 'blocked', last_error: 'Choose a replacement task.' },
+          },
+        },
+      ],
+    });
+    apiClient.agent.rolesBreakdown.mockResolvedValue({
+      data: [{
+        role_id: 421,
+        agentic_mode_enabled: true,
+        budget_cents: 1200,
+        cap_cents: 5000,
+        pending: 2,
+      }],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={onNavigate} /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Show archived and inactive roles (3)',
+    }));
+    const coupledCard = (await screen.findByText('Archived Coupled Role')).closest('.job-card');
+    expect(within(coupledCard).getByText('ON · $12/$50')).toBeInTheDocument();
+    expect(within(coupledCard).getByText('2 awaiting you')).toBeInTheDocument();
+    expect(within(coupledCard).getByText('5 in pipeline')).toBeInTheDocument();
+    expect(within(coupledCard).getByText(/Coupled to Primary Workable Role in Workable/i))
+      .toBeInTheDocument();
+    expect(within(coupledCard).getByText('Northwind')).toBeInTheDocument();
+    expect(within(coupledCard).getByText(/Platform · Dubai/i)).toBeInTheDocument();
+
+    const starButton = within(coupledCard).getByRole('button', {
+      name: 'Unstar role (stop auto-sync)',
+    });
+    fireEvent.click(starButton);
+    expect(apiClient.roles.unstar).toHaveBeenCalledWith(421, 8);
+    expect(onNavigate).not.toHaveBeenCalled();
+
+    const queuedCard = screen.getByText('Archived Queued Role').closest('.job-card');
+    expect(within(queuedCard).getByText('TURN-ON QUEUED')).toBeInTheDocument();
+    const blockedCard = screen.getByText('Archived Blocked Role').closest('.job-card');
+    expect(within(blockedCard).getByText('NEEDS INPUT')).toHaveAttribute(
+      'title',
+      'Choose a replacement task.',
+    );
+  });
+
   it('greys only explicitly non-live ATS roles, independently of agent state', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
@@ -666,27 +860,32 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={onNavigate} /></MemoryRouter>);
 
     const publishedCard = (await screen.findByText('Published Role')).closest('.job-card');
-    const closedCard = screen.getByText('Closed Role').closest('.job-card');
     const manualCard = screen.getByText('Manual Role').closest('.job-card');
     const pausedPublishedCard = screen.getByText('Paused Published Role').closest('.job-card');
     const unknownStateCard = screen.getByText('Unknown Workable State').closest('.job-card');
+    expect(screen.queryByText('Closed Role')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inactive Sister Role')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Show archived and inactive roles (2)',
+    }));
+    const closedCard = (await screen.findByText('Closed Role')).closest('.job-card');
     const inactiveSisterCard = screen.getByText('Inactive Sister Role').closest('.job-card');
 
     expect(closedCard).toHaveClass('not-live');
+    expect(closedCard).toHaveClass('is-compact');
     expect(closedCard).toHaveClass('agent-on');
     expect(publishedCard).not.toHaveClass('not-live');
     expect(manualCard).not.toHaveClass('not-live');
     expect(pausedPublishedCard).not.toHaveClass('not-live');
     expect(unknownStateCard).not.toHaveClass('not-live');
     expect(inactiveSisterCard).toHaveClass('not-live');
+    expect(inactiveSisterCard).toHaveClass('is-compact');
     expect(publishedCard).toHaveClass('agent-on');
     expect(pausedPublishedCard).not.toHaveClass('agent-on');
-    await waitFor(() => expect(closedCard).toHaveStyle({ opacity: '0.55' }));
     expect(publishedCard).toHaveStyle({ opacity: '1' });
     expect(manualCard).toHaveStyle({ opacity: '1' });
     expect(pausedPublishedCard).toHaveStyle({ opacity: '1' });
     expect(unknownStateCard).toHaveStyle({ opacity: '1' });
-    expect(inactiveSisterCard).toHaveStyle({ opacity: '0.55' });
 
     expect(closedCard).toHaveAttribute('role', 'button');
     expect(closedCard).toHaveAttribute('tabindex', '0');
@@ -844,13 +1043,21 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const nativeOpenCard = (await screen.findByText('Native Open')).closest('.job-card');
-    const nativeDraftCard = screen.getByText('Native Draft').closest('.job-card');
+    expect(screen.queryByText('Native Draft')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Show archived and inactive roles (1)',
+    }));
+    const nativeDraftCard = (await screen.findByText('Native Draft')).closest('.job-card');
     expect(screen.queryByRole('button', { name: 'Filter' })).not.toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Filter jobs' })).toBeInTheDocument();
     expect(nativeOpenCard).not.toHaveClass('not-live');
     expect(nativeDraftCard).toHaveClass('not-live');
     expect(screen.getByRole('button', { name: /^Live2$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Draft1$/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Hide archived and inactive roles (1)',
+    }));
+    await waitFor(() => expect(screen.queryByText('Native Draft')).not.toBeInTheDocument());
 
     const liveFilter = screen.getByRole('button', { name: /^Live2$/i });
     expect(liveFilter).toHaveAttribute('aria-pressed', 'false');
@@ -862,6 +1069,9 @@ describe('JobsPage Workable sync states', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Draft1$/i }));
     expect(await screen.findByText('Native Draft')).toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: 'Hide archived and inactive roles (1)',
+    })).toHaveAttribute('aria-expanded', 'true');
     await waitFor(() => expect(screen.queryByText('Native Open')).not.toBeInTheDocument());
     expect(screen.queryByText('Provider Live')).not.toBeInTheDocument();
   });
@@ -938,7 +1148,11 @@ describe('JobsPage entrance motion', () => {
 
     const liveCard = (await screen.findByText('Published Role')).closest('.job-card');
     const draftCard = screen.getByText('Unpublished Role').closest('.job-card');
-    const closedCard = screen.getByText('Closed Preview').closest('.job-card');
+    expect(screen.queryByText('Closed Preview')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Show archived and inactive roles (1)',
+    }));
+    const closedCard = (await screen.findByText('Closed Preview')).closest('.job-card');
     expect(within(liveCard).getByText('Live')).toBeInTheDocument();
     expect(within(draftCard).queryByText('Live')).not.toBeInTheDocument();
     expect(within(closedCard).queryByText('Live')).not.toBeInTheDocument();

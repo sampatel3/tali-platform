@@ -59,6 +59,7 @@ class AgentDecision(Base):
         UniqueConstraint("idempotency_key", name="uq_agent_decisions_idempotency_key"),
         Index("ix_agent_decisions_application_status", "application_id", "status"),
         Index("ix_agent_decisions_role_status", "role_id", "status"),
+        Index("ix_agent_decisions_dedup_key", "decision_dedup_key"),
     )
 
     id = Column(BigInteger, primary_key=True, index=True)
@@ -147,7 +148,7 @@ class AgentDecision(Base):
     # 10 minutes (discarded). Intentional re-emit after inputs change
     # changes the hash and is allowed through. Non-unique so the
     # dedup window logic lives in code, not the schema.
-    decision_dedup_key = Column(String(64), nullable=True, index=True)
+    decision_dedup_key = Column(String(64), nullable=True)
 
     idempotency_key = Column(String, nullable=False)
 

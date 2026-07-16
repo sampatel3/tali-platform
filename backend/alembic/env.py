@@ -5,6 +5,7 @@ from alembic import context
 
 # Import Base and all models so autogenerate can detect them
 from app.platform.database import Base
+from app.platform.alembic_autogenerate_policy import include_object
 from app.models import *  # noqa: F401, F403
 
 config = context.config
@@ -22,6 +23,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=database_url,
         target_metadata=target_metadata,
+        include_object=include_object,
         version_table_schema=version_table_schema,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -36,6 +38,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            include_object=include_object,
             version_table_schema=version_table_schema,
         )
         with context.begin_transaction():

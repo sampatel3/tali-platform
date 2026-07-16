@@ -64,7 +64,7 @@ class PolicyVersion(Base):
     training_window_end = Column(DateTime(timezone=True), nullable=True)
     trained_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    status = Column(String(16), nullable=False, server_default="candidate", index=True)
+    status = Column(String(16), nullable=False, server_default="candidate")
     promoted_at = Column(DateTime(timezone=True), nullable=True)
     archived_at = Column(DateTime(timezone=True), nullable=True)
 
