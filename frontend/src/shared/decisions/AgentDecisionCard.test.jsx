@@ -131,13 +131,13 @@ describe('AgentDecisionCard decision narrative', () => {
     expect(screen.getByText(/2 must-have requirements were marked missing/i)).toBeInTheDocument();
     expect(screen.getByText(/policy revision #7/)).toBeInTheDocument();
 
-    // Factor chips render in the card narrative. The candidate summary does
-    // NOT — cards carry only the cause; the summary lives in the report.
+    // Factor chips render in the card narrative, alongside the compact
+    // candidate overview (the full un-clamped summary lives on the report).
     expect(screen.getByText(/Knowledge graph development/)).toBeInTheDocument();
-    expect(screen.queryByText(
+    expect(screen.getByText('CANDIDATE SUMMARY')).toBeInTheDocument();
+    expect(screen.getByText(
       '18 years in Lakehouse and dimensional modelling. The material gap is unproven knowledge-graph delivery.',
-    )).not.toBeInTheDocument();
-    expect(screen.queryByText('CANDIDATE SUMMARY')).not.toBeInTheDocument();
+    )).toBeInTheDocument();
   });
 
   it('surfaces confidence as the chip for genuine agent judgment', () => {
@@ -157,8 +157,10 @@ describe('AgentDecisionCard decision narrative', () => {
     // Agent reasoning prints inline, so no redundant "why?" disclosure.
     expect(screen.queryByRole('button', { name: 'why?' })).not.toBeInTheDocument();
     expect(screen.getByText('Reject recommended after reviewing the conflicting evidence.')).toBeInTheDocument();
-    // The candidate summary is not surfaced on the card.
-    expect(screen.queryByText('Partial role fit.')).not.toBeInTheDocument();
+    // The compact candidate overview renders under its own kicker, so the two
+    // prose blocks stay distinguishable.
+    expect(screen.getByText('Partial role fit.')).toBeInTheDocument();
+    expect(screen.getByText('CANDIDATE SUMMARY')).toBeInTheDocument();
   });
 
   it('renders a 2-line clamp with a Show more toggle on long agent reasoning', () => {
@@ -179,7 +181,7 @@ describe('AgentDecisionCard decision narrative', () => {
     expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument();
   });
 
-  it('drops the candidate summary on card density but keeps it on report density', () => {
+  it('shows the compact candidate summary (pill + clamp) on card density', () => {
     const summary = 'Partial fit — strong AWS depth with a material knowledge-graph gap.';
     const decision = {
       ...baseDecision,
@@ -193,20 +195,45 @@ describe('AgentDecisionCard decision narrative', () => {
     };
 
     const card = render(<DecisionNarrative decision={decision} density="card" />);
-    expect(card.queryByText('CANDIDATE SUMMARY')).not.toBeInTheDocument();
-    expect(card.queryByText(/material knowledge-graph gap/)).not.toBeInTheDocument();
+    expect(card.getByText('CANDIDATE SUMMARY')).toBeInTheDocument();
+    expect(card.getByText('Partial fit')).toBeInTheDocument();
+    expect(card.getByText(/material knowledge-graph gap/)).toBeInTheDocument();
     card.unmount();
 
     const report = render(<DecisionNarrative decision={decision} density="report" />);
     expect(report.getByText(/material knowledge-graph gap/)).toBeInTheDocument();
   });
 
-  it('renders nothing on card density for a policy decision with no factors', () => {
+  it('renders the candidate summary on a factorless policy card, but no reason block', () => {
+    const { container, getByText, queryByText } = render(
+      <DecisionNarrative
+        decision={{
+          ...baseDecision,
+          candidate_summary: 'Clear misfit — signal-processing background with no LLM or RAG work.',
+          decision_explanation: {
+            source: 'policy',
+            rule: 'pre_screen_auto_reject_eligible',
+            summary: 'Reject recommended at pre-screen.',
+            factors: [],
+          },
+        }}
+        density="card"
+      />,
+    );
+    expect(getByText('CANDIDATE SUMMARY')).toBeInTheDocument();
+    expect(getByText(/signal-processing background/)).toBeInTheDocument();
+    // The pending slab's chip + why? carry the policy cause on cards.
+    expect(queryByText(/WHY THE POLICY RECOMMENDS THIS/i)).not.toBeInTheDocument();
+    expect(container.firstChild).not.toBeNull();
+  });
+
+  it('renders nothing on card density with no explanation content and no summary', () => {
     const { container } = render(
       <DecisionNarrative
         decision={{
           ...baseDecision,
-          candidate_summary: 'Some summary that only belongs on the report.',
+          reasoning: '',
+          candidate_summary: null,
           decision_explanation: {
             source: 'policy',
             rule: 'pre_screen_auto_reject_eligible',
