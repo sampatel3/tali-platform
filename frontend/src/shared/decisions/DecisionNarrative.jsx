@@ -66,7 +66,7 @@ const FactorChips = ({ factors, max, total = factors.length }) => {
 // `density` picks the surface: 'card' (AgentDecisionCard / rail — chips + clamped
 // summary, no boxed prose) or 'report' (candidate report — one merged FIT SUMMARY
 // block). `compact` is the retired boolean prop: true maps to density='card'.
-export const DecisionNarrative = ({ decision, density = 'report', compact = false }) => {
+export const DecisionNarrative = ({ decision, density = 'report', compact = false, showPolicyReason = false }) => {
   if (!decision) return null;
   const resolvedDensity = compact ? 'card' : density;
 
@@ -123,17 +123,23 @@ export const DecisionNarrative = ({ decision, density = 'report', compact = fals
       && explanation.rule === 'must_have_blocked'
       && factors.length > 0;
     const showAgentReason = source !== 'policy' && Boolean(decisionReason);
-    if (!showMustHaveChips && !showAgentReason) return null;
+    // Pending cards carry the policy cause on the recommendation slab (chip +
+    // "why?"), but resolved/processing cards have no slab — the caller sets
+    // showPolicyReason so the cause still renders on history surfaces.
+    const showPolicyReasonBlock = showPolicyReason && source === 'policy' && Boolean(decisionReason);
+    if (!showMustHaveChips && !showAgentReason && !showPolicyReasonBlock) return null;
     return (
       <div className="decision-narrative is-card">
         {showMustHaveChips ? (
           <FactorChips factors={factors} max={3} total={explanationFactorTotal(explanation)} />
         ) : null}
 
-        {showAgentReason ? (
+        {showAgentReason || showPolicyReasonBlock ? (
           <section className="decision-narrative-block" aria-label="Why this decision">
-            <div className="decision-narrative-kicker">WHY THE AGENT RECOMMENDS THIS</div>
-            <ClampBlock text={decisionReason} className="decision-narrative-primary" />
+            <div className="decision-narrative-kicker">
+              {source === 'policy' ? 'WHY THE POLICY RECOMMENDS THIS' : 'WHY THE AGENT RECOMMENDS THIS'}
+            </div>
+            <ClampBlock text={context ? `${decisionReason} ${context}` : decisionReason} className="decision-narrative-primary" />
           </section>
         ) : null}
       </div>

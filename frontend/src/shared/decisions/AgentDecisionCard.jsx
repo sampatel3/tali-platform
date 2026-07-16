@@ -268,7 +268,16 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      {!hideDecisionParts ? <DecisionNarrative decision={decision} density="card" /> : null}
+      {/* Resolved/processing cards (timeline, history filters) have no rec slab,
+          so the chip + "why?" never render there — the narrative must carry the
+          policy cause itself or those cards show no explanation at all. */}
+      {!hideDecisionParts ? (
+        <DecisionNarrative
+          decision={decision}
+          density="card"
+          showPolicyReason={!(isPending && !middleSlot)}
+        />
+      ) : null}
 
       {/* Trust readout right under the summary — the specific things to verify
           and the cross-source corroborations we confirmed. Same component the

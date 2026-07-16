@@ -219,6 +219,41 @@ describe('AgentDecisionCard decision narrative', () => {
     );
     expect(container.firstChild).toBeNull();
   });
+
+  it('keeps the policy cause visible on a resolved card, where no rec slab renders', () => {
+    // Timeline / history surfaces render approved|processing cards: the
+    // pending-only recommendation slab (chip + why?) is absent, so the
+    // narrative itself must carry the causal sentence.
+    renderCard({
+      ...baseDecision,
+      status: 'approved',
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score >= role_fit_min',
+        summary: 'Send an assessment recommended because the role-fit score of 72 clears the 55 threshold.',
+        factors: [],
+        score_context: { role_fit_score: 72, threshold: 55, threshold_passed: true },
+      },
+    });
+    expect(screen.getByText(/WHY THE POLICY RECOMMENDS THIS/i)).toBeTruthy();
+    expect(screen.getByText(/clears the 55 threshold/)).toBeTruthy();
+  });
+
+  it('does not duplicate the policy cause inline on a pending card (it lives behind why?)', () => {
+    renderCard({
+      ...baseDecision,
+      status: 'pending',
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score >= role_fit_min',
+        summary: 'Send an assessment recommended because the role-fit score of 72 clears the 55 threshold.',
+        factors: [],
+        score_context: { role_fit_score: 72, threshold: 55, threshold_passed: true },
+      },
+    });
+    expect(screen.queryByText(/WHY THE POLICY RECOMMENDS THIS/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /why\?/i })).toBeTruthy();
+  });
 });
 
 describe('AgentDecisionCard button design-system contract', () => {
