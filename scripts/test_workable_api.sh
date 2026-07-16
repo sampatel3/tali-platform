@@ -2,15 +2,15 @@
 # Test Workable API integration against production backend.
 #
 # Option A - Admin endpoint (no user login needed):
-#   SECRET_KEY="your-railway-secret" EMAIL=sampatel@deeplight.ae ./scripts/test_workable_api.sh
+#   ADMIN_SECRET="your-admin-secret" EMAIL=sampatel@deeplight.ae ./scripts/test_workable_api.sh
 #
 # Option B - User token:
 #   AUTH_TOKEN="..." ./scripts/test_workable_api.sh
 #   EMAIL=sampatel@deeplight.ae PASSWORD="..." ./scripts/test_workable_api.sh
 #
-# Option C - Use Railway CLI to get SECRET_KEY:
-#   SECRET_KEY=$(railway variables --json | python3 -c "import sys,json; print(json.load(sys.stdin).get('SECRET_KEY',''))")
-#   EMAIL=sampatel@deeplight.ae SECRET_KEY="$SECRET_KEY" ./scripts/test_workable_api.sh
+# Option C - Use Railway CLI to get ADMIN_SECRET:
+#   ADMIN_SECRET=$(railway variables --json | python3 -c "import sys,json; print(json.load(sys.stdin).get('ADMIN_SECRET',''))")
+#   EMAIL=sampatel@deeplight.ae ADMIN_SECRET="$ADMIN_SECRET" ./scripts/test_workable_api.sh
 
 set -e
 
@@ -18,10 +18,10 @@ BACKEND_URL="${BACKEND_URL:-https://resourceful-adaptation-production.up.railway
 API_BASE="${BACKEND_URL}/api/v1"
 TEST_EMAIL="${EMAIL:-sampatel@deeplight.ae}"
 
-if [ -n "$SECRET_KEY" ]; then
+if [ -n "$ADMIN_SECRET" ]; then
   echo "Trying admin diagnostic for $TEST_EMAIL..."
   HTTP=$(curl -s -o /tmp/workable_admin.json -w "%{http_code}" -X GET "${API_BASE}/workable/admin/diagnostic?email=${TEST_EMAIL}" \
-    -H "X-Admin-Secret: ${SECRET_KEY}")
+    -H "X-Admin-Secret: ${ADMIN_SECRET}")
   if [ "$HTTP" = "200" ]; then
     python3 -m json.tool < /tmp/workable_admin.json
     echo "Done (admin)."
@@ -33,7 +33,7 @@ fi
 
 if [ -z "$AUTH_TOKEN" ]; then
   if [ -z "$EMAIL" ] || [ -z "$PASSWORD" ]; then
-    echo "Set SECRET_KEY + EMAIL (admin), or AUTH_TOKEN, or EMAIL + PASSWORD." 1>&2
+    echo "Set ADMIN_SECRET + EMAIL (admin), or AUTH_TOKEN, or EMAIL + PASSWORD." 1>&2
     exit 1
   fi
   echo "Logging in as $EMAIL..."

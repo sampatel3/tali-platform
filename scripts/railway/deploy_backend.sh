@@ -59,7 +59,8 @@ RAILWAY_STATUS_SCOPE=workers \
   "$ROOT_DIR/scripts/railway/check_status.sh"
 
 STATUS_FILE="$(mktemp)"
-trap 'rm -f "$STATUS_FILE"' EXIT
+WEB_VARIABLES_FILE="$(mktemp)"
+trap 'rm -f "$STATUS_FILE" "$WEB_VARIABLES_FILE"' EXIT
 railway status --json > "$STATUS_FILE"
 previous_id="$(
   railway_service_deployment_id "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE"
@@ -88,7 +89,33 @@ if [[ -z "$BACKEND_BASE_URL" ]]; then
   fi
 fi
 railway_wait_for_readiness "$BACKEND_BASE_URL"
+
+# /ready intentionally exposes only a redacted readiness verdict. Fetch the
+# already-configured operator secret without logging Railway's variable
+# payload, then use it only for the authenticated diagnostic probe.
+railway variable list \
+  --service "$WEB_SERVICE" \
+  --environment "$ENV_NAME" \
+  --json > "$WEB_VARIABLES_FILE"
+RAILWAY_ADMIN_SECRET="$(python3 - "$WEB_VARIABLES_FILE" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+secret = str(payload.get("ADMIN_SECRET") or "") if isinstance(payload, dict) else ""
+if len(secret) < 32 or "\n" in secret or "\r" in secret:
+    print(
+        "error: production ADMIN_SECRET must be configured with at least 32 "
+        "characters before authenticated capability validation.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print(secret, end="")
+PY
+)"
+export RAILWAY_ADMIN_SECRET
 railway_validate_default_agent_capabilities "$BACKEND_BASE_URL"
+unset RAILWAY_ADMIN_SECRET
 
 RAILWAY_ENVIRONMENT="$ENV_NAME" \
 RAILWAY_BACKEND_SERVICE="$WEB_SERVICE" \

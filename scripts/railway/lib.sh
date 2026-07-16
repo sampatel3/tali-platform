@@ -251,6 +251,36 @@ PY
   return "$result"
 }
 
+railway_scoring_policy_from_file() {
+  local variables_file="$1"
+
+  python3 - "$variables_file" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+if not isinstance(payload, dict):
+    print("error: unexpected Railway variable payload for the web service.", file=sys.stderr)
+    raise SystemExit(1)
+
+raw_threshold = str(payload.get("PRE_SCREEN_THRESHOLD") or "30").strip()
+raw_gate = str(payload.get("ENABLE_PRE_SCREEN_GATE") or "false").strip().lower()
+try:
+    threshold = int(raw_threshold)
+except ValueError:
+    print("error: PRE_SCREEN_THRESHOLD must be an integer.", file=sys.stderr)
+    raise SystemExit(1)
+if not 0 <= threshold <= 100:
+    print("error: PRE_SCREEN_THRESHOLD must be between 0 and 100.", file=sys.stderr)
+    raise SystemExit(1)
+if raw_gate not in {"true", "false"}:
+    print("error: ENABLE_PRE_SCREEN_GATE must be true or false.", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"{threshold}\t{raw_gate}")
+PY
+}
+
 railway_wait_for_readiness() {
   local base_url="${1%/}"
   local timeout_seconds="${RAILWAY_READINESS_TIMEOUT_SECONDS:-420}"
@@ -274,14 +304,27 @@ railway_wait_for_readiness() {
 
 railway_validate_default_agent_capabilities() {
   local base_url="${1%/}"
-  local health_file
-  health_file="$(mktemp)"
-  if ! curl --fail --silent --show-error --max-time 15 \
-    "$base_url/ready" > "$health_file"; then
-    rm -f "$health_file"
-    echo "error: could not read agent capability status from ${base_url}/ready." >&2
+  local admin_secret="${RAILWAY_ADMIN_SECRET:-}"
+  if [[ ${#admin_secret} -lt 32 \
+    || "$admin_secret" == *$'\n'* \
+    || "$admin_secret" == *$'\r'* ]]; then
+    echo "error: RAILWAY_ADMIN_SECRET must contain the production ADMIN_SECRET (at least 32 characters, no newlines)." >&2
     return 1
   fi
+
+  local health_file auth_header_file
+  health_file="$(mktemp)"
+  auth_header_file="$(mktemp)"
+  chmod 600 "$auth_header_file"
+  printf 'X-Admin-Secret: %s\n' "$admin_secret" > "$auth_header_file"
+  if ! curl --fail --silent --show-error --max-time 15 \
+    --header "@$auth_header_file" \
+    "$base_url/admin/health" > "$health_file"; then
+    rm -f "$health_file" "$auth_header_file"
+    echo "error: could not read authenticated agent capability status from ${base_url}/admin/health." >&2
+    return 1
+  fi
+  rm -f "$auth_header_file"
 
   local result=0
   python3 - "$health_file" <<'PY' || result=$?

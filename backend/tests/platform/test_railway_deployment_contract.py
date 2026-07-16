@@ -48,10 +48,59 @@ def test_predeploy_pins_metering_and_runs_separate_migrations():
     assert "ATS_PUBLIC_APPLY_ENABLED=true" in script
     assert "BULLHORN_ENABLED=true" in script
     assert "MVP_DISABLE_WORKABLE=false" in script
+    assert "TRUST_RAILWAY_X_REAL_IP=true" in script
+    assert 'railway_scoring_policy_from_file "$WEB_VARIABLES_FILE"' in script
+    assert 'PRE_SCREEN_THRESHOLD="$PRE_SCREEN_THRESHOLD"' in script
+    assert 'ENABLE_PRE_SCREEN_GATE="$ENABLE_PRE_SCREEN_GATE"' in script
     assert "--skip-deploys" in script
     assert 'payload.get("DATABASE_PUBLIC_URL")' in script
-    assert '[sys.executable, "-m", "alembic", "upgrade", "head"]' in script
-    assert '[sys.executable, "-m", "alembic", "current"]' in script
+    assert '[sys.executable, "-m", "app.scripts.database_migrate"]' in script
+    assert '[sys.executable, "-m", "alembic", "upgrade", "head"]' not in script
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({}, "30\tfalse"),
+        ({"PRE_SCREEN_THRESHOLD": "50", "ENABLE_PRE_SCREEN_GATE": "true"}, "50\ttrue"),
+    ],
+)
+def test_scoring_policy_parser_validates_and_defaults(tmp_path: Path, payload, expected):
+    variables_file = tmp_path / "variables.json"
+    variables_file.write_text(json.dumps(payload))
+    command = (
+        f"source {RAILWAY_DIR / 'lib.sh'}; "
+        f"railway_scoring_policy_from_file {variables_file}"
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", command], check=True, capture_output=True, text=True
+    )
+
+    assert result.stdout.strip() == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"PRE_SCREEN_THRESHOLD": "101"},
+        {"PRE_SCREEN_THRESHOLD": "not-a-number"},
+        {"ENABLE_PRE_SCREEN_GATE": "sometimes"},
+    ],
+)
+def test_scoring_policy_parser_rejects_invalid_values(tmp_path: Path, payload):
+    variables_file = tmp_path / "variables.json"
+    variables_file.write_text(json.dumps(payload))
+    command = (
+        f"source {RAILWAY_DIR / 'lib.sh'}; "
+        f"railway_scoring_policy_from_file {variables_file}"
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", command], capture_output=True, text=True
+    )
+
+    assert result.returncode != 0
 
 
 def test_worker_wrapper_enforces_split_queue_and_single_beat_topology():
@@ -71,6 +120,7 @@ def test_web_wrapper_checks_workers_and_polls_readiness():
     assert "railway_wait_for_new_successful_deployment" in script
     assert "railway_wait_for_readiness" in script
     assert "railway_validate_default_agent_capabilities" in script
+    assert 'payload.get("ADMIN_SECRET")' in script
 
 
 def test_status_wrapper_validates_agent_and_ats_contract_everywhere():
@@ -80,6 +130,7 @@ def test_status_wrapper_validates_agent_and_ats_contract_everywhere():
     assert '"ATS_PUBLIC_APPLY_ENABLED" "true"' in script
     assert '"BULLHORN_ENABLED" "true"' in script
     assert '"MVP_DISABLE_WORKABLE" "false"' in script
+    assert '"TRUST_RAILWAY_X_REAL_IP" "true"' in script
 
 
 def test_default_agent_capability_gate_covers_assessment_providers():
@@ -93,6 +144,10 @@ def test_default_agent_capability_gate_covers_assessment_providers():
         "github_mock_mode=false",
     ):
         assert capability in script
+    validator = script.split("railway_validate_default_agent_capabilities()", 1)[1]
+    assert '"$base_url/admin/health"' in validator
+    assert "X-Admin-Secret: %s" in validator
+    assert '"$base_url/ready"' not in validator
 
 
 def test_status_helpers_resolve_environment_specific_service(tmp_path: Path):
@@ -153,7 +208,32 @@ def test_default_agent_capability_gate_fails_closed(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_curl = fake_bin / "curl"
-    fake_curl.write_text("#!/usr/bin/env bash\ncat \"$FAKE_HEALTH_JSON\"\n")
+    fake_curl.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+header_file=""
+url=""
+while (( $# )); do
+  case "$1" in
+    --header)
+      header_file="${2#@}"
+      shift 2
+      ;;
+    http*)
+      url="$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ "$url" == "https://api.example.test/admin/health" ]]
+[[ -n "$header_file" ]]
+[[ "$(cat "$header_file")" == "X-Admin-Secret: $RAILWAY_ADMIN_SECRET" ]]
+cat "$FAKE_HEALTH_JSON"
+"""
+    )
     fake_curl.chmod(0o755)
     health_file = tmp_path / "health.json"
     capabilities = {
@@ -184,6 +264,7 @@ def test_default_agent_capability_gate_fails_closed(tmp_path: Path):
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "FAKE_HEALTH_JSON": str(health_file),
+        "RAILWAY_ADMIN_SECRET": "test-admin-secret-that-is-at-least-32-characters",
     }
 
     healthy = subprocess.run(
@@ -206,3 +287,28 @@ def test_default_agent_capability_gate_fails_closed(tmp_path: Path):
     )
     assert unhealthy.returncode != 0
     assert "resend_probe_ok" in unhealthy.stderr
+
+
+def test_default_agent_capability_gate_requires_admin_secret(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "curl-was-called"
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(f"#!/usr/bin/env bash\ntouch {marker}\n")
+    fake_curl.chmod(0o755)
+    command = (
+        f"source {RAILWAY_DIR / 'lib.sh'}; "
+        "railway_validate_default_agent_capabilities https://api.example.test"
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+    }
+
+    result = subprocess.run(
+        ["bash", "-c", command], env=env, capture_output=True, text=True
+    )
+
+    assert result.returncode != 0
+    assert "RAILWAY_ADMIN_SECRET" in result.stderr
+    assert not marker.exists()

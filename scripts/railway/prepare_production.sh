@@ -43,6 +43,17 @@ for service in \
   railway_service_snapshot "$STATUS_FILE" "$ENV_NAME" "$service" >/dev/null
 done
 
+# The pre-screen gate is process-local, so workers must inherit the web
+# service's resolved policy. Reading it once and propagating the validated
+# values prevents identical candidates being gated differently by the API and
+# Celery after an env-only policy change.
+railway variable list \
+  --service "$WEB_SERVICE" \
+  --environment "$ENV_NAME" \
+  --json > "$WEB_VARIABLES_FILE"
+SCORING_POLICY="$(railway_scoring_policy_from_file "$WEB_VARIABLES_FILE")"
+IFS=$'\t' read -r PRE_SCREEN_THRESHOLD ENABLE_PRE_SCREEN_GATE <<< "$SCORING_POLICY"
+
 echo "Pinning the production agent contract on web and both workers without deploying..."
 for service in \
   "$WEB_SERVICE" \
@@ -55,7 +66,10 @@ for service in \
     USAGE_METER_LIVE=true \
     ATS_PUBLIC_APPLY_ENABLED=true \
     BULLHORN_ENABLED=true \
-    MVP_DISABLE_WORKABLE=false >/dev/null
+    MVP_DISABLE_WORKABLE=false \
+    TRUST_RAILWAY_X_REAL_IP=true \
+    PRE_SCREEN_THRESHOLD="$PRE_SCREEN_THRESHOLD" \
+    ENABLE_PRE_SCREEN_GATE="$ENABLE_PRE_SCREEN_GATE" >/dev/null
 done
 for service in \
   "$WEB_SERVICE" \
@@ -69,16 +83,17 @@ for service in \
     "$ENV_NAME" "$service" "BULLHORN_ENABLED" "true"
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "MVP_DISABLE_WORKABLE" "false"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "TRUST_RAILWAY_X_REAL_IP" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "PRE_SCREEN_THRESHOLD" "$PRE_SCREEN_THRESHOLD"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "ENABLE_PRE_SCREEN_GATE" "$ENABLE_PRE_SCREEN_GATE"
 done
 
 # Fetch the resolved public database URL without printing any Railway variables.
 # Migrations run as a separate predeploy operation, before either worker starts
 # executing code that may depend on the new schema.
-railway variable list \
-  --service "$WEB_SERVICE" \
-  --environment "$ENV_NAME" \
-  --json > "$WEB_VARIABLES_FILE"
-
 python3 - "$WEB_VARIABLES_FILE" "$BACKEND_DIR" <<'PY'
 import json
 import os
@@ -116,16 +131,9 @@ if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(
 env = os.environ.copy()
 env["DATABASE_PUBLIC_URL"] = database_url
 env["DATABASE_URL"] = database_url
-print(f"Running production migrations against {hostname} ...", flush=True)
+print(f"Running locked production bootstrap/migrations against {hostname} ...", flush=True)
 subprocess.run(
-    [sys.executable, "-m", "alembic", "upgrade", "head"],
-    cwd=backend_dir,
-    env=env,
-    check=True,
-)
-print("Verifying production Alembic revision ...", flush=True)
-subprocess.run(
-    [sys.executable, "-m", "alembic", "current"],
+    [sys.executable, "-m", "app.scripts.database_migrate"],
     cwd=backend_dir,
     env=env,
     check=True,
