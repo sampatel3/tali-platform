@@ -18,9 +18,21 @@ from ...models.role_brief import RoleBrief
 from ...platform.config import settings
 from ...services.client_service import compute_margin
 from ...services.ats_role_lifecycle import ats_job_lifecycle
-from ...services.requisition_chat_service import compute_gaps
+from ...services.requisition_chat_service import compute_completeness, compute_gaps
 from ...services.requisition_template_service import resolve_template
 from ...services.related_role_service import RelatedRoleError, preview_related_role
+from ...services.related_role_spec_hydration import extract_explicit_responsibilities
+
+
+class _BriefTemplateValueView:
+    """Read-only brief proxy with serializer-only custom-field hydration."""
+
+    def __init__(self, brief: RoleBrief, custom_fields: dict[str, Any]):
+        self._brief = brief
+        self.custom_fields = custom_fields
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._brief, name)
 
 
 def _job_page_url(token: str) -> str:
@@ -86,6 +98,18 @@ _BRIEF_FIELDS = (
     "completeness",
 )
 
+_INTERNAL_AGENT_STATE_KEYS = frozenset(
+    {
+        "client_source_material",
+        "client_source_hydration_digest",
+        "client_canonical_source",
+        "client_canonical_spec_mode",
+        "client_pending_job_spec_source",
+        "recruiter_source_hydration_digest",
+        "pending_job_spec_source",
+    }
+)
+
 
 def _serialize_brief(
     brief: RoleBrief,
@@ -98,6 +122,11 @@ def _serialize_brief(
     empty), and the consultancy economics (client_name + margin/margin_pct)."""
     template = resolve_template(org)
     payload: dict[str, Any] = {k: getattr(brief, k, None) for k in _BRIEF_FIELDS}
+    payload["agent_state"] = {
+        key: value
+        for key, value in dict(brief.agent_state or {}).items()
+        if key not in _INTERNAL_AGENT_STATE_KEYS
+    }
     source_role = brief.source_role
     payload["brief_kind"] = "related_role" if brief.source_role_id else "standard"
     payload["source_role"] = (
@@ -129,13 +158,28 @@ def _serialize_brief(
     # brief hasn't captured its own — render-time only, not persisted — so the
     # About-us section fills even on requisitions created before it was set.
     custom_fields = dict(brief.custom_fields or {})
+    # Read-time compatibility view for related-role drafts created before the
+    # cloned JD was structured. Keep GET read-only (mutation authorization is
+    # enforced by chat/PATCH/publish), while still showing explicitly headed
+    # responsibilities and accurate blockers immediately in the existing UI.
+    if brief.source_role_id and brief.role_id is None and not custom_fields.get("responsibilities"):
+        saved_spec = str(
+            (brief.agent_state or {}).get("jd_override") or brief.raw_input or ""
+        ).strip()
+        responsibilities = extract_explicit_responsibilities(saved_spec)
+        if responsibilities:
+            custom_fields["responsibilities"] = responsibilities
+    template_value_view = _BriefTemplateValueView(brief, custom_fields)
     org_blurb = (getattr(org, "company_blurb", None) or "").strip() if org else ""
     if org_blurb and not str(custom_fields.get("company_description") or "").strip():
         custom_fields["company_description"] = org_blurb
     payload["custom_fields"] = custom_fields
     payload["messages"] = brief.messages or []
-    payload["completeness"] = int(brief.completeness or 0)
-    payload["gaps"] = compute_gaps(brief, template)
+    # Derive both values from the same live template/value snapshot. The column
+    # remains a useful cache, but serializers must never pair stale percentage
+    # data with freshly-computed gaps after a manual or provider mutation.
+    payload["completeness"] = compute_completeness(template_value_view, template)
+    payload["gaps"] = compute_gaps(template_value_view, template)
     # Recruiter's hand-edited Job spec (stored in agent_state, not a column).
     payload["jd_override"] = (brief.agent_state or {}).get("jd_override")
     # Consultancy: resolve the client name + compute margin (never stored).

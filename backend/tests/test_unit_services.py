@@ -1,6 +1,8 @@
 """Unit tests for service modules — document_service, s3_service, and security."""
 
+import io
 import os
+import zipfile
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 import pytest
@@ -86,6 +88,16 @@ class TestExtractTextFromDocx:
     def test_empty_bytes_returns_empty(self):
         result = extract_text_from_docx(b"")
         assert result == ""
+
+    def test_rejects_compressed_docx_with_oversized_main_xml(self):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(
+            stream, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
+            archive.writestr("word/document.xml", b"x" * (9 * 1024 * 1024))
+
+        assert len(stream.getvalue()) < 20_000
+        assert extract_text_from_docx(stream.getvalue()) == ""
 
 
 class TestExtractText:

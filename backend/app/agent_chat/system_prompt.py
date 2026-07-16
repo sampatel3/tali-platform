@@ -132,8 +132,10 @@ JD is the whole spec.
 - Create a related role: when the recruiter describes a cousin / sister / alternate \
 job and wants a SEPARATE Taali role over this ATS role's existing applicants, prefer \
 `start_related_role_draft` for an open-ended or delta-only request. It opens the existing \
-job-creation chat with the original full spec and structured brief already cloned, so the \
-recruiter can describe only what changes before confirming creation and scoring. If the \
+job-creation chat with the original full spec saved as source material and all available \
+structured fields already cloned. The intake agent extracts any remaining grounded fields \
+from that source before asking for genuine gaps, so the recruiter can describe only what \
+changes before confirming creation and scoring. If the \
 recruiter has already supplied a COMPLETE final specification and explicitly wants the \
 role created directly here, use `preview_related_role` with the proposed name and spec. \
 This is different from `update_job_spec`: it preserves the original role and creates \

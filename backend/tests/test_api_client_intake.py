@@ -254,7 +254,10 @@ def test_public_chat_captures_role_fields_and_meters_client_intake(client, db, m
         "suggested_replies",
         "suggested_multi",
     }
-    assert body["reply"].startswith("Got it")
+    # Attachment turns use post-capture gaps, so the reply cannot repeat the
+    # model's stale pre-capture workplace question.
+    assert body["reply"].startswith("I've amended the draft.")
+    assert "What domain or industry" in body["reply"]
     # Role fields captured onto the brief and surfaced (role-safe).
     assert body["captured"]["title"] == "Data Engineer"
     assert body["captured"]["must_haves"] == ["SQL", "Spark"]
@@ -262,6 +265,17 @@ def test_public_chat_captures_role_fields_and_meters_client_intake(client, db, m
     assert body["captured"]["urgency"] == "High"
     # Transcript: opening + user + assistant.
     assert [m["role"] for m in body["messages"]] == ["assistant", "user", "assistant"]
+
+    # Persisted client source remains available to later intake turns without
+    # being echoed through authenticated requisition detail/list payloads.
+    recruiter_view = client.get(
+        f"/api/v1/requisitions/{brief_id}", headers=headers
+    ).json()
+    assert "client_source_material" not in recruiter_view["agent_state"]
+    assert "client_source_hydration_digest" not in recruiter_view["agent_state"]
+    listed = client.get("/api/v1/requisitions", headers=headers).json()
+    listed_brief = next(item for item in listed if item["id"] == brief_id)
+    assert "client_source_material" not in listed_brief["agent_state"]
 
     # The route threaded the dedicated CLIENT-intake feature all the way to the
     # metered ``one_call`` (NOT the recruiter intake chat).
