@@ -23,14 +23,15 @@ GRANULAR_AUTOMATION_FIELDS = (
 
 # Concrete defaults for a workspace that has never saved an ``agent_defaults``
 # block. Keeping these here makes role creation, API serialization, activation,
-# and every ATS constructor agree on the initial policy. They grant only
-# reversible positive automation; deterministic rejection remains opt-in.
+# and every ATS constructor agree on the initial HITL policy. Candidate-facing
+# positive actions require approval; only deterministic pre-screen failures are
+# rejected automatically.
 PLATFORM_AGENT_DEFAULTS: dict[str, Any] = {
     "enabled": True,
-    "auto_send_assessment": True,
-    "auto_resend_assessment": True,
-    "auto_advance": True,
-    "auto_reject_pre_screen": False,
+    "auto_send_assessment": False,
+    "auto_resend_assessment": False,
+    "auto_advance": False,
+    "auto_reject_pre_screen": True,
     "auto_skip_assessment": False,
     "threshold_mode": None,
     # A new role is immediately activatable without a separate budget setup
@@ -159,7 +160,10 @@ def apply_workspace_agent_defaults(
     for field in GRANULAR_AUTOMATION_FIELDS:
         setattr(role, field, bool(defaults[field]))
     role.auto_reject_pre_screen = bool(defaults["auto_reject_pre_screen"])
-    role.auto_skip_assessment = bool(defaults["auto_skip_assessment"])
+    # A new role has no active task yet. Keep its assessment stage explicitly
+    # skipped until the recruiter assigns one; task linking clears this forced
+    # state and makes the role-level skip control editable.
+    role.auto_skip_assessment = True
     if defaults.get("agent_action_allowlist") is not None:
         role.agent_action_allowlist = list(defaults["agent_action_allowlist"])
     for field in (
@@ -191,8 +195,8 @@ def activation_policy_values(
     """Resolve the policy snapshot a Turn-on command should persist.
 
     Concrete granular choices always win over the old aggregate switch. If a
-    legacy role has no concrete choices at all, first activation retains the
-    one-switch historical default (all reversible actions on).
+    legacy role has no concrete choices at all, first activation materializes
+    the safe platform default (candidate-facing actions off).
     """
     updates = updates or {}
     concrete_before = any(
@@ -205,7 +209,7 @@ def activation_policy_values(
     legacy_incoming = updates.get("auto_promote")
     if not concrete_before and not concrete_incoming:
         legacy_default = (
-            bool(legacy_incoming) if legacy_incoming is not None else True
+            bool(legacy_incoming) if legacy_incoming is not None else False
         )
     else:
         legacy_default = bool(getattr(role, "auto_promote", False))

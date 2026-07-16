@@ -37,9 +37,9 @@ const buildPayload = (role, key, value) => {
   }
   if (!GRANULAR_AUTOMATION_KEYS.includes(key)) return { [key]: value };
 
-  // Untouched roles preview reversible actions as ON while their stored values
-  // are null. Materialize the complete visible policy on the first change so
-  // the remaining switches cannot silently inherit legacy auto_promote=false.
+  // Untouched roles preview the safe HITL policy while their stored values are
+  // null. Materialize the complete visible policy on the first change so the
+  // remaining switches cannot silently inherit a legacy aggregate value.
   const granularPolicy = Object.fromEntries(
     GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
       automationKey,
@@ -59,7 +59,7 @@ const buildPayload = (role, key, value) => {
 const successMessage = (key, value) => {
   if (key === 'auto_skip_assessment') {
     return value
-      ? 'Assessment skip on — strong candidates bypass assessment.'
+      ? 'Assessment skip on — qualified candidates bypass assessment.'
       : 'Assessment skip off — assessment invites resume for this role.';
   }
   return value ? ENABLED_MESSAGES[key] : DISABLED_MESSAGES[key];

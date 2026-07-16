@@ -179,6 +179,15 @@ def approve_task_for_use(
         .all()
     )
     for role in linked_roles:
+        has_other_active_task = any(
+            int(linked.id) != int(task.id) and bool(linked.is_active)
+            for linked in list(role.tasks or [])
+        )
+        if not has_other_active_task:
+            # This draft was the reason assessment skipping was fixed on.
+            # Approval makes it the role's first usable assessment, so restore
+            # the stage and let the recruiter opt out explicitly if desired.
+            role.auto_skip_assessment = False
         resolve_satisfied_activation_questions(db, role=role)
     db.flush()
     return task

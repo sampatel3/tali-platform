@@ -1296,65 +1296,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // stays stable across the loading/loaded renders.
   const [turnOffOpen, setTurnOffOpen] = useState(false);
   const [turnOffDiscard, setTurnOffDiscard] = useState(false);
-  // Turn on authorizes the single generated, battle-tested assessment. Keep
-  // the validation progress visible here, but do not turn it into a second
-  // manual setup step.
+  // Turn on confirms the currently displayed safety policy. If there is no
+  // active assessment task, the role starts with that stage explicitly
+  // skipped; assigning a task later restores the assessment-stage control.
   const [activationPreflight, setActivationPreflight] = useState(null);
-  const [activationReview, setActivationReview] = useState(null);
-  const activationReviewOpen = Boolean(activationReview);
-  const activationBattleVerdict = activationReview?.draft?.battle_test?.verdict || null;
-  useEffect(() => {
-    if (!activationReviewOpen) {
-      return undefined;
-    }
-    // Polling is presentation-only. The persisted backend intent owns task
-    // generation, battle validation, repository approval, readiness, and the
-    // OFF->ON transition even if this dialog/tab disappears.
-    if (
-      !activationReviewOpen
-      || activationBattleVerdict === 'pass'
-      || !Number.isFinite(numericRoleId)
-    ) return undefined;
-    let cancelled = false;
-    const refreshGeneratedAssessment = async () => {
-      try {
-        const [tasksRes, roleRes] = await Promise.all([
-          rolesApi.listTasks(numericRoleId),
-          rolesApi.get(numericRoleId),
-        ]);
-        if (cancelled) return;
-        const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
-        const generatedDraft = nextTasks.find((task) => (
-          task?.is_active === false && task?.generated && task?.needs_review !== false
-        )) || null;
-        setRoleTasks(nextTasks);
-        if (roleRes?.data) setRole(roleRes.data);
-        if (generatedDraft) {
-          setActivationReview((current) => (
-            current ? { ...current, draft: generatedDraft } : current
-          ));
-        }
-      } catch {
-        // The ordinary workspace refresh and the next poll remain recovery
-        // paths; don't collapse the dialog on a transient read failure.
-      }
-    };
-    void refreshGeneratedAssessment();
-    const timer = window.setInterval(refreshGeneratedAssessment, 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [
-    activationReviewOpen,
-    activationBattleVerdict,
-    loadRoleWorkspace,
-    numericRoleId,
-    refetchAgentStatus,
-    rolesApi,
-    setAgentStatus,
-    showToast,
-  ]);
 
   if (loading && !role) {
     return (
@@ -1408,7 +1353,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       : assessmentAction
         ? { activation_assessment_action: assessmentAction }
         : {};
-    setActivationReview(null);
     // First activation is not optimistic. The OFF strip remains truthful until
     // the backend has accepted the autonomy grant and returned authoritative
     // role state; a rejected PATCH must never flash ON or "starting".
@@ -1435,45 +1379,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       });
   };
 
-  const requestAgentActivationWhenReady = (monthlyBudgetCents, draft = null) => {
-    if (!Number.isFinite(numericRoleId)) return;
-    setActivationReview({
-      monthlyBudgetCents,
-      draft,
-      activationSubmitting: true,
-      activationRequested: false,
-      activationError: null,
-    });
-    rolesApi.update(numericRoleId, versionedRolePayload(role, {
-      agentic_mode_enabled: true,
-      monthly_usd_budget_cents: monthlyBudgetCents,
-      ...activationAutonomyPayload(role),
-      activation_assessment_action: 'approve_when_ready',
-    }))
-      .then((response) => {
-        if (response?.data) setRole(response.data);
-        setActivationReview((current) => (current ? {
-          ...current,
-          activationSubmitting: false,
-          activationRequested: true,
-          activationError: null,
-        } : current));
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
-      })
-      .catch((error) => {
-        const conflict = roleVersionConflict(error);
-        const detail = conflict?.message || getErrorMessage(error, 'Failed to queue agent activation.');
-        setActivationReview((current) => (current ? {
-          ...current,
-          activationSubmitting: false,
-          activationRequested: false,
-          activationError: detail,
-        } : current));
-        if (!handleRoleVersionConflict(error)) showToast(detail, 'error');
-      });
-  };
-
   const handleActivateAgent = (monthlyBudgetCents) => {
     if (!canControlRoleAgent) return;
     if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
@@ -1493,15 +1398,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
     setActivationPreflight(null);
     if (role?.role_kind === 'sister') return activateAgentWithAssessmentChoice(monthlyBudgetCents, 'skip_assessment');
-    const activeTasks = (roleTasks || []).filter((task) => task?.is_active !== false);
-    if (Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment) || activeTasks.length > 0) {
-      activateAgentWithAssessmentChoice(monthlyBudgetCents);
-      return;
-    }
-    const generatedDraft = (roleTasks || []).find((task) => (
-      task?.is_active === false && task?.generated && task?.needs_review !== false
-    )) || null;
-    requestAgentActivationWhenReady(monthlyBudgetCents, generatedDraft);
+    // The backend owns the authoritative task relationship and safely
+    // normalizes truly taskless roles to skip mode. A transient or failed task
+    // list request must not disable an assessment that already exists.
+    activateAgentWithAssessmentChoice(monthlyBudgetCents, null);
   };
 
   // Turn the agent OFF for this role — indefinite, no auto-resume. Opens a
@@ -1674,7 +1574,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                           ? `${draftTasks[0].name} · draft`
                           : Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment)
                             ? 'Skipped'
-                            : 'Generated after Turn on'}
+                            : 'Skipped until task assigned'}
                     </span>
                   </div>
                 );
@@ -1752,7 +1652,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </>
         )}
 
-        <RoleViewTabs activeView={activeView} onBeforeNavigate={handleRoleViewNavigate} />
+        <RoleViewTabs
+          activeView={activeView}
+          onBeforeNavigate={handleRoleViewNavigate}
+          scoreOnly={role?.role_kind === 'sister'}
+        />
 
         <PresenceSwap presenceKey={activeView} className="role-view-panel">
           {activeView === 'pipeline' ? (
@@ -2439,167 +2343,44 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <Dialog
           open={Boolean(activationPreflight)}
           onClose={() => setActivationPreflight(null)}
-          title="Turn on this role’s agent?"
-          description="Confirm once and the saved policy keeps running after you close this page."
+          title="Turn on agent?"
+          description="Review what the agent can do without asking you."
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
-              <Button type="button" variant="primary" onClick={confirmAgentActivation} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn on with this policy</Button>
+              <Button type="button" variant="primary" onClick={confirmAgentActivation} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn on agent</Button>
             </div>
           )}
         >
           <div className="space-y-3 text-sm">
             <div className="mc-agent-settings-card-help">
-              <strong>Effective automation</strong>
+              <strong>Candidate-action safeguards</strong>
               <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
                 <li>
-                  {externalProvider
-                    ? `${externalProviderLabel} remains the intake source; its current publish state is unchanged.`
-                    : 'The native job page opens for applications after activation succeeds.'}
-                </li>
-                <li>Applications that reach this role are parsed, screened, scored, and monitored while the agent is on.</li>
-                <li>
-                  Initial assessments {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'wait for recruiter approval'};
-                  {' '}resends {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'run automatically' : 'wait for recruiter approval'}.
+                  Assessment invitations {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'require your approval'}.
                 </li>
                 <li>
-                  Qualified candidates {resolvedRoleAutomation(role, 'auto_advance') ? 'advance automatically to recruiter handoff' : 'wait for recruiter approval before advancing'}.
+                  Assessment retries {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'send automatically' : 'require your approval'}.
                 </li>
                 <li>
-                  Pre-screen failures {
-                    resolvedDeterministicReject(role)
-                      ? 'reject automatically when provider and safety checks pass'
-                      : 'wait for recruiter approval'
-                  }. Full CV-score and assessment rejections still need approval.
+                  Candidate advancement {resolvedRoleAutomation(role, 'auto_advance') ? 'runs automatically' : 'requires your approval'}.
                 </li>
                 <li>
-                  Assessment stage: {
-                    Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment)
-                      ? 'explicitly skipped for this role'
-                      : (roleTasks || []).some((task) => task?.is_active !== false)
-                        ? 'uses the active approved task'
-                        : 'the agent generates, repairs, battle-tests, and approves a role-specific task automatically'
-                  }.
+                  Pre-screen failures {resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval'}. Full CV-score and assessment rejections always require approval.
                 </li>
+                {(roleTasks || []).some((task) => task?.is_active !== false) ? null : (
+                  <li>No active assessment is assigned, so candidates skip that stage until you assign one.</li>
+                )}
               </ul>
             </div>
-            <div className="mc-agent-warn" role="status">
+            <div className="mc-agent-settings-card-help" role="status">
               <div>
-                <div className="mc-agent-warn-title">
+                <strong>
                   Monthly AI-usage cap: ${Math.round(Number(activationPreflight?.monthlyBudgetCents || 0) / 100)}
-                </div>
-                <div className="mc-agent-warn-body">
-                  Pause or Turn off stops autonomous processing and AI spend. {intakeLifecycleCopy}
-                </div>
+                </strong>
+                <div>Pausing stops new AI processing and spend until you resume.</div>
               </div>
             </div>
-          </div>
-        </Dialog>
-
-        <Dialog
-          open={Boolean(activationReview)}
-          onClose={() => setActivationReview(null)}
-          title="Preparing the assessment and turning on"
-          description={activationReview?.activationSubmitting
-            ? 'Saving Turn-on… The agent remains off until the backend confirms this request.'
-            : activationReview?.activationRequested
-              ? 'Your Turn-on request is saved. The agent will validate the generated task and turn on automatically, even after you close this dialog.'
-              : activationReview?.activationError
-                ? 'The Turn-on request was not saved. The agent remains off; retry when ready.'
-                : 'The Turn-on request has not been saved.'}
-          footer={(
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setActivationReview(null)}>Close</Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => activateAgentWithAssessmentChoice(activationReview?.monthlyBudgetCents, 'skip_assessment')}
-                disabled={!canControlRoleAgent || Boolean(activationReview?.activationSubmitting)}
-                title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
-              >
-                Skip assessment &amp; turn on
-              </Button>
-              {activationReview?.activationError ? (
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={!canControlRoleAgent}
-                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
-                    onClick={() => requestAgentActivationWhenReady(
-                      activationReview?.monthlyBudgetCents,
-                      activationReview?.draft || null,
-                    )}
-                  >
-                    Retry request
-                  </Button>
-                ) : null}
-            </div>
-          )}
-        >
-          <div className="space-y-3 text-sm">
-            {activationReview?.activationError ? (
-              <div className="mc-agent-warn" role="alert">
-                <div>
-                  <div className="mc-agent-warn-title">Turn-on request failed</div>
-                  <div className="mc-agent-warn-body">{activationReview.activationError}</div>
-                </div>
-              </div>
-            ) : null}
-            {activationReview?.draft ? (
-              <>
-                <div>
-                  <strong>{activationReview.draft.name}</strong>
-                  <span style={{ opacity: 0.7 }}>
-                    {' '}· {activationReview.draft.duration_minutes || 30} minutes
-                  </span>
-                </div>
-                <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                  {activationReview.draft.scenario || activationReview.draft.description || 'Generated from this requisition.'}
-                </p>
-                {activationReview.draft.battle_test?.verdict === 'pass' ? (
-                  <p style={{ margin: 0, color: 'var(--success, #16804b)' }}>
-                    {activationReview?.activationSubmitting
-                      ? 'Automated battle test passed. Saving the Turn-on request…'
-                      : activationReview?.activationRequested
-                        ? 'Automated battle test passed. The saved request will turn the agent on as soon as production readiness passes.'
-                        : 'Automated battle test passed. Retry Turn-on to save the activation request.'}
-                  </p>
-                ) : (
-                  <div className="mc-agent-warn" role="alert">
-                    <div>
-                      <div className="mc-agent-warn-title">
-                        {activationReview.draft.battle_test?.verdict === 'fail'
-                          ? 'Automated battle test did not pass'
-                          : 'Automated battle test is still pending'}
-                      </div>
-                      <div className="mc-agent-warn-body">
-                        {activationReview?.activationSubmitting
-                          ? 'Saving Turn-on… The agent remains off until the backend confirms the request.'
-                          : activationReview?.activationRequested
-                            ? 'Automatic repair and validation are still running. You can close this dialog; the saved request will continue, or you can explicitly skip the assessment stage.'
-                            : 'Turn-on was not saved. Retry the request, or explicitly skip the assessment stage.'}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="mc-agent-warn" role="status">
-                <div>
-                  <div className="mc-agent-warn-title">Assessment generation is still pending</div>
-                  <div className="mc-agent-warn-body">
-                    {activationReview?.activationSubmitting
-                      ? 'Saving Turn-on… The agent remains off until the backend confirms the request.'
-                      : activationReview?.activationRequested
-                        ? 'You can close this dialog: generation and validation continue from the saved request. You can also turn on now with the assessment stage explicitly skipped.'
-                        : 'Turn-on was not saved. Retry the request, or explicitly skip the assessment stage.'}
-                    {role?.assessment_task_provisioning?.last_error
-                      ? ` Latest authoring attempt: ${role.assessment_task_provisioning.last_error}`
-                      : ''}
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </Dialog>
 

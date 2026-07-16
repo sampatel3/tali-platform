@@ -137,20 +137,32 @@ const hasConfiguredGranularAutomation = (role) => GRANULAR_AUTOMATION_KEYS
   .some((key) => role?.[key] != null);
 
 export const resolvedRoleAutomation = (role, key) => {
-  if (!hasConfiguredGranularAutomation(role)) return true;
+  // Nullable fields identify roles created before action-level controls were
+  // introduced. Preview them with the safe HITL policy instead of granting
+  // autonomy just because the older aggregate switch is absent.
+  if (!hasConfiguredGranularAutomation(role)) return false;
   const effective = role?.agent_effective_policy || {};
   if (effective[key] != null) return Boolean(effective[key]);
   if (role?.[key] != null) return Boolean(role[key]);
   return Boolean(role?.auto_promote);
 };
 
-export const resolvedDeterministicReject = (role) => Boolean(
-  role?.agent_effective_policy?.auto_reject_pre_screen
-  ?? role?.auto_reject_pre_screen
-) || Boolean(role?.auto_reject);
+export const resolvedDeterministicReject = (role) => {
+  if (role?.auto_reject) return true;
+  const configured = role?.agent_effective_policy?.auto_reject_pre_screen
+    ?? role?.auto_reject_pre_screen;
+  return configured == null ? true : Boolean(configured);
+};
 
 export const activationAutonomyPayload = (role) => {
-  if (!hasConfiguredGranularAutomation(role)) return {};
+  if (!hasConfiguredGranularAutomation(role)) {
+    return {
+      auto_send_assessment: false,
+      auto_resend_assessment: false,
+      auto_advance: false,
+      auto_promote: false,
+    };
+  }
   const payload = {};
   for (const key of GRANULAR_AUTOMATION_KEYS) {
     if (role?.[key] != null) payload[key] = Boolean(role[key]);

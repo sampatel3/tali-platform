@@ -847,7 +847,6 @@ def update_role(
         )
     if (
         updates.get("auto_skip_assessment") is False
-        and bool(role.agentic_mode_enabled)
         and not any(bool(task.is_active) for task in (role.tasks or []))
     ):
         raise HTTPException(
@@ -1009,11 +1008,14 @@ def update_role(
                     status_code=422,
                     detail="monthly_usd_budget_cents is required to enable agentic mode",
                 )
+            if activation_assessment_action is None and not any(
+                bool(task.is_active) for task in (role.tasks or [])
+            ):
+                activation_assessment_action = "skip_assessment"
             if activation_assessment_action == "skip_assessment":
                 from ...services.role_activation_intent import (
                     cancel_role_activation_intent,
                 )
-
                 cancel_role_activation_intent(
                     role,
                     user_id=int(current_user.id),
@@ -1156,7 +1158,7 @@ def update_role(
         agent_activated_now = next_enabled and not was_enabled
         # Snapshot each reversible-action choice at activation. Concrete role
         # settings survive Turn on; a truly legacy role with no granular values
-        # retains the historical one-switch default (all three on).
+        # materializes the same safe HITL default shown by the current UI.
         if agent_activated_now:
             activation_policy = activation_policy_values(role, updates)
             role.auto_promote = activation_policy["auto_promote"]
@@ -2505,8 +2507,11 @@ def add_role_task(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    had_active_task = any(bool(t.is_active) for t in (role.tasks or []))
     if not any(t.id == task.id for t in (role.tasks or [])):
         role.tasks.append(task)
+        if bool(task.is_active) and not had_active_task:
+            role.auto_skip_assessment = False
         _add_role_change_boundary(
             db,
             role=role,
@@ -2560,17 +2565,12 @@ def remove_role_task(
         raise HTTPException(status_code=400, detail="Cannot unlink task that already has assessments")
     had_task = any(t.id == task_id for t in (role.tasks or []))
     role.tasks = [t for t in (role.tasks or []) if t.id != task_id]
-    enabled_last_task_removed = bool(
+    last_active_task_removed = bool(
         had_task
-        and role.agentic_mode_enabled
         and not any(bool(task.is_active) for task in (role.tasks or []))
         and not bool(role.auto_skip_assessment)
     )
-    if enabled_last_task_removed:
-        # Choosing "No assessment task" is the recruiter's explicit choice to
-        # bypass that stage. Keep the live role internally consistent instead
-        # of silently translating taskless send decisions into advances while
-        # settings still claim assessment skipping is off.
+    if last_active_task_removed:
         role.auto_skip_assessment = True
     if had_task:
         _add_role_change_boundary(
@@ -2585,7 +2585,7 @@ def remove_role_task(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to unlink task from role")
-    if enabled_last_task_removed:
+    if last_active_task_removed:
         try:
             from ...services.bulk_decision_service import (
                 reconcile_pending_positive_decisions,

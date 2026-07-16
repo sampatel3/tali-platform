@@ -94,7 +94,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(advance).not.toBeDisabled();
   });
 
-  it('previews the first-Turn-on autonomous default for an untouched role', async () => {
+  it('previews safe HITL defaults for an untouched role', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({
@@ -114,14 +114,36 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     const send = screen.getByRole('button', { name: 'Auto-send assessments' });
     const resend = screen.getByRole('button', { name: 'Auto-retry assessment invites' });
     const advance = screen.getByRole('button', { name: 'Auto-advance qualified candidates' });
-    expect(send).toHaveAttribute('aria-pressed', 'true');
-    expect(resend).toHaveAttribute('aria-pressed', 'true');
-    expect(advance).toHaveAttribute('aria-pressed', 'true');
+    expect(send).toHaveAttribute('aria-pressed', 'false');
+    expect(resend).toHaveAttribute('aria-pressed', 'false');
+    expect(advance).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
+      .toHaveAttribute('aria-pressed', 'true');
 
     await act(async () => {
       fireEvent.click(send);
     });
-    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', false);
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
+  });
+
+  it('replaces forbidden related-role actions with a clear original-role link', () => {
+    const onAutonomyChange = vi.fn();
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        role_kind: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    expect(screen.getByRole('heading', { name: /Related-role scoring/i })).toBeInTheDocument();
+    expect(screen.getByText(/does not send assessments, reject, or advance candidates/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open original role settings/i }))
+      .toHaveAttribute('href', '/jobs/77?view=role-fit');
+    expect(screen.queryByRole('button', { name: 'Auto-send assessments' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
+    expect(onAutonomyChange).not.toHaveBeenCalled();
   });
 
   it('renders one consolidated deterministic-rejection control', async () => {
@@ -198,18 +220,20 @@ describe('RoleAgentSettingsTab assessment task', () => {
     );
     expect(screen.getByText('No assessment task assigned')).toBeInTheDocument();
     expect(
-      screen.getByText(/Turn on will generate and validate a role-specific task automatically/i),
+      screen.getByText(/Candidates will skip the assessment stage until you assign an active task/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/nothing to send after screening/i)).toBeInTheDocument();
+    const skipToggle = screen.getByRole('button', { name: 'Skip assessment stage' });
+    expect(skipToggle).toHaveAttribute('aria-pressed', 'true');
+    expect(skipToggle).toBeDisabled();
   });
 
-  it('keeps a running taskless role in explicit skip mode until a task is chosen', () => {
+  it('keeps every taskless role in explicit skip mode until a task is chosen', () => {
     const onAutonomyChange = vi.fn();
     render(
       <RoleAgentSettingsTab
         {...baseProps({
-          agentic_mode_enabled: true,
-          auto_skip_assessment: true,
+          agentic_mode_enabled: false,
+          auto_skip_assessment: false,
         })}
         roleTasks={[]}
         allTasks={catalogue}
@@ -218,9 +242,9 @@ describe('RoleAgentSettingsTab assessment task', () => {
     );
 
     expect(
-      screen.getByText(/this running role is skipping the assessment stage/i),
+      screen.getByText(/Candidates will skip the assessment stage until you assign an active task/i),
     ).toBeInTheDocument();
-    const skipToggle = screen.getByRole('button', { name: 'Skip assessment for strong candidates' });
+    const skipToggle = screen.getByRole('button', { name: 'Skip assessment stage' });
     expect(skipToggle).toBeDisabled();
     fireEvent.click(skipToggle);
     expect(onAutonomyChange).not.toHaveBeenCalled();

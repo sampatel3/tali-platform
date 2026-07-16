@@ -235,11 +235,49 @@ describe('SettingsPage recruiter surface', () => {
     expect(showToast).toHaveBeenCalledWith('Agent defaults saved.', 'success');
   });
 
-  it('shows the complete reversible platform policy when a workspace has no saved agent defaults', async () => {
+  it('shows the HITL-safe platform policy when a workspace has no saved agent defaults', async () => {
     orgsApi.get.mockResolvedValueOnce({
       data: {
         ...baseOrgData,
         ai_tooling_config: { provider_setting: 'keep-me' },
+      },
+    });
+
+    renderSettingsRoute('/settings/agent');
+
+    expect(await screen.findByRole('button', { name: 'Auto-send assessments' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Skip assessment for strong candidates' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('spinbutton', { name: /Default budget/i }))
+      .toHaveValue(200);
+  });
+
+  it('preserves legacy nested autonomy choices when saving workspace defaults', async () => {
+    const legacyAgentDefaults = {
+      enabled: false,
+      budget_cents: 20000,
+      threshold_mode: 'manual',
+      autonomy: {
+        auto_invite_above: true,
+        auto_advance_high_score: true,
+        auto_reject_below: false,
+      },
+      agent_token_budget_per_cycle: 12000,
+    };
+    orgsApi.get.mockResolvedValueOnce({
+      data: {
+        ...baseOrgData,
+        ai_tooling_config: {
+          provider_setting: 'keep-me',
+          agent_defaults: legacyAgentDefaults,
+        },
       },
     });
 
@@ -253,10 +291,24 @@ describe('SettingsPage recruiter surface', () => {
       .toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
       .toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('button', { name: 'Skip assessment for strong candidates' }))
-      .toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('spinbutton', { name: /Default budget/i }))
-      .toHaveValue(200);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent defaults' }));
+
+    await waitFor(() => expect(orgsApi.update).toHaveBeenCalledWith({
+      default_role_budget_cents: 20000,
+      default_score_threshold: 70,
+      ai_tooling_config: {
+        provider_setting: 'keep-me',
+        agent_defaults: {
+          ...legacyAgentDefaults,
+          auto_send_assessment: true,
+          auto_resend_assessment: true,
+          auto_advance: true,
+          auto_reject_pre_screen: false,
+          auto_skip_assessment: false,
+        },
+      },
+    }));
   });
 
   it('legacy /settings/ai and /settings/scoring deep links land on the agent tab', async () => {
