@@ -25,6 +25,7 @@ from app.models.job_hiring_team import (
 )
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.role_brief import RoleBrief
 from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.taali_chat_message import ROLE_USER, TaaliChatMessage
 from app.models.user import User
@@ -181,6 +182,35 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     )
     assert copied_membership.team_role == TEAM_ROLE_RECRUITER
     dispatch.assert_called_once()
+
+
+def test_role_agent_can_start_a_cloned_related_role_requisition_chat(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id, role_id=source.id, title="Related role draft"
+    )
+    db.add(conversation)
+    db.commit()
+
+    result = dispatch_agent_tool(
+        "start_related_role_draft",
+        {"name": "AI Engineer · Platform"},
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+
+    assert result["type"] == "related_role_draft"
+    assert result["source_role_id"] == source.id
+    assert result["source_role_name"] == source.name
+    assert result["frontend_url"] == f"/requisitions?brief={result['brief_id']}"
+    brief = db.get(RoleBrief, result["brief_id"])
+    assert brief.source_role_id == source.id
+    assert brief.title == "AI Engineer · Platform"
+    assert brief.agent_state["jd_override"] == source.job_spec_text
+    assert "Tell me what should change" in brief.messages[0]["content"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
 
 
 def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):

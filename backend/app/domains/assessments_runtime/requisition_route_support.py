@@ -29,6 +29,9 @@ from .job_authorization import JobPermission, require_job_permission
 
 class CreateRequisition(BaseModel):
     source_kind: Optional[str] = None
+    # When set, start the existing conversational intake as a pre-populated
+    # related-role draft cloned from this original ATS role.
+    source_role_id: int | None = Field(default=None, ge=1)
 
 
 class IntakeInput(BaseModel):
@@ -56,6 +59,7 @@ _BRIEF_CONTROL_FIELDS = frozenset(
         "id",
         "organization_id",
         "role_id",
+        "source_role_id",
         "ref_code",
         "created_by_user_id",
         "created_at",

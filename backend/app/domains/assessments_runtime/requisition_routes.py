@@ -37,6 +37,10 @@ from ...services.requisition_similar_service import (
     apply_agnostic_fields,
     standardize_agnostic_fields,
 )
+from ...services.related_role_service import (
+    RelatedRoleError,
+    create_related_role_draft,
+)
 from ...services.requisition_template_service import resolve_template
 from ...services.role_brief_service import (
     create_brief,
@@ -58,6 +62,7 @@ from .requisition_route_support import (
 )
 from .requisition_settings_routes import router as _settings_router
 from .requisition_shared import _get_brief, _org, _serialize_brief
+from .job_authorization import JobPermission, require_job_permission
 
 router = APIRouter(tags=["Requisitions"])
 
@@ -79,6 +84,27 @@ def create_requisition(
 ):
     """Create a requisition and seed the OPENING assistant message (greeting +
     the first required question from the org's template)."""
+    org = _org(db, current_user.organization_id)
+    template = resolve_template(org)
+    if data.source_role_id is not None:
+        require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=int(data.source_role_id),
+            permission=JobPermission.EDIT_ROLE,
+        )
+        try:
+            brief = create_related_role_draft(
+                db,
+                role_id=int(data.source_role_id),
+                organization_id=int(current_user.organization_id),
+                creator_user_id=int(current_user.id),
+                template=template,
+            )
+        except RelatedRoleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _serialize_brief(brief, org)
+
     brief = create_brief(
         db,
         organization_id=current_user.organization_id,
@@ -87,8 +113,6 @@ def create_requisition(
     )
     # Salary defaults to AED (UAE-based org) so the agent never asks currency.
     brief.salary_currency = "AED"
-    org = _org(db, current_user.organization_id)
-    template = resolve_template(org)
     # Warm-start: prefill location/workplace/employment/department from the org's
     # most-recent specs (the agent/recruiter can still override). These count
     # toward the live gap engine + completeness and are visible to the agent as
@@ -138,7 +162,7 @@ def list_requisitions(
         .order_by(RoleBrief.id.desc())
         .all()
     )
-    return [_serialize_brief(b, org) for b in briefs]
+    return [_serialize_brief(b, org, include_related_preview=False) for b in briefs]
 
 
 @router.get("/requisitions/{brief_id}")

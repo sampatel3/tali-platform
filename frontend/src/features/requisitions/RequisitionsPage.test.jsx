@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildRequisitionAtsSpec,
+  isRelatedRoleBrief,
   isPublishedRequisition,
   isRequisitionBriefReadOnly,
   reloadRequisitionAfterRoleConflict,
@@ -32,6 +33,12 @@ describe('requisition lifecycle labels', () => {
       job_page: { token: 'published-page' },
     })).toBe(false);
     expect(isRequisitionBriefReadOnly({ status: 'applied' })).toBe(true);
+  });
+
+  it('identifies persisted related-role drafts independently of lifecycle status', () => {
+    expect(isRelatedRoleBrief({ brief_kind: 'related_role', status: 'draft' })).toBe(true);
+    expect(isRelatedRoleBrief({ source_role_id: 42, status: 'applied' })).toBe(true);
+    expect(isRelatedRoleBrief({ brief_kind: 'standard', status: 'draft' })).toBe(false);
   });
 
   it('reloads the authoritative requisition after a stale linked write', async () => {

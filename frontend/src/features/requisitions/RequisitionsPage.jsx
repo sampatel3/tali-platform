@@ -11,7 +11,8 @@
 // ThinkingDots) — the one standard chat UI across Search, the Home dock and
 // the candidate workspace — and the global purple design tokens.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Check, Copy, ExternalLink, FileText, GitFork, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { organizations as organizationsApi } from '../../shared/api';
@@ -94,6 +95,10 @@ export const isRequisitionBriefReadOnly = (brief) => (
   String(brief?.status || '').toLowerCase() === 'applied'
 );
 
+export const isRelatedRoleBrief = (brief) => (
+  brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
+);
+
 export const requisitionRoleConflictMessage = (error, { latestLoaded = true } = {}) => {
   const conflict = roleVersionConflict(error);
   if (!conflict) return null;
@@ -170,6 +175,7 @@ function Turn({ msg }) {
 }
 
 export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
+  const [searchParams] = useSearchParams();
   const [briefs, setBriefs] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [brief, setBrief] = useState(null);
@@ -215,8 +221,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // The most-recently-requested requisition id, so a slow get() that resolves
   // after the user switches again doesn't clobber the newer brief.
   const selectingRef = useRef(null);
+  const routedBriefRef = useRef(null);
 
   const messages = useMemo(() => (Array.isArray(brief?.messages) ? brief.messages : []), [brief]);
+  const relatedRoleDraft = isRelatedRoleBrief(brief);
+  const relatedRolePreview = brief?.related_role_preview || null;
 
   const handleVersionConflict = useCallback(async (err) => {
     if (selectedId == null) return false;
@@ -337,6 +346,15 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       if (selectingRef.current === id) setLoadingBrief(false);
     }
   }, [selectedId, clearAttachments]);
+
+  // Job-header and role-agent entry points deep-link directly to the cloned
+  // draft. Load it without waiting for (or depending on) the sidebar list.
+  useEffect(() => {
+    const requested = Number(searchParams.get('brief'));
+    if (!Number.isFinite(requested) || requested <= 0 || routedBriefRef.current === requested) return;
+    routedBriefRef.current = requested;
+    void select(requested);
+  }, [searchParams, select]);
 
   const createReq = useCallback(async () => {
     setCreating(true);
@@ -680,19 +698,18 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [selectedId, loadClients, brief, handleVersionConflict]);
 
-  // ---- publish ----
-  // Snapshot the RENDERED JD (the recruiter's per-requisition override if set,
-  // else the live template-filled draft — the exact markdown shown in the Job
-  // spec panel) onto the public job page. Re-running refreshes that snapshot.
-  // The backend returns `job_page` ({ token, url, status, published_at }) on
-  // the serialized brief, which drives the published-state UI below.
+  // ---- publish / create related role ----
+  // Standard drafts publish a native job page. Related-role drafts use this
+  // same reviewed spec as the explicit create-and-score confirmation, without
+  // publishing a second candidate-facing job.
   const publish = useCallback(async () => {
     if (!selectedId) return;
     // Frontend gate mirrors the backend required-field validation and gives the
     // recruiter an immediate, field-oriented message before the request.
     const remaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
     if (remaining > 0) {
-      setError(`${remaining} required field${remaining === 1 ? '' : 's'} still needed before you can publish — fill them in on the Brief tab or answer the agent.`);
+      const action = relatedRoleDraft ? 'create this related role' : 'publish';
+      setError(`${remaining} required field${remaining === 1 ? '' : 's'} still needed before you can ${action} — fill them in on the Brief tab or answer the agent.`);
       return;
     }
     setPublishing(true);
@@ -710,6 +727,23 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         jdMarkdown,
         brief?.job?.version ?? null,
       );
+      if (res?.related_role) {
+        setBrief((prev) => ({
+          ...(prev || {}),
+          status: res.status || 'applied',
+          job: res.role_id
+            ? {
+                role_id: res.role_id,
+                version: res.version,
+                name: res.role_name || prev?.title || null,
+                job_status: res.job_status,
+              }
+            : (prev?.job || null),
+        }));
+        await loadList();
+        if (res.role_id) onNavigate?.('job-pipeline', { roleId: res.role_id });
+        return;
+      }
       // The publish response carries the job_page fields (token/url/status/…);
       // fold them into brief.job_page so the published state renders without a
       // refetch, and lift status to keep the header chip in sync.
@@ -739,12 +773,17 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       await loadList();
     } catch (err) {
       if (!(await handleVersionConflict(err))) {
-        setError(errorDetail(err, 'Publish failed — please try again.'));
+        setError(errorDetail(
+          err,
+          relatedRoleDraft
+            ? 'Related-role creation failed — please try again.'
+            : 'Publish failed — please try again.',
+        ));
       }
     } finally {
       setPublishing(false);
     }
-  }, [selectedId, loadList, brief, template, handleVersionConflict]);
+  }, [selectedId, loadList, brief, template, handleVersionConflict, onNavigate, relatedRoleDraft]);
 
   // The published job page (token/url/status/published_at) or null. Drives the
   // header's published state on load and after a (re-)publish.
@@ -910,7 +949,6 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldPoll, selectedId, turnInFlight]);
 
-  const published = Boolean(jobPage) || isPublishedRequisition(brief?.status);
   const applied = isRequisitionBriefReadOnly(brief);
   // Block sends while a switch is in flight (brief null / loadingBrief) so a
   // reply can't post to the wrong requisition, and while a turn is in flight.
@@ -1002,7 +1040,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <span className="rq-side-title">{b.title || 'Untitled job'}</span>
                     <span className="rq-side-meta">
                       <span className={`rq-dot ${isPublishedRequisition(b.status) ? 'is-published' : 'is-open'}`} />
-                      {requisitionStatusLabel(b.status)}
+                      {isRelatedRoleBrief(b)
+                        ? (isRequisitionBriefReadOnly(b) ? 'Related role created' : 'Related role draft')
+                        : requisitionStatusLabel(b.status)}
                       {b.completeness != null ? ` · ${b.completeness}%` : ''}
                     </span>
                   </button>
@@ -1052,7 +1092,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                 <div className="rq-main-head-titles">
                   <h1 className="rq-main-title">{brief.title || 'Untitled job'}</h1>
                   <div className="rq-main-sub">
-                    <span className="rq-status-chip">{requisitionStatusLabel(brief.status)}</span>
+                    <span className="rq-status-chip">
+                      {relatedRoleDraft
+                        ? (applied ? 'Related role created' : 'Related role draft')
+                        : requisitionStatusLabel(brief.status)}
+                    </span>
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
                   {/* Hiring department folded into the header (no separate
@@ -1066,6 +1110,62 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   />
                 </div>
                 <div className="rq-head-actions">
+                  {relatedRoleDraft ? (
+                    <div className="rq-related-card">
+                      <div className="rq-related-source">
+                        <span className="rq-related-flag"><GitFork size={14} /> Related to</span>
+                        <button
+                          type="button"
+                          className="rq-related-source-link"
+                          onClick={() => onNavigate?.('job-pipeline', { roleId: brief.source_role?.role_id || brief.source_role_id })}
+                        >
+                          {brief.source_role?.name || `Job #${brief.source_role_id}`}
+                        </button>
+                        {brief.source_role?.ats_provider ? (
+                          <span className="rq-related-provider">{atsProviderLabel(brief.source_role.ats_provider)}</span>
+                        ) : null}
+                      </div>
+                      {!applied && relatedRolePreview ? (
+                        <div className="rq-related-metrics" aria-label="Related role scoring preview">
+                          <span><strong>{relatedRolePreview.candidates_total ?? 0}</strong> shared candidates</span>
+                          <span><strong>{relatedRolePreview.candidates_with_cv ?? 0}</strong> ready to score</span>
+                          <span><strong>${Number(relatedRolePreview.estimated_cost_usd || 0).toFixed(2)}</strong> estimated</span>
+                        </div>
+                      ) : null}
+                      <p className="rq-related-hint">
+                        {applied
+                          ? 'This Taali scoring role remains coupled to the original ATS job for candidate stages and actions.'
+                          : 'Edit the cloned specification in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to the original ATS job.'}
+                      </p>
+                      <div className="rq-published-actions">
+                        {applied && brief.job?.role_id ? (
+                          <button
+                            type="button"
+                            className="rq-btn-sm is-primary"
+                            onClick={() => onNavigate?.('job-pipeline', { roleId: brief.job.role_id })}
+                          >
+                            <Rocket size={13} /> Open related role
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="rq-publish-btn"
+                            onClick={publish}
+                            disabled={publishing || requiredRemaining > 0}
+                            title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
+                          >
+                            {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <GitFork size={15} />} Create and score candidates
+                          </button>
+                        )}
+                        {!applied && requiredRemaining > 0 ? (
+                          <span className="rq-publish-hint">
+                            {requiredRemaining} required field{requiredRemaining === 1 ? '' : 's'} still needed
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
                   {/* Share with the hiring manager — the no-login intake link
                       the recruiter sends so the hiring manager describes the role
                       to the same agent (economics + internal logistics hidden). */}
@@ -1220,6 +1320,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       ) : null}
                     </div>
                   )}
+                    </>
+                  )}
                 </div>
               </header>
 
@@ -1242,7 +1344,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   not enter this read-only branch. */}
               {applied ? (
                 <div className="rq-applied-note" role="note">
-                  This job brief has been applied to a live role, so it is now read-only.
+                  {relatedRoleDraft
+                    ? 'This related-role draft has been created and is now read-only.'
+                    : 'This job brief has been applied to a live role, so it is now read-only.'}
                 </div>
               ) : null}
 
@@ -1259,7 +1363,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
                   {applied ? (
                     <div className="rq-applied-note" role="note">
-                      This intake conversation is archived. Continue changes in the live job.
+                      {relatedRoleDraft
+                        ? 'This related-role conversation is archived. Continue work in the created role.'
+                        : 'This intake conversation is archived. Continue changes in the live job.'}
                     </div>
                   ) : (
                   <div className="rq-composer-wrap">
@@ -1322,7 +1428,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       onChange={setComposer}
                       onSubmit={onComposerSubmit}
                       onPaste={onPaste}
-                      placeholder="Tell the agent about the role, or answer its question…"
+                      placeholder={relatedRoleDraft
+                        ? 'Tell the agent what changes from the original role…'
+                        : 'Tell the agent about the role, or answer its question…'}
                       busy={turnInFlight}
                     />
 
