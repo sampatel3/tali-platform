@@ -54,9 +54,9 @@ Why this matters:
   a database revision absent from or unreachable in the exact release tree.
   A genuinely empty new database is accepted as Alembic base; a database with
   user tables but no `alembic_version` table fails closed.
-- CLI deploys preserve `backend/` as the upload prefix so Railway's configured
-  `/backend` service root and `/backend/railway.json` resolve exactly as they do
-  for GitHub-triggered deployments.
+- CLI deploys run `railway up` from the repository root without a path argument.
+  Railway then uploads the monorepo and applies the configured `/backend` service
+  root and `/backend/railway.json`, exactly as GitHub-triggered deployments do.
 - Web, general-worker, and scoring-worker services are validated by exact name.
 - The coordinated wrapper pins live metering and native apply, migrates
   production, deploys both workers, deploys web, waits for public `/ready`, and
