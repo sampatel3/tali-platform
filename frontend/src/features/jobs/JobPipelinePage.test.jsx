@@ -613,7 +613,8 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByText(/Related-role scoring is waiting · 0%/i)).toBeInTheDocument();
     expect(screen.getByText(/workspace Agent is paused/i)).toBeInTheDocument();
     expect(screen.getByText(/0 of 800 scoreable candidates/i)).toBeInTheDocument();
-    expect(screen.getByText(/Original Workable pipeline · shared ATS stages, not related-role score progress/i)).toBeInTheDocument();
+    expect(screen.getByText(/Related-role Taali pipeline · independent stages/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /turn on/i })).toBeInTheDocument();
     expect(screen.getByText('Shared candidates')).toBeInTheDocument();
     expect(screen.getByText('806')).toBeInTheDocument();
     expect(screen.getByText('Awaiting score')).toBeInTheDocument();

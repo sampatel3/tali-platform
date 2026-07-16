@@ -126,6 +126,54 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     );
   });
 
+  it('attributes a related-role advance and advances only its local funnel after ATS confirmation', async () => {
+    const application = { id: 45, source: 'bullhorn', application_outcome: 'open' };
+    const rolesApi = {
+      moveApplicationToAtsStage: vi.fn().mockResolvedValue({
+        data: { ...application, ats_writeback_job_run_id: 904 },
+      }),
+      backgroundJobRun: vi.fn().mockResolvedValue({
+        data: { id: 904, status: 'completed', counters: {} },
+      }),
+      updateRelatedApplicationStage: vi.fn().mockResolvedValue({ data: {} }),
+    };
+    const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useCandidateTriage({
+      role: {
+        id: 17,
+        role_kind: 'sister',
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-900',
+      },
+      roleApplications: [application],
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow,
+      showToast: vi.fn(),
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    await act(async () => {
+      await result.current.drawerProps.onMoveToAtsStage(
+        application,
+        'advanced',
+        'Interview Scheduled',
+      );
+    });
+
+    expect(rolesApi.moveApplicationToAtsStage).toHaveBeenCalledWith(45, {
+      target_stage: 'advanced',
+      acting_role_id: 17,
+    });
+    expect(rolesApi.updateRelatedApplicationStage).toHaveBeenCalledWith(
+      17,
+      45,
+      { pipeline_stage: 'advanced' },
+    );
+    expect(patchApplicationRow).toHaveBeenCalledWith(45);
+  });
+
   it('does not patch or report success when the queued provider write fails', async () => {
     const application = { id: 42, source: 'bullhorn' };
     const rolesApi = {

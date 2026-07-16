@@ -16,6 +16,7 @@ from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.sister_role_evaluation import (
     SISTER_EVAL_DONE,
     SISTER_EVAL_ERROR,
+    SISTER_EVAL_EXCLUDED,
     SISTER_EVAL_PENDING,
     SISTER_EVAL_RETRY_WAIT,
     SISTER_EVAL_RUNNING,
@@ -30,6 +31,7 @@ from ...schemas.sister_role import (
     SisterRolePreview,
     SisterRoleScoringStatus,
 )
+from ...schemas.role import ApplicationResponse, ApplicationStageUpdate
 from ...services.related_role_service import (
     RelatedRoleError,
     create_related_role as create_related_role_record,
@@ -38,10 +40,11 @@ from ...services.related_role_service import (
 )
 from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.job_page_lifecycle import role_paid_ats_work_block_reason
-from ...services.sister_role_service import ensure_sister_evaluations
+from ...services.sister_role_service import ensure_sister_evaluations, project_sister_application
 from ...tasks.sister_role_tasks import score_sister_role
 from .roles_management_routes import _serialize_role_detail
 from .job_authorization import JobPermission, require_job_permission
+from .related_role_actions import move_related_role_application_stage
 
 router = APIRouter(tags=["Sister roles"])
 logger = logging.getLogger("taali.sister_roles")
@@ -182,12 +185,19 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
     counts = Counter({str(key): int(value) for key, value in rows})
     for key in (
         SISTER_EVAL_PENDING, SISTER_EVAL_RUNNING, SISTER_EVAL_RETRY_WAIT, SISTER_EVAL_DONE,
-        SISTER_EVAL_ERROR, SISTER_EVAL_UNSCORABLE,
+        SISTER_EVAL_ERROR, SISTER_EVAL_UNSCORABLE, SISTER_EVAL_EXCLUDED,
     ):
         counts.setdefault(key, 0)
     total = sum(counts.values())
-    completed = counts[SISTER_EVAL_DONE] + counts[SISTER_EVAL_ERROR] + counts[SISTER_EVAL_UNSCORABLE]
-    scoreable_total = max(total - counts[SISTER_EVAL_UNSCORABLE], 0)
+    completed = (
+        counts[SISTER_EVAL_DONE]
+        + counts[SISTER_EVAL_ERROR]
+        + counts[SISTER_EVAL_UNSCORABLE]
+        + counts[SISTER_EVAL_EXCLUDED]
+    )
+    scoreable_total = max(
+        total - counts[SISTER_EVAL_UNSCORABLE] - counts[SISTER_EVAL_EXCLUDED], 0
+    )
     scoreable_completed = counts[SISTER_EVAL_DONE] + counts[SISTER_EVAL_ERROR]
     authority_waiting = int(
         db.query(func.count(SisterRoleEvaluation.id))
@@ -201,11 +211,8 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
     )
     waiting_reason = None
     if authority_waiting:
-        source = getattr(role, "ats_owner_role", None)
-        if source is None and role.ats_owner_role_id:
-            source = db.get(Role, int(role.ats_owner_role_id))
         waiting_reason = (
-            role_paid_ats_work_block_reason(source, db=db)
+            role_paid_ats_work_block_reason(role, db=db)
             or "authority_blocked"
         )
     elif counts[SISTER_EVAL_RETRY_WAIT]:
@@ -270,3 +277,37 @@ def sister_role_scoring_status(
 ):
     role = _sister_role(db, role_id=role_id, organization_id=current_user.organization_id)
     return _scoring_status(db, role)
+
+
+@router.patch(
+    "/roles/{role_id}/applications/{application_id}/stage",
+    response_model=ApplicationResponse,
+)
+def update_related_role_application_stage(
+    role_id: int,
+    application_id: int,
+    data: ApplicationStageUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Move one candidate inside this related role's Taali funnel."""
+
+    from .applications_routes import application_to_response, get_application
+
+    app = get_application(application_id, current_user.organization_id, db)
+    role, evaluation = move_related_role_application_stage(
+        db,
+        current_user=current_user,
+        related_role_id=role_id,
+        application=app,
+        to_stage=data.pipeline_stage,
+    )
+    payload = application_to_response(
+        app, use_cached_score_summary=True
+    ).model_dump(mode="python")
+    return project_sister_application(
+        payload,
+        sister_role=role,
+        owner_role=db.get(Role, int(role.ats_owner_role_id)),
+        evaluation=evaluation,
+    )

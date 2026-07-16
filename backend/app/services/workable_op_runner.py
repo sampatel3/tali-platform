@@ -521,6 +521,26 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
             metadata={"workable_target_stage": target_stage},
             idempotency_key=f"workable_handback:{app.id}:{target_stage}",
         )
+    acting_role_id = payload.get("acting_role_id")
+    if acting_role_id is not None:
+        from .sister_role_service import related_role_advance_note
+
+        acting_role = db.get(Role, int(acting_role_id))
+        if (
+            acting_role is not None
+            and int(acting_role.ats_owner_role_id or 0) == int(app.role_id)
+        ):
+            # Post the same related-role attribution beside the shared ATS
+            # move. The serialized operation retries both writes together.
+            _op_post_note(
+                db,
+                organization_id,
+                {
+                    "application_id": int(app.id),
+                    "user_id": user_id,
+                    "body": related_role_advance_note(acting_role, role),
+                },
+            )
     db.commit()
     return {"status": "ok", "application_id": application_id}
 

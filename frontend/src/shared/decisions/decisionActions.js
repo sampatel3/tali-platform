@@ -25,7 +25,7 @@ export const DECISION_ACTIONS = {
         icon: X,
         kicker: 'REJECT CANDIDATE',
         headline: 'Reject {name}?',
-        body: 'This will disqualify them in Workable and send the rejection email. Cannot be undone from this screen.',
+        body: 'This rejects the shared ATS application across the original and every related role. Cannot be undone from this screen.',
         confirmLabel: 'Reject',
         confirmClass: 'rq-override',
         placeholder: 'e.g. Missing AWS Glue experience confirmed by the recruiter screen',
@@ -78,7 +78,7 @@ export const DECISION_ACTIONS = {
         icon: X,
         kicker: 'REJECT CANDIDATE',
         headline: 'Reject {name}?',
-        body: 'This will disqualify them in Workable and send the rejection email.',
+        body: 'This rejects the shared ATS application across the original and every related role.',
         confirmLabel: 'Reject',
         confirmClass: 'rq-override',
       },
@@ -141,7 +141,7 @@ export const DECISION_ACTIONS = {
         icon: X,
         kicker: 'REJECT CANDIDATE',
         headline: 'Reject {name}?',
-        body: 'This will disqualify them in Workable and send the rejection email.',
+        body: 'This rejects the shared ATS application across the original and every related role.',
         confirmLabel: 'Reject',
         confirmClass: 'rq-override',
       },
@@ -177,4 +177,5 @@ export const isRejectDecisionType = (decisionType) =>
 // candidate email: Taali never emails candidates about the job (see backend
 // actions/reject_application.py); any candidate-facing message is the ATS's own
 // disqualify workflow, so we don't claim one on Taali's behalf.
-export const REJECT_CONSEQUENCE_COPY = 'Disqualifies them in Workable.';
+export const REJECT_CONSEQUENCE_COPY =
+  'Rejects the shared ATS application across the original and every related role.';

@@ -193,7 +193,6 @@ def dispatch_sister_evaluation(
 )
 def score_sister_evaluation(evaluation_id: int) -> dict:
     from ..cv_matching.holistic import run_holistic_match
-    from ..models.role import Role
     from ..models.sister_role_evaluation import (
         SISTER_EVAL_DONE,
         SISTER_EVAL_PENDING,
@@ -220,12 +219,10 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
             return {"status": "skipped", "evaluation_id": evaluation_id}
 
         application = evaluation.source_application
-        source_role = (
-            db.get(Role, int(application.role_id)) if application is not None else None
-        )
+        role = evaluation.role
         # This is deliberately immediately before the paid-call claim. Pause,
         # Turn off, role closure, or ATS closure therefore revokes queued work.
-        if not role_allows_new_paid_ats_work(source_role, db=db):
+        if not role_allows_new_paid_ats_work(role, db=db):
             _set_retry(
                 evaluation,
                 error_code="authority_blocked",
@@ -237,7 +234,20 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 "evaluation_id": evaluation_id,
             }
 
-        role = evaluation.role
+        from ..services.sister_role_service import source_application_is_globally_closed
+
+        if source_application_is_globally_closed(application):
+            from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
+
+            evaluation.status = SISTER_EVAL_EXCLUDED
+            evaluation.error_message = "Shared ATS application is disqualified or closed"
+            evaluation.last_error_code = "shared_application_closed"
+            evaluation.next_attempt_at = None
+            evaluation.dispatch_attempted_at = None
+            evaluation.started_at = None
+            evaluation.scored_at = _now()
+            db.commit()
+            return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
         cv_text = application_cv_text(application) if application is not None else ""
         job_spec = (role.job_spec_text or "").strip() if role is not None else ""
         if not cv_text or not job_spec:
@@ -270,12 +280,10 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 client=client,
                 metering_context={
                     "organization_id": int(evaluation.organization_id),
-                    # Related roles are score-only projections over the owning
-                    # ATS job. Charge and hard-admit every provider call against
-                    # that operational role so its Agent budget covers the
-                    # complete candidate workflow instead of creating an
-                    # uncapped spend bucket on the projection role.
-                    "role_id": int(source_role.id),
+                    # Every related role owns an independent Agent and budget.
+                    # The canonical application is shared, but this score/spend
+                    # belongs to the role whose specification produced it.
+                    "role_id": int(role.id),
                     # Stable across retries so metering/caches can deduplicate a
                     # worker death after provider success but before row ack.
                     "entity_id": f"sister_evaluation:{evaluation.id}",
@@ -343,19 +351,36 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
     queue="scoring",
 )
 def score_sister_role(role_id: int) -> dict:
-    from ..models.sister_role_evaluation import SISTER_EVAL_PENDING, SisterRoleEvaluation
+    from ..models.sister_role_evaluation import (
+        SISTER_EVAL_PENDING,
+        SISTER_EVAL_RETRY_WAIT,
+        SisterRoleEvaluation,
+    )
     from ..platform.database import SessionLocal
 
     with SessionLocal() as db:
-        evaluation_ids = [
-            int(row_id)
-            for (row_id,) in db.query(SisterRoleEvaluation.id)
+        evaluations = (
+            db.query(SisterRoleEvaluation)
             .filter(
                 SisterRoleEvaluation.role_id == int(role_id),
-                SisterRoleEvaluation.status == SISTER_EVAL_PENDING,
+                SisterRoleEvaluation.status.in_(
+                    (SISTER_EVAL_PENDING, SISTER_EVAL_RETRY_WAIT)
+                ),
             )
+            .order_by(SisterRoleEvaluation.id.asc())
             .all()
-        ]
+        )
+        # This role-level kick is used by Turn on, Resume and an explicit
+        # re-score. Those commands revoke an earlier authority hold, so do not
+        # leave retry_wait rows sleeping until the periodic recovery sweep.
+        for evaluation in evaluations:
+            if evaluation.status == SISTER_EVAL_RETRY_WAIT:
+                evaluation.status = SISTER_EVAL_PENDING
+                evaluation.next_attempt_at = None
+                evaluation.dispatch_attempted_at = None
+                evaluation.started_at = None
+        db.commit()
+        evaluation_ids = [int(evaluation.id) for evaluation in evaluations]
         results = [
             dispatch_sister_evaluation(db, evaluation_id=evaluation_id)
             for evaluation_id in evaluation_ids

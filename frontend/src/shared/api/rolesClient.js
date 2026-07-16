@@ -197,6 +197,8 @@ export const roles = {
   createSourcedCandidate: (roleId, data) => api.post(`/roles/${roleId}/sourced-candidates`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
+  updateRelatedApplicationStage: (roleId, applicationId, data) =>
+    api.patch(`/roles/${roleId}/applications/${applicationId}/stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
   // Record/update a recruiter's manual decision (advance/hold/reject +
   // rationale, confidence, next steps) on an application with no assessment

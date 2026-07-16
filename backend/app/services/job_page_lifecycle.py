@@ -164,8 +164,9 @@ def role_paid_ats_work_block_reason(
         return INTAKE_ROLE_MISSING
     if getattr(role, "deleted_at", None) is not None:
         return INTAKE_ROLE_DELETED
-    if (getattr(role, "role_kind", None) or ROLE_KIND_STANDARD) != ROLE_KIND_STANDARD:
-        return "role_not_standard"
+    role_kind = getattr(role, "role_kind", None) or ROLE_KIND_STANDARD
+    if role_kind not in {ROLE_KIND_STANDARD, "sister"}:
+        return "role_kind_unsupported"
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return INTAKE_AGENT_OFF
     if getattr(role, "agent_paused_at", None) is not None:
@@ -177,7 +178,14 @@ def role_paid_ats_work_block_reason(
     if job_status is not None and job_status != JOB_STATUS_OPEN:
         return INTAKE_JOB_NOT_OPEN
 
-    ats = ats_job_lifecycle(role)
+    lifecycle_role = role
+    if role_kind == "sister":
+        lifecycle_role = getattr(role, "ats_owner_role", None)
+        if lifecycle_role is None and db is not None and role.ats_owner_role_id:
+            lifecycle_role = db.get(Role, int(role.ats_owner_role_id))
+        if lifecycle_role is None:
+            return INTAKE_ROLE_MISSING
+    ats = ats_job_lifecycle(lifecycle_role)
     if ats.external_job_id and ats.external_job_live is False:
         return INTAKE_ATS_JOB_NOT_LIVE
 

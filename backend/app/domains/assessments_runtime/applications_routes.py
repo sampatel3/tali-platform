@@ -59,6 +59,7 @@ from ...schemas.role import (
     AssessmentRetakeCreate,
     FirefliesInterviewLinkCreate,
     ManualApplicationInterviewCreate,
+    WorkableMoveStageRequest,
 )
 from ...services.evaluation_result_service import (
     author_from_user,
@@ -990,7 +991,8 @@ def list_role_applications(
     if status and status.strip().lower() != "all":
         query = query.filter(CandidateApplication.status.ilike(status.strip()))
     if pipeline_stage and pipeline_stage.strip().lower() != "all":
-        query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage.strip().lower())
+        stage_column = SisterRoleEvaluation.pipeline_stage if is_sister else CandidateApplication.pipeline_stage
+        query = query.filter(stage_column == pipeline_stage.strip().lower())
     if application_outcome and application_outcome.strip().lower() != "all":
         query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
     if min_pre_screen_score is not None:
@@ -2464,19 +2466,6 @@ def update_application_outcome(
     return response
 
 
-class WorkableMoveStageRequest(BaseModel):
-    """Body for the recruiter-initiated hand-back to the active ATS.
-
-    For Workable, ``target_stage`` is the remote stage slug/kind displayed by
-    the picker. For Bullhorn, it is the Taali stage intent (normally
-    ``"advanced"``); the provider resolves that intent through the org's
-    explicit stage map and never accepts/guesses a free-text remote status.
-    """
-
-    target_stage: str = Field(min_length=1, max_length=200)
-    reason: Optional[str] = Field(default=None, max_length=2000)
-
-
 class ApplicationWorkableNoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=8000)
 
@@ -2525,6 +2514,7 @@ def _queue_application_ats_move(
                 "target_stage": target_stage,
                 "target_intent": target_stage if provider_name == "bullhorn" else None,
                 "reason": data.reason,
+                "acting_role_id": data.acting_role_id,
             },
         )
     except AtsJobRunPersistenceError:
@@ -2556,6 +2546,13 @@ def move_application_in_active_ats(
         application_id=application_id,
         permission=JobPermission.EDIT_ROLE,
     )
+    if data.acting_role_id is not None:
+        from .related_role_actions import require_related_role_application_action
+
+        require_related_role_application_action(
+            db, current_user=current_user,
+            related_role_id=data.acting_role_id, application=app,
+        )
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)

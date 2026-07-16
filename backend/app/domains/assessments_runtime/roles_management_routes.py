@@ -16,7 +16,7 @@ from ...models.job_hiring_team import (
     JobHiringTeam,
 )
 from ...models.organization import Organization
-from ...models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+from ...models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, ROLE_KIND_SISTER, Role
 from ...models.role_change_event import RoleChangeEvent
 from ...models.role_brief import RoleBrief
 from ...models.task import Task
@@ -72,6 +72,7 @@ from ...services.role_concurrency import (
     bump_role_version,
     role_query_for_update,
 )
+from ...services.sister_role_service import pipeline_counts_for_role, related_role_pipeline_counts_bulk
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_DISABLED,
     ROLE_CHANGE_ACTION_AGENT_ENABLED,
@@ -432,6 +433,7 @@ def list_roles(
             organization_id=current_user.organization_id,
             role_ids=operational_role_ids,
         )
+        stage_counts_by_role.update(related_role_pipeline_counts_bulk(db, [int(role.id) for role in roles if str(role.role_kind or "") == ROLE_KIND_SISTER]))
 
     # Batched role -> client lookup (one query) for the Jobs list's Client column
     # + filter. Roles with no requisition (or no client) are simply absent.
@@ -477,7 +479,7 @@ def list_roles(
             summary=True,
             tasks_count=len(role.tasks or []),
             applications_count=app_counts.get(int(role.ats_owner_role_id or role.id), 0),
-            stage_counts=stage_counts_by_role.get(int(role.ats_owner_role_id or role.id), {}),
+            stage_counts=pipeline_counts_for_role(db, role, organization_id=current_user.organization_id, standard_counts=stage_counts_by_role.get(int(role.id), {})),
             active_candidates_count=active_counts.get(int(role.ats_owner_role_id or role.id), 0),
             last_candidate_activity_at=last_activity_by_role.get(int(role.ats_owner_role_id or role.id)),
             client=clients_by_role.get(role.id),
@@ -506,9 +508,7 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     # advanced + rejected) — the same aggregate the /roles list attaches, so
     # the role detail page can render the home-card funnel summary from the
     # single GET rather than deriving it from the (row-capped) applications list.
-    stage_counts = role_pipeline_counts(
-        db, organization_id=organization_id, role_id=operational_role_id
-    )
+    stage_counts = pipeline_counts_for_role(db, role, organization_id=organization_id)
     # Pending agent decisions by type — feeds the role funnel's "awaiting your
     # decision" chips (uncapped, unlike the row-limited applications fetch).
     pending_decisions_by_type = role_pending_decisions_by_type(
@@ -823,7 +823,6 @@ def update_role(
         unsafe_automation = {
             key
             for key in (
-                "agentic_mode_enabled",
                 "auto_reject",
                 "auto_reject_pre_screen",
                 "auto_promote",
@@ -1325,7 +1324,7 @@ def update_role(
     if "suppressed_org_criterion_ids" in updates:
         raw = updates["suppressed_org_criterion_ids"] or []
         role.suppressed_org_criterion_ids = [int(x) for x in raw]
-    if agent_activated_now or agent_resumed_now:
+    if (agent_activated_now or agent_resumed_now) and str(role.role_kind or "") != ROLE_KIND_SISTER:
         bootstrap_started_at = datetime.now(timezone.utc)
         role.agent_bootstrap_status = "starting"
         role.agent_bootstrap_error = None
@@ -1411,7 +1410,7 @@ def update_role(
     # rather than discovering gaps one cycle at a time. Idempotent on
     # (role_id, kind). Fires every false→true transition regardless of
     # whether the role was previously active.
-    if agent_activated_now:
+    if agent_activated_now and str(role.role_kind or "") != ROLE_KIND_SISTER:
         try:
             from ...services.agent_activation_checklist import surface_activation_questions
             surface_activation_questions(db, role=role)
@@ -1441,11 +1440,12 @@ def update_role(
         dispatched_role_id = int(role.id)
         dispatched_role_version = int(dispatch_control_version)
         try:
-            from ...tasks.agent_tasks import agent_cohort_tick_role
-            agent_cohort_tick_role.delay(
-                dispatched_role_id,
+            from ...services.role_agent_dispatch import dispatch_role_agent_cycle
+
+            dispatch_role_agent_cycle(
+                role,
                 activation=bool(agent_activated_now),
-                dispatch_role_version=dispatched_role_version,
+                role_version=dispatched_role_version,
             )
         except Exception:
             logger.exception(

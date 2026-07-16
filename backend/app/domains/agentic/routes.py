@@ -1882,9 +1882,11 @@ def run_now(
             detail=f"agent is paused: {role.agent_paused_reason or 'unspecified'}",
         )
 
-    from ...tasks.agent_tasks import agent_manual_run
+    from ...services.role_agent_dispatch import dispatch_role_agent_cycle
 
-    async_result = agent_manual_run.delay(role_id=role_id, application_id=body.application_id)
+    async_result = dispatch_role_agent_cycle(
+        role, manual=True, application_id=body.application_id
+    )
     return RunNowResult(role_id=role_id, queued=True, task_id=str(async_result.id))
 
 
@@ -2192,13 +2194,10 @@ def resume_all_agents(
             dispatch_failed += 1
             continue
         try:
-            from ...tasks.agent_tasks import agent_cohort_tick_role
+            from ...services.role_agent_dispatch import dispatch_role_agent_cycle
 
-            agent_cohort_tick_role.delay(
-                int(role.id),
-                activation=False,
-                dispatch_role_version=int(role.version or 1),
-                dispatch_workspace_version=workspace_resume_version,
+            dispatch_role_agent_cycle(
+                role, workspace_version=workspace_resume_version
             )
         except Exception:
             logger.exception(
@@ -2441,13 +2440,9 @@ def resume_role_agent(
         )
         if not workspace_held:
             try:
-                from ...tasks.agent_tasks import agent_cohort_tick_role
+                from ...services.role_agent_dispatch import dispatch_role_agent_cycle
 
-                agent_cohort_tick_role.delay(
-                    int(role.id),
-                    activation=False,
-                    dispatch_role_version=int(audit_to),
-                )
+                dispatch_role_agent_cycle(role, role_version=int(audit_to))
             except Exception:
                 logger.exception(
                     "Failed to enqueue resume cycle for role_id=%s", role.id
