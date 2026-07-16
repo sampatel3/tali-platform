@@ -854,21 +854,20 @@ describe('JobPipelinePage', () => {
     }));
   });
 
-  it('turns on in fixed skip mode when no active assessment is assigned', async () => {
+  it('leaves the authoritative taskless skip decision to the backend', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [] });
     renderPipeline();
 
     await confirmTurnOnPolicy();
 
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
-      101,
-      expect.objectContaining({
-        agentic_mode_enabled: true,
-        monthly_usd_budget_cents: 5000,
-        auto_skip_assessment: true,
-        activation_assessment_action: 'skip_assessment',
-      }),
-    ));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(activationPayload).toEqual(expect.objectContaining({
+      agentic_mode_enabled: true,
+      monthly_usd_budget_cents: 5000,
+    }));
+    expect(activationPayload).not.toHaveProperty('auto_skip_assessment');
+    expect(activationPayload).not.toHaveProperty('activation_assessment_action');
     expect(screen.queryByText(/Preparing the assessment/i)).not.toBeInTheDocument();
   });
 
@@ -911,7 +910,7 @@ describe('JobPipelinePage', () => {
     expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
   });
 
-  it('ignores an inactive generated draft and turns on in fixed skip mode', async () => {
+  it('lets the backend ignore an inactive generated draft during activation', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [{
       id: 708,
       name: 'Pending generated exercise',
@@ -925,19 +924,16 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     await confirmTurnOnPolicy();
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
-      101,
-      expect.objectContaining({
-        agentic_mode_enabled: true,
-        auto_skip_assessment: true,
-        activation_assessment_action: 'skip_assessment',
-      }),
-    ));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(activationPayload.agentic_mode_enabled).toBe(true);
+    expect(activationPayload).not.toHaveProperty('auto_skip_assessment');
+    expect(activationPayload).not.toHaveProperty('activation_assessment_action');
     expect(screen.queryByText(/battle test is still pending/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Preparing the assessment/i)).not.toBeInTheDocument();
   });
 
-  it('keeps a taskless activation off until the direct skip PATCH succeeds', async () => {
+  it('keeps a taskless activation off until the authoritative PATCH succeeds', async () => {
     const pendingDraft = {
       id: 709,
       name: 'Generated systems exercise',
@@ -965,14 +961,11 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     await confirmTurnOnPolicy();
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
-      101,
-      expect.objectContaining({
-        agentic_mode_enabled: true,
-        auto_skip_assessment: true,
-        activation_assessment_action: 'skip_assessment',
-      }),
-    ));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(activationPayload.agentic_mode_enabled).toBe(true);
+    expect(activationPayload).not.toHaveProperty('auto_skip_assessment');
+    expect(activationPayload).not.toHaveProperty('activation_assessment_action');
     expect(screen.getByText('Agent off')).toBeInTheDocument();
 
     await act(async () => {

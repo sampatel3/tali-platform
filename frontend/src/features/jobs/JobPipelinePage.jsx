@@ -1398,11 +1398,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
     setActivationPreflight(null);
     if (role?.role_kind === 'sister') return activateAgentWithAssessmentChoice(monthlyBudgetCents, 'skip_assessment');
-    const activeTasks = (roleTasks || []).filter((task) => task?.is_active !== false);
-    activateAgentWithAssessmentChoice(
-      monthlyBudgetCents,
-      activeTasks.length > 0 ? null : 'skip_assessment',
-    );
+    // The backend owns the authoritative task relationship and safely
+    // normalizes truly taskless roles to skip mode. A transient or failed task
+    // list request must not disable an assessment that already exists.
+    activateAgentWithAssessmentChoice(monthlyBudgetCents, null);
   };
 
   // Turn the agent OFF for this role — indefinite, no auto-resume. Opens a

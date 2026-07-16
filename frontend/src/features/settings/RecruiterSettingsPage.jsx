@@ -119,6 +119,15 @@ const buildWorkableScopeSelection = (scopes = []) => {
   };
 };
 
+const resolveAgentDefaultBoolean = (defaults, key, legacyKey, fallback = false) => {
+  if (defaults?.[key] != null) return Boolean(defaults[key]);
+  const legacyAutonomy = defaults?.autonomy;
+  if (legacyKey && legacyAutonomy?.[legacyKey] != null) {
+    return Boolean(legacyAutonomy[legacyKey]);
+  }
+  return fallback;
+};
+
 const normalizeWorkableError = (input) => {
   const raw = (input || '').toString();
   const lower = raw.toLowerCase();
@@ -810,11 +819,21 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       budgetUsd: String((seedBudgetCents / 100).toFixed(2)),
       threshold: Math.max(0, Math.min(100, seedThreshold)),
       thresholdMode: agentDefaults.threshold_mode === 'auto' ? 'auto' : 'manual',
-      autoSendAssessment: Boolean(agentDefaults.auto_send_assessment),
-      autoResendAssessment: Boolean(agentDefaults.auto_resend_assessment),
-      autoAdvance: Boolean(agentDefaults.auto_advance),
-      autoRejectPreScreen: agentDefaults.auto_reject_pre_screen !== false,
-      autoSkipAssessment: Boolean(agentDefaults.auto_skip_assessment),
+      autoSendAssessment: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_send_assessment', 'auto_invite_above'
+      ),
+      autoResendAssessment: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_resend_assessment', 'auto_invite_above'
+      ),
+      autoAdvance: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_advance', 'auto_advance_high_score'
+      ),
+      autoRejectPreScreen: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_reject_pre_screen', 'auto_reject_below', true
+      ),
+      autoSkipAssessment: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_skip_assessment'
+      ),
     });
     const firefliesConfig = orgData.fireflies_config || {};
     setFirefliesForm({
