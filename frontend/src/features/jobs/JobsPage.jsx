@@ -727,9 +727,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     orgStatusResult,
   );
 
-  // Workspace pause / resume driven from the header's Agent panel. This is an
-  // overlay, not a bulk role edit: each role retains its own desired state and
-  // resumes accordingly when the workspace hold is cleared.
+  // Workspace pause / resume is a convenience bulk edit. Individual role
+  // controls remain authoritative between those global actions.
   const agentBulkBusyRef = useRef(false);
   const [agentBulkAction, setAgentBulkAction] = useState(null);
   const runAgentBulk = useCallback(async (actionName, action, failMsg) => {
@@ -833,6 +832,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         onResumeAgent={!isShowcase && canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
         pauseLabel="Pause workspace"
         resumeLabel="Resume workspace"
+        pauseAllCount={headerAgent?.runningRoleCount ?? 0}
+        resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
+        controlsDisabledReason={!canControlWorkspaceAgent
+          ? 'Workspace owners can pause or resume all agents.'
+          : null}
         offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
       <div className="mc-page">

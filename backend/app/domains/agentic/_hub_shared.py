@@ -165,8 +165,6 @@ class OrgKpiPayload(BaseModel):
     teach_rate_pct: float
     paused_role_count: int
     active_role_count: int
-    # Local desired pauses remain visible under a workspace overlay even though
-    # effective paused_role_count becomes every enabled role.
     local_paused_role_count: int = 0
     oldest_pending_age_seconds: Optional[int]
 

@@ -1238,7 +1238,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     handleRoleVersionConflict,
     showToast,
   });
-  const handleResumeEffectiveAgent = useEffectiveRelatedAgentResume({ agentStatus, onResumeRole: handleResumeAgent, refetchAgentStatus, resumeWorkspace: apiClient.agent.resumeAll, reloadRole: loadRoleWorkspace, setPollingVersion: setSisterPollVersion, showToast });
+  const handleResumeLegacyWorkspace = useEffectiveRelatedAgentResume({
+    agentStatus, onResumeRole: handleResumeAgent, refetchAgentStatus, resumeWorkspace: apiClient.agent.resumeAll, reloadRole: loadRoleWorkspace, setPollingVersion: setSisterPollVersion, showToast });
 
   // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
   // AgentHeader with a role-scoped agent panel on the right. Builds the
@@ -1687,7 +1688,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         agent={roleAgent}
         onActivateAgent={handleActivateAgent}
         onPauseAgent={handlePauseAgent}
-        onResumeAgent={handleResumeEffectiveAgent}
+        onResumeAgent={handleResumeAgent}
         onTurnOffAgent={handleTurnOffAgent}
         onAgentSettings={goToAgentSettings}
         controlsDisabledReason={roleAgentControlDisabledReason}
@@ -1698,7 +1699,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           providerLabel={externalProviderLabel}
           status={sisterScoringStatus}
           agentStatus={agentStatus}
-          onResumeWorkspace={handleResumeEffectiveAgent}
+          onResumeWorkspace={handleResumeLegacyWorkspace}
           onOpenOriginal={() => navigate(`/jobs/${role.ats_owner_role_id}`)}
         />
       ) : null}
