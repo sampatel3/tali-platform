@@ -7,7 +7,6 @@ from app.services.decision_evidence_service import (
 from app.services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
-    humanize_agent_reasoning,
     normalize_candidate_summary,
 )
 
@@ -183,48 +182,18 @@ def test_legacy_hard_rule_does_not_invent_missing_factor_details():
     assert "marked missing" not in result["summary"]
 
 
-def test_humanize_cleans_the_live_agent_reasoning_example():
-    raw = (
-        "Aiazuddin (52407) scores 78.0 (role_fit, pre_screen, cv_match all 78.0) — "
-        "well above send threshold (70). Policy fires on role_fit + pre_screen. "
-        "... Externally advanced (workable_stage=Technical Interview)."
-    )
-    cleaned = humanize_agent_reasoning(raw)
-    assert cleaned == (
-        "Aiazuddin scores 78.0 (role fit, pre-screen, CV match all 78.0) — "
-        "well above send threshold (70). Policy fires on role fit + pre-screen. "
-        "... Externally advanced (Technical Interview stage in Workable)."
-    )
-    for token in ("role_fit", "pre_screen", "cv_match", "workable_stage=", "(52407)"):
-        assert token not in cleaned
-
-
-def test_humanize_passes_clean_text_through_byte_identical():
-    text = (
-        "Strong distributed-systems depth and a proven verification habit; "
-        "recommend advancing to the technical interview."
-    )
-    assert humanize_agent_reasoning(text) == text
-
-
-def test_humanize_keeps_four_digit_year_but_strips_candidate_id_paren():
-    # 4-digit runs are treated as a possible year and left untouched; only the
-    # 5+ digit candidate id following a word is stripped.
-    assert humanize_agent_reasoning("Shipped the 2024 roadmap (2024).") == (
-        "Shipped the 2024 roadmap (2024)."
-    )
-    assert humanize_agent_reasoning("Aiazuddin (52407) is a strong fit.") == (
-        "Aiazuddin is a strong fit."
-    )
-
-
 def test_agent_reasoning_is_humanized_in_explanation():
+    # The explanation summary must run the SAME shared humanizer the serializer
+    # applies to the raw ``reasoning`` field (app.domains.agentic._reasoning_text),
+    # so the two fields can never drift — including its 4-digit id and quoted
+    # key=value handling that a narrower local copy previously missed.
     decision = SimpleNamespace(
         decision_type="advance_to_interview",
         evidence={"decision_source": "agent"},
         reasoning=(
-            "Aiazuddin (52407) clears role_fit and pre_screen; externally "
-            "advanced (workable_stage=Technical Interview)."
+            'Aiazuddin (1042) clears role_fit and pre_screen; externally '
+            'advanced (workable_stage = "Technical Interview"). Policy fires '
+            "on role_fit."
         ),
         model_version="agent",
     )
@@ -232,10 +201,27 @@ def test_agent_reasoning_is_humanized_in_explanation():
     result = build_decision_explanation(decision, None)
 
     assert result["source"] == "agent"
-    for token in ("role_fit", "pre_screen", "workable_stage=", "(52407)"):
+    for token in ("role_fit", "pre_screen", "workable_stage", "(1042)"):
         assert token not in result["summary"]
     assert "role fit" in result["summary"]
-    assert "Technical Interview stage in Workable" in result["summary"]
+    assert 'already at "Technical Interview" in Workable' in result["summary"]
+    assert "Policy triggered" in result["summary"]
+
+
+def test_clean_agent_reasoning_passes_through_unchanged():
+    text = (
+        "Strong distributed-systems depth and a proven verification habit; "
+        "recommend advancing to the technical interview."
+    )
+    decision = SimpleNamespace(
+        decision_type="advance_to_interview",
+        evidence={"decision_source": "agent"},
+        reasoning=text,
+        model_version="agent",
+    )
+
+    result = build_decision_explanation(decision, None)
+    assert result["summary"] == text
 
 
 def test_policy_fallback_is_not_relabelled_as_candidate_summary():
