@@ -22,7 +22,7 @@ export const STANDARD_MANUAL_TEMPLATE = {
   difficulty: 'mid',
   duration_minutes: 45,
   claude_budget_limit_usd: 5,
-  starter_code: `from typing import List, Dict\n\n\ndef process_events(events: List[Dict]) -> int:\n    \"\"\"Process incoming events and return number of successful writes.\"\"\"\n    processed = 0\n    for event in events:\n        # TODO: harden validation and idempotency checks\n        if event.get("id"):\n            processed += 1\n    return processed\n`,
+  starter_code: `from typing import List, Dict\n\n\ndef process_events(events: List[Dict]) -> int:\n    """Process incoming events and return number of successful writes."""\n    processed = 0\n    for event in events:\n        # TODO: harden validation and idempotency checks\n        if event.get("id"):\n            processed += 1\n    return processed\n`,
   test_code: `from src.task import process_events\n\n\ndef test_processes_valid_events():\n    events = [{"id": "1"}, {"id": "2"}]\n    assert process_events(events) == 2\n\n\ndef test_skips_invalid_event_payload():\n    events = [{"id": "1"}, {"payload": {}}]\n    assert process_events(events) == 1\n\n\ndef test_handles_empty_input():\n    assert process_events([]) == 0\n`,
   role: 'backend_engineer',
   scenario: 'A production ingestion pipeline is dropping events and producing duplicate records during spikes. Stabilize the processing logic and keep behavior predictable.',

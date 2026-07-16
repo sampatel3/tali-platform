@@ -12,7 +12,7 @@ import {
   Panel,
   cx,
 } from './TaaliPrimitives';
-import { MotionLoop } from '../motion';
+import { MotionLoop, useDocumentVisibility } from '../motion';
 
 const relativeFormatter = typeof Intl !== 'undefined'
   ? new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
@@ -458,11 +458,14 @@ export const WorkableSyncStrip = ({
   className = '',
 }) => {
   const [now, setNow] = useState(Date.now());
+  const documentVisible = useDocumentVisibility();
 
   useEffect(() => {
+    if (!documentVisible) return undefined;
+    setNow(Date.now());
     const interval = window.setInterval(() => setNow(Date.now()), 30000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [documentVisible]);
 
   const workableConnected = Boolean(org?.workable_connected);
   const summary = org?.workable_last_sync_summary || {};

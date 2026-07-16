@@ -10,7 +10,7 @@ import { ErrorBoundary as SharedErrorBoundary } from '@mainspring/ui';
 function TaaliDefaultFallback() {
   return (
     <div className="min-h-screen flex items-center justify-center px-6 py-10 bg-[var(--taali-bg)]">
-      <div className="max-w-md w-full border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] p-6 text-center">
+      <div className="max-w-md w-full border-[2px] border-[var(--taali-border)] bg-[var(--taali-surface)] p-6 text-center">
         <h1 className="text-2xl font-bold text-[var(--taali-text)] mb-2">Something went wrong</h1>
         <p className="text-sm text-[var(--taali-muted)] mb-4">
           An unexpected error occurred. Refresh to try again, or contact support if the issue persists.

@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
   Building2,
@@ -13,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { useAuth } from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
   PIPELINE_FUNNEL_STAGES,
@@ -99,11 +99,8 @@ const reducedRoleCardFadeVariants = Object.freeze({
   dimmed: Object.freeze({ opacity: ROLE_CARD_DIMMED_OPACITY, transition: motionTransition.instant }),
 });
 
-// Progressive load: paint this many roles first (the active / starred /
-// recently-synced head of the list, per the backend's sort), then fetch the
-// full list in the background. Sized to comfortably cover a recruiter's live +
-// recently-touched roles on first paint without waiting on the long tail of
-// old / filled postings.
+// Paint active/recently synced roles first; additional pages stay explicit so
+// large tenants avoid long-tail query/serialization until requested.
 const JOBS_FIRST_PAGE = 24;
 
 const SOURCE_FILTERS = [
@@ -305,11 +302,12 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
   return { agent, refetch };
 };
 
-export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => {
+export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showcase = false }) => {
+  const { user } = useAuth();
   const rolesApi = apiClient.roles;
   const orgApi = apiClient.organizations;
-  const [searchParams] = useSearchParams();
-  const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
+  const isShowcase = showcase;
+  const isOwner = String(user?.role || '') === 'owner';
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
   const orgStatusResult = useAgentStatusOrg(!isShowcase);
   const {
@@ -320,9 +318,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   } = useJobStatus() ?? {};
 
   const [roles, setRoles] = useState([]);
-  // True while the first page is shown and the full role list is still
-  // loading in the background (drives the subtle "loading all roles" hint).
+  // True when another explicit page of roles is available.
   const [rolesPartial, setRolesPartial] = useState(false);
+  const [loadingMoreRoles, setLoadingMoreRoles] = useState(false);
   const [orgData, setOrgData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -383,24 +381,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       setOrgData(nextOrgData);
       setLoading(false);
 
-      // Phase 2 — fill in the long tail. If the first page came back full there
-      // are likely more roles; fetch the COMPLETE list in the background and
-      // swap it in. The page is already interactive, so the recruiter never
-      // waits on the full aggregate pass. Role keys (role.id) keep the first
-      // page stable as the rest append.
-      if (firstRoles.length >= JOBS_FIRST_PAGE) {
-        setRolesPartial(true);
-        rolesApi
-          .list({ include_pipeline_stats: true })
-          .then((fullRes) => {
-            const allRoles = Array.isArray(fullRes?.data) ? fullRes.data : null;
-            if (allRoles && allRoles.length) setRoles(allRoles);
-          })
-          .catch(() => { /* keep the first page if the full fetch fails */ })
-          .finally(() => setRolesPartial(false));
-      } else {
-        setRolesPartial(false);
-      }
+      // Keep the long tail out of the critical path. Explicit pagination still
+      // gives recruiters access to every role without duplicate aggregate work.
+      setRolesPartial(firstRoles.length >= JOBS_FIRST_PAGE);
     } catch {
       setRoles([]);
       setRolesPartial(false);
@@ -411,6 +394,29 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       setLoading(false);
     }
   }, [isShowcase, orgApi, rolesApi]);
+
+  const loadMoreRoles = useCallback(async () => {
+    if (isShowcase || loadingMoreRoles || !rolesPartial) return;
+    setLoadingMoreRoles(true);
+    try {
+      const offset = roles.length;
+      const res = await rolesApi.list({
+        include_pipeline_stats: true,
+        limit: JOBS_FIRST_PAGE,
+        offset,
+      });
+      const page = Array.isArray(res?.data) ? res.data : [];
+      setRoles((current) => {
+        const seen = new Set(current.map((role) => Number(role?.id)));
+        return [...current, ...page.filter((role) => !seen.has(Number(role?.id)))];
+      });
+      setRolesPartial(page.length >= JOBS_FIRST_PAGE);
+    } catch {
+      // Keep the roles already rendered; the button remains available to retry.
+    } finally {
+      setLoadingMoreRoles(false);
+    }
+  }, [isShowcase, loadingMoreRoles, roles.length, rolesApi, rolesPartial]);
 
   useEffect(() => {
     void loadJobsHub();
@@ -501,7 +507,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   }, [isShowcase, roles]);
 
   const handleSyncNow = async () => {
-    if (isShowcase || !activeAts) return;
+    if (isShowcase || !activeAts || !isOwner) return;
     setError('');
     setSyncing(true);
     try {
@@ -718,8 +724,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   }, [roles]);
 
   return (
-    <div>
+    <>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
+      <main>
       {/* HANDOFF unified-headers.md §2-§4 — single AgentHeader at the top of
           the page. Right-side panel reflects the org-aggregate agent state
           when at least one role has the agent enabled; otherwise the OFF
@@ -802,18 +809,20 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               </div>
             </div>
             <div className="row">
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={handleSyncNow}
-                disabled={syncing}
-                aria-label={syncing ? 'Syncing' : 'Sync now'}
-              >
-                <MotionLoop kind="spin" active={syncing} className="inline-flex" aria-hidden="true">
-                  <RefreshCw size={13} />
-                </MotionLoop>
-                {syncing ? 'Syncing…' : 'Sync now'}
-              </button>
+              {isOwner ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={handleSyncNow}
+                  disabled={syncing}
+                  aria-label={syncing ? 'Syncing' : 'Sync now'}
+                >
+                  <MotionLoop kind="spin" active={syncing} className="inline-flex" aria-hidden="true">
+                    <RefreshCw size={13} />
+                  </MotionLoop>
+                  {syncing ? 'Syncing…' : 'Sync now'}
+                </button>
+              ) : <span className="settings-inline-note">Only owners can start a sync.</span>}
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
@@ -936,12 +945,15 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             </label>
           ) : null}
           {rolesPartial ? (
-            <span
-              className="flex items-center gap-1 text-xs text-[var(--mute)]"
-              aria-live="polite"
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={loadMoreRoles}
+              disabled={loadingMoreRoles}
             >
-              <Spinner size={11} /> Loading all roles…
-            </span>
+              {loadingMoreRoles ? <Spinner size={11} /> : null}
+              {loadingMoreRoles ? 'Loading more…' : `Load more roles (${roles.length} shown)`}
+            </button>
           ) : null}
         </Reveal>
 
@@ -1178,8 +1190,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         ) : (
                           <span className="job-agent-pill is-off" title="Agent off">OFF</span>
                         )}
-                      </div>
-
+      </div>
                       <div className="job-stats">
                         {STAGES.map((stage) => {
                           const value = stage.key === 'invited'
@@ -1241,8 +1252,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         ) : null}
 
       </div>
-    </div>
+      </main>
+    </>
   );
 };
-
 export default JobsPage;

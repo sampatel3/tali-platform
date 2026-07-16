@@ -15,7 +15,7 @@ import {
   getCategoryScoresFromAssessment,
 } from '../../lib/comparisonCategories';
 
-const DEFAULT_COLORS = ['var(--taali-text)', 'var(--taali-success)', 'var(--taali-warning)', 'var(--taali-info)', '#ef4444'];
+const DEFAULT_COLORS = ['var(--taali-text)', 'var(--taali-success)', 'var(--taali-warning)', 'var(--taali-info)', 'var(--taali-comparison-series-danger)'];
 
 export const ComparisonRadar = ({
   assessments = [],

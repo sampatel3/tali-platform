@@ -162,9 +162,9 @@ describe('AssessmentClaudeChat', () => {
 
     for (let i = 1; i <= 31; i += 1) {
       // sequentially submit
-      // eslint-disable-next-line no-await-in-loop
+
       await typeAndSend(`msg-${i}`);
-      // eslint-disable-next-line no-await-in-loop
+
       await waitFor(() => {
         expect(screen.getByText(`reply-msg-${i}`)).toBeInTheDocument();
       });

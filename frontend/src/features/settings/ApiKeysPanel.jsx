@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 
 import { apiKeys as apiKeysApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
@@ -71,7 +71,7 @@ export const ApiKeysPanel = () => {
   const [creating, setCreating] = useState(false);
   const [newSecret, setNewSecret] = useState(null);
 
-  const loadKeys = async () => {
+  const loadKeys = useCallback(async () => {
     try {
       const res = await apiKeysApi.list();
       const data = res?.data || {};
@@ -88,12 +88,11 @@ export const ApiKeysPanel = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
-    loadKeys();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void loadKeys();
+  }, [loadKeys]);
 
   const toggleScope = (scope) => {
     setSelectedScopes((prev) =>

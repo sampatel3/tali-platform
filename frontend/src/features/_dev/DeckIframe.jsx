@@ -30,7 +30,7 @@ export default function DeckIframe() {
         width: '100vw',
         height: '100vh',
         border: 0,
-        background: '#0d0a14',
+        background: 'var(--taali-deck-backdrop)',
       }}
       // Full permissions because it's our own static asset.
       allow="fullscreen"

@@ -120,7 +120,7 @@ export function CandidateTriageDrawer({
   mode = 'inline',
   activityLabel = '',
   loadingActivity = false,
-  // eslint-disable-next-line no-unused-vars -- kept for API parity; the
+
   // segmented control was retired in favour of automatic stage
   // transitions driven by the action buttons.
   stageBusy = false,
@@ -136,7 +136,7 @@ export function CandidateTriageDrawer({
   loadingWorkableStages = false,
   workableMoveBusy = false,
   onClose = null,
-  // eslint-disable-next-line no-unused-vars -- kept for API parity.
+
   onMoveStage,
   onSendAssessment,
   onViewFullReport,

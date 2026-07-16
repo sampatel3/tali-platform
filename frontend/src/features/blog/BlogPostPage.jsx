@@ -42,15 +42,15 @@ export const BlogPostPage = ({ onNavigate }) => {
     <div className="blog-wrap">
       <MarketingNav onNavigate={onNavigate} />
 
-      {!post ? (
-        <div className="blog-container" style={{ padding: '80px 20px' }}>
-          <h1 style={{ fontFamily: 'var(--font-display)' }}>Post not found</h1>
-          <p style={{ color: 'var(--ink-2)' }}>
-            That post doesn’t exist. <Link to="/blog">Back to the blog →</Link>
-          </p>
-        </div>
-      ) : (
-        <>
+      <main>
+        {!post ? (
+          <div className="blog-container" style={{ padding: '80px 20px' }}>
+            <h1 style={{ fontFamily: 'var(--font-display)' }}>Post not found</h1>
+            <p style={{ color: 'var(--ink-2)' }}>
+              That post doesn’t exist. <Link to="/blog">Back to the blog →</Link>
+            </p>
+          </div>
+        ) : (
           <article>
             <div className="blog-container">
               <header className="blog-hero">
@@ -74,9 +74,9 @@ export const BlogPostPage = ({ onNavigate }) => {
               </div>
             </div>
           </article>
-          <BlogFooter />
-        </>
-      )}
+        )}
+      </main>
+      <BlogFooter />
     </div>
   );
 };

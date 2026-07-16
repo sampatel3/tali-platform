@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 
 import {
   Badge,
@@ -88,26 +88,30 @@ export const ScorecardPanel = ({
     }
   };
 
-  const reload = () =>
-    Promise.all([
+  const reload = useCallback(() => {
+    if (!applicationId || !rolesApi?.listScorecards || !rolesApi?.getScorecardSummary) {
+      return Promise.resolve();
+    }
+    return Promise.all([
       rolesApi.listScorecards(applicationId),
       rolesApi.getScorecardSummary(applicationId),
     ]).then(([list, sum]) => {
       setCards(list.data);
       setSummary(sum.data);
     });
+  }, [applicationId, rolesApi]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!applicationId || !rolesApi?.listScorecards) return undefined;
+    if (!applicationId) return undefined;
     reload().catch(() => {
       if (!cancelled) setError('Could not load scorecards.');
     });
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applicationId]);
+
+  }, [applicationId, reload]);
 
   const save = async (thenSubmit) => {
     setSaving(true);
@@ -196,7 +200,7 @@ export const ScorecardPanel = ({
             </Button>
           </div>
           {aiDrafted ? (
-            <div className="mt-3 rounded-md border border-[var(--taali-accent-border,var(--taali-border))] bg-[var(--taali-accent-soft,var(--taali-surface-2))] px-3 py-2 text-xs text-[var(--taali-text)]">
+            <div className="mt-3 rounded-md border border-[var(--taali-accent-border,var(--taali-border))] bg-[var(--taali-accent-soft,var(--bg-3))] px-3 py-2 text-xs text-[var(--taali-text)]">
               Drafted from the interview transcript — review, edit, and submit. You own the
               final verdict; the agent never submits.
             </div>

@@ -5,6 +5,7 @@ import { AssessmentScorecard } from '../../candidates/AssessmentScorecard';
 import { LandingPreviewNav, LandingPreviewFooter, ClosingCtaBand, containerClass } from './LandingPreviewChrome';
 import { LandingPreviewHero } from './LandingPreviewHero';
 import { ValuePillars, EvidenceStrip } from './LandingPreviewSections';
+import './landingPreviewTokens.css';
 
 // ---------------------------------------------------------------------------
 // Fixture data for the TWO real product moments embedded below.
@@ -114,9 +115,9 @@ const SCORECARD_ASSESSMENT = {
 const ArtifactFrame = ({ browserPath, children }) => (
   <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
     <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[0.6875rem] text-[var(--mute)]">
-      <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#f06' }} />
-      <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#ffb020' }} />
-      <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: '#39c66d' }} />
+      <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: 'var(--lvb-window-close)' }} />
+      <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: 'var(--lvb-window-minimize)' }} />
+      <span className="h-[0.5625rem] w-[0.5625rem] rounded-full" style={{ background: 'var(--lvb-window-expand)' }} />
       <span className="ml-3">{browserPath}</span>
       <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--mute)]">
         Live component
@@ -132,7 +133,7 @@ const Callouts = ({ items }) => (
       <li key={item.label} className="flex items-start gap-3">
         <span
           aria-hidden="true"
-          className="mt-0.5 inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-[var(--purple)] font-[var(--font-mono)] text-[0.6875rem] font-semibold text-white"
+          className="mt-0.5 inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-[var(--purple)] font-[var(--font-mono)] text-[0.6875rem] font-semibold text-[var(--lvb-on-accent)]"
         >
           {i + 1}
         </span>
@@ -170,7 +171,7 @@ const NarrativeArtifact = ({ kicker, title, blurb, callouts, browserPath, childr
 // 5-Ds scorecard), each framed large and annotated, with abstract value
 // sections reused from A between and after.
 export const LandingVariantB = ({ onNavigate }) => (
-  <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+  <div className="lvb min-h-screen bg-[var(--bg)] text-[var(--ink)]">
     <LandingPreviewNav onNavigate={onNavigate} />
 
     <LandingPreviewHero

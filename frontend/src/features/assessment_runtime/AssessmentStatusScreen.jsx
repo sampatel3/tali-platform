@@ -20,6 +20,8 @@ export const AssessmentStatusScreen = ({
   mode,
   lightMode = false,
 }) => {
+  const [closeAttempted, setCloseAttempted] = useState(false);
+
   if (mode === 'loading') {
     return (
       <div className={`taali-runtime ${lightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen items-center justify-center bg-[var(--taali-runtime-bg)]`}>
@@ -40,7 +42,6 @@ export const AssessmentStatusScreen = ({
   // window via ``target="_blank"`` with the opener retained). If the
   // tab is still here after a short tick, swap the button for the
   // keyboard-shortcut hint — the only honest path left.
-  const [closeAttempted, setCloseAttempted] = useState(false);
   const isMac = detectMacShortcut();
   const shortcutLabel = isMac ? '⌘W' : 'Ctrl+W';
 
@@ -69,7 +70,7 @@ export const AssessmentStatusScreen = ({
         <div className="mb-7 text-[20px] font-extrabold tracking-[-0.01em] text-[var(--taali-runtime-text)]">
           taali<span className="text-[var(--purple)]">.</span>
         </div>
-        <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-[16px] bg-[var(--purple)] text-white">
+        <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-[16px] bg-[var(--purple)] text-[var(--taali-on-accent)]">
           <Check size={26} />
         </div>
         <h1 className="mb-2.5 font-[var(--font-display)] text-[24px] font-bold leading-[1.18] tracking-[-0.02em] text-[var(--taali-runtime-text)]">

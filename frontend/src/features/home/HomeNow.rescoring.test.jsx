@@ -11,6 +11,7 @@ import { HomeNow } from './HomeNow';
 // Re-evaluate is clicked.
 
 const reEvaluateDecision = vi.fn();
+const listDecisions = vi.fn().mockResolvedValue({ data: [] });
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -19,7 +20,7 @@ vi.mock('../../shared/api', () => ({
     bulkOverrideDecisions: vi.fn().mockResolvedValue({ data: {} }),
     snoozeDecision: vi.fn().mockResolvedValue({ data: {} }),
     reEvaluateDecision: (...a) => reEvaluateDecision(...a),
-    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    listDecisions: (...a) => listDecisions(...a),
   },
   organizations: {
     getWorkableStages: vi.fn().mockResolvedValue({ data: { stages: [] } }),
@@ -64,13 +65,17 @@ const renderHome = (decisions) => {
 describe('HomeNow — re-score in flight', () => {
   beforeEach(() => {
     reEvaluateDecision.mockReset();
+    listDecisions.mockReset().mockResolvedValue({ data: [] });
   });
 
-  it('greys the queue row + card and freezes actions when the server reports rescore_in_flight', () => {
+  it('greys the queue row + card and freezes actions when the server reports rescore_in_flight', async () => {
     const { container } = renderHome([
       mkDecision(1, 'Mohd Hashimi', { rescore_in_flight: true }),
       mkDecision(2, 'Sathish Kumar'),
     ]);
+    await act(async () => {
+      await listDecisions.mock.results.at(-1).value;
+    });
 
     // Queue row: greyed + a spinning "re-scoring" chip.
     const rows = container.querySelectorAll('.rq-qrow');

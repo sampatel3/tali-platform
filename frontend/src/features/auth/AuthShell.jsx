@@ -30,7 +30,7 @@ export const AuthShell = ({
       >
         <TaaliTile
           className="h-7 w-7 rounded-[7px]"
-          fillClassName="text-white"
+          fillClassName="text-[var(--cloud)]"
           lineClassName="text-[var(--purple)]"
           strokeWidth={2.4}
           cornerRadius={6.5}
@@ -41,15 +41,15 @@ export const AuthShell = ({
         <div className="mc-auth-quote-kicker">WHY TAALI</div>
         <p>
           A real IDE. Real AI tooling. Real prompts on the record. The only platform that scores how
-          a candidate <span style={{ color: '#fff', fontWeight: 600 }}>uses AI</span> on the job — calibrated to your team&apos;s bar.
+          a candidate <span style={{ color: 'var(--cloud)', fontWeight: 600 }}>uses AI</span> on the job — calibrated to your team&apos;s bar.
         </p>
       </div>
       <div className="mc-auth-compliance">
-        <span>SOC 2 TYPE II</span>
+        <span>ENCRYPTED IN TRANSIT</span>
         <span>·</span>
-        <span>EU/US DATA RESIDENCY</span>
+        <span>TENANT-ISOLATED</span>
         <span>·</span>
-        <span>GDPR</span>
+        <span>NO MODEL TRAINING</span>
       </div>
     </aside>
     <main className="mc-auth-form-pane">

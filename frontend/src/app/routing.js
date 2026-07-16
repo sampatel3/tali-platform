@@ -54,6 +54,10 @@ export const pathForPage = (page, options = {}) => {
       return '/showcase';
     case 'developers':
       return '/developers';
+    case 'terms':
+      return '/terms';
+    case 'privacy':
+      return '/privacy';
     case 'blog':
       return '/blog';
     case 'blog-post':

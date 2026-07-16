@@ -1,0 +1,33 @@
+:root {
+  --candidate-prompt-chart-grid: #ebe7f8;
+  --candidate-prompt-chart-specificity: #2d2d44;
+  --candidate-prompt-chart-efficiency: #9ca3af;
+  --candidate-code-surface: #151122;
+  --candidate-code-foreground: #e5e7eb;
+  --candidate-evaluation-supporting-text: #4b5563;
+  --candidate-evaluation-muted-text: #6b7280;
+  --candidate-evaluation-primary-text: #1f2937;
+  --candidate-avatar-gradient-end: #6b4dff;
+  --candidate-accent-foreground: #ffffff;
+  --candidate-fraud-evidence-surface: rgb(255 255 255 / 60%);
+  --candidate-client-share-accent: #4f46e5;
+}
+
+.graph-view {
+  --candidate-search-graph-node-default: #9d8df1;
+  --candidate-search-graph-label: #1a1a2e;
+  --candidate-search-graph-person-label: #0e0e1a;
+  --candidate-search-graph-score-high: #00b894;
+  --candidate-search-graph-score-medium: #fdcb6e;
+  --candidate-search-graph-score-low: #d63031;
+  --candidate-search-graph-score-unscored: #b2bec3;
+  --candidate-search-graph-company: #22c1c3;
+  --candidate-search-graph-school: #fdcb6e;
+  --candidate-search-graph-skill: #dfe6e9;
+  --candidate-search-graph-skill-label: #636e72;
+  --candidate-search-graph-country: #a29bfe;
+  --candidate-search-graph-edge: rgba(150, 150, 160, 0.45);
+  --candidate-search-graph-work-edge: rgba(34, 193, 195, 0.5);
+  --candidate-search-graph-study-edge: rgba(253, 203, 110, 0.55);
+  --candidate-search-graph-skill-edge: rgba(160, 160, 160, 0.35);
+}

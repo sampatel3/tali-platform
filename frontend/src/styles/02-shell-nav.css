@@ -259,6 +259,19 @@
   font-size: 0.96875rem;
 }
 
+@media (pointer: coarse) {
+  .app-nav .logo,
+  .app-nav .btn-sm {
+    min-height: 44px;
+  }
+
+  .app-nav .icon-btn {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+}
+
 .card {
   background: var(--bg-2);
   border: 1px solid var(--line);

@@ -131,16 +131,18 @@ const RoleAgentSettingsTab = ({
     .map((task) => Number(task?.id))
     .filter(Number.isFinite);
   const assignedTaskSignature = [...assignedTaskIdsFromProps].sort((a, b) => a - b).join(',');
+  const assignedTaskIdsRef = React.useRef(assignedTaskIdsFromProps);
+  assignedTaskIdsRef.current = assignedTaskIdsFromProps;
   const [selectedAssessmentTaskIds, setSelectedAssessmentTaskIds] = React.useState(assignedTaskIdsFromProps);
   const [assessmentTaskSearch, setAssessmentTaskSearch] = React.useState('');
   const [assessmentChangePending, setAssessmentChangePending] = React.useState(false);
 
   React.useEffect(() => {
-    setSelectedAssessmentTaskIds(assignedTaskIdsFromProps);
+    setSelectedAssessmentTaskIds(assignedTaskIdsRef.current);
     setAssessmentTaskSearch('');
     // The signature is deliberately stable when a parent reload returns new
     // task objects with the same IDs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [role?.id, assignedTaskSignature]);
 
   // Merge the catalogue with assigned tasks so a linked task remains visible

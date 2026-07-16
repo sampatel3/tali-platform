@@ -8,6 +8,7 @@ import { AssessmentStatusScreen } from './AssessmentStatusScreen';
 import { AssessmentTopBar } from './AssessmentTopBar';
 import { AssessmentWorkspace } from './AssessmentWorkspace';
 import { AssessmentStagePanel } from './AssessmentStagePanel';
+import { remainingSecondsUntil } from './assessmentTimer';
 import {
   buildRepoFileTree,
   extractRepoFiles,
@@ -247,6 +248,8 @@ export default function AssessmentPage({
   const codeRef = useRef("");
   const contextWindowRef = useRef(null);
   const timerRef = useRef(null);
+  const countdownTimeRef = useRef(timeLeft); // latest seed for fixed-deadline restarts
+  countdownTimeRef.current = timeLeft;
   const milestoneFlagsRef = useRef({ halfway: false, warning80: false, warning90: false });
   const milestoneTimerRef = useRef(null);
   // Always points at the latest handleSubmit so the timer interval doesn't
@@ -352,38 +355,30 @@ export default function AssessmentPage({
       }
     };
     startAssessment();
-  }, [token, taskData, startData]);
+  }, [demoMode, token, taskData, startData]);
 
-  useEffect(() => {
-    return () => {
-      if (milestoneTimerRef.current) {
-        clearTimeout(milestoneTimerRef.current);
-      }
-    };
+  useEffect(() => () => {
+    // Avoid a late notice update after the assessment surface unmounts.
+    if (milestoneTimerRef.current) clearTimeout(milestoneTimerRef.current);
   }, []);
 
   useEffect(() => {
-    if (loading || submitted || timeLeft <= 0 || isTimerPaused) return;
+    const countdownSeconds = countdownTimeRef.current;
+    if (loading || submitted || countdownSeconds <= 0 || isTimerPaused) return;
+
+    // A fixed deadline stays accurate when browsers throttle hidden tabs.
+    const deadlineMs = Date.now() + (countdownSeconds * 1000);
 
     timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timerRef.current);
-          // Read from the ref so we always invoke the latest handleSubmit
-          // (its deps include things that change during the assessment, like
-          // tabSwitchCount and the repo snapshot helpers).
-          handleSubmitRef.current?.(true);
-          return 0;
-        }
-        // 30s before zero, push the full in-browser snapshot to the sandbox
-        // so even if the server-side timeout finalizer fires first, the
-        // captured git diff reflects the candidate's latest unsaved edits.
-        if (prev <= 31 && !preTimeoutSnapshotFlushedRef.current) {
-          preTimeoutSnapshotFlushedRef.current = true;
-          preTimeoutSnapshotRef.current?.();
-        }
-        return prev - 1;
-      });
+      const remaining = remainingSecondsUntil(deadlineMs);
+      setTimeLeft(remaining);
+      if (remaining <= 0) {
+        clearInterval(timerRef.current);
+        handleSubmitRef.current?.(true);
+      } else if (remaining <= 30 && !preTimeoutSnapshotFlushedRef.current) {
+        preTimeoutSnapshotFlushedRef.current = true;
+        preTimeoutSnapshotRef.current?.();
+      }
     }, 1000);
 
     return () => clearInterval(timerRef.current);
@@ -621,7 +616,7 @@ export default function AssessmentPage({
     setCreatingRepoFile(false);
     setNewRepoFilePath('');
     setOutput(`Created ${normalizedPath}. Add content, then click Save to sync it into the workspace.`);
-  }, [buildRepoSnapshot, creatingRepoFile]);
+  }, [buildRepoSnapshot, creatingRepoFile, editorContent]);
 
   const handleCancelRepoFileCreate = useCallback(() => {
     setCreatingRepoFile(false);

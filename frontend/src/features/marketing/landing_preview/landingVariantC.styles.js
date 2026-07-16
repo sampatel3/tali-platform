@@ -12,19 +12,11 @@
 // v3: tighter type scale + rhythm (Gradient Labs / Cursor density, not a
 // poster), a dot-lattice hero motif (replaces the falling CVs), centred section
 // headers in the hero's design language, and denser Pipeline/Standard sections.
+import './landingPreviewTokens.css';
+
 export const VARIANT_C_CSS = `
 .lvc {
-  /* Taali light purple family — hardcoded. Purple only, no r/a/g. */
-  --lvc-purple: #5e3aa8;
-  --lvc-purple-2: #4a2d80;
-  --lvc-purple-soft: #ede5f8;
-  --lvc-lav: #c4a5fd;
-  --lvc-bg: #f7f4fb;      /* pale lavender base */
-  --lvc-bg-2: #ffffff;    /* card surface */
-  --lvc-ink: #15121a;
-  --lvc-ink-2: #3a3343;
-  --lvc-mute: #8b8595;
-  --lvc-line: #e8e2ee;
+  /* The fixed light palette is declared on this root in landingPreviewTokens.css. */
 
   /* Content column — kept tight so folds carry information, not air. */
   --lvc-maxw: 1140px;
@@ -201,7 +193,7 @@ export const VARIANT_C_CSS = `
 .lvc-switch-track {
   position: relative; display: block;
   width: 128px; height: 62px; border-radius: 999px;
-  background: linear-gradient(180deg, #e9e4f0, #d9d2e2);
+  background: var(--lvc-switch-track-gradient);
   border: 1px solid var(--lvc-line);
   box-shadow: inset 0 2px 6px rgba(21,18,26,0.14), inset 0 -1px 0 rgba(255,255,255,0.6);
   transition: border-color 0.5s ease, box-shadow 0.5s ease, background 0.6s ease;
@@ -223,7 +215,7 @@ export const VARIANT_C_CSS = `
 .lvc-switch-knob {
   position: absolute; top: 5px; left: 5px;
   width: 52px; height: 52px; border-radius: 50%;
-  background: linear-gradient(160deg, #ffffff, #f0ecf7);
+  background: var(--lvc-switch-knob-gradient);
   box-shadow: 0 5px 14px rgba(21,18,26,0.22), inset 0 -2px 4px rgba(21,18,26,0.06);
   display: flex; align-items: center; justify-content: center;
   transition: box-shadow 0.4s ease;
@@ -440,7 +432,7 @@ export const VARIANT_C_CSS = `
 }
 .lvc-trap-badge {
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase; color: #fff;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--lvc-bg-2);
   padding: 4px 9px; border-radius: 999px;
   background: linear-gradient(135deg, var(--lvc-purple), var(--lvc-purple-2));
 }

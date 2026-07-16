@@ -3,15 +3,17 @@ import { Bot, AlertTriangle, RefreshCw } from 'lucide-react';
 
 import * as apiClient from '../../../shared/api';
 import { getAgentPauseCopy } from '../../../shared/agentPauseCopy';
-import { MotionLoop } from '../../../shared/motion';
+import { MotionLoop, useDocumentVisibility } from '../../../shared/motion';
 import { Button, Panel, Spinner } from '../../../shared/ui/TaaliPrimitives';
 import { useToast } from '../../../context/ToastContext';
 import { AgentDecisionCard } from './AgentDecisionCard';
+import '../candidateVisualTokens.css';
 
 const POLL_INTERVAL_MS = 30_000;
 
 export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
   const { showToast } = useToast();
+  const documentVisible = useDocumentVisibility();
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [resolvingId, setResolvingId] = useState(null);
@@ -36,11 +38,15 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
   }, [role?.id]);
 
   useEffect(() => {
-    fetchDecisions();
-    if (!role?.id) return undefined;
-    const handle = window.setInterval(fetchDecisions, POLL_INTERVAL_MS);
+    if (!role?.id || !documentVisible) return undefined;
+    void fetchDecisions();
+    const handle = window.setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void fetchDecisions();
+      }
+    }, POLL_INTERVAL_MS);
     return () => window.clearInterval(handle);
-  }, [fetchDecisions, role?.id]);
+  }, [documentVisible, fetchDecisions, role?.id]);
 
   const handleApprove = useCallback(async (decision) => {
     setResolvingId(decision.id);
@@ -130,7 +136,7 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
           <Bot size={18} className="text-taali-accent" aria-hidden />
           <h2 className="text-base font-semibold">Pending agent decisions</h2>
           {hasPending ? (
-            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-taali-accent px-1.5 text-[0.6875rem] font-semibold text-white">
+            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-taali-accent px-1.5 text-[0.6875rem] font-semibold text-[var(--candidate-accent-foreground)]">
               {decisions.length}
             </span>
           ) : null}

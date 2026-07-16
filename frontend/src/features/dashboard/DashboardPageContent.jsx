@@ -10,6 +10,7 @@ import { Button, PageContainer, PageHeader, Panel, Select, Spinner, TableShell }
 import { PageLink } from '../../shared/ui/PageLink';
 import { useUrlState } from '../../shared/hooks/useUrlState';
 import { getErrorMessage } from '../../shared/getErrorMessage';
+import { useCollectionFilterOptions } from './useCollectionFilterOptions';
 
 const PAGE_SIZE = 10;
 const ONBOARDING_DISMISSED_KEY = 'taali_onboarding_dismissed';
@@ -100,6 +101,13 @@ export const DashboardPage = ({
   const candidatesApi = 'candidates' in apiClient ? apiClient.candidates : null;
   const { showToast } = useToast();
   const { user } = useAuth();
+  const {
+    tasks: tasksForFilter,
+    roles: rolesForFilter,
+    rolesCount,
+    loadAllTasks: loadAllTaskOptions,
+    loadAllRoles: loadAllRoleOptions,
+  } = useCollectionFilterOptions(tasksApi, rolesApi);
 
   const [assessmentsList, setAssessmentsList] = useState([]);
   const [totalAssessmentsCount, setTotalAssessmentsCount] = useState(0);
@@ -111,8 +119,6 @@ export const DashboardPage = ({
   const [loadingResendId, setLoadingResendId] = useState(null);
   const [statusFilter, setStatusFilter] = useUrlState('status', '');
   const [taskFilter, setTaskFilter] = useUrlState('task', '');
-  const [tasksForFilter, setTasksForFilter] = useState([]);
-  const [rolesForFilter, setRolesForFilter] = useState([]);
   const [roleFilter, setRoleFilter] = useUrlState('role', '');
   const [pageParam, setPageParam] = useUrlState('p', '');
   const page = Math.max(0, parseInt(pageParam, 10) || 0);
@@ -120,7 +126,6 @@ export const DashboardPage = ({
     const nextValue = typeof next === 'function' ? next(page) : next;
     setPageParam(nextValue > 0 ? String(nextValue) : '');
   };
-  const [rolesCount, setRolesCount] = useState(0);
   const [candidatesCount, setCandidatesCount] = useState(0);
   const [onboardingDismissed, setOnboardingDismissed] = useState(
     () => (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARDING_DISMISSED_KEY) === 'true')
@@ -136,17 +141,6 @@ export const DashboardPage = ({
 
   useEffect(() => {
     let cancelled = false;
-    tasksApi.list().then((res) => {
-      if (!cancelled) setTasksForFilter(Array.isArray(res.data) ? res.data : []);
-    }).catch(() => {});
-    if (rolesApi?.list) {
-      rolesApi.list().then((res) => {
-        if (cancelled) return;
-        const roles = Array.isArray(res.data) ? res.data : [];
-        setRolesForFilter(roles);
-        setRolesCount(roles.length);
-      }).catch(() => {});
-    }
     if (candidatesApi?.list) {
       const request = candidatesApi.list({ limit: 1, offset: 0 });
       if (request && typeof request.then === 'function') {
@@ -167,7 +161,7 @@ export const DashboardPage = ({
     return () => {
       cancelled = true;
     };
-  }, [candidatesApi, rolesApi, tasksApi]);
+  }, [candidatesApi]);
 
   // Bumping this re-runs the list fetch (used by the error-state Retry button).
   const [reloadKey, setReloadKey] = useState(0);
@@ -433,6 +427,7 @@ export const DashboardPage = ({
               <Select
                 className="min-h-[2.35rem] text-xs"
                 value={roleFilter}
+                onFocus={() => { void loadAllRoleOptions(); }}
                 onChange={(event) => {
                   setRoleFilter(event.target.value);
                   setPage(0);
@@ -449,6 +444,7 @@ export const DashboardPage = ({
               <Select
                 className="min-h-[2.35rem] text-xs"
                 value={taskFilter}
+                onFocus={() => { void loadAllTaskOptions(); }}
                 onChange={(event) => {
                   setTaskFilter(event.target.value);
                   setPage(0);

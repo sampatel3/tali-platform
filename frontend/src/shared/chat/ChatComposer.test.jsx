@@ -3,6 +3,11 @@ import { render, screen, fireEvent } from '@testing-library/react';
 
 import { ChatComposer } from './ChatComposer';
 
+it('gives the shared message textarea an accessible name', () => {
+  render(<ChatComposer value="" onChange={vi.fn()} onSubmit={vi.fn()} />);
+  expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeInTheDocument();
+});
+
 // Controlled harness — mirrors how every chat surface wires the composer:
 // value lives in the parent, onChange writes it back, onSubmit gets the text.
 function Harness({ onSubmit, submitMode }) {

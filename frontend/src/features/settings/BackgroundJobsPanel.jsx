@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 
+import { useAuth } from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { roles as rolesApi } from '../../shared/api';
 import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentLoop, MotionLoop } from '../../shared/motion';
 
 const HISTORY_POLL_MS = 5000;
+const EMPTY_JOB_MAP = Object.freeze({});
 // Hide terminal-state history rows older than this so the panel stays focused
 // on what actually needs attention. Toggle "Show all history" to override.
 const HISTORY_RECENT_WINDOW_MS = 30 * 60 * 1000;
@@ -16,6 +18,7 @@ const HISTORY_RECENT_WINDOW_MS = 30 * 60 * 1000;
 const STATUS_TONE = {
   running: 'running',
   started: 'running',
+  dispatching: 'queued',
   queued: 'queued',
   cancelling: 'cancelling',
   cancelled: 'cancelled',
@@ -35,6 +38,7 @@ const STATUS_TONE = {
 const STATUS_LABEL = {
   running: 'Running',
   started: 'Running',
+  dispatching: 'Dispatch pending',
   queued: 'Queued',
   cancelling: 'Cancelling',
   cancelled: 'Cancelled',
@@ -71,7 +75,7 @@ const TERMINAL_STATUSES = new Set([
   'nothing_to_score', 'nothing_to_sync', 'already_running',
 ]);
 
-const ACTIVE_STATUSES = new Set(['running', 'started', 'queued', 'cancelling']);
+const ACTIVE_STATUSES = new Set(['dispatching', 'running', 'started', 'queued', 'cancelling']);
 
 const isRecentTerminal = (status, finishedAt, showAll) => {
   if (showAll) return true;
@@ -360,16 +364,18 @@ const tsValue = (value) => {
 };
 
 export default function BackgroundJobsPanel() {
+  const { user } = useAuth();
   const ctx = useJobStatus();
+  const isOwner = String(user?.role || '') === 'owner';
   const [history, setHistory] = useState([]);
   const [workableHistory, setWorkableHistory] = useState([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [tick, setTick] = useState(0);
   const [showAllHistory, setShowAllHistory] = useState(false);
 
-  const liveJobs = ctx?.jobs ?? {};
-  const liveFetch = ctx?.fetchJobs ?? {};
-  const liveProcess = ctx?.processJobs ?? {};
+  const liveJobs = ctx?.jobs ?? EMPTY_JOB_MAP;
+  const liveFetch = ctx?.fetchJobs ?? EMPTY_JOB_MAP;
+  const liveProcess = ctx?.processJobs ?? EMPTY_JOB_MAP;
   const graphSync = ctx?.graphSyncJob ?? null;
   const workableSync = ctx?.workableSyncJob ?? null;
   const bullhornSync = ctx?.bullhornSyncJob ?? null;
@@ -430,6 +436,9 @@ export default function BackgroundJobsPanel() {
   // chronological list — no per-source grouping. The `type` column tells
   // the recruiter what kind of job each row is.
   const allRows = useMemo(() => {
+    // Recreate row elements on the heartbeat so their relative-time labels can
+    // advance even when the underlying job payload is unchanged.
+    void tick;
     const rows = [];
 
     for (const [roleIdRaw, data] of Object.entries(liveProcess)) {
@@ -566,11 +575,11 @@ export default function BackgroundJobsPanel() {
             key="workable-live"
             type="Workable sync"
             status={workableSync.status || 'running'}
-            scope={`Org-wide · mode: ${workableSync.mode || 'metadata'}`}
+            scope={`Org-wide · mode: ${workableSync.mode || 'metadata'}${isOwner ? '' : ' · only owners can stop'}`}
             counters={<WorkableCounters data={workableSync} />}
             startedAt={workableSync.started_at}
             finishedAt={workableSync.finished_at}
-            onCancel={() => ctx?.cancelWorkableSync?.(workableSync.run_id ?? null)}
+            onCancel={isOwner ? () => ctx?.cancelWorkableSync?.(workableSync.run_id ?? null) : null}
             onDismiss={() => ctx?.dismissWorkableSyncJob?.()}
             isLive
           />
@@ -612,11 +621,11 @@ export default function BackgroundJobsPanel() {
             key="bullhorn-live"
             type="Bullhorn sync"
             status={status}
-            scope="Org-wide"
+            scope={isOwner ? 'Org-wide' : 'Org-wide · only owners can stop'}
             counters={<BullhornCounters data={bullhornSync} />}
             startedAt={bullhornSync.sync_progress?.started_at ?? null}
             finishedAt={bullhornSync.last_sync_at}
-            onCancel={() => ctx?.cancelBullhornSync?.()}
+            onCancel={isOwner ? () => ctx?.cancelBullhornSync?.() : null}
             onDismiss={() => ctx?.dismissBullhornSyncJob?.()}
             isLive
           />
@@ -720,7 +729,7 @@ export default function BackgroundJobsPanel() {
   }, [
     liveProcess, liveJobs, liveFetch, graphSync, workableSync, bullhornSync,
     history, workableHistory, liveScoreRoleIds, liveFetchRoleIds,
-    showAllHistory, ctx, tick,
+    showAllHistory, ctx, isOwner, tick,
   ]);
 
   const hasActive = useMemo(() => {
@@ -734,8 +743,6 @@ export default function BackgroundJobsPanel() {
     return false;
   }, [liveJobs, liveFetch, liveProcess, graphSync, workableSync, bullhornSync]);
 
-  // tick is read so React re-renders the "last updated" tooltip text every 5s.
-  void tick;
   const lastUpdatedTitle = lastUpdatedAt
     ? `Last updated ${formatRelativeDateTime(lastUpdatedAt.toISOString())}`
     : 'Awaiting first refresh…';

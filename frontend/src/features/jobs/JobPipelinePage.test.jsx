@@ -1,7 +1,9 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
+
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 
 const showToast = vi.fn();
 
@@ -98,6 +100,7 @@ vi.mock('./RoleScreeningQuestions', () => ({
 }));
 
 import * as apiClient from '../../shared/api';
+import { clearCache, readCache } from '../../shared/api/resourceCache';
 import { JobPipelinePage } from './JobPipelinePage';
 
 const baseRole = {
@@ -157,18 +160,20 @@ const baseApplications = [
 const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
   onNavigate,
   ...render(
-    <MemoryRouter initialEntries={['/jobs/101']}>
+    <TestMemoryRouter initialEntries={['/jobs/101']}>
       <Routes>
         <Route path="/jobs/:roleId" element={<JobPipelinePage onNavigate={onNavigate} />} />
         <Route path="/chat/agents/:roleId" element={<div>Role agent chat route</div>} />
       </Routes>
-    </MemoryRouter>
+    </TestMemoryRouter>
   ),
 });
 
 describe('JobPipelinePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearCache();
+    apiClient.roles.listApplicationsPage = undefined;
     apiClient.roles.get.mockResolvedValue({ data: baseRole });
     apiClient.roles.getShell.mockResolvedValue({ data: baseRole });
     apiClient.roles.update.mockResolvedValue({ data: baseRole });
@@ -206,13 +211,18 @@ describe('JobPipelinePage', () => {
   // above-tabs score-panel was retired). Tests that assert on those
   // controls open the tab first.
   const openAgentSettingsTab = async () => {
-    fireEvent.click(await screen.findByRole('link', { name: /^Agent settings$/i }));
+    const tab = await screen.findByRole('link', { name: /^Agent settings$/i });
+    await act(async () => {
+      fireEvent.click(tab);
+    });
   };
 
   const confirmTurnOnPolicy = async () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
     expect(await screen.findByRole('heading', { name: /Turn on this role’s agent/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    });
   };
 
   it('paints the job shell before a large candidate roster finishes loading', async () => {
@@ -222,6 +232,66 @@ describe('JobPipelinePage', () => {
 
     expect(await screen.findByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Loading candidates…');
+  });
+
+  it('paints page one, loads every outcome sequentially, and bounds the SWR roster', async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) => ({
+      ...baseApplications[0],
+      id: 1000 + index,
+      candidate_id: 2000 + index,
+      candidate_name: index === 0 ? 'First Page Leader' : `Paged Candidate ${index}`,
+      candidate_email: `paged-${index}@example.com`,
+      taali_score: index === 0 ? 100 : 50,
+    }));
+    const tail = {
+      ...baseApplications[0], id: 5000, candidate_id: 5000,
+      candidate_name: 'Open Page Tail', candidate_email: 'tail@example.com', taali_score: 99,
+    };
+    const rejected = {
+      ...baseApplications[0], id: 6000, candidate_id: 6000,
+      candidate_name: 'Rejected History', candidate_email: 'rejected@example.com',
+      application_outcome: 'rejected', taali_score: 98,
+    };
+    let releaseSecondPage;
+    const secondPage = new Promise((resolve) => { releaseSecondPage = resolve; });
+    apiClient.roles.listApplicationsPage = vi.fn((_, params) => {
+      if (params.application_outcome === 'open' && params.offset === 0) {
+        return Promise.resolve({ data: { items: firstPage, total: 201, limit: 200, offset: 0 } });
+      }
+      if (params.application_outcome === 'open' && params.offset === 200) return secondPage;
+      if (params.application_outcome === 'rejected' && params.offset === 0) {
+        return Promise.resolve({ data: { items: [rejected], total: 1, limit: 200, offset: 0 } });
+      }
+      throw new Error(`Unexpected page ${params.application_outcome}:${params.offset}`);
+    });
+
+    renderPipeline();
+
+    expect(await screen.findByText('First Page Leader')).toBeInTheDocument();
+    expect(screen.queryByText('Open Page Tail')).not.toBeInTheDocument();
+    await waitFor(() => expect(apiClient.roles.listApplicationsPage).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      releaseSecondPage({ data: { items: [tail], total: null, limit: 200, offset: 200 } });
+    });
+
+    expect(await screen.findByText('Open Page Tail')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('tab', { name: /Rejected1/i }));
+    expect(await screen.findByText('Rejected History')).toBeInTheDocument();
+    expect(apiClient.roles.listApplicationsPage.mock.calls.map(([, params]) => [
+      params.application_outcome,
+      params.offset,
+      params.limit,
+    ])).toEqual([
+      ['open', 0, 200],
+      ['open', 200, 200],
+      ['rejected', 0, 200],
+    ]);
+
+    await waitFor(() => expect(readCache('role-workspace:101')?.data?.roleApplications).toHaveLength(200));
+    const cachedIds = readCache('role-workspace:101').data.roleApplications.map((app) => app.id);
+    expect(cachedIds).not.toContain(tail.id);
+    expect(cachedIds).not.toContain(rejected.id);
   });
 
   it('paints the job shell while the aggregate role detail is still loading', async () => {
@@ -314,9 +384,26 @@ describe('JobPipelinePage', () => {
         effective_workable_job_id: 'AI-ENG',
       },
     });
-    apiClient.roles.listApplications.mockResolvedValue({
-      data: [{ ...baseApplications[0], taali_score: 91, source_role_score: 72, score_status: 'done' }],
-    });
+    const sisterApps = {
+      open: { ...baseApplications[0], taali_score: 91, source_role_score: 72, score_status: 'done' },
+      rejected: {
+        ...baseApplications[0], id: 3, candidate_id: 33, candidate_name: 'Rejected Sister',
+        application_outcome: 'rejected', taali_score: 81,
+      },
+      hired: {
+        ...baseApplications[0], id: 4, candidate_id: 44, candidate_name: 'Hired Sister',
+        application_outcome: 'hired', taali_score: 80,
+      },
+      withdrawn: {
+        ...baseApplications[0], id: 5, candidate_id: 55, candidate_name: 'Withdrawn Sister',
+        application_outcome: 'withdrawn', taali_score: 79,
+      },
+    };
+    apiClient.roles.listApplications.mockImplementation((_, params) => (
+      params.application_outcome === 'hired'
+        ? Promise.reject(new Error('Hired history unavailable'))
+        : Promise.resolve({ data: [sisterApps[params.application_outcome]] })
+    ));
 
     renderPipeline();
 
@@ -329,6 +416,13 @@ describe('JobPipelinePage', () => {
     const row = screen.getByText('Sam Patel').closest('tr');
     expect(within(row).getByText('91')).toBeInTheDocument();
     expect(within(row).getByText('72')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Closed2/i }));
+    expect(screen.getByText('Rejected Sister')).toBeInTheDocument();
+    expect(screen.getByText('Withdrawn Sister')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Some candidates could not be loaded.');
+    expect(apiClient.roles.listApplications.mock.calls.map(([, params]) => (
+      params.application_outcome
+    ))).toEqual(['open', 'rejected', 'hired', 'withdrawn']);
     expect(screen.getByRole('button', { name: /Open original role/i })).toBeInTheDocument();
     expect(screen.queryByText(/Not published/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Process \d+ candidate/i })).not.toBeInTheDocument();
@@ -650,7 +744,9 @@ describe('JobPipelinePage', () => {
     await confirmTurnOnPolicy();
     expect(await screen.findByText(/battle test is still pending/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Skip assessment & turn on/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Skip assessment & turn on/i }));
+    });
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
       101,

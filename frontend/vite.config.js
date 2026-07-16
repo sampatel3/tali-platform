@@ -4,6 +4,15 @@ import react from '@vitejs/plugin-react'
 import staticDeckTokenPlugin from './scripts/vite-static-deck-token-plugin.mjs'
 
 const vendor = (p) => fileURLToPath(new URL(`./vendor/mainspring/${p}`, import.meta.url))
+const inPackage = (id, packageName) => id.replaceAll('\\', '/').includes(`/node_modules/${packageName}/`)
+const manualChunks = (id) => {
+  if (['react', 'react-dom', 'react-router', 'react-router-dom', 'scheduler'].some((pkg) => inPackage(id, pkg))) return 'react_vendor'
+  if (inPackage(id, 'recharts')) return 'charts_vendor'
+  if (['@monaco-editor/react', 'monaco-editor'].some((pkg) => inPackage(id, pkg))) return 'monaco_vendor'
+  if (inPackage(id, 'lucide-react')) return 'icons_vendor'
+  if (inPackage(id, 'cytoscape')) return 'graph_vendor'
+  return undefined
+}
 
 export default defineConfig({
   plugins: [react(), staticDeckTokenPlugin()],
@@ -18,14 +27,16 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        developers: fileURLToPath(new URL('./developers.html', import.meta.url)),
+        blog: fileURLToPath(new URL('./blog.html', import.meta.url)),
+        blogAiNative: fileURLToPath(new URL('./blog-ai-native.html', import.meta.url)),
+        terms: fileURLToPath(new URL('./terms.html', import.meta.url)),
+        privacy: fileURLToPath(new URL('./privacy.html', import.meta.url)),
+      },
       output: {
-        manualChunks: {
-          react_vendor: ['react', 'react-dom', 'react-router-dom'],
-          charts_vendor: ['recharts'],
-          monaco_vendor: ['@monaco-editor/react'],
-          icons_vendor: ['lucide-react'],
-          graph_vendor: ['cytoscape'],
-        },
+        manualChunks,
       },
     },
   },

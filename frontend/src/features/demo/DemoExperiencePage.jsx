@@ -100,9 +100,6 @@ export const DemoExperiencePage = ({ onNavigate }) => {
   // One-shot guard: the validator can only reset a given iframe once. The
   // iframe is sandboxed (allow-scripts allow-same-origin) so even if it
   // navigates somewhere unexpected, the blast radius is the iframe itself.
-  // Without this guard, a redirect inside the iframe (e.g. a route that
-  // doesn't recognise showcase=1 yet) ping-pongs against frame.src = pane.src
-  // and the user sees the showcase flash.
   const resetCountsRef = useRef(new Map());
 
   const updateField = (field) => (event) => {
@@ -115,7 +112,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
       key: 'jobs',
       label: 'Jobs you’re hiring for',
       urlLabel: 'taali.ai/jobs · your open roles',
-      src: '/jobs?demo=1&showcase=1',
+      src: '/showcase/jobs',
     },
     chat: {
       key: 'chat',
@@ -253,7 +250,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                 Walk through what you can do with Taali — see your jobs board, ask questions in plain English, watch the candidate experience, and send a clean verdict to your client.
               </p>
               <p className="lede-sub">
-                Click through it like a customer would. No setup, no fake data screens — just the product.
+                Click through it like a customer would. No setup — real product surfaces with curated sample data.
               </p>
 
               <div className="demo-preview">
@@ -375,7 +372,9 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               ))}
             </div>
 
-            {Object.entries(panes).map(([key, pane]) => {
+            {(() => {
+              const key = activePane;
+              const pane = panes[key];
               const value = PANE_VALUE[key];
               return (
                 <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
@@ -411,7 +410,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                   </div>
                 </div>
               );
-            })}
+            })()}
 
             <div className="wt-foot">
               <button type="button" className="taali-text-btn exit" onClick={() => setSubmittedLead(null)}>← Back to form</button>

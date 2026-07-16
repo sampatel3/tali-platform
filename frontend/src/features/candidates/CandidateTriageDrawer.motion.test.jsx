@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MotionSystemProvider } from '../../shared/motion';
+import motionFeatures from '../../shared/motion/motionFeatures';
 import { CandidateTriageDrawer } from './CandidateTriageDrawer';
 
 vi.mock('./CandidateAuditTimeline', () => ({
@@ -28,11 +29,16 @@ const application = {
   score_summary: {},
 };
 const originalMatchMedia = window.matchMedia;
+const TestMotionSystemProvider = ({ children }) => (
+  <MotionSystemProvider features={motionFeatures}>
+    {children}
+  </MotionSystemProvider>
+);
 
 const renderDrawer = () => render(
-  <MotionSystemProvider>
+  <TestMotionSystemProvider>
     <CandidateTriageDrawer application={application} roleId={9} roleTasks={[]} />
-  </MotionSystemProvider>,
+  </TestMotionSystemProvider>,
 );
 
 afterEach(() => {
@@ -62,14 +68,14 @@ describe('CandidateTriageDrawer shared motion', () => {
   it('demotes Send assessment to a manual override when the agent runs the role, keeping HITL controls', async () => {
     vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
     render(
-      <MotionSystemProvider>
+      <TestMotionSystemProvider>
         <CandidateTriageDrawer
           application={application}
           roleId={9}
           roleTasks={[{ id: 5, name: 'Backend take-home' }]}
           agentRunning
         />
-      </MotionSystemProvider>,
+      </TestMotionSystemProvider>,
     );
 
     // The decisive HITL path (Move forward, incl. Reject) stays present.
@@ -89,13 +95,13 @@ describe('CandidateTriageDrawer shared motion', () => {
   it('keeps Send assessment as the primary action when the agent is off', async () => {
     vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
     render(
-      <MotionSystemProvider>
+      <TestMotionSystemProvider>
         <CandidateTriageDrawer
           application={application}
           roleId={9}
           roleTasks={[{ id: 5, name: 'Backend take-home' }]}
         />
-      </MotionSystemProvider>,
+      </TestMotionSystemProvider>,
     );
 
     fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
@@ -115,7 +121,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       external_stage_normalized: 'advanced',
     };
     render(
-      <MotionSystemProvider>
+      <TestMotionSystemProvider>
         <CandidateTriageDrawer
           application={bullhornApplication}
           roleId={9}
@@ -127,7 +133,7 @@ describe('CandidateTriageDrawer shared motion', () => {
           ]}
           onMoveToAtsStage={onMoveToAtsStage}
         />
-      </MotionSystemProvider>,
+      </TestMotionSystemProvider>,
     );
 
     expect(screen.getByText('Bullhorn')).toBeInTheDocument();
@@ -150,7 +156,7 @@ describe('CandidateTriageDrawer shared motion', () => {
 
   it('does not claim a native applicant was imported or updated in the role ATS', () => {
     render(
-      <MotionSystemProvider>
+      <TestMotionSystemProvider>
         <CandidateTriageDrawer
           application={{
             ...application,
@@ -163,7 +169,7 @@ describe('CandidateTriageDrawer shared motion', () => {
           roleTasks={[]}
           atsProvider="bullhorn"
         />
-      </MotionSystemProvider>,
+      </TestMotionSystemProvider>,
     );
 
     expect(screen.getByText('Added in Taali')).toBeInTheDocument();
@@ -176,7 +182,7 @@ describe('CandidateTriageDrawer shared motion', () => {
     ['confirmed', /rejected in Bullhorn/i, true],
   ])('renders the durable Bullhorn rejection receipt: %s', (status, expected, confirmed) => {
     render(
-      <MotionSystemProvider>
+      <TestMotionSystemProvider>
         <CandidateTriageDrawer
           application={{
             ...application,
@@ -195,7 +201,7 @@ describe('CandidateTriageDrawer shared motion', () => {
           roleTasks={[]}
           atsProvider="bullhorn"
         />
-      </MotionSystemProvider>,
+      </TestMotionSystemProvider>,
     );
 
     expect(screen.getByText(expected)).toBeInTheDocument();
@@ -206,7 +212,7 @@ describe('CandidateTriageDrawer shared motion', () => {
 
   it('does not invent hired or withdrawn ATS writeback', () => {
     render(
-      <MotionSystemProvider>
+      <TestMotionSystemProvider>
         <CandidateTriageDrawer
           application={{
             ...application,
@@ -218,7 +224,7 @@ describe('CandidateTriageDrawer shared motion', () => {
           roleTasks={[]}
           atsProvider="bullhorn"
         />
-      </MotionSystemProvider>,
+      </TestMotionSystemProvider>,
     );
 
     expect(screen.queryByText(/moved to hired in Bullhorn/i)).not.toBeInTheDocument();

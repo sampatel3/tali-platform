@@ -47,6 +47,16 @@ export const reqGradeKey = (item) => {
   return 'missing';
 };
 
+const REQUIREMENT_PRIORITY_RANK = { must_have: 0, strong_preference: 1, nice_to_have: 2, constraint: 3 };
+export const sortCandidateRequirements = (items) => [...items].sort((a, b) => {
+  const aRecruiter = String(a?.requirement_id || '').startsWith('crit_') ? 0 : 1;
+  const bRecruiter = String(b?.requirement_id || '').startsWith('crit_') ? 0 : 1;
+  if (aRecruiter !== bRecruiter) return aRecruiter - bRecruiter;
+  const aPriority = REQUIREMENT_PRIORITY_RANK[String(a?.priority || '').toLowerCase()] ?? 4;
+  const bPriority = REQUIREMENT_PRIORITY_RANK[String(b?.priority || '').toLowerCase()] ?? 4;
+  return aPriority - bPriority;
+});
+
 export const splitInlineList = (value) => String(value || '')
   .split(/[,;|•\n]/)
   .map((item) => asCleanText(item).replace(/^[-*]\s*/, ''))

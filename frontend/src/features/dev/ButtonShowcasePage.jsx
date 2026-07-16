@@ -29,6 +29,7 @@ import '../clientintake/clientintake.css';
 import '../jobpage/jobpage.css';
 import '../clients/clients.css';
 import '../../styles/09-standing-report.css';
+import '../../styles/03-settings-agent.css';
 import '../../styles/21-demo.css';
 import '../../styles/14-auth-shell.css';
 import '../../shared/ui/CriteriaEditor.css';

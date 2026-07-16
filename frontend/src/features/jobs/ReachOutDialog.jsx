@@ -110,14 +110,14 @@ export function ReachOutDialog({ open, roleId, roleTitle, applications = [], onC
       const token = pollRef.current;
       let attempts = 0;
       // Poll the campaign until it leaves the 'generating' state.
-      // eslint-disable-next-line no-constant-condition
+
       while (true) {
         if (token.cancelled) return;
         attempts += 1;
-        // eslint-disable-next-line no-await-in-loop
+
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
         if (token.cancelled) return;
-        // eslint-disable-next-line no-await-in-loop
+
         const detail = await outreachApi.getCampaign(campaignId);
         const status = detail.data?.status;
         if (status !== 'generating') break;

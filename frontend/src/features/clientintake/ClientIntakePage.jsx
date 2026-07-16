@@ -71,7 +71,7 @@ function Turn({ msg }) {
           {attachments.length > 0 ? (
             <div className="ci-attach-row" style={{ marginTop: msg.content ? 8 : 0, marginBottom: 0 }}>
               {attachments.map((a, i) => (
-                <span key={i} className="ci-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: '#fff' }}>
+                <span key={i} className="ci-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: 'var(--taali-on-accent)' }}>
                   <span className="ci-attach-glyph"><FileText size={13} /></span>
                   <span className="ci-attach-name">{a.name}</span>
                 </span>

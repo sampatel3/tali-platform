@@ -61,23 +61,9 @@ const getRoleBadgeLabel = (role) => {
   return 'Role';
 };
 
-// The base JOBS_SHOWCASE fixture has no agent status or Workable job-state on
-// its roles (the real showcase board is a static snapshot). Enrich a COPY here
-// — preview-only, the fixture is untouched — so the board shows the real
-// agent-ON / PAUSED / OFF vocabulary and per-role pending counts the founder
-// needs to see move. `workable_job_state: 'published'` lights the live star.
+// The shared evergreen fixture already carries current job/agent state. Keep a
+// preview-only copy only for the Workable draft treatment on the final card.
 const PREVIEW_ROLES = JOBS_SHOWCASE.map((role) => {
-  if (role.id === 7001) {
-    return { ...role, workable_job_state: 'published', agentic_mode_enabled: true };
-  }
-  if (role.id === 7002) {
-    return {
-      ...role,
-      workable_job_state: 'published',
-      agentic_mode_enabled: true,
-      agent_paused_at: '2026-04-27T06:00:00.000Z',
-    };
-  }
   if (role.id === 7004) {
     return {
       ...role,
@@ -235,7 +221,7 @@ const RoleCard = ({ role, agentLive, reduced }) => {
   );
 };
 
-export const JobsMotionPreview = () => {
+export const JobsMotionPreview = ({ motionProviderProps }) => {
   const reduced = useReducedMotionSync();
   const [sourceFilter, setSourceFilter] = useState('all');
 
@@ -267,7 +253,7 @@ export const JobsMotionPreview = () => {
   };
 
   return (
-    <MotionSystemProvider>
+    <MotionSystemProvider {...motionProviderProps}>
         <div data-brand="taali" className="jmp-root">
           <Reveal>
             <AgentHeader

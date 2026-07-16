@@ -4,6 +4,7 @@ import { organizations as orgsApi } from '../../shared/api';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { formatRelativeDateTime, SyncPulse } from '../../shared/ui/RecruiterDesignPrimitives';
+import { useDocumentVisibility } from '../../shared/motion';
 
 // Bullhorn connect card + status + stage-map editor for the Settings page.
 // Mirrors the Workable integration surface (purple design tokens, shared
@@ -22,8 +23,9 @@ const EMPTY_CONNECT = { username: '', client_id: '', client_secret: '', password
 // Kept in-component (small, single-use) rather than a shared constant.
 const REJECT_HINT = 'Treat this remote status as a rejection when it maps in.';
 
-export const BullhornConnection = ({ orgData }) => {
+export const BullhornConnection = ({ orgData, canManage = true }) => {
   const connected = Boolean(orgData?.bullhorn_connected);
+  const documentVisible = useDocumentVisibility();
   // Surface the sync in the global BackgroundJobsPanel too (mirrors the Workable
   // sync): once we kick a run off, tell the shared job-status context to track it
   // so it stays visible even after the recruiter leaves this tab.
@@ -85,10 +87,14 @@ export const BullhornConnection = ({ orgData }) => {
   // Poll while a sync is running so the strip stays live (mirrors the Workable
   // sync poll). Stops as soon as the run finalizes.
   useEffect(() => {
-    if (!syncInProgress) return undefined;
-    const id = setInterval(() => { void refreshStatus(); }, 4000);
+    if (!syncInProgress || !documentVisible) return undefined;
+    const id = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void refreshStatus();
+      }
+    }, 4000);
     return () => clearInterval(id);
-  }, [syncInProgress, refreshStatus]);
+  }, [documentVisible, syncInProgress, refreshStatus]);
 
   const canConnect = useMemo(
     () => Object.values(connectForm).every((v) => v.trim().length > 0),
@@ -96,6 +102,7 @@ export const BullhornConnection = ({ orgData }) => {
   );
 
   const handleConnect = async () => {
+    if (!canManage) return;
     setConnectError('');
     if (!canConnect) {
       setConnectError('Enter the API username, client id, client secret, and API-user password.');
@@ -121,6 +128,7 @@ export const BullhornConnection = ({ orgData }) => {
   };
 
   const handleSync = async () => {
+    if (!canManage) return;
     setSyncError('');
     setSyncing(true);
     try {
@@ -135,6 +143,7 @@ export const BullhornConnection = ({ orgData }) => {
   };
 
   const handleCancelSync = async () => {
+    if (!canManage) return;
     try {
       await orgsApi.cancelBullhornSync();
       await refreshStatus();
@@ -144,22 +153,26 @@ export const BullhornConnection = ({ orgData }) => {
   };
 
   const updateRow = (idx, patch) => {
+    if (!canManage) return;
     setStageSaved(false);
     setStageRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   };
 
   const removeRow = (idx) => {
+    if (!canManage) return;
     setStageSaved(false);
     setStageRows((rows) => rows.filter((_, i) => i !== idx));
   };
 
   const addRowForStatus = (remoteStatus) => {
+    if (!canManage) return;
     setStageSaved(false);
     const firstStage = stageMap?.pipeline_stages?.[0] || 'applied';
     setStageRows((rows) => [...rows, { remote_status: remoteStatus, taali_stage: firstStage, is_reject: false }]);
   };
 
   const handleSaveStageMap = async () => {
+    if (!canManage) return;
     setStageError('');
     setStageSaved(false);
     setStageSaving(true);
@@ -205,7 +218,7 @@ export const BullhornConnection = ({ orgData }) => {
           </div>
         </div>
         <div className="settings-inline-actions">
-          {connected ? (
+          {connected && canManage ? (
             <button
               type="button"
               className="btn btn-purple btn-sm"
@@ -218,7 +231,13 @@ export const BullhornConnection = ({ orgData }) => {
         </div>
       </div>
 
-      {!connected ? (
+      {!canManage ? (
+        <div className="settings-inline-note settings-top-gap" role="note">
+          Only a workspace owner can connect Bullhorn, run or stop syncs, and change stage mappings. You can still review connection, sync, and mapping status.
+        </div>
+      ) : null}
+
+      {!connected && canManage ? (
         <div className="settings-top-gap">
           <div className="row-form">
             <label className="field">
@@ -291,9 +310,11 @@ export const BullhornConnection = ({ orgData }) => {
                 : 'We will keep this strip updated while the sync runs.'}
             </div>
           </div>
-          <button type="button" className="btn btn-outline btn-sm" onClick={handleCancelSync}>
-            Stop sync
-          </button>
+          {canManage ? (
+            <button type="button" className="btn btn-outline btn-sm" onClick={handleCancelSync}>
+              Stop sync
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -321,7 +342,7 @@ export const BullhornConnection = ({ orgData }) => {
 
           {unmappedStatuses.length ? (
             <div className="settings-chip-row settings-top-gap">
-              {unmappedStatuses.map((s) => (
+              {unmappedStatuses.map((s) => canManage ? (
                 <button
                   key={s}
                   type="button"
@@ -331,7 +352,7 @@ export const BullhornConnection = ({ orgData }) => {
                 >
                   + {s}
                 </button>
-              ))}
+              ) : <span key={s} className="chip">{s}</span>)}
             </div>
           ) : null}
 
@@ -346,10 +367,12 @@ export const BullhornConnection = ({ orgData }) => {
                     value={row.remote_status}
                     onChange={(e) => updateRow(idx, { remote_status: e.target.value })}
                     placeholder="Bullhorn status"
+                    disabled={!canManage}
                   />
                   <select
                     value={row.taali_stage}
                     onChange={(e) => updateRow(idx, { taali_stage: e.target.value })}
+                    disabled={!canManage}
                   >
                     {pipelineStages.map((stage) => (
                       <option key={stage} value={stage}>{stage}</option>
@@ -360,12 +383,15 @@ export const BullhornConnection = ({ orgData }) => {
                       type="checkbox"
                       checked={Boolean(row.is_reject)}
                       onChange={(e) => updateRow(idx, { is_reject: e.target.checked })}
+                      disabled={!canManage}
                     />
                     <span>Reject</span>
                   </label>
-                  <button type="button" className="settings-link-button" onClick={() => removeRow(idx)}>
-                    Remove
-                  </button>
+                  {canManage ? (
+                    <button type="button" className="settings-link-button" onClick={() => removeRow(idx)}>
+                      Remove
+                    </button>
+                  ) : null}
                 </div>
               ))
             )}
@@ -375,9 +401,11 @@ export const BullhornConnection = ({ orgData }) => {
             <div className="settings-inline-note">
               {stageSaved ? 'Stage mapping saved.' : 'Changes apply to the next sync and any live status change.'}
             </div>
-            <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveStageMap} disabled={stageSaving}>
-              {stageSaving ? 'Saving...' : 'Save stage mapping'}
-            </button>
+            {canManage ? (
+              <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveStageMap} disabled={stageSaving}>
+                {stageSaving ? 'Saving...' : 'Save stage mapping'}
+              </button>
+            ) : null}
           </div>
           {stageError ? (
             <div className="settings-banner warning settings-top-gap">

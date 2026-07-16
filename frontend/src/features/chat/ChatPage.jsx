@@ -12,77 +12,16 @@ import useChatStream from './useChatStream';
 import { conversationsApi } from './api';
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { hydrateMessage, stitchToolResults } from './conversationHistory';
+import { useDocumentVisibility } from '../../shared/motion';
 
-// Backend persists messages with Anthropic-shaped content blocks. The
-// chat hook works with a slightly flatter shape (parts: text/tool_call).
-// This converter lets us hydrate a saved conversation and pick up where
-// the user left off.
-const hydrateMessage = (m) => {
-  const parts = [];
-  const blocks = Array.isArray(m.content) ? m.content : [];
-  // Synthetic "user" rows that only contain tool_result blocks aren't
-  // meaningful to show — they're echoes of the previous tool dispatch.
-  // We attach those back to the matching tool_call instead by matching
-  // tool_use_id, in a second pass below.
-  for (const b of blocks) {
-    if (b.type === 'text' && b.text) parts.push({ type: 'text', text: b.text });
-    if (b.type === 'tool_use') {
-      parts.push({
-        type: 'tool_call',
-        toolCallId: b.id,
-        toolName: b.name,
-        args: b.input || {},
-        status: 'complete',
-      });
-    }
-  }
-  return {
-    id: `m_${m.id}`,
-    role: m.role === 'assistant' ? 'assistant' : 'user',
-    parts,
-    createdAt: m.created_at || null,
-    _isToolResultEcho: blocks.length > 0 && blocks.every((b) => b.type === 'tool_result'),
-    _toolResults: blocks.filter((b) => b.type === 'tool_result'),
-  };
-};
-
-const stitchToolResults = (rows) => {
-  // Walk through rows; whenever we see a "user" row that's just
-  // tool_result echoes, dissolve it into the matching tool_call parts
-  // of the previous assistant row.
-  const out = [];
-  for (const m of rows) {
-    if (m._isToolResultEcho && out.length) {
-      const prev = out[out.length - 1];
-      const merged = {
-        ...prev,
-        parts: prev.parts.map((p) => {
-          if (p.type !== 'tool_call') return p;
-          const r = m._toolResults.find((tr) => tr.tool_use_id === p.toolCallId);
-          if (!r) return p;
-          let parsed = r.content;
-          try {
-            parsed = JSON.parse(r.content);
-          } catch {
-            /* keep as string */
-          }
-          return { ...p, result: parsed, status: r.is_error ? 'error' : 'complete' };
-        }),
-      };
-      out[out.length - 1] = merged;
-      continue;
-    }
-    out.push(m);
-  }
-  return out
-    .filter((m) => !(m.role === 'user' && !m.parts.length))
-    .map(({ _isToolResultEcho, _toolResults, ...rest }) => rest);
-};
+const HISTORY_PAGE_SIZE = 60;
 
 const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {}) => {
   const navigate = useNavigate();
   const params = useParams();
   const isAgents = mode === 'agents';
+  const documentVisible = useDocumentVisibility();
   const conversationId = !isAgents && params.conversationId ? Number(params.conversationId) : null;
   const agentRoleId = isAgents && params.roleId ? Number(params.roleId) : null;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -96,6 +35,9 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   // small failure row. Both are cleared once a fetch resolves.
   const [hydrating, setHydrating] = useState(false);
   const [hydrateError, setHydrateError] = useState(false);
+  const [historyPage, setHistoryPage] = useState({ hasMore: false, before: null });
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState(false);
   // Set when the sidebar list fetch fails so we keep the previous list on
   // screen (and show a quiet retry row) rather than collapsing to the
   // "no conversations yet" empty state for a user who has some.
@@ -124,11 +66,15 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   }, []);
 
   useEffect(() => {
-    if (!isAgents) return undefined;
+    if (!isAgents || !documentVisible) return undefined;
     void refreshAgents();
-    const id = window.setInterval(() => { void refreshAgents(); }, 30_000);
+    const id = window.setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void refreshAgents();
+      }
+    }, 30_000);
     return () => window.clearInterval(id);
-  }, [isAgents, refreshAgents]);
+  }, [documentVisible, isAgents, refreshAgents]);
 
   // Land on the highest-attention agent when the Agents tab opens with no
   // role selected, so the surface is never an empty two-pane shell.
@@ -196,8 +142,22 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     [conversationId, navigate],
   );
 
-  const { messages, isStreaming, error, send, stop, setHistory, reset, clearError } =
+  const {
+    messages,
+    isStreaming,
+    error,
+    send,
+    stop,
+    setHistory,
+    prependHistory,
+    reset,
+    clearError,
+  } =
     useChatStream({ conversationId, onConversationId });
+
+  const activeConversationIdRef = useRef(conversationId);
+  activeConversationIdRef.current = conversationId;
+  const historyGenerationRef = useRef(0);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -225,12 +185,17 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   // flight or, on a 404, permanently. That also clears any error banner
   // left over from the conversation we're leaving.
   useEffect(() => {
+    const generation = historyGenerationRef.current + 1;
+    historyGenerationRef.current = generation;
     let cancelled = false;
     const run = async () => {
       if (!conversationId) {
         reset();
         setHydrating(false);
         setHydrateError(false);
+        setHistoryPage({ hasMore: false, before: null });
+        setLoadingOlder(false);
+        setOlderError(false);
         return;
       }
       // Just created by send(): its history lives in the hook already; don't
@@ -238,18 +203,28 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
       if (locallyCreated.current.has(conversationId)) {
         setHydrating(false);
         setHydrateError(false);
+        setHistoryPage({ hasMore: false, before: null });
+        setLoadingOlder(false);
+        setOlderError(false);
         return;
       }
       reset();
       setHydrateError(false);
+      setHistoryPage({ hasMore: false, before: null });
+      setLoadingOlder(false);
+      setOlderError(false);
       setHydrating(true);
       try {
-        const data = await conversationsApi.get(conversationId);
+        const data = await conversationsApi.get(conversationId, { limit: HISTORY_PAGE_SIZE });
         if (cancelled) return;
         const hydrated = stitchToolResults(
           (data.messages || []).map(hydrateMessage),
         );
         setHistory(hydrated);
+        setHistoryPage({
+          hasMore: Boolean(data.has_more && data.next_before != null),
+          before: data.next_before ?? null,
+        });
       } catch {
         if (!cancelled) setHydrateError(true);
       } finally {
@@ -259,20 +234,58 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     run();
     return () => {
       cancelled = true;
+      if (historyGenerationRef.current === generation) {
+        historyGenerationRef.current += 1;
+      }
     };
   }, [conversationId, reset, setHistory, hydrateNonce]);
+
+  const loadOlder = useCallback(async () => {
+    const id = conversationId;
+    const before = historyPage.before;
+    if (id == null || before == null || loadingOlder) return;
+    const generation = historyGenerationRef.current;
+    const requestIsCurrent = () =>
+      activeConversationIdRef.current === id &&
+      historyGenerationRef.current === generation;
+    setLoadingOlder(true);
+    setOlderError(false);
+    try {
+      const data = await conversationsApi.get(id, {
+        before,
+        limit: HISTORY_PAGE_SIZE,
+      });
+      // Route changes reset the thread. The generation also protects a quick
+      // leave-and-return to the same id from accepting the first visit's late
+      // response.
+      if (!requestIsCurrent()) return;
+      prependHistory(
+        (data.messages || []).map(hydrateMessage),
+        stitchToolResults,
+      );
+      setHistoryPage({
+        hasMore: Boolean(data.has_more && data.next_before != null),
+        before: data.next_before ?? null,
+      });
+    } catch {
+      if (requestIsCurrent()) setOlderError(true);
+    } finally {
+      if (requestIsCurrent()) setLoadingOlder(false);
+    }
+  }, [conversationId, historyPage.before, loadingOlder, prependHistory]);
 
   // After a streaming turn ends, refresh the sidebar so the new
   // conversation (or updated_at on the existing one) shows up, and drop the
   // conversation from ``locallyCreated`` — the API now has the full turn, so
   // re-opening it later must hydrate normally instead of being skipped.
+  const previousStreamingRef = useRef(isStreaming);
   useEffect(() => {
-    if (!isStreaming && messages.length) {
-      if (conversationId != null) locallyCreated.current.delete(conversationId);
-      refreshConversations();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming]);
+    const justFinished = previousStreamingRef.current && !isStreaming;
+    previousStreamingRef.current = isStreaming;
+    if (!justFinished || messages.length === 0) return;
+    if (conversationId != null) locallyCreated.current.delete(conversationId);
+    void refreshConversations();
+  }, [conversationId, isStreaming, messages.length, refreshConversations]);
 
   const onNew = useCallback(() => {
     setMobileNavOpen(false);
@@ -436,6 +449,10 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
               isStreaming={isStreaming}
               error={error}
               onRetry={retryLastTurn}
+              hasOlder={historyPage.hasMore}
+              loadingOlder={loadingOlder}
+              olderError={olderError}
+              onLoadOlder={loadOlder}
             />
           )}
         </div>

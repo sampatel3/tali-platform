@@ -555,6 +555,14 @@
   flex-direction: column;
   gap: 16px;
 }
+.cp-history-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--c-mute);
+  font-size: 0.8125rem;
+}
 
 /* ============ messages ============ */
 

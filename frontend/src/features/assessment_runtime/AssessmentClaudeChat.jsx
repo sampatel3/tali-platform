@@ -70,7 +70,7 @@ const MessageRow = ({ entry }) => {
       <div
         className={`inline-block max-w-[94%] rounded-[12px] px-4 py-2.5 text-left ${
           isUser
-            ? 'rounded-tr-[4px] bg-[var(--purple)] text-white'
+            ? 'rounded-tr-[4px] bg-[var(--purple)] text-[var(--taali-on-accent)]'
             : 'rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] text-[var(--ink)]'
         }`}
       >
@@ -106,7 +106,7 @@ const MessageRow = ({ entry }) => {
 // message (skipped if empty — covers the ``opener`` case where Claude
 // asked unprompted at /start) and one assistant message.
 //
-// Critical for interrogative mode (#422): the ``task_opener`` lives in
+// Critical for interrogative mode (issue 422): the ``task_opener`` lives in
 // ``ai_prompts[0]`` with ``message=""``, ``response=<opener text>``.
 // Without this preload the candidate opens chat and sees a blank panel
 // instead of Claude's decision questions (assessment 81, 2026-05-26).

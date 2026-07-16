@@ -176,3 +176,10 @@ test('rediscovery stays focused on evidence and does not expose sourcing actions
   expect(screen.queryByRole('button', { name: /start outreach/i })).not.toBeInTheDocument();
   expect(screen.queryByText(/campaign/i)).not.toBeInTheDocument();
 });
+
+test('a public snapshot without an internal URL renders a name, not a dead link', () => {
+  render(<CandidateEvidenceCard data={cardWith([])} />);
+
+  expect(screen.getByText('Saurabh Zambare')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /Saurabh Zambare/ })).toBeNull();
+});

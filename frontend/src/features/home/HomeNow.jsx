@@ -1050,6 +1050,8 @@ export const HomeNow = ({
   // recruiter saw, even if the queue reloads underneath the modal. Replaces
   // the native window.confirm so the dialog uses the app's design tokens.
   const [bulkConfirm, setBulkConfirm] = useState(null);
+  const bulkDialogRef = useRef(null);
+  const bulkTriggerRef = useRef(null);
   // Recruiter's per-role Workable stage picks for the bulk-approve modal,
   // keyed by role_id. Only the advancing roles need one; reset each open.
   const [bulkStages, setBulkStages] = useState({});
@@ -1103,6 +1105,9 @@ export const HomeNow = ({
         name: d.candidate_name || `#${d.id}`,
         stage: d.candidate_workable_stage || 'a live interview stage',
       }));
+    bulkTriggerRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     setBulkStages({});
     setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles, postHandoverRejects });
   };
@@ -1233,6 +1238,12 @@ export const HomeNow = ({
     </div>
   ) : null;
 
+  // Keyboard listeners live for longer than a render. Read the current row and
+  // handlers from a ref so shortcuts never target a decision or callback from a
+  // previous render, without tearing the listener down for unrelated updates.
+  const shortcutActionsRef = useRef({ selected, handleApprove, handleSnooze });
+  shortcutActionsRef.current = { selected, handleApprove, handleSnooze };
+
   // Keyboard shortcuts on the action bar — only fire when no modal is
   // open, no input has focus, and the user actually has a selected
   // pending decision they could act on. We intentionally don't intercept
@@ -1246,35 +1257,54 @@ export const HomeNow = ({
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       if (e.target?.isContentEditable) return;
-      if (!selected) return;
-      if (selected.status !== 'pending' && selected.status !== 'reverted_for_feedback') return;
+      const current = shortcutActionsRef.current;
+      if (!current.selected) return;
+      if (current.selected.status !== 'pending' && current.selected.status !== 'reverted_for_feedback') return;
       const k = e.key.toLowerCase();
-      if (k === 'a') { e.preventDefault(); handleApprove(selected); return; }
-      if (k === 't') { e.preventDefault(); setTeachFor(selected); return; }
-      if (k === 's') { e.preventDefault(); handleSnooze(selected); return; }
+      if (k === 'a') { e.preventDefault(); current.handleApprove(current.selected); return; }
+      if (k === 't') { e.preventDefault(); setTeachFor(current.selected); return; }
+      if (k === 's') { e.preventDefault(); current.handleSnooze(current.selected); return; }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-    // We deliberately depend on the selected decision and modal state
-    // — re-binding on each pending row is cheap and keeps the closure
-    // pointing at the right target.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status, teachFor, bulkConfirm, alternativeFor, invitedView, sourcedView]);
+  }, [teachFor, bulkConfirm, alternativeFor, invitedView, sourcedView]);
 
   // Esc cancels / Enter confirms the bulk-approve modal. Enter only fires once
   // every advancing role has its stage picked (bulkStagesReady) — matching the
   // Confirm button's disabled state so the natural confirm key can't bypass the
-  // required Workable stage pick. We depend on bulkStagesReady (and re-bind
-  // runBulkApprove) so the handler never closes over a stale empty stage map.
+  // required Workable stage pick. The ref keeps the handler on the current
+  // confirmation snapshot and stage map without needless listener churn.
+  const runBulkApproveRef = useRef(runBulkApprove);
+  runBulkApproveRef.current = runBulkApprove;
   useEffect(() => {
     if (!bulkConfirm) return undefined;
+    const dialog = bulkDialogRef.current;
+    dialog?.focus();
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); setBulkConfirm(null); }
-      if (e.key === 'Enter' && bulkStagesReady) { e.preventDefault(); runBulkApprove(); }
+      if (e.key === 'Enter' && bulkStagesReady) { e.preventDefault(); runBulkApproveRef.current(); }
+      if (e.key === 'Tab' && dialog) {
+        const focusable = [...dialog.querySelectorAll(
+          'button:not(:disabled), select:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+        )].filter((node) => !node.hasAttribute('hidden'));
+        if (!focusable.length) { e.preventDefault(); dialog.focus(); return; }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      bulkTriggerRef.current?.focus?.();
+    };
+
   }, [bulkConfirm, bulkStagesReady]);
 
   return (
@@ -1410,6 +1440,7 @@ export const HomeNow = ({
             role="dialog"
             aria-modal="true"
             aria-labelledby="rq-bulk-title"
+            aria-describedby={bulkConfirm.sample ? 'rq-bulk-summary' : undefined}
             style={{ width: 'min(480px, 100%)' }}
             onClick={(e) => e.stopPropagation()}
             tabIndex={-1}
@@ -1417,7 +1448,7 @@ export const HomeNow = ({
             // land inside it (focus otherwise stays on the "Approve N" trigger
             // behind the backdrop) — this is also what keeps stray a/t/s
             // shortcuts from reaching the decision underneath.
-            ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus(); }}
+            ref={bulkDialogRef}
           >
             <div className="rq-modal-head">
               <div>
@@ -1433,12 +1464,12 @@ export const HomeNow = ({
                   {`Approve ${bulkConfirm.count} ${bulkConfirm.typeLabel}${bulkConfirm.count === 1 ? '' : 's'} on ${bulkConfirm.roleScope}?`}
                 </h3>
                 {bulkConfirm.sample ? (
-                  <p style={{ margin: 0, fontSize: 'var(--fs-body)', color: 'var(--ink-2)', maxWidth: 420, lineHeight: 1.5 }}>
+                  <p id="rq-bulk-summary" style={{ margin: 0, fontSize: 'var(--fs-body)', color: 'var(--ink-2)', maxWidth: 420, lineHeight: 1.5 }}>
                     {`${bulkConfirm.sample}${bulkConfirm.more}`}
                   </p>
                 ) : null}
               </div>
-              <button type="button" className="rq-tinybtn" onClick={() => setBulkConfirm(null)} aria-label="Close">
+              <button type="button" className="rq-tinybtn" onClick={() => setBulkConfirm(null)} aria-label="Close bulk approval dialog">
                 <X size={12} strokeWidth={2.2} />
               </button>
             </div>

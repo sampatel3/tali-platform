@@ -1737,7 +1737,7 @@
    The dedicated Analytics page (AnalyticsPage → HomeMonitoring standalone).
    The page-level AgentHeader carries the title; the section adds a thin
    right-aligned scope-control strip, a 6-up summary pulse band, and the
-   shared .vtabs tab bar — mirroring frontend/public/analytics-preview.html. */
+   shared .vtabs tab bar — mirroring the canonical /analytics-preview route. */
 .hm-standalone .hm-head-controls {
   display: flex;
   flex-wrap: wrap;

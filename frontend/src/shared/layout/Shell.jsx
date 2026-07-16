@@ -69,6 +69,7 @@ const initialsFor = (name, org) => {
 };
 
 const useOrgProfile = (user) => {
+  const hasUser = Boolean(user);
   const fallback = useMemo(
     () => normalizeHeaderOrgName(pickOrganizationName(user), 'No company'),
     [user],
@@ -77,7 +78,7 @@ const useOrgProfile = (user) => {
   useEffect(() => {
     let cancelled = false;
     setProfile((current) => ({ ...current, name: fallback }));
-    if (!user) return undefined;
+    if (!hasUser) return undefined;
     const load = async () => {
       try {
         const res = await organizationsApi.get();
@@ -95,7 +96,7 @@ const useOrgProfile = (user) => {
     return () => {
       cancelled = true;
     };
-  }, [fallback, user?.id, user?.organization_id]);
+  }, [fallback, hasUser, user?.id, user?.organization_id]);
   return profile;
 };
 
@@ -399,7 +400,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
         <TaaliTile
           className="h-7 w-7 rounded-[6px]"
           fillClassName="text-[var(--purple)]"
-          lineClassName="text-white"
+          lineClassName="text-[var(--taali-on-accent)]"
           strokeWidth={2.4}
           cornerRadius={5.4}
         />

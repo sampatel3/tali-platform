@@ -600,8 +600,8 @@ const ClosingCta = ({ onNavigate }) => (
         className="relative overflow-hidden rounded-[18px] px-8 py-14 md:px-12"
         style={{
           background:
-            'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, #000) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
-          color: '#fff',
+            'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, var(--lvc-cta-shade)) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
+          color: 'var(--lvc-bg-2)',
         }}
       >
         <div

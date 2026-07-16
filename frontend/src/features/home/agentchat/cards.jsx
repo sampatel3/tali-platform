@@ -275,8 +275,8 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
           <span className="ac-thresh-new ac-thresh-applied">{numOrDash(card.after_threshold)}</span>
         </div>
         <div className="ac-statrow">
-          <span><b>{card.discarded_advances ?? 0}</b> advances retracted</span>
-          <span><b>{card.created_rejects ?? 0}</b> new rejects</span>
+          <span><b>{card.reconciled_decisions ?? 0}</b> decisions re-flowed</span>
+          <span><b>{card.created_decisions ?? 0}</b> decisions created</span>
           <span><b>{card.above_after ?? '—'}</b> clear the cut-off</span>
         </div>
       </div>

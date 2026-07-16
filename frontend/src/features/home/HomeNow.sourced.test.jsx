@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 
 import { HomeNow } from './HomeNow';
@@ -11,6 +11,8 @@ import { HomeNow } from './HomeNow';
 //  - the toolbar chip surfaces the sourced count from the role breakdown.
 
 const listApplicationsGlobal = vi.fn();
+const listDecisions = vi.fn().mockResolvedValue({ data: [] });
+const getWorkableStages = vi.fn().mockResolvedValue({ data: { stages: [] } });
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -20,10 +22,10 @@ vi.mock('../../shared/api', () => ({
     overrideDecision: vi.fn().mockResolvedValue({ data: {} }),
     snoozeDecision: vi.fn().mockResolvedValue({ data: {} }),
     reEvaluateDecision: vi.fn().mockResolvedValue({ data: {} }),
-    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    listDecisions: (...a) => listDecisions(...a),
   },
   organizations: {
-    getWorkableStages: vi.fn().mockResolvedValue({ data: { stages: [] } }),
+    getWorkableStages: (...a) => getWorkableStages(...a),
   },
   roles: {
     listApplicationsGlobal: (...a) => listApplicationsGlobal(...a),
@@ -80,23 +82,36 @@ const renderHome = (overrides = {}) => render(
   />,
 );
 
+const settleHomeMount = async () => {
+  await act(async () => {
+    await Promise.all([
+      listDecisions.mock.results.at(-1).value,
+      getWorkableStages.mock.results.at(-1).value,
+    ]);
+  });
+};
+
 describe('HomeNow — Sourced tracker', () => {
   beforeEach(() => {
     listApplicationsGlobal.mockReset();
+    listDecisions.mockReset().mockResolvedValue({ data: [] });
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
   });
 
-  it('shows the sourced count on the toolbar chip from the role breakdown', () => {
+  it('shows the sourced count on the toolbar chip from the role breakdown', async () => {
     listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
     renderHome();
+    await settleHomeMount();
     // 2 (Data Engineer) + 1 (Platform Lead) summed across roles.
     const chip = screen.getByRole('button', { name: /^Sourced/ });
     expect(within(chip).getByText('3')).toBeInTheDocument();
   });
 
-  it('the Sourced chip toggles the view (calls setFilters with view=sourced)', () => {
+  it('the Sourced chip toggles the view (calls setFilters with view=sourced)', async () => {
     listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
     const setFilters = vi.fn();
     renderHome({ setFilters });
+    await settleHomeMount();
     fireEvent.click(screen.getByRole('button', { name: /^Sourced/ }));
     // setFilters is called with an updater — apply it to see the produced view.
     const updater = setFilters.mock.calls.at(-1)[0];

@@ -54,17 +54,18 @@ const prettyStatus = (s) => {
   return key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 };
 
-// Chart palette — literal tokens (SVG fill can't read CSS custom properties).
-// In-scheme only: purple / lavender / amber / grey. No traffic-light
+// Chart palette — SVG presentation attributes resolve CSS custom properties,
+// keeping the chart synchronized with the active Taali theme. In-scheme only:
+// purple / lavender / amber / grey. No traffic-light
 // green/red — "decisions" reads as lavender (a positive second series),
 // "errors" as amber (the warn tone), matching the no-traffic-light rule.
 const C = {
-  purple: '#5e3aa8',
-  purpleLav: '#7c5cff',
-  purpleSoft: '#c4a5fd',
-  amber: '#d88a1c',
-  mute: '#8b8595',
-  grid: '#f1edf5',
+  purple: 'var(--purple)',
+  purpleLav: 'var(--taali-chart-purple-vivid)',
+  purpleSoft: 'var(--purple-lav)',
+  amber: 'var(--amber)',
+  mute: 'var(--mute)',
+  grid: 'var(--line-2)',
 };
 
 const prettyType = (t) => TYPE_LABEL[t] || String(t || '').replace(/_/g, ' ');
@@ -169,11 +170,11 @@ function AgentCard({ a }) {
 }
 
 const tooltipStyle = {
-  background: '#fff',
-  border: '1px solid #e8e2ee',
+  background: 'var(--bg-2)',
+  border: '1px solid var(--line)',
   borderRadius: 10,
   fontSize: 12,
-  color: '#15121a',
+  color: 'var(--ink)',
 };
 
 export default function AgentsOverviewPanel() {

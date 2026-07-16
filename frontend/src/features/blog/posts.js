@@ -8,7 +8,7 @@ import aiNativeRaw from './posts/ai-native-coding-and-knowledge-work.md?raw';
 // renders the title from metadata, so we don't want it twice in the body).
 const bodyOf = (raw) =>
   String(raw || '')
-    .replace(/^﻿?---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
+    .replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
     .replace(/^\s*#\s+.*\r?\n/, '')
     .trim();
 

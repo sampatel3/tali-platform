@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../../styles/16-job-pipeline.css';
+import '../../styles/03-settings-agent.css';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -17,6 +18,7 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
+import { loadAllPages } from '../../shared/api/loadAllPages';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
@@ -42,6 +44,7 @@ import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
 import { ReachOutDialog } from './ReachOutDialog';
+import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
 import {
   agentIntakeLifecycleCopy,
@@ -77,6 +80,10 @@ import {
   resolvedDeterministicReject,
   resolvedRoleAutomation,
 } from './jobPipelinePageUtils';
+import {
+  APPLICATION_ROSTER_PAGE_SIZE,
+  loadApplicationRoster,
+} from './applicationRosterLoader';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -92,7 +99,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const { showToast } = useToast();
   const {
     jobs,
+    processJobs,
     trackRole,
+    trackRoleProcess,
   } = useJobStatus() ?? {};
   void onViewCandidate;
 
@@ -205,6 +214,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [sisterRescoring, setSisterRescoring] = useState(false);
   const [sisterPollVersion, setSisterPollVersion] = useState(0);
   const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
+  const [processDialogOpen, setProcessDialogOpen] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
   // The lightweight role shell paints the page immediately; aggregate funnel
@@ -413,13 +423,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setApplicationsLoading(true);
     let rolePainted = Boolean(cached?.data);
     try {
-      // Two separate fetches (open + rejected) at the backend's 2000-row
-      // ceiling — splits the budget so a long reject history can't crowd
-      // open candidates out, and avoids the 500-row default that would
-      // silently truncate thousand-applicant roles. They deliberately run
-      // SEQUENTIALLY: two large ORM/serialization queries at once saturated
-      // the API on large roles and made the whole page hit the 60s timeout.
-      const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
       // Paint from a bounded, single-query shell endpoint. The ordinary role
       // detail endpoint computes funnel and decision aggregates and can be
       // slow on large roles; none of that should block the first useful paint.
@@ -470,45 +473,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
       setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
 
-      let applicationPayloads = [];
-      let applicationError = null;
-      try {
-        const openAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('open'));
-        if (seq !== loadSeqRef.current) return;
-        applicationPayloads = [...(openAppsRes?.data || [])];
-        // Paint the useful, active roster before loading the potentially much
-        // larger reject history.
-        setRoleApplications(applicationPayloads);
-      } catch (error) {
-        applicationError = error;
-      }
-      try {
-        const rejectedAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('rejected'));
-        if (seq !== loadSeqRef.current) return;
-        applicationPayloads = [...applicationPayloads, ...(rejectedAppsRes?.data || [])];
-        setRoleApplications(applicationPayloads);
-      } catch (error) {
-        applicationError ||= error;
-      }
-      // Sister roles evaluate the complete source cohort, including prior
-      // hires/withdrawals. The standard page keeps its two-query hot path;
-      // only the uncommon sister view pays this extra terminal-outcome fetch.
-      if (nextRole?.role_kind === 'sister') {
-        const [hiredAppsRes, withdrawnAppsRes] = await Promise.all([
-          rolesApi.listApplications(numericRoleId, appsQuery('hired')),
-          rolesApi.listApplications(numericRoleId, appsQuery('withdrawn')),
-        ]);
-        if (seq !== loadSeqRef.current) return;
-        applicationPayloads = [
-          ...applicationPayloads,
-          ...(hiredAppsRes?.data || []),
-          ...(withdrawnAppsRes?.data || []),
-        ];
-        setRoleApplications(applicationPayloads);
-      }
-      if (applicationError) {
-        setApplicationsLoadError(getErrorMessage(applicationError, 'Some candidates could not be loaded.'));
-      }
+      const roster = await loadApplicationRoster({
+        rolesApi,
+        roleId: numericRoleId,
+        isSister: nextRole?.role_kind === 'sister',
+        isCurrent: () => seq === loadSeqRef.current,
+        onProgress: setRoleApplications,
+      });
+      if (roster.cancelled || seq !== loadSeqRef.current) return;
+      const applicationPayloads = roster.applications;
+      if (roster.error) setApplicationsLoadError(
+        getErrorMessage(roster.error, 'Some candidates could not be loaded.'),
+      );
       // Fetch the agent's threshold recommendation when the role is
       // in auto mode so the panel shows it without waiting for click.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
@@ -516,18 +492,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           .then((res) => setSuggestedThreshold(res?.data || null))
           .catch(() => setSuggestedThreshold(null));
       } else setSuggestedThreshold(null);
-      // Dedupe by id — defensive against any backend overlap.
-      const byId = new Map();
-      for (const a of applicationPayloads) {
-        if (a?.id != null && !byId.has(a.id)) byId.set(a.id, a);
-      }
-      const nextApps = [...byId.values()];
+      const nextApps = applicationPayloads;
       setRoleApplications(nextApps);
       // Refresh the SWR cache so the next visit paints instantly.
       writeCache(cacheKey, {
         role: nextRole,
         roleTasks: nextTasks,
-        roleApplications: nextApps,
+        roleApplications: nextApps.slice(0, APPLICATION_ROSTER_PAGE_SIZE),
         workspaceCriteria: nextCriteria,
       });
       // Hand off batch status to the global context — it owns display state.
@@ -560,7 +531,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   }, [numericRoleId, rolesApi, showToast, trackRole]);
 
   // Patch a SINGLE application row after a single-candidate mutation instead
-  // of reloading the whole workspace (which refetches up to 2×2000 rows over
+  // of reloading the whole workspace (which walks every paginated outcome over
   // the UAE→us-east4 link for one rejected/moved candidate). Refetches just
   // that application AND the (cheap) role record so the FunnelBoard + KPI strip
   // aggregates don't stay stale all session — the idle page has no periodic
@@ -623,17 +594,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [loadRoleWorkspace, sisterScoringStatus?.status]);
 
-  // The org-wide task catalogue belongs to Agent settings. The job-spec editor
-  // is a focused writing surface and never needs to load it.
+  // Load the org-wide catalogue only when Agent settings needs it.
   const loadedAllTasksRef = useRef(false);
   useEffect(() => {
     if (activeView !== 'role-fit' || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
     let cancelled = false;
     const loadAllTasks = async () => {
       try {
-        const res = await tasksApi.list();
+        const items = await loadAllPages(tasksApi.list);
         if (!cancelled) {
-          setAllTasks(Array.isArray(res?.data) ? res.data : []);
+          setAllTasks(items);
           loadedAllTasksRef.current = true;
         }
       } catch {
@@ -910,7 +880,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   };
 
   // Per-role chip CRUD + sync/reset. Merge the returned chip into role.criteria —
-  // a full role-workspace refetch would drag in 2× 2000-row application lists per edit.
+  // a full workspace refetch would needlessly walk every candidate page per edit.
   const handleCreateRoleCriterion = useCallback(async ({ text, bucket }) => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
@@ -1139,6 +1109,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   };
 
+  const handleProcessCandidates = useCallback(async (body) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    try {
+      await rolesApi.processRole(numericRoleId, body);
+      trackRoleProcess?.(numericRoleId);
+      setProcessDialogOpen(false);
+      showToast('Candidate processing started. Progress will stay visible while you work.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to start candidate processing.'), 'error');
+      throw error;
+    }
+  }, [numericRoleId, rolesApi, showToast, trackRoleProcess]);
+
   const viewCandidateReport = useCallback((application) => {
     if (!application?.id) return;
     const navOptions = { candidateApplicationId: application.id };
@@ -1196,9 +1179,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const persistedActivationIntent = role?.assessment_task_provisioning?.activation_intent || null;
   const persistedActivationStatus = String(persistedActivationIntent?.status || '');
   const activationIsPending = ['pending', 'retry_wait'].includes(persistedActivationStatus)
-    && !Boolean(role?.agentic_mode_enabled);
+    && !role?.agentic_mode_enabled;
   const activationIsBlocked = persistedActivationStatus === 'blocked'
-    && !Boolean(role?.agentic_mode_enabled);
+    && !role?.agentic_mode_enabled;
 
   // Turn-off confirm dialog state (the "also discard pending decisions" opt-in).
   // Declared with the other hooks — before any early return — so hook order
@@ -1226,6 +1209,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     ) return undefined;
     let cancelled = false;
     const refreshGeneratedAssessment = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       try {
         const [tasksRes, roleRes] = await Promise.all([
           rolesApi.listTasks(numericRoleId),
@@ -1244,8 +1228,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           ));
         }
       } catch {
-        // The ordinary workspace refresh and the next poll remain recovery
-        // paths; don't collapse the dialog on a transient read failure.
+        // Keep the dialog open; the workspace refresh and next poll recover.
       }
     };
     void refreshGeneratedAssessment();
@@ -1557,6 +1540,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
+                onClick={() => setProcessDialogOpen(true)}
+                disabled={['pending', 'queued', 'starting', 'running', 'cancelling'].includes(
+                  String(processJobs?.[numericRoleId]?.status || '').toLowerCase(),
+                )}
+                title="Fetch CVs, pre-screen, score, and update semantic search in one governed run"
+              >
+                <RefreshCw size={12} />
+                {['pending', 'queued', 'starting', 'running', 'cancelling'].includes(
+                  String(processJobs?.[numericRoleId]?.status || '').toLowerCase(),
+                ) ? 'Processing…' : 'Process candidates'}
+              </button>
+            ) : null}
+            {role?.role_kind !== 'sister' ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
                 onClick={() => navigate(`/chat/agents/${role.id}`)}
                 title="Open this job's agent chat"
               >
@@ -1610,7 +1609,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         ? activeTasks.map((task) => task.name).join(' · ')
                         : draftTasks.length
                           ? `${draftTasks[0].name} · draft`
-                          : Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment)
+                          : role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment
                             ? 'Skipped'
                             : 'Generated after Turn on'}
                     </span>
@@ -1671,7 +1670,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             the terminal Rejected cell set apart. The home hub uses the same
             variant — one funnel look across surfaces. */}
         {roleDetailLoading ? (
-          <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-text-muted)]" role="status">
+          <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-muted)]" role="status">
             <Spinner size={18} />
             <span className="ml-2">Loading pipeline summary…</span>
           </div>
@@ -2431,6 +2430,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           }}
         />
 
+        <ProcessCandidatesDialog
+          open={processDialogOpen}
+          roleId={numericRoleId}
+          onClose={() => setProcessDialogOpen(false)}
+          onConfirm={handleProcessCandidates}
+        />
+
         <ReachOutDialog
           open={reachOutOpen}
           roleId={numericRoleId}
@@ -2484,7 +2490,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 </li>
                 <li>
                   Assessment stage: {
-                    Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment)
+                    role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment
                       ? 'explicitly skipped for this role'
                       : (roleTasks || []).some((task) => task?.is_active !== false)
                         ? 'uses the active approved task'
@@ -2564,7 +2570,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   {activationReview.draft.scenario || activationReview.draft.description || 'Generated from this requisition.'}
                 </p>
                 {activationReview.draft.battle_test?.verdict === 'pass' ? (
-                  <p style={{ margin: 0, color: 'var(--success, #16804b)' }}>
+                  <p style={{ margin: 0, color: 'var(--taali-success-ink-strong)' }}>
                     {activationReview?.activationSubmitting
                       ? 'Automated battle test passed. Saving the Turn-on request…'
                       : activationReview?.activationRequested

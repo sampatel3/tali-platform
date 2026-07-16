@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { isPublicPath } from '../../app/routePolicy';
+
+export { isPublicPath } from '../../app/routePolicy';
 
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
 
@@ -16,45 +19,51 @@ const api = axios.create({
   },
 });
 
+// Public requests deliberately use a separate instance so a recruiter's JWT
+// can never leak onto a shared link, job page, intake, or unsubscribe request.
+// Keep the same finite timeout as authenticated traffic: bare axios has no
+// timeout and could otherwise leave a public screen spinning indefinitely.
+export const publicApi = axios.create({ timeout: 60000 });
+
 // Public unauth share-link endpoint lives at the app root (no /api/v1
 // prefix) so recipients can open it without a recruiter session. The
 // SPA's /share/:token route uses this to fetch the application payload
 // in one round-trip — the backend scrubs to client-view shape when
 // the share link's mode is "client".
 export const viewShareLink = (token) =>
-  axios.get(`${API_URL}/share/${encodeURIComponent(token)}`);
+  publicApi.get(`${API_URL}/share/${encodeURIComponent(token)}`);
 
 // Public unauth "top candidates report" — same pattern as the share link.
 export const viewTopReport = (token) =>
-  axios.get(`${API_URL}/report/${encodeURIComponent(token)}`);
+  publicApi.get(`${API_URL}/report/${encodeURIComponent(token)}`);
 
 // Public unauth curated client submittal pack — same pattern: a role-scoped
 // shortlist frozen at mint time, served read-only by token. Bare axios so the
 // recruiter's JWT is never attached — anyone with the link can read it.
 export const viewSubmittalPack = (token) =>
-  axios.get(`${API_URL}/submittal/${encodeURIComponent(token)}`);
+  publicApi.get(`${API_URL}/submittal/${encodeURIComponent(token)}`);
 
 // Public unauth job posting — the careers-style page a published requisition
 // links to. Lives UNDER /api/v1 (unlike the share/report endpoints), but we
 // still use a bare axios.get rather than the shared `api` instance so the
 // recruiter's JWT is never attached: anyone with the link can read it.
 export const viewPublicJob = (token) =>
-  axios.get(`${API_URL}/api/v1/public/job/${encodeURIComponent(token)}`);
+  publicApi.get(`${API_URL}/api/v1/public/job/${encodeURIComponent(token)}`);
 
 // Public unauth CAREERS BOARD — an org's per-org page listing all of its
 // published jobs. Same JWT-free pattern as viewPublicJob (bare axios so the
 // recruiter's token is never attached — anyone with the link can read it).
 // Returns `{ organization_name, slug, jobs: [ { token, url, title, location,
 //   workplace_type, employment_type, seniority, salary, published_at } ] }`.
-export const viewCareers = (slug) =>
-  axios.get(`${API_URL}/api/v1/public/careers/${encodeURIComponent(slug)}`);
+export const viewCareers = (slug, params = {}) =>
+  publicApi.get(`${API_URL}/api/v1/public/careers/${encodeURIComponent(slug)}`, { params });
 
 // Public unauth NATIVE APPLY — a candidate submits an application to a published
 // job page. Multipart (name/email/phone + a JSON `answers` field + optional
 // resume file). Bare axios (JWT-free); the browser sets the multipart boundary.
 // Returns `{ status, message, application_id, eeo_token }`.
 export const applyToJob = (token, formData) =>
-  axios.post(
+  publicApi.post(
     `${API_URL}/api/v1/public/job-pages/${encodeURIComponent(token)}/apply`,
     formData,
     { headers: { 'Content-Type': 'multipart/form-data' } },
@@ -64,7 +73,7 @@ export const applyToJob = (token, formData) =>
 // apply response carried (never a raw application_id). Bare axios (JWT-free).
 // Returns 204 (no body).
 export const submitJobEeo = (token, payload) =>
-  axios.post(`${API_URL}/api/v1/public/eeo/${encodeURIComponent(token)}`, payload);
+  publicApi.post(`${API_URL}/api/v1/public/eeo/${encodeURIComponent(token)}`, payload);
 
 // ---- Public, no-auth CLIENT INTAKE (a consultancy's client describing the
 // role via the conversational agent) ----
@@ -78,7 +87,7 @@ const intakeBase = (token) =>
 
 // Snapshot the intake conversation + captured ROLE fields.
 // Returns `{ organization_name, messages, captured, gaps, completeness, status }`.
-export const viewClientIntake = (token) => axios.get(intakeBase(token));
+export const viewClientIntake = (token) => publicApi.get(intakeBase(token));
 
 // One conversational turn from the client — `message` text plus optional File
 // attachments — as multipart/form-data (mirrors requisitionApi.chat). Returns
@@ -89,14 +98,14 @@ export const sendClientIntakeChat = (token, { message = '', files = [] } = {}) =
   (files || []).forEach((file) => {
     if (file) form.append('files', file);
   });
-  return axios.post(`${intakeBase(token)}/chat`, form, {
+  return publicApi.post(`${intakeBase(token)}/chat`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
 };
 
 // Submit the captured brief back to the consultancy. Returns `{ ok, status }`.
 export const submitClientIntake = (token) =>
-  axios.post(`${intakeBase(token)}/submit`);
+  publicApi.post(`${intakeBase(token)}/submit`);
 
 // ---- Public, no-auth one-click UNSUBSCRIBE ----
 //
@@ -107,8 +116,8 @@ export const submitClientIntake = (token) =>
 const unsubscribeBase = (token) =>
   `${API_URL}/api/v1/public/unsubscribe/${encodeURIComponent(token)}`;
 
-export const fetchUnsubscribe = (token) => axios.get(unsubscribeBase(token));
-export const submitUnsubscribe = (token) => axios.post(unsubscribeBase(token));
+export const fetchUnsubscribe = (token) => publicApi.get(unsubscribeBase(token));
+export const submitUnsubscribe = (token) => publicApi.post(unsubscribeBase(token));
 
 // ---- Sliding session ----
 // Access tokens expire after 30 minutes. Rather than silently logging active
@@ -208,41 +217,6 @@ const isAuthEndpoint = (url = '') => (
 // Exported for tests: the 401 interceptor must never bounce these
 // marketing/public routes to /login (a stale token in localStorage plus a
 // failed bootstrap call would otherwise hijack a public page).
-export const isPublicPath = (pathname = '', search = '') => {
-  if (pathname === '/'
-    || pathname.startsWith('/login')
-    || pathname.startsWith('/register')
-    || pathname.startsWith('/forgot-password')
-    || pathname.startsWith('/reset-password')
-    || pathname.startsWith('/verify-email')
-    || pathname.startsWith('/accept-invite')
-    || pathname.startsWith('/demo')
-    || pathname.startsWith('/blog')
-    || pathname.startsWith('/developers')
-    || pathname.startsWith('/c/')
-    || pathname.startsWith('/share/')
-    || pathname.startsWith('/report/')
-    || pathname.startsWith('/submittal/')
-    || pathname.startsWith('/assess/')
-    || pathname.startsWith('/assessment/')
-    || pathname.startsWith('/job/')
-    || pathname.startsWith('/careers/')
-    || pathname.startsWith('/intake/')
-    || pathname.startsWith('/unsubscribe/')
-    || pathname.startsWith('/outreach/thanks')
-    || pathname === '/showcase'
-    || pathname.startsWith('/showcase/')) {
-    return true;
-  }
-  // Marketing showcase mode runs the recruiter pages with auth-bypassed
-  // demo data. We must never bounce these to /login on a stray 401, since
-  // they're loaded inside the public marketing iframe.
-  if (pathname === '/jobs' && search.includes('showcase=1') && search.includes('demo=1')) {
-    return true;
-  }
-  return false;
-};
-
 const buildLoginRedirectPath = () => {
   if (typeof window === 'undefined') return '/login';
   const nextPath = `${window.location.pathname || '/'}${window.location.search || ''}${window.location.hash || ''}`;

@@ -8,6 +8,7 @@ import { LandingVariantD } from './variant_d/LandingVariantD';
 import { LandingVariantE } from './variant_e/LandingVariantE';
 import { LandingVariantF } from './variant_f/LandingVariantF';
 import { LandingVariantG } from './variant_g/LandingVariantG';
+import './landingPreviewTokens.css';
 
 const DEFAULT_VARIANT = 'g';
 const VARIANTS = {
@@ -47,7 +48,7 @@ const VariantSwitcher = ({ active, onPick }) => (
         onClick={() => onPick(key)}
         className={`rounded-full px-3 py-1.5 text-[0.75rem] font-semibold transition ${
           active === key
-            ? 'bg-[var(--purple)] text-white'
+            ? 'bg-[var(--purple)] text-[var(--landing-preview-switcher-foreground)]'
             : 'text-[var(--ink-2)] hover:bg-[var(--bg)]'
         }`}
       >

@@ -5,7 +5,15 @@ import api from '../../shared/api/httpClient';
 
 export const conversationsApi = {
   list: () => api.get('/taali-chat/conversations').then((r) => r.data),
-  get: (id) => api.get(`/taali-chat/conversations/${id}`).then((r) => r.data),
+  get: (id, { before, limit } = {}) => {
+    const params = {};
+    if (before != null) params.before = before;
+    if (limit != null) params.limit = limit;
+    const config = Object.keys(params).length ? { params } : undefined;
+    const path = `/taali-chat/conversations/${id}`;
+    const request = config ? api.get(path, config) : api.get(path);
+    return request.then((response) => response.data);
+  },
   rename: (id, title) =>
     api.patch(`/taali-chat/conversations/${id}`, { title }).then((r) => r.data),
   remove: (id) => api.delete(`/taali-chat/conversations/${id}`),

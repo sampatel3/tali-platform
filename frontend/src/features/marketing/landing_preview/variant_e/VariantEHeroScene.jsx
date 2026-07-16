@@ -111,7 +111,7 @@ export const HeroScene = () => {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
               <h3 className="role-name">AI Engineer</h3>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--mute)' }}>#312</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--mute)' }}>&#35;312</span>
               <span className="chip purple" style={{ fontSize: 10 }}>Role</span>
             </div>
             <div className="role-meta">Engineering · Remote · 312 applied</div>

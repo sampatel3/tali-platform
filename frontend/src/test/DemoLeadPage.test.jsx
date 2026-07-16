@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DemoLeadPage } from '../features/marketing/DemoLeadPage';
@@ -23,7 +23,7 @@ describe('DemoLeadPage submit', () => {
     const onNavigate = vi.fn();
     render(<DemoLeadPage onNavigate={onNavigate} />);
     fireEvent.submit(screen.getByRole('button', { name: /open the live walkthrough/i }));
-    vi.runAllTimers();
+    act(() => vi.runAllTimers());
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
@@ -34,7 +34,7 @@ describe('DemoLeadPage submit', () => {
       target: { value: 'jane@acme-corp.io' },
     });
     fireEvent.submit(screen.getByRole('button', { name: /open the live walkthrough/i }));
-    vi.runAllTimers();
+    act(() => vi.runAllTimers());
     expect(onNavigate).toHaveBeenCalledWith('demo');
   });
 });

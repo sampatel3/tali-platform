@@ -11,6 +11,13 @@ const indexHtml = read('index.html');
 const robots = read('public/robots.txt');
 const sitemap = read('public/sitemap.xml');
 const llms = read('public/llms.txt');
+const investorDeck = read('public/_deck/index.html');
+const routeShells = {
+  developers: read('developers.html'),
+  blog: read('blog.html'),
+  terms: read('terms.html'),
+  privacy: read('privacy.html'),
+};
 
 describe('index.html SEO/AEO head', () => {
   it('has a self-referential canonical to the www apex', () => {
@@ -31,6 +38,25 @@ describe('index.html SEO/AEO head', () => {
     expect(fs.existsSync(path.join(frontendRoot, 'public/og-image.png'))).toBe(true);
     expect(indexHtml).toMatch(/property="og:image:width" content="1200"/);
     expect(indexHtml).toMatch(/property="og:image:height" content="630"/);
+  });
+});
+
+describe('route-specific crawlable shells', () => {
+  for (const [slug, html] of Object.entries(routeShells)) {
+    it(`serves ${slug} with its own canonical and description before JavaScript`, () => {
+      expect(html).toContain(`https://www.taali.ai/${slug}`);
+      expect(html).toMatch(/<meta name="description" content="[^"]+"/);
+      expect(html).not.toContain('Agentic Hiring Platform & AI-Native Assessments');
+      expect(html).toContain('src="/src/main.jsx"');
+    });
+  }
+
+  it('serves the published article with article metadata before JavaScript', () => {
+    const html = read('blog-ai-native.html');
+    expect(html).toContain('https://www.taali.ai/blog/ai-native-coding-and-knowledge-work');
+    expect(html).toContain('property="og:type" content="article"');
+    expect(html).toContain('type="application/ld+json"');
+    expect(html).toContain('src="/src/main.jsx"');
   });
 });
 
@@ -173,7 +199,7 @@ describe('keyword content pages', () => {
     expect(contentCss).toContain('data-theme="dark"');
     // Matches the app's 80% density (root 0.8rem) so the guides don't look zoomed.
     expect(contentCss).toContain('font-size: 0.8rem');
-    // The static product-UI kit (KPIs, score chips, six-axis report).
+    // The static product-UI kit (KPIs, score chips, five-axis report).
     expect(contentCss).toContain('.score-chip');
     expect(contentCss).toContain('.axis');
   });
@@ -184,12 +210,14 @@ describe('vercel rewrites', () => {
     const sources = rootVercel.rewrites.map((r) => r.source);
     const catchAllIdx = sources.indexOf('/(.*)');
     expect(catchAllIdx).toBeGreaterThanOrEqual(0);
-    for (const slug of ['/agentic-hiring', '/ai-native-hiring', '/ai-native-assessments']) {
+    for (const slug of ['/agentic-hiring', '/ai-native-hiring', '/ai-native-assessments', '/developers', '/blog', '/terms', '/privacy']) {
       const idx = sources.indexOf(slug);
       expect(idx).toBeGreaterThanOrEqual(0);
       expect(idx).toBeLessThan(catchAllIdx);
       expect(rootVercel.rewrites.find((r) => r.source === slug).destination).toBe(`${slug}.html`);
     }
+    const article = rootVercel.rewrites.find((r) => r.source === '/blog/ai-native-coding-and-knowledge-work');
+    expect(article.destination).toBe('/blog-ai-native.html');
   });
 });
 
@@ -200,9 +228,27 @@ describe('sitemap + internal linking', () => {
     }
   });
 
+  it('lists the developer portal and legal notices', () => {
+    for (const slug of ['developers', 'terms', 'privacy']) {
+      expect(sitemap).toContain(`<loc>https://www.taali.ai/${slug}</loc>`);
+    }
+  });
+
+  it('lists the crawlable blog index and published article', () => {
+    expect(sitemap).toContain('<loc>https://www.taali.ai/blog</loc>');
+    expect(sitemap).toContain('<loc>https://www.taali.ai/blog/ai-native-coding-and-knowledge-work</loc>');
+  });
+
   it('links the guides from the home-page crawlable fallback', () => {
     for (const slug of ['/agentic-hiring', '/ai-native-hiring', '/ai-native-assessments']) {
       expect(indexHtml).toContain(`href="${slug}"`);
     }
+  });
+});
+
+describe('public investor deck routes', () => {
+  it('embeds the public Jobs showcase rather than the authenticated recruiter route', () => {
+    expect(investorDeck).toContain('iframe src="/showcase/jobs"');
+    expect(investorDeck).not.toContain('iframe src="/jobs?demo=1');
   });
 });

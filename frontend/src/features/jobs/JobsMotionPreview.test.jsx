@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { JobsMotionPreview } from './JobsMotionPreview';
+import motionFeatures from '../../shared/motion/motionFeatures';
 
 // Smoke coverage for the public /jobs-preview Motion mockup:
 //  - renders logged-out on the JOBS_SHOWCASE fixtures (no auth, no APIs) with
@@ -52,7 +53,15 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
 
   it('renders the final state under prefers-reduced-motion', () => {
     setReducedMotion(true);
-    render(<JobsMotionPreview />);
+    render(
+      <JobsMotionPreview
+        motionProviderProps={{
+          features: motionFeatures,
+          reducedMotion: 'never',
+          skipAnimations: true,
+        }}
+      />,
+    );
 
     // The role board is present and the per-role count tickers land on their
     // final fixture values immediately (AI Engineer · rejected = 18) rather

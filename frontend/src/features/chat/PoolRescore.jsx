@@ -53,6 +53,7 @@ export default function PoolRescore({ requirementText, candidates }) {
       if (!jobId) throw new Error('no job id');
       if (await poll(jobId)) return;
       timer.current = setInterval(async () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         try {
           if (await poll(jobId)) clearInterval(timer.current);
         } catch (e) {

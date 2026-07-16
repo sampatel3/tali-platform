@@ -1,7 +1,8 @@
 import api from './httpClient';
 
 export const tasks = {
-  list: () => api.get('/tasks/'),
+  list: (params = {}) => api.get('/tasks/', { params }),
+  facets: (params = {}) => api.get('/tasks/facets', { params }),
   get: (id) => api.get(`/tasks/${id}`),
   rubric: (id) => api.get(`/tasks/${id}/rubric`),
   create: (data) => api.post('/tasks/', data),

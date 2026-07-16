@@ -345,7 +345,11 @@ const AgentConversation = ({
   useEffect(() => {
     if (!livePoll) return undefined;
     const every = agentWorking ? 2500 : 5000;
-    const poll = window.setInterval(() => { void load({ silent: true }); }, every);
+    const poll = window.setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void load({ silent: true });
+      }
+    }, every);
     const stop = window.setTimeout(() => window.clearInterval(poll), 6 * 60 * 1000);
     return () => { window.clearInterval(poll); window.clearTimeout(stop); };
   }, [livePoll, agentWorking, load]);
@@ -517,7 +521,7 @@ const AgentConversation = ({
                       </div>
                     ) : null}
                     {(it.actions || []).map((card, i) =>
-                      card.type === 'candidate_evidence' ? (
+                      (card.type === 'candidate_evidence' || card.type === 'candidate_report') ? (
                         <CandidateEvidenceCard key={i} data={card} />
                       ) : card.type === 'draft_task_review' ? (
                         <DraftTaskCard

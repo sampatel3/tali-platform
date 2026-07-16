@@ -234,15 +234,14 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
           <li key={c.application_id || i} className="ev-cand">
             <div className="ev-cand-head">
               <span className="ev-rank">#{c.rank || i + 1}</span>
-              <a
-                className="ev-name"
-                href={c.frontend_url || '#'}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {c.candidate_name || 'Candidate'}
-                <span className="ev-name-ext" aria-hidden="true"> ↗</span>
-              </a>
+              {c.frontend_url ? (
+                <a className="ev-name" href={c.frontend_url} target="_blank" rel="noreferrer">
+                  {c.candidate_name || 'Candidate'}
+                  <span className="ev-name-ext" aria-hidden="true"> ↗</span>
+                </a>
+              ) : (
+                <span className="ev-name">{c.candidate_name || 'Candidate'}</span>
+              )}
               {typeof c.taali_score === 'number' ? (
                 <span className={`ev-pill ${scoreClass(c.taali_score)}`}>
                   Taali {Math.round(c.taali_score)}

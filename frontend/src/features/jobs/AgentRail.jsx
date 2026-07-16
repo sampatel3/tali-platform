@@ -96,7 +96,7 @@ export const AgentRail = ({ roleId, onOpenSettings, onOpenFeed, onPending, fallb
       <header className="mc-rail-head">
         <div className="mc-rail-orb">
           <AgentLoop kind="ring" className="mc-rail-orb-pulse" />
-          <Bot size={16} strokeWidth={2} style={{ color: '#fff' }} />
+          <Bot size={16} strokeWidth={2} style={{ color: 'var(--taali-on-accent)' }} />
         </div>
         <div>
           <div className="mc-rail-title">Agent</div>

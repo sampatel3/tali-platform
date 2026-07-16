@@ -1,0 +1,87 @@
+:root {
+  --landing-preview-cta-foreground: #fff;
+  --landing-preview-cta-shade: #000;
+  --landing-preview-switcher-foreground: #fff;
+}
+
+.lvb {
+  --lvb-window-close: #f06;
+  --lvb-window-minimize: #ffb020;
+  --lvb-window-expand: #39c66d;
+  --lvb-on-accent: #fff;
+}
+
+.lvc {
+  --lvc-purple: #5e3aa8;
+  --lvc-purple-2: #4a2d80;
+  --lvc-purple-soft: #ede5f8;
+  --lvc-lav: #c4a5fd;
+  --lvc-bg: #f7f4fb;
+  --lvc-bg-2: #ffffff;
+  --lvc-ink: #15121a;
+  --lvc-ink-2: #3a3343;
+  --lvc-mute: #8b8595;
+  --lvc-line: #e8e2ee;
+  --lvc-switch-track-gradient: linear-gradient(180deg, #e9e4f0, #d9d2e2);
+  --lvc-switch-knob-gradient: linear-gradient(160deg, #ffffff, #f0ecf7);
+  --lvc-cta-shade: #000;
+}
+
+.lvd {
+  --lvd-purple: #5e3aa8;
+  --lvd-purple-2: #4a2d80;
+  --lvd-purple-soft: #ede5f8;
+  --lvd-lav: #c4a5fd;
+  --lvd-bg: #f7f4fb;
+  --lvd-bg-2: #ffffff;
+  --lvd-ink: #15121a;
+  --lvd-ink-2: #3a3343;
+  --lvd-mute: #8b8595;
+  --lvd-line: #e8e2ee;
+  --lvd-switch-track-gradient: linear-gradient(180deg, #e9e4f0, #d9d2e2);
+  --lvd-switch-knob-gradient: linear-gradient(160deg, #ffffff, #f0ecf7);
+  --lvd-cta-shade: #000;
+}
+
+.lve {
+  --lve-purple: #5e3aa8;
+  --lve-purple-2: #4a2d80;
+  --lve-purple-soft: #ede5f8;
+  --lve-lav: #c4a5fd;
+  --lve-bg: #f7f4fb;
+  --lve-bg-2: #ffffff;
+  --lve-ink: #15121a;
+  --lve-ink-2: #3a3343;
+  --lve-mute: #8b8595;
+  --lve-line: #e8e2ee;
+  --lve-frame-close: #e6b8c8;
+  --lve-frame-minimize: #e8cfa0;
+  --lve-frame-expand: #b9d8bf;
+  --lve-cta-shade: #000;
+}
+
+.lvf {
+  --purple: #5e3aa8;
+  --purple-deep: #4a2d80;
+  --purple-soft: #ede5f8;
+  --lavender: #c4a5fd;
+  --bg: #f7f4fb;
+  --surface: #ffffff;
+  --ink: #15121a;
+  --ink-2: #3a3343;
+  --mute: #8b8595;
+  --line: #e8e2ee;
+  --agent-on: linear-gradient(150deg, #3a1d6e, #241147);
+  --agent-on-flow: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  --lvf-gradient-text: linear-gradient(96deg, #6a3fb8, #5e3aa8 40%, #8b5cf6);
+  --lvf-agent-pill-text: #efe7ff;
+  --lvf-deep-ink: #241147;
+}
+
+.lvg {
+  --lvg-gradient-text: linear-gradient(96deg, #6a3fb8, #5e3aa8 40%, #8b5cf6);
+  --lvg-fixed-white: #fff;
+  --lvg-agent-pill-text: #efe7ff;
+  --lvg-agent-led: #c4a5fd;
+  --lvg-cta-ink: #241147;
+}

@@ -4,7 +4,8 @@ import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAle
 
 import '../../styles/08-candidate-detail.css';
 import '../../styles/09-standing-report.css';
-
+import './candidateVisualTokens.css';
+import { demoReportViewMode } from '../demo/showcaseRoutePolicy';
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
 import {
@@ -63,6 +64,7 @@ import {
   getErrorMessage,
   reqGradeKey,
   resolveCvMatchDetails,
+  sortCandidateRequirements,
 } from './candidatesUiUtils';
 
 const resolveAssessmentId = (application) => (
@@ -107,6 +109,7 @@ const CLIENT_HIDDEN_TABS = new Set(
   REPORT_TABS.filter((tab) => tab.internalOnly || tab.recruiterOnly).map((tab) => tab.id),
 );
 const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
+const EMPTY_HIDDEN_TABS = new Set();
 
 // Stable empty-rubric reference so the Evaluate panel's draft-init effect
 // (keyed on the rubric identity) doesn't reset recruiter input every render.
@@ -297,14 +300,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const sharedRouteToken = String(routeShareToken || '').trim();
   const isShareRoute = Boolean(sharedRouteToken);
   const numericApplicationId = Number(routeApplicationKey);
+  const showcaseReportViewMode = demoReportViewMode(routeApplicationKey, searchParams);
   const isClientView = shareViewMode === 'client';
   // Any share-route recipient (client OR recruiter view) hides internal
   // recruiter-only controls like "Rescore" and "Share" actions.
   const isInterviewView = isShareRoute;
   const hiddenTabs = isClientView
     ? CLIENT_HIDDEN_TABS
-    : (isInterviewView ? INTERNAL_TABS : new Set());
+    : (isInterviewView ? INTERNAL_TABS : EMPTY_HIDDEN_TABS);
   const requestedTab = searchParams.get('tab') || 'overview';
+  // Route identity resets the lazy assessment mount; ordinary tab switches do
+  // not, so an in-progress evaluation stays mounted when the recruiter looks
+  // elsewhere. The ref supplies the route's latest query without making the
+  // reset effect react to every `?tab=` change.
+  const requestedRouteTabRef = React.useRef(requestedTab);
+  requestedRouteTabRef.current = requestedTab;
   // Back-link source of truth is ?from. ?from=jobs/<id> → role pipeline;
   // anything else (including ?from=home or absent) → /home. Using
   // application.role_id here would always go to the job pipeline since
@@ -328,7 +338,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   }, [activeTab]);
 
   useEffect(() => {
-    setAssessmentContentMounted(requestedTab === 'assessment');
+    setAssessmentContentMounted(requestedRouteTabRef.current === 'assessment');
     setSupportingLinkOpen(false);
   }, [routeApplicationKey, sharedRouteToken]);
 
@@ -399,7 +409,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       // Show the agent's deterministic recommendation (the demo previously fell
       // back to the "not yet decided" placeholder despite a completed score).
       setAgentDecision(AI_SHOWCASE_AGENT_DECISION);
-      setShareViewMode(null);
+      // The showcase uses the real report route with fixtures rather than a
+      // minted backend share token. Honour its explicit client-view contract
+      // so internal recruiter notes/actions are still scrubbed in the demo.
+        setShareViewMode(showcaseReportViewMode);
       setError('');
       setLoading(false);
       return;
@@ -503,7 +516,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setLoading(false);
       setRefreshing(false);
     }
-  }, [assessmentsApi, backFromRoleId, isShareRoute, numericApplicationId, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
+  }, [assessmentsApi, backFromRoleId, isShareRoute, numericApplicationId, rolesApi, routeApplicationKey, sharedRouteToken, showcaseReportViewMode, showToast]);
 
   // Refetch JUST the candidate's latest decision (after an approve / override /
   // teach) without reloading the whole report. Recruiter-view only.
@@ -724,20 +737,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // ahead of JD-extracted ones (``jd_req_``), then by priority. Show
   // every requirement — silently truncating recruiter must-haves at 4
   // was hiding the user's own criteria from their own report.
-  const PRIORITY_RANK = { must_have: 0, strong_preference: 1, nice_to_have: 2, constraint: 3 };
-  const sortRequirements = (items) => [...items].sort((a, b) => {
-    const aRecruiter = String(a?.requirement_id || '').startsWith('crit_') ? 0 : 1;
-    const bRecruiter = String(b?.requirement_id || '').startsWith('crit_') ? 0 : 1;
-    if (aRecruiter !== bRecruiter) return aRecruiter - bRecruiter;
-    const aPri = PRIORITY_RANK[String(a?.priority || '').toLowerCase()] ?? 4;
-    const bPri = PRIORITY_RANK[String(b?.priority || '').toLowerCase()] ?? 4;
-    return aPri - bPri;
-  });
   const matchedRequirements = useMemo(() => {
     const requirements = Array.isArray(cvMatchDetails?.requirements_assessment)
       ? cvMatchDetails.requirements_assessment
       : [];
-    return sortRequirements(
+    return sortCandidateRequirements(
       requirements.filter((item) => reqGradeKey(item) === 'met')
     );
   }, [cvMatchDetails]);
@@ -745,7 +749,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     const requirements = Array.isArray(cvMatchDetails?.requirements_assessment)
       ? cvMatchDetails.requirements_assessment
       : [];
-    return sortRequirements(
+    return sortCandidateRequirements(
       requirements.filter((item) => reqGradeKey(item) !== 'met')
     );
   }, [cvMatchDetails]);
@@ -952,7 +956,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const handleMintAndCopyShareLink = useCallback(async (mode, successMessage) => {
     if (!application?.id || !rolesApi?.createApplicationShareLink) return;
     setSharingMode(mode);
-    let url = '';
+    let url;
     try {
       const res = await rolesApi.createApplicationShareLink(application.id, { mode, expiry: '7d' });
       const token = res?.data?.token;
@@ -1143,7 +1147,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             other decision control. */}
 
         {isClientView && application?.client_share_summary ? (
-          <div className="report-card" style={{ marginTop: 18, borderLeft: '4px solid var(--taali-accent, #4f46e5)' }}>
+          <div className="report-card" style={{ marginTop: 18, borderLeft: '4px solid var(--candidate-client-share-accent)' }}>
             <div className="kicker">Why we&apos;re sharing this candidate</div>
             <h2 style={{ fontSize: '20px', margin: '8px 0 6px' }}>
               {application.client_share_summary.verdict}

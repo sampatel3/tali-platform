@@ -66,7 +66,7 @@ export const BackgroundJobsToaster = () => {
 
   const visible = (status) => {
     const s = String(status ?? '').toLowerCase();
-    return s === 'running' || s === 'cancelling' || s === 'cancelled' || s === 'completed' || s === 'failed';
+    return s === 'queued' || s === 'running' || s === 'cancelling' || s === 'cancelled' || s === 'completed' || s === 'failed';
   };
 
   // Process jobs (cascade) — preferred. Show one row per role.

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { TaaliTile } from '../../shared/ui/Branding';
 import { AgentLoop } from '../../shared/motion';
 import '../../styles/21-demo.css';
+import './marketingTokens.css';
 
 // Recruiter-readable agent feed shown on the dark editorial pane. Same
 // vocabulary the real Hub decision feed uses (advance / reject / taught)
@@ -110,7 +111,7 @@ export const DemoLeadPage = ({ onNavigate }) => {
           <TaaliTile
             className="h-7 w-7 rounded-[7px]"
             fillClassName="text-[var(--purple)]"
-            lineClassName="text-white"
+            lineClassName="text-[var(--marketing-logo-line)]"
             strokeWidth={2.4}
             cornerRadius={6.5}
           />
@@ -244,7 +245,7 @@ export const DemoLeadPage = ({ onNavigate }) => {
                 </svg>
               </span>
               <div>
-                <strong>SOC 2 Type II.</strong> We never use your data to train models. Your candidate
+                <strong>Security review available.</strong> We never use your data to train models. Your candidate
                 pool stays yours.
               </div>
             </div>

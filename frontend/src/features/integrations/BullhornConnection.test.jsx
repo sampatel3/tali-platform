@@ -167,4 +167,34 @@ describe('BullhornConnection', () => {
     // BackgroundJobsPanel, not just this tab's local strip.
     expect(trackBullhornSync).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps status and mappings readable for members without exposing mutations', async () => {
+    orgsApi.getBullhornStatus.mockResolvedValue({
+      data: { bullhorn_connected: true, unmapped_status_count: 1, unmapped_statuses: ['Submitted'] },
+    });
+    orgsApi.getBullhornStageMap.mockResolvedValue({
+      data: {
+        pipeline_stages: ['applied', 'review', 'advanced'],
+        mappings: [{ remote_status: 'Placed', taali_stage: 'advanced', is_reject: false }],
+        unmapped_statuses: ['Submitted'],
+      },
+    });
+
+    render(<BullhornConnection orgData={{ bullhorn_connected: true }} canManage={false} />);
+
+    expect(await screen.findByDisplayValue('Placed')).toBeDisabled();
+    expect(screen.getByText(/Only a workspace owner can connect Bullhorn/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /Sync now|Stop sync|Save stage mapping|Remove|\+ Submitted/i })).not.toBeInTheDocument();
+    expect(orgsApi.getBullhornStatus).toHaveBeenCalledTimes(1);
+    expect(orgsApi.getBullhornStageMap).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show the credential form to a member when Bullhorn is disconnected', () => {
+    render(<BullhornConnection orgData={{ bullhorn_connected: false }} canManage={false} />);
+
+    expect(screen.getByText('Bullhorn not connected')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('taali.api')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Connect Bullhorn/i })).not.toBeInTheDocument();
+  });
 });

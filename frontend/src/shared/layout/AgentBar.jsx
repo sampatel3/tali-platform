@@ -321,7 +321,7 @@ export const AgentBar = ({
       <div className="mc-agent-row">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 320px', minWidth: 0 }}>
           <div className="mc-agent-glyph">
-            <Sparkles size={18} strokeWidth={2} style={{ color: '#fff' }} />
+            <Sparkles size={18} strokeWidth={2} style={{ color: 'var(--taali-on-accent)' }} />
             {inFlight ? <AgentLoop kind="ring" className="mc-pulse-ring" /> : null}
           </div>
           <div style={{ minWidth: 0 }}>
@@ -347,7 +347,7 @@ export const AgentBar = ({
         </div>
         <div className="mc-agent-actions">
           <button type="button" className="mc-agent-btn" onClick={onRunNow} disabled={!onRunNow}>
-            <Play size={12} strokeWidth={2} fill="#fff" />
+            <Play size={12} strokeWidth={2} fill="var(--taali-on-accent)" />
             Run now
           </button>
           <button type="button" className="mc-agent-btn is-ghost" onClick={onPause} disabled={!onPause}>

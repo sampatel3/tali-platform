@@ -419,7 +419,6 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
   prompt_quality_score: 8.4,
   browser_focus_ratio: 0.93,
   tab_switch_count: 4,
-  calibration_score: 8.1,
   prompt_fraud_flags: [],
   time_to_first_prompt_seconds: 47,
   // Rubric-dimension specs (lens → scorecard axis) so the Assessment tab's
@@ -787,11 +786,14 @@ export const PRODUCT_WALKTHROUGH_START_DATA = {
   },
 };
 
-// Seed data for the showcase Jobs board (`/jobs?demo=1&showcase=1`).
+// Seed data for the fixture-only showcase Jobs board (`/showcase/jobs`).
 // Shape mirrors the recruiter `roles.list({ include_pipeline_stats: true })` payload:
 // fields used by JobsPage are id, name, source, workable_job_id, job_spec_present,
 // applications_count, active_candidates_count, stage_counts, tasks_count,
-// description, last_candidate_activity_at.
+// description, last_candidate_activity_at. Dates are relative to page load so
+// the evergreen demo never claims an 80-day-old sync is live.
+const showcaseIsoHoursAgo = (hours) => new Date(Date.now() - (hours * 60 * 60 * 1000)).toISOString();
+
 export const JOBS_SHOWCASE = [
   {
     id: 7001,
@@ -799,13 +801,15 @@ export const JOBS_SHOWCASE = [
     description: 'Production-ready GenAI engineer who can ship under release pressure.',
     source: 'workable',
     workable_job_id: 'wkbl-71224',
+    workable_job_state: 'published',
+    agentic_mode_enabled: true,
     job_spec_present: true,
     job_spec_filename: 'ai-engineer-spec.md',
     applications_count: 38,
     active_candidates_count: 24,
     tasks_count: 2,
     stage_counts: { applied: 7, scored: 12, invited: 6, completed: 2, advanced: 5, rejected: 18 },
-    last_candidate_activity_at: '2026-04-26T16:42:00.000Z',
+    last_candidate_activity_at: showcaseIsoHoursAgo(1),
     score_threshold: 55,
   },
   {
@@ -814,12 +818,15 @@ export const JOBS_SHOWCASE = [
     description: 'Owns the recovery playbooks for our nightly Glue pipelines.',
     source: 'workable',
     workable_job_id: 'wkbl-71338',
+    workable_job_state: 'published',
+    agentic_mode_enabled: true,
+    agent_paused_at: showcaseIsoHoursAgo(3),
     job_spec_present: true,
     applications_count: 19,
     active_candidates_count: 11,
     tasks_count: 1,
     stage_counts: { applied: 4, scored: 9, invited: 3, completed: 2, advanced: 4, rejected: 11 },
-    last_candidate_activity_at: '2026-04-25T09:18:00.000Z',
+    last_candidate_activity_at: showcaseIsoHoursAgo(5),
     score_threshold: 60,
   },
   {
@@ -828,12 +835,14 @@ export const JOBS_SHOWCASE = [
     description: 'Recruiter workspace UI and reporting surfaces.',
     source: 'manual',
     workable_job_id: null,
+    workable_job_state: 'published',
+    agentic_mode_enabled: true,
     job_spec_present: true,
     applications_count: 12,
     active_candidates_count: 7,
     tasks_count: 1,
     stage_counts: { applied: 5, scored: 2, invited: 1, completed: 0, advanced: 1, rejected: 6 },
-    last_candidate_activity_at: '2026-04-24T14:55:00.000Z',
+    last_candidate_activity_at: showcaseIsoHoursAgo(22),
     score_threshold: null,
   },
   {
@@ -842,6 +851,8 @@ export const JOBS_SHOWCASE = [
     description: 'Draft role — scoring policy not configured yet.',
     source: 'manual',
     workable_job_id: null,
+    workable_job_state: 'draft',
+    agentic_mode_enabled: false,
     job_spec_present: false,
     applications_count: 0,
     active_candidates_count: 0,
@@ -856,7 +867,7 @@ export const JOBS_SHOWCASE = [
 // JobsPage (sync status, last pull, summary counts).
 export const JOBS_SHOWCASE_ORG = {
   workable_connected: true,
-  workable_last_sync_at: '2026-04-27T08:12:00.000Z',
+  workable_last_sync_at: showcaseIsoHoursAgo(0.5),
   workable_last_sync_status: 'success',
   workable_last_sync_summary: {
     new_candidates: 4,

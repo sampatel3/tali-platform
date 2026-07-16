@@ -3,6 +3,7 @@ import cytoscape from 'cytoscape';
 import { X } from 'lucide-react';
 
 import { Button } from '../../shared/ui/TaaliPrimitives';
+import './candidateVisualTokens.css';
 
 /**
  * Force-directed graph view of NL-search results.
@@ -32,10 +33,11 @@ export function CandidateGraphView({ subgraph, onSelectCandidate, isLoading = fa
       cyRef.current.destroy();
       cyRef.current = null;
     }
+    const palette = readGraphPalette(containerRef.current);
     const cy = cytoscape({
       container: containerRef.current,
       elements,
-      style: STYLE,
+      style: buildGraphStyle(palette),
       layout: {
         name: 'cose',
         animate: false,
@@ -162,19 +164,48 @@ function buildElements(subgraph) {
   };
 }
 
-const STYLE = [
+const GRAPH_COLOR_TOKENS = {
+  nodeDefault: '--candidate-search-graph-node-default',
+  label: '--candidate-search-graph-label',
+  personLabel: '--candidate-search-graph-person-label',
+  scoreHigh: '--candidate-search-graph-score-high',
+  scoreMedium: '--candidate-search-graph-score-medium',
+  scoreLow: '--candidate-search-graph-score-low',
+  scoreUnscored: '--candidate-search-graph-score-unscored',
+  company: '--candidate-search-graph-company',
+  school: '--candidate-search-graph-school',
+  skill: '--candidate-search-graph-skill',
+  skillLabel: '--candidate-search-graph-skill-label',
+  country: '--candidate-search-graph-country',
+  edge: '--candidate-search-graph-edge',
+  workEdge: '--candidate-search-graph-work-edge',
+  studyEdge: '--candidate-search-graph-study-edge',
+  skillEdge: '--candidate-search-graph-skill-edge',
+};
+
+const readGraphPalette = (element) => {
+  const computedStyle = getComputedStyle(element);
+  return Object.fromEntries(
+    Object.entries(GRAPH_COLOR_TOKENS).map(([name, token]) => [
+      name,
+      computedStyle.getPropertyValue(token).trim(),
+    ])
+  );
+};
+
+const buildGraphStyle = (palette) => [
   // ── Base ──────────────────────────────────────────────────────────────────
   {
     selector: 'node',
     style: {
-      'background-color': '#9d8df1',
+      'background-color': palette.nodeDefault,
       label: 'data(label)',
       'font-size': 11,
       'text-wrap': 'wrap',
       'text-max-width': 80,
       'text-valign': 'bottom',
       'text-margin-y': 4,
-      color: '#1a1a2e',
+      color: palette.label,
       width: 28,
       height: 28,
     },
@@ -187,30 +218,30 @@ const STYLE = [
       width: 'data(nodeSize)',
       height: 'data(nodeSize)',
       'font-weight': 600,
-      color: '#0e0e1a',
+      color: palette.personLabel,
     },
   },
   {
     selector: 'node[kind = "Person"][scoreBand = "high"]',
-    style: { 'background-color': '#00b894' },   // green
+    style: { 'background-color': palette.scoreHigh },
   },
   {
     selector: 'node[kind = "Person"][scoreBand = "medium"]',
-    style: { 'background-color': '#fdcb6e' },   // amber
+    style: { 'background-color': palette.scoreMedium },
   },
   {
     selector: 'node[kind = "Person"][scoreBand = "low"]',
-    style: { 'background-color': '#d63031' },   // red
+    style: { 'background-color': palette.scoreLow },
   },
   {
     selector: 'node[kind = "Person"][scoreBand = "unscored"]',
-    style: { 'background-color': '#b2bec3' },   // grey
+    style: { 'background-color': palette.scoreUnscored },
   },
   // ── Company: large hubs so cose clusters candidates around them ───────────
   {
     selector: 'node[kind = "Company"]',
     style: {
-      'background-color': '#22c1c3',
+      'background-color': palette.company,
       shape: 'ellipse',
       width: 56,
       height: 56,
@@ -223,7 +254,7 @@ const STYLE = [
   {
     selector: 'node[kind = "School"]',
     style: {
-      'background-color': '#fdcb6e',
+      'background-color': palette.school,
       shape: 'diamond',
       width: 40,
       height: 40,
@@ -232,8 +263,8 @@ const STYLE = [
   {
     selector: 'node[kind = "Skill"]',
     style: {
-      'background-color': '#dfe6e9',
-      color: '#636e72',
+      'background-color': palette.skill,
+      color: palette.skillLabel,
       shape: 'round-tag',
       width: 24,
       height: 24,
@@ -243,7 +274,7 @@ const STYLE = [
   {
     selector: 'node[kind = "Country"]',
     style: {
-      'background-color': '#a29bfe',
+      'background-color': palette.country,
       shape: 'hexagon',
       width: 32,
       height: 32,
@@ -254,7 +285,7 @@ const STYLE = [
     selector: 'edge',
     style: {
       width: 1.4,
-      'line-color': 'rgba(150,150,160,0.45)',
+      'line-color': palette.edge,
       'curve-style': 'bezier',
       'target-arrow-shape': 'none',
       opacity: 0.8,
@@ -262,17 +293,17 @@ const STYLE = [
   },
   {
     selector: 'edge[label = "WORKED_AT"]',
-    style: { width: 2.4, 'line-color': 'rgba(34,193,195,0.5)' },
+    style: { width: 2.4, 'line-color': palette.workEdge },
   },
   {
     selector: 'edge[label = "STUDIED_AT"]',
-    style: { width: 1.6, 'line-color': 'rgba(253,203,110,0.55)' },
+    style: { width: 1.6, 'line-color': palette.studyEdge },
   },
   {
     selector: 'edge[label = "HAS_SKILL"]',
     style: {
       width: 1,
-      'line-color': 'rgba(160,160,160,0.35)',
+      'line-color': palette.skillEdge,
       'line-style': 'dashed',
     },
   },

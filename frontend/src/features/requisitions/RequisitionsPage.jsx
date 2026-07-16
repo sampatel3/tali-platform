@@ -29,6 +29,7 @@ import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
 import { JobSpec, renderJobSpec, stripPlaceholderLines } from './JobSpec';
 import { RequisitionDepartment } from './RequisitionDepartment';
+import { useRequisitionList } from './useRequisitionList';
 import './requisitions.css';
 
 const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
@@ -107,7 +108,7 @@ function Turn({ msg }) {
           {attachments.length > 0 ? (
             <div className="rq-attach-row" style={{ marginTop: msg.content ? 8 : 0, marginBottom: 0 }}>
               {attachments.map((a, i) => (
-                <span key={i} className="rq-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: '#fff' }}>
+                <span key={i} className="rq-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: 'var(--taali-on-accent)' }}>
                   <span className="rq-attach-glyph"><FileText size={13} /></span>
                   <span className="rq-attach-name">{a.name}</span>
                 </span>
@@ -133,7 +134,6 @@ function Turn({ msg }) {
 }
 
 export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
-  const [briefs, setBriefs] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [brief, setBrief] = useState(null);
   const [template, setTemplate] = useState(null);
@@ -155,10 +155,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [atsSpecCopied, setAtsSpecCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
-  // True while the sidebar list is still loading its FIRST response, so we can
-  // show skeleton rows instead of the "No requisitions yet" empty copy.
-  const [listLoading, setListLoading] = useState(true);
   const [error, setError] = useState('');
+  const {
+    briefs,
+    hasMore: hasMoreBriefs,
+    listLoading,
+    loadingMore: loadingMoreBriefs,
+    loadList,
+    loadMore: loadMoreBriefs,
+    patchListRow,
+  } = useRequisitionList(setError);
   // Internal economics: the org's clients (for the assign dropdown) + the
   // in-flight save flag for the client/rate strip.
   const [clients, setClients] = useState([]);
@@ -196,38 +202,6 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       .then((res) => { if (!cancelled) setOrgData(res?.data || null); })
       .catch(() => { if (!cancelled) setOrgData(null); });
     return () => { cancelled = true; };
-  }, []);
-
-  const loadList = useCallback(async () => {
-    try {
-      const list = await requisitionApi.list();
-      setBriefs(Array.isArray(list) ? list : []);
-    } catch {
-      setError('Could not load job drafts.');
-    } finally {
-      // First response is in (empty or not) — the sidebar can stop showing
-      // skeletons and, if the list really is empty, show the empty copy.
-      setListLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { void loadList(); }, [loadList]);
-
-  // Patch the selected requisition's sidebar row in place from a turn/answer/
-  // save response — the only sidebar-visible fields are title/status/
-  // completeness. This replaces a full loadList() after every chat turn / quick
-  // reply / field save (list MEMBERSHIP only changes on create/publish, which
-  // still call loadList).
-  const patchListRow = useCallback((id, patch) => {
-    if (id == null || !patch) return;
-    setBriefs((prev) => prev.map((b) => (b.id === id
-      ? {
-          ...b,
-          ...(patch.title !== undefined ? { title: patch.title } : {}),
-          ...(patch.status !== undefined ? { status: patch.status } : {}),
-          ...(patch.completeness !== undefined ? { completeness: patch.completeness } : {}),
-        }
-      : b)));
   }, []);
 
   // Load the org's clients once for the assign dropdown (best-effort — the
@@ -809,7 +783,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     const schedule = () => { timer = setTimeout(tick, 20000); };
     schedule();
     return () => { stopped = true; if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- polled updates must not restart the bounded idle budget
   }, [shouldPoll, selectedId, turnInFlight]);
 
   const published = Boolean(jobPage) || isPublishedRequisition(brief?.status);
@@ -875,7 +849,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
             <div className="rq-side-head-row">
               <span className="rq-side-kicker">Job drafts</span>
               {briefs.length > 0 ? (
-                <span className="rq-side-count">{briefs.length}</span>
+                <span className="rq-side-count">{briefs.length}{hasMoreBriefs ? '+' : ''}</span>
               ) : null}
             </div>
             <button type="button" className="rq-new-btn" onClick={createReq} disabled={creating}>
@@ -912,6 +886,20 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                 </li>
               ))
             )}
+            {hasMoreBriefs ? (
+              <li>
+                <button
+                  type="button"
+                  className="rq-side-item"
+                  onClick={loadMoreBriefs}
+                  disabled={loadingMoreBriefs}
+                >
+                  <span className="rq-side-title">
+                    {loadingMoreBriefs ? 'Loading more…' : 'Load more job drafts'}
+                  </span>
+                </button>
+              </li>
+            ) : null}
           </ul>
         </aside>
 

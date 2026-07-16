@@ -28,6 +28,7 @@ export const ChatComposer = forwardRef(function ChatComposer({
   onChange,
   onSubmit,
   placeholder = 'Ask anything…',
+  ariaLabel = 'Chat message',
   busy = false,
   streaming = false,
   onStop,
@@ -117,6 +118,7 @@ export const ChatComposer = forwardRef(function ChatComposer({
         rows={1}
         value={value}
         placeholder={placeholder}
+        aria-label={ariaLabel}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={onPaste}

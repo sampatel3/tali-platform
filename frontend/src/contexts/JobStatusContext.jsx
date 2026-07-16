@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -10,6 +11,7 @@ import React, {
 import { organizations as orgsApi } from '../shared/api/orgClient';
 import { roles as rolesApi } from '../shared/api/rolesClient';
 import { useAuth } from '../context/AuthContext';
+import { jobTrackingScope, scopedJobTrackingKey } from '../shared/jobs/jobTrackingStorage';
 
 // How often to poll each tracked role's status.
 const ROLE_POLL_MS = 4000;
@@ -29,24 +31,10 @@ const isPollActive = (data) => {
   if (!status) return true; // unknown shape → don't prune, stay safe
   return POLL_ACTIVE_STATES.has(status);
 };
+const isTerminalPollError = (error) => [401, 403, 404].includes(Number(error?.response?.status || 0));
 // True while the tab is backgrounded — we skip fetches (but keep the loop's
 // timer alive) so hidden tabs don't hammer the API. Guarded for SSR/tests.
 const docHidden = () => (typeof document !== 'undefined' && document.hidden);
-
-function loadPersistedRoleIds() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistRoleIds(ids) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
-  } catch {}
-}
 
 const FETCH_STORAGE_KEY = 'tali_tracked_fetch_roles';
 const PRESCREEN_STORAGE_KEY = 'tali_tracked_pre_screen_roles';
@@ -76,7 +64,17 @@ export function JobStatusProvider({ children }) {
   // Re-key auth-gated effects (discovery polling) on login state so they
   // re-run after a load-then-login — the provider is mounted at app root
   // and never remounts on authentication.
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const trackingScope = useMemo(
+    () => jobTrackingScope(user),
+    [user],
+  );
+  const storageKeys = useMemo(() => ({
+    score: scopedJobTrackingKey(STORAGE_KEY, trackingScope),
+    fetch: scopedJobTrackingKey(FETCH_STORAGE_KEY, trackingScope),
+    preScreen: scopedJobTrackingKey(PRESCREEN_STORAGE_KEY, trackingScope),
+    process: scopedJobTrackingKey(PROCESS_STORAGE_KEY, trackingScope),
+  }), [trackingScope]);
 
   // jobs / fetchJobs / preScreenJobs are keyed by role_id.
   // Each job kind has its own polling loop because they have different
@@ -102,10 +100,10 @@ export function JobStatusProvider({ children }) {
   const [bullhornSyncTracked, setBullhornSyncTracked] = useState(false);
 
   // tracked sets: role IDs we're actively polling for each job kind
-  const trackedRef = useRef(new Set(loadPersistedRoleIds()));
-  const trackedFetchRef = useRef(new Set(loadPersistedFromKey(FETCH_STORAGE_KEY)));
-  const trackedPreScreenRef = useRef(new Set(loadPersistedFromKey(PRESCREEN_STORAGE_KEY)));
-  const trackedProcessRef = useRef(new Set(loadPersistedFromKey(PROCESS_STORAGE_KEY)));
+  const trackedRef = useRef(new Set(loadPersistedFromKey(storageKeys.score)));
+  const trackedFetchRef = useRef(new Set(loadPersistedFromKey(storageKeys.fetch)));
+  const trackedPreScreenRef = useRef(new Set(loadPersistedFromKey(storageKeys.preScreen)));
+  const trackedProcessRef = useRef(new Set(loadPersistedFromKey(storageKeys.process)));
   const [trackedVersion, setTrackedVersion] = useState(0);
   const [fetchVersion, setFetchVersion] = useState(0);
   const [preScreenVersion, setPreScreenVersion] = useState(0);
@@ -116,16 +114,40 @@ export function JobStatusProvider({ children }) {
   const bumpPreScreen = useCallback(() => setPreScreenVersion((v) => v + 1), []);
   const bumpProcess = useCallback(() => setProcessVersion((v) => v + 1), []);
 
+  const activeScopeRef = useRef(trackingScope);
+  useEffect(() => {
+    if (activeScopeRef.current === trackingScope) return;
+    activeScopeRef.current = trackingScope;
+    trackedRef.current = new Set(loadPersistedFromKey(storageKeys.score));
+    trackedFetchRef.current = new Set(loadPersistedFromKey(storageKeys.fetch));
+    trackedPreScreenRef.current = new Set(loadPersistedFromKey(storageKeys.preScreen));
+    trackedProcessRef.current = new Set(loadPersistedFromKey(storageKeys.process));
+    setJobs({});
+    setFetchJobs({});
+    setPreScreenJobs({});
+    setProcessJobs({});
+    setGraphSyncJob(null);
+    setWorkableSyncJob(null);
+    setBullhornSyncJob(null);
+    setGraphSyncTracked(false);
+    setWorkableSyncTracked(false);
+    setBullhornSyncTracked(false);
+    bumpVersion();
+    bumpFetch();
+    bumpPreScreen();
+    bumpProcess();
+  }, [bumpFetch, bumpPreScreen, bumpProcess, bumpVersion, storageKeys, trackingScope]);
+
   const addTracked = useCallback(
     (roleId) => {
       const id = Number(roleId);
       if (!trackedRef.current.has(id)) {
         trackedRef.current = new Set([...trackedRef.current, id]);
-        persistRoleIds(trackedRef.current);
+        persistToKey(storageKeys.score, trackedRef.current);
         bumpVersion();
       }
     },
-    [bumpVersion],
+    [bumpVersion, storageKeys.score],
   );
 
   const removeTracked = useCallback(
@@ -135,11 +157,11 @@ export function JobStatusProvider({ children }) {
         const next = new Set(trackedRef.current);
         next.delete(id);
         trackedRef.current = next;
-        persistRoleIds(next);
+        persistToKey(storageKeys.score, next);
         bumpVersion();
       }
     },
-    [bumpVersion],
+    [bumpVersion, storageKeys.score],
   );
 
   const addTrackedFetch = useCallback(
@@ -147,11 +169,11 @@ export function JobStatusProvider({ children }) {
       const id = Number(roleId);
       if (!trackedFetchRef.current.has(id)) {
         trackedFetchRef.current = new Set([...trackedFetchRef.current, id]);
-        persistToKey(FETCH_STORAGE_KEY, trackedFetchRef.current);
+        persistToKey(storageKeys.fetch, trackedFetchRef.current);
         bumpFetch();
       }
     },
-    [bumpFetch],
+    [bumpFetch, storageKeys.fetch],
   );
 
   const removeTrackedFetch = useCallback(
@@ -161,11 +183,11 @@ export function JobStatusProvider({ children }) {
         const next = new Set(trackedFetchRef.current);
         next.delete(id);
         trackedFetchRef.current = next;
-        persistToKey(FETCH_STORAGE_KEY, next);
+        persistToKey(storageKeys.fetch, next);
         bumpFetch();
       }
     },
-    [bumpFetch],
+    [bumpFetch, storageKeys.fetch],
   );
 
   const addTrackedProcess = useCallback(
@@ -173,11 +195,11 @@ export function JobStatusProvider({ children }) {
       const id = Number(roleId);
       if (!trackedProcessRef.current.has(id)) {
         trackedProcessRef.current = new Set([...trackedProcessRef.current, id]);
-        persistToKey(PROCESS_STORAGE_KEY, trackedProcessRef.current);
+        persistToKey(storageKeys.process, trackedProcessRef.current);
         bumpProcess();
       }
     },
-    [bumpProcess],
+    [bumpProcess, storageKeys.process],
   );
 
   const removeTrackedProcess = useCallback(
@@ -187,11 +209,11 @@ export function JobStatusProvider({ children }) {
         const next = new Set(trackedProcessRef.current);
         next.delete(id);
         trackedProcessRef.current = next;
-        persistToKey(PROCESS_STORAGE_KEY, next);
+        persistToKey(storageKeys.process, next);
         bumpProcess();
       }
     },
-    [bumpProcess],
+    [bumpProcess, storageKeys.process],
   );
 
   const addTrackedPreScreen = useCallback(
@@ -199,11 +221,11 @@ export function JobStatusProvider({ children }) {
       const id = Number(roleId);
       if (!trackedPreScreenRef.current.has(id)) {
         trackedPreScreenRef.current = new Set([...trackedPreScreenRef.current, id]);
-        persistToKey(PRESCREEN_STORAGE_KEY, trackedPreScreenRef.current);
+        persistToKey(storageKeys.preScreen, trackedPreScreenRef.current);
         bumpPreScreen();
       }
     },
-    [bumpPreScreen],
+    [bumpPreScreen, storageKeys.preScreen],
   );
 
   const removeTrackedPreScreen = useCallback(
@@ -213,11 +235,11 @@ export function JobStatusProvider({ children }) {
         const next = new Set(trackedPreScreenRef.current);
         next.delete(id);
         trackedPreScreenRef.current = next;
-        persistToKey(PRESCREEN_STORAGE_KEY, next);
+        persistToKey(storageKeys.preScreen, next);
         bumpPreScreen();
       }
     },
-    [bumpPreScreen],
+    [bumpPreScreen, storageKeys.preScreen],
   );
 
   // ── Per-role status polling: batch-score ──────────────────────────────────
@@ -233,7 +255,9 @@ export function JobStatusProvider({ children }) {
       if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
-            rolesApi?.batchScoreStatus(roleId).then((r) => ({ roleId, data: r?.data })),
+            rolesApi?.batchScoreStatus(roleId)
+              .then((r) => ({ roleId, data: r?.data }))
+              .catch((error) => ({ roleId, error })),
           ),
         );
         if (cancelled) return;
@@ -244,6 +268,9 @@ export function JobStatusProvider({ children }) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
               if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
+            } else if (r.status === 'fulfilled' && isTerminalPollError(r.value?.error)) {
+              delete next[r.value.roleId];
+              done.push(Number(r.value.roleId));
             }
           }
           return next;
@@ -256,7 +283,7 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedRef.current = nextTracked;
-          persistRoleIds(nextTracked);
+          persistToKey(storageKeys.score, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
@@ -268,8 +295,8 @@ export function JobStatusProvider({ children }) {
       if (timer) clearTimeout(timer);
     };
     // trackedVersion re-runs this effect when the tracked set changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, trackedVersion]);
+
+  }, [trackedVersion, storageKeys.score]);
 
   // ── Per-role status polling: fetch-cvs ────────────────────────────────────
   useEffect(() => {
@@ -281,7 +308,9 @@ export function JobStatusProvider({ children }) {
       if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
-            rolesApi?.fetchCvsStatus(roleId).then((r) => ({ roleId, data: r?.data })),
+            rolesApi?.fetchCvsStatus(roleId)
+              .then((r) => ({ roleId, data: r?.data }))
+              .catch((error) => ({ roleId, error })),
           ),
         );
         if (cancelled) return;
@@ -292,6 +321,9 @@ export function JobStatusProvider({ children }) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
               if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
+            } else if (r.status === 'fulfilled' && isTerminalPollError(r.value?.error)) {
+              delete next[r.value.roleId];
+              done.push(Number(r.value.roleId));
             }
           }
           return next;
@@ -300,15 +332,15 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedFetchRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedFetchRef.current = nextTracked;
-          persistToKey(FETCH_STORAGE_KEY, nextTracked);
+          persistToKey(storageKeys.fetch, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, fetchVersion]);
+
+  }, [fetchVersion, storageKeys.fetch]);
 
   // ── Per-role status polling: pre-screen ───────────────────────────────────
   useEffect(() => {
@@ -320,7 +352,9 @@ export function JobStatusProvider({ children }) {
       if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
-            rolesApi?.batchPreScreenStatus(roleId).then((r) => ({ roleId, data: r?.data })),
+            rolesApi?.batchPreScreenStatus(roleId)
+              .then((r) => ({ roleId, data: r?.data }))
+              .catch((error) => ({ roleId, error })),
           ),
         );
         if (cancelled) return;
@@ -331,6 +365,9 @@ export function JobStatusProvider({ children }) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
               if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
+            } else if (r.status === 'fulfilled' && isTerminalPollError(r.value?.error)) {
+              delete next[r.value.roleId];
+              done.push(Number(r.value.roleId));
             }
           }
           return next;
@@ -339,15 +376,15 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedPreScreenRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedPreScreenRef.current = nextTracked;
-          persistToKey(PRESCREEN_STORAGE_KEY, nextTracked);
+          persistToKey(storageKeys.preScreen, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, preScreenVersion]);
+
+  }, [preScreenVersion, storageKeys.preScreen]);
 
   // ── Per-role status polling: process (cascade) ────────────────────────────
   useEffect(() => {
@@ -359,7 +396,9 @@ export function JobStatusProvider({ children }) {
       if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
-            rolesApi?.processRoleStatus(roleId).then((r) => ({ roleId, data: r?.data })),
+            rolesApi?.processRoleStatus(roleId)
+              .then((r) => ({ roleId, data: r?.data }))
+              .catch((error) => ({ roleId, error })),
           ),
         );
         if (cancelled) return;
@@ -370,6 +409,9 @@ export function JobStatusProvider({ children }) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
               if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
+            } else if (r.status === 'fulfilled' && isTerminalPollError(r.value?.error)) {
+              delete next[r.value.roleId];
+              done.push(Number(r.value.roleId));
             }
           }
           return next;
@@ -378,15 +420,15 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedProcessRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedProcessRef.current = nextTracked;
-          persistToKey(PROCESS_STORAGE_KEY, nextTracked);
+          persistToKey(storageKeys.process, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, processVersion]);
+
+  }, [processVersion, storageKeys.process]);
 
   // ── Org-wide graph sync polling ───────────────────────────────────────────
   useEffect(() => {
@@ -411,7 +453,7 @@ export function JobStatusProvider({ children }) {
     };
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [rolesApi, graphSyncTracked]);
+  }, [graphSyncTracked]);
 
   // ── Org-wide Workable sync polling ────────────────────────────────────────
   useEffect(() => {
@@ -436,7 +478,7 @@ export function JobStatusProvider({ children }) {
     };
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [rolesApi, workableSyncTracked]);
+  }, [workableSyncTracked]);
 
   // ── Org-wide Bullhorn sync polling ────────────────────────────────────────
   useEffect(() => {
@@ -459,7 +501,7 @@ export function JobStatusProvider({ children }) {
     };
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [orgsApi, bullhornSyncTracked]);
+  }, [bullhornSyncTracked]);
 
   // ── Discovery polling — finds batches started from other pages/tabs ───────
   useEffect(() => {
@@ -492,7 +534,7 @@ export function JobStatusProvider({ children }) {
           }
         }
         if (changed) {
-          persistRoleIds(trackedRef.current);
+          persistToKey(storageKeys.score, trackedRef.current);
           bumpVersion();
         }
       } catch {}
@@ -506,7 +548,7 @@ export function JobStatusProvider({ children }) {
     };
     // isAuthenticated re-runs this after a load-then-login so discovery,
     // gated on the access token above, actually starts once signed in.
-  }, [rolesApi, bumpVersion, isAuthenticated]);
+  }, [bumpVersion, isAuthenticated, storageKeys.score]);
 
   // ── One-shot discovery on mount: pick up an in-flight workable sync ───────
   useEffect(() => {
@@ -525,7 +567,7 @@ export function JobStatusProvider({ children }) {
     })();
     return () => { cancelled = true; };
     // Run once on mount — rolesApi is stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   // ── One-shot discovery on mount: pick up an in-flight Bullhorn sync ───────
@@ -545,7 +587,7 @@ export function JobStatusProvider({ children }) {
     })();
     return () => { cancelled = true; };
     // Run once on mount — orgsApi is stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   // ── One-shot discovery on mount: pick up an in-flight graph sync ──────────
@@ -565,7 +607,7 @@ export function JobStatusProvider({ children }) {
       } catch {}
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -639,7 +681,7 @@ export function JobStatusProvider({ children }) {
         }));
       } catch {}
     },
-    [rolesApi],
+    [],
   );
 
   const dismissGraphSyncJob = useCallback(() => {
@@ -662,7 +704,7 @@ export function JobStatusProvider({ children }) {
       await rolesApi?.syncGraphCancel();
       setGraphSyncJob((prev) => (prev ? { ...prev, status: 'cancelling' } : prev));
     } catch {}
-  }, [rolesApi]);
+  }, []);
 
   const cancelWorkableSync = useCallback(
     async (runId = null) => {
@@ -671,7 +713,7 @@ export function JobStatusProvider({ children }) {
         setWorkableSyncJob((prev) => (prev ? { ...prev, status: 'cancelling' } : prev));
       } catch {}
     },
-    [rolesApi],
+    [],
   );
 
   const cancelBullhornSync = useCallback(async () => {
@@ -679,7 +721,7 @@ export function JobStatusProvider({ children }) {
       await orgsApi?.cancelBullhornSync();
       setBullhornSyncJob((prev) => (prev ? { ...prev, status: 'cancelling' } : prev));
     } catch {}
-  }, [orgsApi]);
+  }, []);
 
   // Cancel a running batch. Updates local state optimistically; next poll
   // confirms the server-side status.
@@ -696,7 +738,7 @@ export function JobStatusProvider({ children }) {
         }));
       } catch {}
     },
-    [rolesApi],
+    [],
   );
 
   const cancelFetchCvs = useCallback(
@@ -709,7 +751,7 @@ export function JobStatusProvider({ children }) {
         }));
       } catch {}
     },
-    [rolesApi],
+    [],
   );
 
   const value = {

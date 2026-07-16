@@ -36,7 +36,10 @@ describe('CampaignsMonitorPanel', () => {
     render(<CampaignsMonitorPanel roleId={5} defaultOpen />);
 
     // Loads scoped to the role.
-    await waitFor(() => expect(outreachApi.listCampaigns).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(outreachApi.listCampaigns).toHaveBeenCalledWith(
+      5,
+      { limit: 50, offset: 0 },
+    ));
     await waitFor(() => expect(screen.getByText('Sourced outreach · Backend')).toBeInTheDocument());
 
     // Compact summary reads off the rollup counts.
@@ -52,7 +55,10 @@ describe('CampaignsMonitorPanel', () => {
 
   it('auto-opens and focuses a campaign after a reach-out send', async () => {
     render(<CampaignsMonitorPanel roleId={5} focusCampaignId={3} />);
-    await waitFor(() => expect(outreachApi.listCampaigns).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(outreachApi.listCampaigns).toHaveBeenCalledWith(
+      5,
+      { limit: 50, offset: 0 },
+    ));
     // Focused campaign renders its funnel expanded without a click.
     await waitFor(() => expect(screen.getByText('Audience')).toBeInTheDocument());
   });

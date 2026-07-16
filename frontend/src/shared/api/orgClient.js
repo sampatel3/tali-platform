@@ -8,7 +8,7 @@ export const organizations = {
     const params = scopes.length ? { scopes: scopes.join(',') } : undefined;
     return api.get('/organizations/workable/authorize-url', { params });
   },
-  connectWorkable: (code) => api.post('/organizations/workable/connect', { code }),
+  connectWorkable: (code, state) => api.post('/organizations/workable/connect', { code, state }),
   connectWorkableToken: ({ access_token, subdomain, read_only = true }) =>
     api.post('/organizations/workable/connect-token', { access_token, subdomain, read_only }),
   getWorkableSyncJobs: () => api.get('/workable/sync/jobs'),

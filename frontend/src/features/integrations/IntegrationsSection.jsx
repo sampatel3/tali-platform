@@ -10,7 +10,12 @@ import { ATS_PROVIDERS, activeAtsLabel, deriveActiveAts } from './atsProviders';
 // AVAILABLE provider. Provider bodies come from `bodies[id]` (a slot — used for
 // Workable's state-coupled inline block) or fall back to the provider's registry
 // Component (e.g. BullhornConnection).
-export const IntegrationsSection = ({ org = null, providers = ATS_PROVIDERS, bodies = {} }) => {
+export const IntegrationsSection = ({
+  org = null,
+  providers = ATS_PROVIDERS,
+  bodies = {},
+  canManage = true,
+}) => {
   const activeAts = deriveActiveAts(org);
   const isStandalone = activeAts === 'standalone';
   const available = providers.filter((p) => p.available(org));
@@ -27,7 +32,9 @@ export const IntegrationsSection = ({ org = null, providers = ATS_PROVIDERS, bod
       {isStandalone ? (
         <p className="settings-inline-note settings-integrations-standalone">
           No ATS connected — Taali runs standalone; your candidates and pipeline
-          live in Taali. Connect a provider below to sync jobs and candidates.
+          live in Taali. {canManage
+            ? 'Connect a provider below to sync jobs and candidates.'
+            : 'A workspace owner can connect a provider when your team is ready.'}
         </p>
       ) : null}
 
@@ -36,7 +43,7 @@ export const IntegrationsSection = ({ org = null, providers = ATS_PROVIDERS, bod
           const body = Object.prototype.hasOwnProperty.call(bodies, provider.id)
             ? bodies[provider.id]
             : provider.Component
-              ? <provider.Component orgData={org} />
+              ? <provider.Component orgData={org} canManage={canManage} />
               : null;
           return (
             <IntegrationCard

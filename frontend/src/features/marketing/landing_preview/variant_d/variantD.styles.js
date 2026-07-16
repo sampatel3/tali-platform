@@ -19,19 +19,11 @@
 // scroll container and never breaks `position: sticky`. Reduced-motion and short
 // viewports fall back to a stacked static composition (`.is-static`) with every
 // beat shown in its final state — no pin, no scrub, no Lenis.
+import '../landingPreviewTokens.css';
+
 export const VARIANT_D_CSS = `
 .lvd {
-  /* Taali light purple family — hardcoded. Purple only. */
-  --lvd-purple: #5e3aa8;
-  --lvd-purple-2: #4a2d80;
-  --lvd-purple-soft: #ede5f8;
-  --lvd-lav: #c4a5fd;
-  --lvd-bg: #f7f4fb;      /* pale lavender base */
-  --lvd-bg-2: #ffffff;    /* card surface */
-  --lvd-ink: #15121a;
-  --lvd-ink-2: #3a3343;
-  --lvd-mute: #8b8595;
-  --lvd-line: #e8e2ee;
+  /* The fixed light palette is declared on this root in landingPreviewTokens.css. */
 
   --lvd-maxw: 1140px;
 
@@ -169,7 +161,7 @@ export const VARIANT_D_CSS = `
 .lvd-switch.is-pressing { transform: scale(0.94); }
 .lvd-switch-track {
   position: relative; display: block; width: 128px; height: 62px; border-radius: 999px;
-  background: linear-gradient(180deg, #e9e4f0, #d9d2e2); border: 1px solid var(--lvd-line);
+  background: var(--lvd-switch-track-gradient); border: 1px solid var(--lvd-line);
   box-shadow: inset 0 2px 6px rgba(21,18,26,0.14), inset 0 -1px 0 rgba(255,255,255,0.6);
   transition: border-color 0.5s ease, box-shadow 0.5s ease, background 0.6s ease;
 }
@@ -186,7 +178,7 @@ export const VARIANT_D_CSS = `
 .lvd-switch.is-on .lvd-switch-glow { opacity: 1; }
 .lvd-switch-knob {
   position: absolute; top: 5px; left: 5px; width: 52px; height: 52px; border-radius: 50%;
-  background: linear-gradient(160deg, #ffffff, #f0ecf7);
+  background: var(--lvd-switch-knob-gradient);
   box-shadow: 0 5px 14px rgba(21,18,26,0.22), inset 0 -2px 4px rgba(21,18,26,0.06);
   display: flex; align-items: center; justify-content: center;
   transition: transform 0.34s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.4s ease;
@@ -357,7 +349,7 @@ export const VARIANT_D_CSS = `
 }
 .lvd-trap-badge {
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase; color: #fff;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--lvd-bg-2);
   padding: 4px 9px; border-radius: 999px;
   background: linear-gradient(135deg, var(--lvd-purple), var(--lvd-purple-2));
   opacity: clamp(0, (var(--b3) - 0.86) * 8, 1);
@@ -389,7 +381,7 @@ export const VARIANT_D_CSS = `
 .lvd-b4-score-cap { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--lvd-mute); }
 .lvd-b4-verdict {
   margin-top: 16px; display: inline-flex; align-items: center; gap: 7px;
-  font-size: 12.5px; font-weight: 600; color: #fff;
+  font-size: 12.5px; font-weight: 600; color: var(--lvd-bg-2);
   background: linear-gradient(135deg, var(--lvd-purple), var(--lvd-purple-2));
   padding: 8px 14px; border-radius: 999px;
   opacity: clamp(0, (var(--b4) - 0.85) * 8, 1);
@@ -415,7 +407,7 @@ export const VARIANT_D_CSS = `
   will-change: transform;
 }
 .lvd-b5-card-name { font-weight: 600; font-size: 15px; color: var(--lvd-ink); }
-.lvd-b5-card-verdict { margin-top: 8px; display: inline-flex; font-size: 11px; font-weight: 600; color: #fff; background: linear-gradient(135deg, var(--lvd-purple), var(--lvd-purple-2)); padding: 5px 11px; border-radius: 999px; }
+.lvd-b5-card-verdict { margin-top: 8px; display: inline-flex; font-size: 11px; font-weight: 600; color: var(--lvd-bg-2); background: linear-gradient(135deg, var(--lvd-purple), var(--lvd-purple-2)); padding: 5px 11px; border-radius: 999px; }
 .lvd-b5-audit {
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 1.7;
   color: var(--lvd-ink-2); word-break: break-word; min-height: 4.2em;

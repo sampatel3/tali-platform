@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
 import { AuthShell, AuthField } from './AuthShell';
 import { PasswordStrength } from './PasswordStrength';
+import { PageLink } from '../../shared/ui/PageLink';
 
 export const RegisterPage = ({ onNavigate }) => {
   const { register } = useAuth();
@@ -99,7 +100,7 @@ export const RegisterPage = ({ onNavigate }) => {
               height: 36,
               borderRadius: 10,
               background: 'var(--green)',
-              color: '#fff',
+              color: 'var(--cloud)',
               display: 'grid',
               placeItems: 'center',
               flexShrink: 0,
@@ -215,7 +216,8 @@ export const RegisterPage = ({ onNavigate }) => {
       </form>
 
       <p style={{ marginTop: 16, fontSize: 12, lineHeight: 1.5, color: 'var(--mute)' }}>
-        By creating an account you agree to our Terms and Privacy. We never train models on your candidate data.
+        By creating an account you agree to our <PageLink page="terms" className="font-semibold text-[var(--purple)] underline">Terms</PageLink>{' '}
+        and <PageLink page="privacy" className="font-semibold text-[var(--purple)] underline">Privacy Notice</PageLink>. We never train models on your candidate data.
       </p>
     </AuthShell>
   );

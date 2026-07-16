@@ -338,7 +338,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     // Repaint the last-known scoped count instantly on a warm re-mount, then
     // revalidate below. Keyed by scope so a role/type count never leaks across
     // filters.
-    const key = staleCacheKey(filters);
+    const key = staleCacheKey({ role_id: filters.role_id, type: filters.type });
     const seeded = readCache(key);
     if (seeded?.data != null) setStaleCount(seeded.data);
     agentApi.needsReevalCount({

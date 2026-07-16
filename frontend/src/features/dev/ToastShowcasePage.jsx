@@ -6,6 +6,7 @@ import '../candidates/BackgroundJobsToaster.css';
 import { useToast } from '../../context/ToastContext';
 import { MotionProgress } from '../../shared/motion';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import './ToastShowcasePage.css';
 
 /**
  * ToastShowcasePage
@@ -26,7 +27,7 @@ export const ToastShowcasePage = () => {
   const { showToast } = useToast();
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+    <div className="toast-showcase min-h-screen bg-[var(--bg)] text-[var(--ink)]">
       <div className="mx-auto max-w-5xl px-6 py-10 space-y-12">
         <Header />
         <DesignTokensSection />
@@ -69,7 +70,7 @@ const TOKEN_GROUPS = [
   {
     label: 'Success',
     tokens: [
-      ['--taali-success', '#15a36a (var(--green))'],
+      ['--taali-success', '\u002315a36a (var(--green))'],
       ['--taali-success-soft', 'mix(green 10%, bg-2)'],
       ['--taali-success-border', 'mix(green 28%, line)'],
     ],
@@ -77,7 +78,7 @@ const TOKEN_GROUPS = [
   {
     label: 'Danger / Error',
     tokens: [
-      ['--taali-danger', '#e64a4a (var(--red))'],
+      ['--taali-danger', '\u0023e64a4a (var(--red))'],
       ['--taali-danger-soft', 'mix(red 10%, bg-2)'],
       ['--taali-danger-border', 'mix(red 28%, line)'],
     ],
@@ -85,7 +86,7 @@ const TOKEN_GROUPS = [
   {
     label: 'Warning',
     tokens: [
-      ['--taali-warning', '#d88a1c (var(--amber))'],
+      ['--taali-warning', '\u0023d88a1c (var(--amber))'],
       ['--taali-warning-soft', 'mix(amber 12%, bg-2)'],
       ['--taali-warning-border', 'mix(amber 28%, line)'],
     ],
@@ -93,7 +94,7 @@ const TOKEN_GROUPS = [
   {
     label: 'Info / Neutral',
     tokens: [
-      ['--taali-info', '#5e3aa8 (var(--purple))'],
+      ['--taali-info', '\u00235e3aa8 (var(--purple))'],
       ['--taali-info-soft', 'mix(purple 10%, bg-2)'],
       ['--taali-info-border', 'mix(purple 28%, line)'],
     ],
@@ -109,7 +110,7 @@ const DesignTokensSection = () => (
       {TOKEN_GROUPS.map((group) => (
         <div
           key={group.label}
-          className="rounded-lg border border-[var(--taali-border)] bg-white p-4"
+          className="rounded-lg border border-[var(--taali-border)] bg-[var(--toast-showcase-card-surface)] p-4"
         >
           <p className="text-sm font-medium text-[var(--ink)]">{group.label}</p>
           <div className="mt-3 space-y-2">
@@ -171,7 +172,7 @@ const VARIANTS = [
     type: 'success',
     label: 'Success',
     sample: 'Pipeline stage updated',
-    current: 'border-red border-2 rounded-lg bg-green-50 border-green-300 text-green-900',
+    current: 'border-red border-[length:var(--toast-showcase-current-border-width)] rounded-lg bg-green-50 border-green-300 text-green-900',
     proposedBg: 'var(--taali-success-soft)',
     proposedBorder: 'var(--taali-success-border)',
     proposedText: 'var(--taali-success)',
@@ -210,7 +211,10 @@ const CurrentToastSample = ({ type, message }) => {
     return 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]';
   })();
   return (
-    <div className={`rounded-lg border-2 px-4 py-3 shadow-lg text-sm ${cls}`}>
+    <div
+      className={`rounded-lg px-4 py-3 shadow-lg text-sm ${cls}`}
+      style={{ borderWidth: 'var(--toast-showcase-current-border-width)' }}
+    >
       <p className="break-words">{message}</p>
       <button
         type="button"
@@ -427,7 +431,7 @@ const CallSiteInventorySection = () => (
     subtitle="167 showToast() calls across 9 source files. Errors dominate (93 / 167) which is worth knowing — the danger style appears more than the success style on a typical session."
   >
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_1fr]">
-      <div className="rounded-lg border border-[var(--taali-border)] bg-white p-4">
+      <div className="rounded-lg border border-[var(--taali-border)] bg-[var(--toast-showcase-card-surface)] p-4">
         <p className="text-sm font-medium text-[var(--ink)]">By variant</p>
         <ul className="mt-3 space-y-1 text-sm text-[var(--ink-2)]">
           {VARIANT_COUNTS.map((v) => (
@@ -438,7 +442,7 @@ const CallSiteInventorySection = () => (
           ))}
         </ul>
       </div>
-      <div className="rounded-lg border border-[var(--taali-border)] bg-white p-4">
+      <div className="rounded-lg border border-[var(--taali-border)] bg-[var(--toast-showcase-card-surface)] p-4">
         <p className="text-sm font-medium text-[var(--ink)]">By file (top 9)</p>
         <ul className="mt-3 space-y-1 text-sm text-[var(--ink-2)]">
           {CALL_SITES.map((cs) => (

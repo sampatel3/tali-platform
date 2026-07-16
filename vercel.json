@@ -2,18 +2,31 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
-  "installCommand": "cd frontend && npm install",
+  "installCommand": "cd frontend && npm ci",
   "rewrites": [
     { "source": "/agentic-hiring", "destination": "/agentic-hiring.html" },
     { "source": "/ai-native-hiring", "destination": "/ai-native-hiring.html" },
     { "source": "/ai-native-assessments", "destination": "/ai-native-assessments.html" },
-    { "source": "/report-preview", "destination": "/report-preview.html" },
-    { "source": "/home-preview", "destination": "/home-preview.html" },
-    { "source": "/jobs-preview", "destination": "/jobs-preview.html" },
+    { "source": "/developers", "destination": "/developers.html" },
+    { "source": "/blog", "destination": "/blog.html" },
+    { "source": "/blog/ai-native-coding-and-knowledge-work", "destination": "/blog-ai-native.html" },
+    { "source": "/terms", "destination": "/terms.html" },
+    { "source": "/privacy", "destination": "/privacy.html" },
     { "source": "/pipeline-preview", "destination": "/pipeline-preview.html" },
     { "source": "/search-preview", "destination": "/search-preview.html" },
-    { "source": "/analytics-preview", "destination": "/analytics-preview.html" },
     { "source": "/settings-preview", "destination": "/settings-preview.html" },
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; frame-src 'self'; worker-src 'self' blob:; form-action 'self' mailto:" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), geolocation=(), microphone=(self), payment=()" }
+      ]
+    }
   ]
 }

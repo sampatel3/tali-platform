@@ -101,7 +101,7 @@ export default function RecruiterAnswersLog({ roleId }) {
       ) : null}
 
       {error ? (
-        <div style={{ color: '#b91c1c', fontSize: 13 }}>{error}</div>
+        <div style={{ color: 'var(--taali-danger-ink-strong)', fontSize: 13 }}>{error}</div>
       ) : null}
 
       {!loading && !error && rows.length > 0 ? (

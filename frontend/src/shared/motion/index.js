@@ -6,13 +6,13 @@ export {
   animate,
   m,
   stagger,
-  useAnimate,
   useInView,
   useMotionValue,
   useMotionValueEvent,
 } from 'motion/react';
 
 export { MotionSystemProvider } from './MotionSystemProvider';
+export { useScopedAnimate as useAnimate } from './useScopedAnimate';
 export { AgentFlowButton, AgentLoop, agentLoopPresets, resolveAgentLoop } from './agentLoops';
 export {
   MOTION_EFFECT_DURATION,

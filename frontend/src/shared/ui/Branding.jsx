@@ -51,7 +51,7 @@ const GLYPH_VARIANTS = {
   linesSoft: {
     containerClassName: '',
     defaultBorderClass: '',
-    lineClassName: 'text-[#B06BFF]',
+    lineClassName: 'text-[var(--taali-brand-lines-soft)]',
   },
   monoLines: {
     containerClassName: '',

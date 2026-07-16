@@ -61,6 +61,20 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
     setMessages(history);
   }, []);
 
+  // Prepend an older persistence page without overwriting messages appended
+  // locally by an active/recent stream. Cursor pages should not overlap, but
+  // id de-duplication makes retries and legacy API behavior harmless.
+  const prependHistory = useCallback((history, reconcile = null) => {
+    setMessages((current) => {
+      const currentIds = new Set(current.map((message) => message.id));
+      const combined = [
+        ...history.filter((message) => !currentIds.has(message.id)),
+        ...current,
+      ];
+      return reconcile ? reconcile(combined) : combined;
+    });
+  }, []);
+
   const send = useCallback(
     async (userText) => {
       const text = (userText || '').trim();
@@ -127,7 +141,7 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
           currentText = null;
         };
 
-        // eslint-disable-next-line no-constant-condition
+
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -290,7 +304,17 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
     [],
   );
 
-  return { messages, isStreaming, error, send, stop, reset, clearError, setHistory };
+  return {
+    messages,
+    isStreaming,
+    error,
+    send,
+    stop,
+    reset,
+    clearError,
+    setHistory,
+    prependHistory,
+  };
 };
 
 export default useChatStream;

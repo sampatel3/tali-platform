@@ -1,7 +1,7 @@
 import { render, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
 
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 import { clearCache } from '../../shared/api/resourceCache';
 
 // The Home page re-mounts on every tab switch (React Router unmounts it). This
@@ -57,9 +57,9 @@ import { HomePage } from './HomePage';
 
 const renderHome = () =>
   render(
-    <MemoryRouter initialEntries={['/home']}>
+    <TestMemoryRouter initialEntries={['/home']}>
       <HomePage />
-    </MemoryRouter>,
+    </TestMemoryRouter>,
   );
 
 const primeFirstMount = () => {

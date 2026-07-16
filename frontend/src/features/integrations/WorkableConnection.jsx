@@ -24,11 +24,17 @@ const normalizeWorkableError = (input) => {
   return raw || 'Workable connection failed.';
 };
 
-export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onClick = null }) => {
+export const ConnectWorkableButton = ({
+  authorizeUrl = '',
+  setupError = '',
+  onClick = null,
+  canManage = true,
+}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleClick = async () => {
+    if (!canManage) return;
     if (onClick) {
       onClick();
       return;
@@ -57,15 +63,21 @@ export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onCl
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={loading}
-        className="btn btn-purple btn-sm"
-      >
-        {loading ? <Spinner size={16} className="!text-current" /> : null}
-        {loading ? 'Redirecting…' : 'Connect Workable'}
-      </button>
+      {canManage ? (
+        <button
+          type="button"
+          onClick={handleClick}
+          disabled={loading}
+          className="btn btn-purple btn-sm"
+        >
+          {loading ? <Spinner size={16} className="!text-current" /> : null}
+          {loading ? 'Redirecting…' : 'Connect Workable'}
+        </button>
+      ) : (
+        <p className="settings-inline-note" role="note">
+          Only a workspace owner can connect Workable.
+        </p>
+      )}
       {setupError && !error && <p className="settings-hint mt-2" style={{ color: 'var(--taali-danger)' }}>{normalizeWorkableError(setupError)}</p>}
       {error && <p className="settings-hint mt-2" style={{ color: 'var(--taali-danger)' }}>{error}</p>}
     </div>
@@ -74,6 +86,7 @@ export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onCl
 
 export const WorkableCallbackPage = ({
   code,
+  state,
   error,
   errorDescription,
   onNavigate,
@@ -92,10 +105,15 @@ export const WorkableCallbackPage = ({
       setMessage('Missing authorization code from Workable callback.');
       return;
     }
+    if (!state) {
+      setStatus('error');
+      setMessage('Missing security state from Workable callback. Please start the connection again.');
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
-        await orgsApi.connectWorkable(code);
+        await orgsApi.connectWorkable(code, state);
         if (!cancelled) {
           setStatus('success');
           onNavigate('settings', { replace: true });
@@ -110,7 +128,7 @@ export const WorkableCallbackPage = ({
     return () => {
       cancelled = true;
     };
-  }, [code, error, errorDescription, onNavigate]);
+  }, [code, state, error, errorDescription, onNavigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'var(--taali-bg, var(--bg))' }}>

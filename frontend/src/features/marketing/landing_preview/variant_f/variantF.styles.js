@@ -8,22 +8,11 @@
 // Injected via a <style> tag inside the `.lvf` root so the whole variant
 // lazy-loads as one chunk with its component. LIGHT theme, purple family only —
 // the reject state is a muted grey, never red. No CSS zoom; no horizontal scroll.
+import '../landingPreviewTokens.css';
+
 export const VARIANT_F_CSS = `
 .lvf {
-  /* ── palette (founder-approved), hardcoded ── */
-  --purple:       #5e3aa8;
-  --purple-deep:  #4a2d80;
-  --purple-soft:  #ede5f8;
-  --lavender:     #c4a5fd;
-  --bg:           #f7f4fb;
-  --surface:      #ffffff;
-  --ink:          #15121a;
-  --ink-2:        #3a3343;
-  --mute:         #8b8595;
-  --line:         #e8e2ee;
-
-  --agent-on:      linear-gradient(150deg, #3a1d6e, #241147);
-  --agent-on-flow: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  /* The founder-approved fixed palette is declared on this root in landingPreviewTokens.css. */
 
   --sh-sm: 0 1px 2px rgba(21,18,26,.05), 0 1px 0 rgba(21,18,26,.02);
   --sh-md: 0 2px 4px rgba(21,18,26,.04), 0 12px 28px -10px rgba(21,18,26,.12);
@@ -89,7 +78,7 @@ export const VARIANT_F_CSS = `
 .lvf .lede { color: var(--ink-2); font-size: 18px; line-height: 1.6; margin: 0; }
 
 .lvf .grad-text {
-  background: linear-gradient(96deg, #6a3fb8, #5e3aa8 40%, #8b5cf6);
+  background: var(--lvf-gradient-text);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 
@@ -179,7 +168,7 @@ export const VARIANT_F_CSS = `
 .lvf .brand-mark {
   width: 30px; height: 30px; border-radius: 8px;
   background: var(--agent-on); background-size: 200% 200%;
-  display: grid; place-items: center; color: #fff;
+  display: grid; place-items: center; color: var(--surface);
   font-weight: 600; font-size: 17px; letter-spacing: -.04em;
   box-shadow: var(--sh-sm);
 }
@@ -198,13 +187,13 @@ export const VARIANT_F_CSS = `
   display: inline-flex; align-items: center; gap: 7px;
   padding: 5px 11px 5px 9px; border-radius: 999px;
   font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
-  color: #efe7ff; font-weight: 500;
+  color: var(--lvf-agent-pill-text); font-weight: 500;
   background: var(--agent-on-flow); background-size: 200% 100%;
   box-shadow: var(--sh-glow);
 }
 .lvf .agent-pill .led {
   width: 7px; height: 7px; border-radius: 50%;
-  background: #c4a5fd; box-shadow: 0 0 0 3px rgba(196,165,253,.28);
+  background: var(--lavender); box-shadow: 0 0 0 3px rgba(196,165,253,.28);
 }
 .lvf .agent-pill.off {
   background: var(--bg); color: var(--mute);
@@ -257,7 +246,7 @@ export const VARIANT_F_CSS = `
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
   padding: 5px 11px; border-radius: 999px; font-weight: 500;
 }
-.lvf .verdict.advance { background: var(--purple); color: #fff; }
+.lvf .verdict.advance { background: var(--purple); color: var(--surface); }
 .lvf .verdict.assess { background: var(--purple-soft); color: var(--purple-deep); }
 .lvf .verdict.reject { background: var(--bg); color: var(--mute); border: 1px solid var(--line); }
 
@@ -286,7 +275,7 @@ export const VARIANT_F_CSS = `
   padding: 4px 9px; border-radius: 7px; background: var(--purple-soft); color: var(--purple-deep);
 }
 .lvf .fchip.plain { background: var(--bg); color: var(--ink-2); border: 1px solid var(--line); }
-.lvf .fchip.ok { background: var(--purple); color: #fff; }
+.lvf .fchip.ok { background: var(--purple); color: var(--surface); }
 .lvf .fchip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .lvf .evid-row {
   display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2);
@@ -350,8 +339,8 @@ export const VARIANT_F_CSS = `
 @media (max-width: 800px) { .lvf .proof-grid { grid-template-columns: repeat(2, 1fr); } }
 
 .lvf .cta-band { border-radius: var(--r-xl); padding: 72px 56px; text-align: center; position: relative; overflow: hidden; }
-.lvf .cta-band.dark { background: var(--agent-on); color: #fff; }
-.lvf .cta-band.dark h2 { color: #fff; }
+.lvf .cta-band.dark { background: var(--agent-on); color: var(--surface); }
+.lvf .cta-band.dark h2 { color: var(--surface); }
 .lvf .cta-band.dark .lede { color: rgba(255,255,255,.78); }
 .lvf .cta-actions { display: flex; gap: 14px; justify-content: center; margin-top: 30px; flex-wrap: wrap; }
 
@@ -371,7 +360,7 @@ export const VARIANT_F_CSS = `
    ============================================================ */
 .lvf .heroC { padding: 66px 0 100px; position: relative; overflow: hidden; }
 .lvf .heroC-hero { text-align: center; display: flex; flex-direction: column; align-items: center; }
-.lvf .heroC .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: #fff; border: 1px solid var(--line); box-shadow: var(--sh-sm); margin-bottom: 24px; }
+.lvf .heroC .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--sh-sm); margin-bottom: 24px; }
 .lvf .heroC .eyebrow-flow-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--agent-on-flow); background-size: 200% 100%; }
 .lvf .heroC h1 { font-size: clamp(44px, 5.2vw, 74px); letter-spacing: -.045em; line-height: .98; max-width: 15ch; }
 .lvf .heroC .lede { margin: 26px auto 0; max-width: 560px; font-size: 19px; }
@@ -403,7 +392,7 @@ export const VARIANT_F_CSS = `
 
 /* ── PROBLEM §2 ── */
 .lvf .problemC { text-align: center; padding: 120px 0; position: relative; }
-.lvf .problemC .card { max-width: 900px; margin: 0 auto; background: linear-gradient(180deg, #fff, var(--purple-soft)); border: 1px solid var(--line); border-radius: var(--r-xl); padding: 72px 48px; box-shadow: var(--sh-lg); }
+.lvf .problemC .card { max-width: 900px; margin: 0 auto; background: linear-gradient(180deg, var(--surface), var(--purple-soft)); border: 1px solid var(--line); border-radius: var(--r-xl); padding: 72px 48px; box-shadow: var(--sh-lg); }
 .lvf .problemC .big { font-size: clamp(32px, 4.4vw, 52px); font-weight: 600; letter-spacing: -.04em; line-height: 1.1; margin: 20px 0 0; }
 .lvf .problemC .big .dim { color: var(--mute); display: block; }
 
@@ -412,14 +401,14 @@ export const VARIANT_F_CSS = `
 
 /* ── CONTROL §5 ── */
 .lvf .controlC-grid { display: grid; grid-template-columns: 1fr 460px; gap: 56px; align-items: center; }
-.lvf .glow-card { background: var(--agent-on); border-radius: var(--r-xl); padding: 28px; color: #fff; box-shadow: 0 40px 90px -30px rgba(74,45,128,.55); }
+.lvf .glow-card { background: var(--agent-on); border-radius: var(--r-xl); padding: 28px; color: var(--surface); box-shadow: 0 40px 90px -30px rgba(74,45,128,.55); }
 .lvf .glow-card .dg-head { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: rgba(255,255,255,.66); margin-bottom: 18px; }
 .lvf .glow-card .dg-card { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); border-radius: var(--r); padding: 18px; }
 .lvf .glow-card .dg-row { display: flex; align-items: center; gap: 12px; }
-.lvf .glow-card .avatar { background: rgba(255,255,255,.18); color: #fff; }
+.lvf .glow-card .avatar { background: rgba(255,255,255,.18); color: var(--surface); }
 .lvf .glow-card .dg-name { font-weight: 600; font-size: 15px; }
 .lvf .glow-card .dg-sub { font-family: var(--mono); font-size: 11px; color: rgba(255,255,255,.6); margin-top: 2px; }
-.lvf .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--lavender); color: #241147; font-weight: 600; }
+.lvf .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--lavender); color: var(--lvf-deep-ink); font-weight: 600; }
 .lvf .glow-card .dg-ev { display: flex; gap: 9px; align-items: center; font-size: 12.5px; color: rgba(255,255,255,.82); margin-top: 10px; }
 .lvf .glow-card .dg-ev .lk { font-family: var(--mono); font-size: 10px; color: var(--lavender); letter-spacing: .06em; }
 .lvf .control-copy .display { font-size: clamp(28px,3vw,38px); margin: 16px 0 6px; }

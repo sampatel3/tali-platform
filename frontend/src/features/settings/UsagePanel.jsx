@@ -8,15 +8,15 @@ import { Spinner } from '../../shared/ui/TaaliPrimitives';
 // label implied only the candidate IDE — the bucket actually rolls in
 // the recruiter chat, the autonomous agent, and interview-prep
 // generation, none of which run inside the candidate's IDE.
-// Colors are the taali tokens the settings-preview usage chart uses for
-// its stacked segments — s1 --purple, s2 --purple-lav, s3 --amber. SVG
-// fills can't read CSS custom properties, so the hex values are inlined
-// to match `[data-brand="taali"]` exactly.
+// Colors are the same live Taali tokens used by the settings-preview chart.
+// SVG presentation attributes resolve custom properties, so the visualization
+// follows theme changes instead of freezing the light palette in JavaScript.
 const SURFACES = [
-  { id: 'workspace', label: 'Workspace AI', color: '#5e3aa8' },
-  { id: 'scoring', label: 'Scoring & matching', color: '#c4a5fd' },
-  { id: 'prescreen', label: 'Pre-screening', color: '#d88a1c' },
+  { id: 'workspace', label: 'Workspace AI', color: 'var(--purple)' },
+  { id: 'scoring', label: 'Scoring & matching', color: 'var(--purple-lav)' },
+  { id: 'prescreen', label: 'Pre-screening', color: 'var(--amber)' },
 ];
+const EMPTY_BUCKETS = Object.freeze([]);
 
 // Backend feature codes → one of the three surfaces. Anything that
 // produces a numeric ranking against the role goes to "Scoring &
@@ -406,7 +406,7 @@ export default function UsagePanel() {
     void loadMeteringGap();
   }, [loadTimeseries, loadMeteringGap]);
 
-  const buckets = timeseries?.buckets || [];
+  const buckets = timeseries?.buckets || EMPTY_BUCKETS;
   const days = useMemo(() => pivotByDay(buckets), [buckets]);
   const surfaceSummary = useMemo(() => sumBySurface(buckets), [buckets]);
   const totalUsd = useMemo(

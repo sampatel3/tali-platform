@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 // Stub the Bullhorn body so we exercise the section's gating/indicator logic
 // without pulling in the JobStatus context the real component needs.
 vi.mock('./BullhornConnection', () => ({
-  BullhornConnection: () => <div>BULLHORN_BODY</div>,
+  BullhornConnection: ({ canManage }) => <div>BULLHORN_BODY:{String(canManage)}</div>,
 }));
 
 import { IntegrationsSection } from './IntegrationsSection';
@@ -59,13 +59,13 @@ describe('IntegrationsSection', () => {
   it('hides the Bullhorn card when bullhorn_enabled is falsy', () => {
     renderSection({ active_ats: 'standalone' });
     expect(screen.queryByRole('heading', { name: /Bullhorn integration/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('BULLHORN_BODY')).not.toBeInTheDocument();
+    expect(screen.queryByText(/BULLHORN_BODY/)).not.toBeInTheDocument();
   });
 
   it('shows the Bullhorn card (from the registry Component) when bullhorn_enabled is true', () => {
     renderSection({ active_ats: 'standalone', bullhorn_enabled: true });
     expect(screen.getByRole('heading', { name: /Bullhorn integration/i })).toBeInTheDocument();
-    expect(screen.getByText('BULLHORN_BODY')).toBeInTheDocument();
+    expect(screen.getByText('BULLHORN_BODY:true')).toBeInTheDocument();
   });
 
   it('shows a Connected chip on a connected provider card', () => {
@@ -77,14 +77,14 @@ describe('IntegrationsSection', () => {
     // Workable connected → open; Bullhorn enabled-but-unconnected → collapsed.
     renderSection({ active_ats: 'workable', workable_connected: true, bullhorn_enabled: true });
     const workableBody = screen.getByText('WORKABLE_BODY').closest('.settings-integration-card-body');
-    const bullhornBody = screen.getByText('BULLHORN_BODY').closest('.settings-integration-card-body');
+    const bullhornBody = screen.getByText('BULLHORN_BODY:true').closest('.settings-integration-card-body');
     expect(workableBody).not.toHaveAttribute('hidden');
     expect(bullhornBody).toHaveAttribute('hidden');
   });
 
   it('expands a collapsed card when its header is clicked', () => {
     renderSection({ active_ats: 'standalone', bullhorn_enabled: true });
-    const bullhornBody = screen.getByText('BULLHORN_BODY').closest('.settings-integration-card-body');
+    const bullhornBody = screen.getByText('BULLHORN_BODY:true').closest('.settings-integration-card-body');
     expect(bullhornBody).toHaveAttribute('hidden');
     fireEvent.click(screen.getByRole('button', { name: /Bullhorn integration/i }));
     expect(bullhornBody).not.toHaveAttribute('hidden');
@@ -105,5 +105,18 @@ describe('IntegrationsSection', () => {
     expect(
       screen.getByText('WORKABLE_BODY').closest('.settings-integration-card-body'),
     ).not.toHaveAttribute('hidden');
+  });
+
+  it('passes read-only capability to provider bodies and explains who can connect', () => {
+    render(
+      <IntegrationsSection
+        org={{ active_ats: 'standalone', bullhorn_enabled: true }}
+        bodies={{ workable: <div>WORKABLE_BODY</div> }}
+        canManage={false}
+      />,
+    );
+
+    expect(screen.getByText('BULLHORN_BODY:false')).toBeInTheDocument();
+    expect(screen.getByText(/A workspace owner can connect a provider/i)).toBeInTheDocument();
   });
 });

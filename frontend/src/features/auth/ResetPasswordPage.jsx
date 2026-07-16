@@ -24,7 +24,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
     // longer. We encourage passphrases, so catch it here with a clear message
     // rather than letting a long one fail server-side.
     if (new TextEncoder().encode(password).length > 72) {
-      setError('That passphrase is too long — please keep it to 72 characters or fewer.');
+      setError('That passphrase is too long — please keep it to 72 UTF-8 bytes or fewer.');
       return;
     }
     if (password !== confirm) {

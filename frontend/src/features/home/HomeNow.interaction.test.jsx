@@ -12,6 +12,7 @@ const approveDecision = vi.fn();
 const bulkApproveDecisions = vi.fn();
 const snoozeDecision = vi.fn();
 const getWorkableStages = vi.fn();
+const listDecisions = vi.fn().mockResolvedValue({ data: [] });
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -21,7 +22,7 @@ vi.mock('../../shared/api', () => ({
     overrideDecision: vi.fn().mockResolvedValue({ data: {} }),
     snoozeDecision: (...a) => snoozeDecision(...a),
     reEvaluateDecision: vi.fn().mockResolvedValue({ data: {} }),
-    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    listDecisions: (...a) => listDecisions(...a),
   },
   organizations: {
     getWorkableStages: (...a) => getWorkableStages(...a),
@@ -66,10 +67,20 @@ const renderHome = (overrides = {}) => {
   return { ...utils, reload };
 };
 
+const settleHomeMount = async () => {
+  const requests = [listDecisions, getWorkableStages]
+    .map((mock) => mock.mock.results.at(-1)?.value)
+    .filter(Boolean);
+  await act(async () => {
+    await Promise.all(requests);
+  });
+};
+
 describe('HomeNow — applied-date freshness', () => {
-  it('shows when the candidate applied on the queue row and the detail card', () => {
+  it('shows when the candidate applied on the queue row and the detail card', async () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     renderHome();
+    await settleHomeMount();
     // Queue row: relative applied age next to the role · queue-age line.
     expect(screen.getAllByText(/applied .+ ago/i).length).toBeGreaterThan(0);
     // Detail card: absolute date line under the score provenance
@@ -83,8 +94,9 @@ describe('HomeNow — action and selection semantics', () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
   });
 
-  it('uses the shared action styles while exposing filters and rows as pressed choices', () => {
+  it('uses the shared action styles while exposing filters and rows as pressed choices', async () => {
     const { container } = renderHome();
+    await settleHomeMount();
 
     const filterGroup = screen.getByRole('group', { name: /filter by decision type/i });
     expect(within(filterGroup).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
@@ -101,7 +113,7 @@ describe('HomeNow — action and selection semantics', () => {
     expect(recommendation.closest('button')).toBeNull();
   });
 
-  it('styles the secondary bulk action canonically and labels stale state as status', () => {
+  it('styles the secondary bulk action canonically and labels stale state as status', async () => {
     const decision = {
       ...mkAdvance(1, 'Miguel Parracho'),
       decision_type: 'send_assessment',
@@ -112,6 +124,7 @@ describe('HomeNow — action and selection semantics', () => {
       pendingOrdered: [decision],
       filters: { status: 'pending', role_id: null, type: 'assessment', q: null },
     });
+    await settleHomeMount();
 
     expect(screen.getByRole('button', { name: /Skip & advance 1 visible/i }))
       .toHaveClass('taali-btn-secondary', 'taali-btn-sm');

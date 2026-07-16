@@ -7,9 +7,11 @@ import {
   scrollToMarketingSection,
 } from '../../lib/marketingScroll';
 import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
+import { PageLink } from '../../shared/ui/PageLink';
 import { AgentLoop, MotionProgress, MotionStagger, Reveal } from '../../shared/motion';
 import './heroAgentScene.css';
 import './landingVariantGSections.css';
+import './marketingTokens.css';
 
 // The production homepage — the ORIGINAL agentic-first landing restored (the
 // hero with the animated agent-ON <AgentScene>, the closing CTA, the real
@@ -75,6 +77,8 @@ const footerColumns = [
       { label: 'Blog', page: 'blog' },
       { label: 'Book a demo', page: 'demo-lead' },
       { label: 'Contact', href: 'mailto:hello@taali.ai' },
+      { label: 'Terms', page: 'terms' },
+      { label: 'Privacy', page: 'privacy' },
     ],
   },
 ];
@@ -96,6 +100,7 @@ export const LandingPage = ({ onNavigate }) => {
     <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
       <MarketingNav onNavigate={onNavigate} />
 
+      <main>
       {/* HERO — two columns: refined copy left, the animated agent-ON scene
           (variant G's <AgentScene>) right. */}
       <section className="relative overflow-hidden pb-16 pt-12 md:pb-24 md:pt-16">
@@ -216,7 +221,7 @@ export const LandingPage = ({ onNavigate }) => {
       {/* AI-NATIVE ASSESSMENT — variant G's single 5-Ds scorecard ("Measure how
           people actually work with AI." — Delegation / Description /
           Discernment / Diligence / Deliverable), the one assessment section. */}
-      <section id="platform" className="mc-vg border-t border-[var(--line)] bg-white">
+      <section id="platform" className="mc-vg border-t border-[var(--line)] bg-[var(--marketing-home-assessment-surface)]">
         <div className={`${containerClass} py-20`}>
           <Reveal className="section-head">
             <span className="eyebrow">AI-NATIVE ASSESSMENTS</span>
@@ -233,7 +238,7 @@ export const LandingPage = ({ onNavigate }) => {
                 <div className="avatar">MC</div>
                 <div>
                   <div className="sc-title">Maya Chen · AI-fluency</div>
-                  <div className="sc-sub">SCORED FROM SESSION · AI ENGINEER #312</div>
+                  <div className="sc-sub">SCORED FROM SESSION · AI ENGINEER &#35;312</div>
                 </div>
               </div>
               <div className="sc-total">
@@ -270,8 +275,8 @@ export const LandingPage = ({ onNavigate }) => {
             className="relative overflow-hidden rounded-[18px] px-12 py-14"
             style={{
               background:
-                'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, #000) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
-              color: '#fff',
+                'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, var(--marketing-home-cta-shade)) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
+              color: 'var(--marketing-home-cta-foreground)',
             }}
           >
             <div
@@ -292,7 +297,7 @@ export const LandingPage = ({ onNavigate }) => {
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  className="inline-flex h-12 items-center gap-2 rounded-full bg-white px-7 text-[0.875rem] font-semibold text-[var(--purple)]"
+                  className="inline-flex h-12 items-center gap-2 rounded-full bg-[var(--marketing-home-cta-foreground)] px-7 text-[0.875rem] font-semibold text-[var(--purple)]"
                   style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
                   onClick={() => onNavigate('showcase')}
                 >
@@ -300,7 +305,7 @@ export const LandingPage = ({ onNavigate }) => {
                 </button>
                 <button
                   type="button"
-                  className="inline-flex h-12 items-center gap-2 rounded-full px-7 text-[0.875rem] font-semibold text-white"
+                  className="inline-flex h-12 items-center gap-2 rounded-full px-7 text-[0.875rem] font-semibold text-[var(--marketing-home-cta-foreground)]"
                   style={{ border: '1px solid rgba(255,255,255,0.55)', background: 'transparent' }}
                   onClick={() => onNavigate('demo-lead')}
                 >
@@ -311,6 +316,7 @@ export const LandingPage = ({ onNavigate }) => {
           </Reveal>
         </div>
       </section>
+      </main>
 
       <footer className="border-t border-[var(--line)] bg-[var(--ink)] text-[var(--bg)]">
         <div className={`${containerClass} py-14`}>
@@ -326,27 +332,24 @@ export const LandingPage = ({ onNavigate }) => {
               <div key={column.title}>
                 <h4 className="font-[var(--font-display)] text-[1.25rem] tracking-[-0.02em]">{column.title}</h4>
                 <div className="mt-4 flex flex-col gap-3">
-                  {column.items.map((item) => (
+                  {column.items.map((item) => item.section ? (
                     <button
                       key={item.label}
                       type="button"
-                      className="w-fit text-left text-[0.875rem] text-[var(--taali-inverse-text)] opacity-70 transition hover:opacity-100"
-                      onClick={() => {
-                        if (item.href) {
-                          window.location.href = item.href;
-                          return;
-                        }
-                        if (item.section) {
-                          scrollToMarketingSection(item.section);
-                          return;
-                        }
-                        if (item.page) {
-                          onNavigate(item.page);
-                        }
-                      }}
+                      className="inline-flex min-h-11 w-fit items-center text-left text-[0.875rem] text-[var(--taali-inverse-text)] opacity-70 transition hover:opacity-100"
+                      onClick={() => scrollToMarketingSection(item.section)}
                     >
                       {item.label}
                     </button>
+                  ) : (
+                    <PageLink
+                      key={item.label}
+                      page={item.page}
+                      to={item.href}
+                      className="inline-flex min-h-11 w-fit items-center text-left text-[0.875rem] text-[var(--taali-inverse-text)] opacity-70 transition hover:opacity-100"
+                    >
+                      {item.label}
+                    </PageLink>
                   ))}
                 </div>
               </div>
@@ -361,15 +364,12 @@ export const LandingPage = ({ onNavigate }) => {
             }}
           >
             <div>© 2026 Taali</div>
-            <button
-              type="button"
-              className="w-fit text-left text-[var(--taali-inverse-text)] opacity-70 transition hover:opacity-100"
-              onClick={() => {
-                window.location.href = 'mailto:hello@taali.ai';
-              }}
+            <a
+              className="inline-flex min-h-11 w-fit items-center text-left text-[var(--taali-inverse-text)] opacity-70 transition hover:opacity-100"
+              href="mailto:hello@taali.ai"
             >
               hello@taali.ai
-            </button>
+            </a>
           </div>
         </div>
       </footer>

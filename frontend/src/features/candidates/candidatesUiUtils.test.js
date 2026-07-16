@@ -72,7 +72,25 @@ import {
   extractRequirementEvidence,
   extractRequirementKey,
   normalizeRequirementRow,
+  sortCandidateRequirements,
 } from './candidatesUiUtils';
+
+describe('sortCandidateRequirements', () => {
+  it('puts recruiter criteria first, then orders each source by priority without mutating input', () => {
+    const rows = [
+      { requirement_id: 'jd_req_1', priority: 'must_have' },
+      { requirement_id: 'crit_2', priority: 'nice_to_have' },
+      { requirement_id: 'crit_1', priority: 'must_have' },
+    ];
+
+    expect(sortCandidateRequirements(rows).map((row) => row.requirement_id)).toEqual([
+      'crit_1',
+      'crit_2',
+      'jd_req_1',
+    ]);
+    expect(rows.map((row) => row.requirement_id)).toEqual(['jd_req_1', 'crit_2', 'crit_1']);
+  });
+});
 
 describe('normalizeRequirementRow (cv_match schema shim)', () => {
   it('backfills requirement/requirement_id from the criterion_* schema', () => {

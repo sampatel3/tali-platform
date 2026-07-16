@@ -1,7 +1,8 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+
+import MemoryRouter from '../../test/TestMemoryRouter';
 
 vi.mock('../../shared/api', () => ({
   roles: {
@@ -31,6 +32,11 @@ vi.mock('../../shared/api', () => ({
 
 vi.mock('../../contexts/JobStatusContext', () => ({
   useJobStatus: vi.fn(),
+}));
+
+const authState = vi.hoisted(() => ({ user: { role: 'owner' } }));
+vi.mock('../../context/AuthContext', () => ({
+  useAuth: () => authState,
 }));
 
 import * as apiClient from '../../shared/api';
@@ -82,6 +88,7 @@ describe('JobsPage Workable sync states', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.user = { role: 'owner' };
     // Default to reduced motion so the per-stage count-up tickers render their
     // final values synchronously (jsdom has no rAF-driven layout). Motion-
     // specific tests below override this to exercise the entrance animations.
@@ -101,6 +108,42 @@ describe('JobsPage Workable sync states', () => {
       trackWorkableSync,
       trackBullhornSync: vi.fn(),
     });
+  });
+
+  it('keeps ATS status visible but hides org-wide sync from members', async () => {
+    authState.user = { role: 'member' };
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText(/Synced from Workable/i)).toBeInTheDocument();
+    expect(screen.getByText(/Only owners can start a sync/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Manage/i })).toBeInTheDocument();
+  });
+
+  it('loads the next bounded page only when requested', async () => {
+    const firstPage = Array.from({ length: 24 }, (_, index) => ({
+      ...baseRoles[0],
+      id: 1000 + index,
+      name: `Role ${index + 1}`,
+    }));
+    apiClient.roles.list
+      .mockResolvedValueOnce({ data: firstPage })
+      .mockResolvedValueOnce({ data: [{ ...baseRoles[0], id: 2025, name: 'Role 25' }] });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const loadMore = await screen.findByRole('button', { name: /Load more roles \(24 shown\)/i });
+    expect(apiClient.roles.list).toHaveBeenCalledTimes(1);
+    fireEvent.click(loadMore);
+
+    await waitFor(() => {
+      expect(apiClient.roles.list).toHaveBeenLastCalledWith({
+        include_pipeline_stats: true,
+        limit: 24,
+        offset: 24,
+      });
+    });
+    expect(await screen.findByText('Role 25')).toBeInTheDocument();
   });
 
   it('reattaches to an active sync on first load', async () => {
@@ -541,31 +584,6 @@ describe('JobsPage Workable sync states', () => {
     expect(await screen.findByText('Native Draft')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Native Open')).not.toBeInTheDocument());
     expect(screen.queryByText('Provider Live')).not.toBeInTheDocument();
-  });
-
-  it('paints the first page, then swaps in the full role list in the background', async () => {
-    // A full first page (== the limit) signals there may be more roles, so the
-    // hub follows up with an unlimited fetch and replaces the list. A small org
-    // (first page not full) must NOT trigger the background fetch.
-    const firstPage = Array.from({ length: 24 }, (_, i) => ({
-      ...baseRoles[0], id: 200 + i, name: `Role ${200 + i}`,
-    }));
-    const fullList = [...firstPage, { ...baseRoles[0], id: 999, name: 'Tail Role Zeta' }];
-    apiClient.roles.list.mockImplementation((params) =>
-      Promise.resolve({ data: params && params.limit ? firstPage : fullList }),
-    );
-    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
-      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
-    });
-
-    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
-
-    // First page paints from the limited fetch...
-    await screen.findByText('Role 200');
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, limit: 24 });
-    // ...then the background unlimited fetch lands and the tail role appears.
-    expect(await screen.findByText('Tail Role Zeta')).toBeInTheDocument();
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true });
   });
 
   it('does not background-fetch when the first page is not full', async () => {

@@ -70,6 +70,9 @@ export const roles = {
   addTask: (roleId, taskId) => api.post(`/roles/${roleId}/tasks`, { task_id: taskId }),
   removeTask: (roleId, taskId) => api.delete(`/roles/${roleId}/tasks/${taskId}`),
   listApplications: (roleId, params = {}) => api.get(`/roles/${roleId}/applications`, { params }),
+  listApplicationsPage: (roleId, params = {}) => api.get(`/roles/${roleId}/applications`, {
+    params: { ...params, paginated: true },
+  }),
   listPipeline: (roleId, params = {}) => api.get(`/roles/${roleId}/pipeline`, { params }),
   listApplicationsGlobal: (params = {}) => api.get('/applications', { params }),
   // Talent-pool rediscovery (Phase B): start a bounded, cost-confirmed re-score
@@ -230,7 +233,8 @@ export const roles = {
   ),
   fetchCvsStatus: (roleId) => api.get(`/roles/${roleId}/fetch-cvs/status`),
   // Unified Process action — replaces individual fetch / pre-screen / score buttons.
-  // Body: { fetch_cvs, pre_screen, refresh_pre_screen, score: 'none'|'new'|'all' }.
+  // Body: { fetch_cvs, refresh_cvs, pre_screen, refresh_pre_screen,
+  //         score: 'none'|'new'|'all', sync_graph, refresh_graph }.
   // Pass { dry_run: true } in options to get cascade-aware preview counts.
   processRole: (roleId, body = {}, options = {}) => api.post(
     `/roles/${roleId}/process`,

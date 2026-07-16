@@ -1,7 +1,9 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
+
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 
 vi.mock('../../shared/api/httpClient', () => ({
   viewSubmittalPack: vi.fn(),
@@ -12,11 +14,11 @@ import SubmittalPackPage from './SubmittalPackPage';
 
 const renderAt = (path) =>
   render(
-    <MemoryRouter initialEntries={[path]}>
+    <TestMemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/submittal/:submittalToken" element={<SubmittalPackPage />} />
       </Routes>
-    </MemoryRouter>,
+    </TestMemoryRouter>,
   );
 
 describe('SubmittalPackPage', () => {

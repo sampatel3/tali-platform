@@ -8,6 +8,7 @@ import {
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
 import { DecisionRecorder } from './DecisionRecorder';
+import './candidateVisualTokens.css';
 
 const statusMeta = (status) => {
   const normalized = String(status || '').trim().toLowerCase();
@@ -106,7 +107,7 @@ export const CandidateEvaluateTab = ({
     <div className="space-y-6">
       {manualEvalSummary ? (
         <Card className="bg-[var(--taali-surface-subtle)] p-3">
-          <div className="font-mono text-xs text-gray-600">
+          <div className="font-mono text-xs text-[var(--candidate-evaluation-supporting-text)]">
             Manual overall score:{' '}
             <span className="font-bold text-[var(--taali-text)]">
               {manualEvalSummary.overall_score != null ? `${manualEvalSummary.overall_score}/100` : '—'}
@@ -199,10 +200,10 @@ export const CandidateEvaluateTab = ({
       </div>
 
       <Panel className="bg-[var(--taali-surface-muted)] p-4">
-        <div className="mb-2 font-mono text-xs font-bold text-gray-600">Manual rubric evaluation (excellent / good / poor). Add evidence per category.</div>
+        <div className="mb-2 font-mono text-xs font-bold text-[var(--candidate-evaluation-supporting-text)]">Manual rubric evaluation (excellent / good / poor). Add evidence per category.</div>
 
         {categories.length === 0 ? (
-          <p className="font-mono text-sm text-gray-500">This task doesn&apos;t have an evaluation rubric yet. Once one is added to the task, you can grade the assessment here.</p>
+          <p className="font-mono text-sm text-[var(--candidate-evaluation-muted-text)]">This task doesn&apos;t have an evaluation rubric yet. Once one is added to the task, you can grade the assessment here.</p>
         ) : (
           <>
             {categories.map(([key, config]) => {
@@ -267,10 +268,10 @@ export const CandidateEvaluateTab = ({
       </Panel>
 
       <Panel className="bg-[var(--taali-surface-muted)] p-4">
-        <div className="mb-2 font-mono text-xs font-bold text-gray-600">Summary notes</div>
+        <div className="mb-2 font-mono text-xs font-bold text-[var(--candidate-evaluation-supporting-text)]">Summary notes</div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
-            <div className="mb-1 font-mono text-xs text-gray-500">Strengths (one per line)</div>
+            <div className="mb-1 font-mono text-xs text-[var(--candidate-evaluation-muted-text)]">Strengths (one per line)</div>
             <Textarea
               className="min-h-[5.625rem] font-mono text-xs"
               placeholder="Strong debugging discipline"
@@ -279,7 +280,7 @@ export const CandidateEvaluateTab = ({
             />
           </div>
           <div>
-            <div className="mb-1 font-mono text-xs text-gray-500">Improvements (one per line)</div>
+            <div className="mb-1 font-mono text-xs text-[var(--candidate-evaluation-muted-text)]">Improvements (one per line)</div>
             <Textarea
               className="min-h-[5.625rem] font-mono text-xs"
               placeholder="Add stronger edge-case tests"
@@ -292,22 +293,22 @@ export const CandidateEvaluateTab = ({
 
       {hideDecision ? null : (
       <Panel className="p-4">
-        <div className="mb-2 font-mono text-xs font-bold text-gray-600">Chat log (for evidence)</div>
+        <div className="mb-2 font-mono text-xs font-bold text-[var(--candidate-evaluation-supporting-text)]">Chat log (for evidence)</div>
         {prompts.length === 0 ? (
-          <p className="font-mono text-sm text-gray-500">{promptEmptyMessage}</p>
+          <p className="font-mono text-sm text-[var(--candidate-evaluation-muted-text)]">{promptEmptyMessage}</p>
         ) : (
           <div className="max-h-64 space-y-2 overflow-y-auto">
             {prompts.map((prompt, index) => (
               <Card key={index} className="bg-[var(--taali-surface)] p-2">
-                <div className="mb-1 font-mono text-xs text-gray-600">Prompt {index + 1}</div>
-                <div className="font-mono text-xs text-gray-800">
+                <div className="mb-1 font-mono text-xs text-[var(--candidate-evaluation-supporting-text)]">Prompt {index + 1}</div>
+                <div className="font-mono text-xs text-[var(--candidate-evaluation-primary-text)]">
                   {(typeof prompt.message === 'string'
                     ? prompt.message
                     : (prompt.message?.content ?? JSON.stringify(prompt.message)) || '').slice(0, 200)}
                   ...
                 </div>
                 {prompt.response ? (
-                  <div className="mt-1 font-mono text-xs text-gray-500">
+                  <div className="mt-1 font-mono text-xs text-[var(--candidate-evaluation-muted-text)]">
                     Response: {(typeof prompt.response === 'string' ? prompt.response : '').slice(0, 150)}...
                   </div>
                 ) : null}

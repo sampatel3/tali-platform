@@ -51,7 +51,7 @@ export default function SubmittalPackPage() {
   const role = data.role || {};
   const organization = data.organization || {};
   const candidates = Array.isArray(data.candidates) ? data.candidates : [];
-  let created = null;
+  let created;
   try {
     created = data.created_at
       ? new Date(data.created_at).toLocaleDateString(undefined, {

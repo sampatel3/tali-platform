@@ -583,7 +583,7 @@
   margin: 20px 24px 0;
   overflow: clip;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--bg-2);
   box-shadow: 0 1px 0 color-mix(in oklab, var(--ink) 2%, transparent);
 }

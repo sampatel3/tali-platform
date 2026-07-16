@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../context/AuthContext';
@@ -12,6 +11,7 @@ import {
   VerifyEmailPage,
 } from '../features/auth';
 import { PasswordStrength } from '../features/auth/PasswordStrength';
+import TestMemoryRouter from './TestMemoryRouter';
 import { auth } from '../shared/api/authClient';
 
 vi.mock('../shared/api/authClient', () => ({
@@ -29,9 +29,9 @@ vi.mock('../shared/api/authClient', () => ({
 }));
 
 const renderWithAuth = (ui) => render(
-  <MemoryRouter>
+  <TestMemoryRouter>
     <AuthProvider>{ui}</AuthProvider>
-  </MemoryRouter>
+  </TestMemoryRouter>
 );
 
 describe('Auth page redesign', () => {
