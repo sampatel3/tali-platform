@@ -33,7 +33,96 @@ import { JobSpec, renderJobSpec, stripPlaceholderLines } from './JobSpec';
 import { RequisitionDepartment } from './RequisitionDepartment';
 import './requisitions.css';
 
-const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
+// Keep this list aligned with the formats the requisition attachment pipeline
+// can actually read. In particular, avoid the broad `image/*` hint: formats such
+// as HEIC/SVG can be selected by the browser but cannot be sent to the vision
+// model. DOCX is supported alongside text, PDF, and the four image formats.
+export const REQUISITION_ATTACHMENT_ACCEPT = [
+  '.txt', '.text', '.vtt', '.srt', '.md', '.markdown', '.pdf', '.docx',
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+].join(',');
+export const REQUISITION_ATTACHMENT_MAX_FILES = 6;
+export const REQUISITION_ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024;
+
+const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
+  'txt', 'text', 'vtt', 'srt', 'md', 'markdown', 'pdf', 'docx',
+  'jpg', 'jpeg', 'png', 'gif', 'webp',
+]);
+const SUPPORTED_ATTACHMENT_MIME_TYPES = new Set([
+  'text/plain', 'text/vtt', 'text/markdown',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+]);
+
+const GENERIC_ATTACHMENT_MIME_TYPES = new Set(['', 'application/octet-stream']);
+const TEXT_ATTACHMENT_EXTENSIONS = new Set(['txt', 'text', 'vtt', 'srt', 'md', 'markdown']);
+const ALTERNATE_TEXT_ATTACHMENT_MIME_TYPES = new Set([
+  'application/markdown', 'application/srt', 'application/x-subrip',
+]);
+const IMAGE_MIME_BY_EXTENSION = Object.freeze({
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+});
+
+const attachmentExtension = (file) => {
+  const name = String(file?.name || '').toLowerCase();
+  return name.includes('.') ? name.split('.').pop() : '';
+};
+
+export const isSupportedRequisitionAttachment = (file) => {
+  const extension = attachmentExtension(file);
+  const mimeType = String(file?.type || '').toLowerCase();
+  if (!extension) return SUPPORTED_ATTACHMENT_MIME_TYPES.has(mimeType);
+  if (!SUPPORTED_ATTACHMENT_EXTENSIONS.has(extension)) return false;
+
+  // Browsers sometimes omit a MIME type (or use octet-stream), in which case
+  // the allow-listed extension is the best signal available. When a browser
+  // does provide a concrete type, require it to agree with the extension so a
+  // renamed HEIC/SVG/PDF is not sent down the wrong backend decoding path.
+  if (GENERIC_ATTACHMENT_MIME_TYPES.has(mimeType)) return true;
+  if (TEXT_ATTACHMENT_EXTENSIONS.has(extension)) {
+    return mimeType.startsWith('text/') || ALTERNATE_TEXT_ATTACHMENT_MIME_TYPES.has(mimeType);
+  }
+  if (extension === 'pdf') return mimeType === 'application/pdf';
+  if (extension === 'docx') {
+    return mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+  return IMAGE_MIME_BY_EXTENSION[extension] === mimeType;
+};
+
+// Validate the whole staged turn, matching the backend's six-file / 15 MB per
+// file guards. A rejected selection is all-or-nothing so the recruiter always
+// knows exactly which files will be sent.
+export const validateRequisitionAttachments = (existing = [], incoming = []) => {
+  const current = Array.from(existing || []).filter(Boolean);
+  const next = Array.from(incoming || []).filter(Boolean);
+  if (current.length + next.length > REQUISITION_ATTACHMENT_MAX_FILES) {
+    return {
+      files: [],
+      error: `You can attach up to ${REQUISITION_ATTACHMENT_MAX_FILES} files per message.`,
+    };
+  }
+  const unsupported = next.find((file) => !isSupportedRequisitionAttachment(file));
+  if (unsupported) {
+    return {
+      files: [],
+      error: `${unsupported.name || 'That file'} isn't supported. Attach a PDF, DOCX, text/Markdown file, or a JPG, PNG, GIF, or WebP image.`,
+    };
+  }
+  const oversized = next.find((file) => Number(file?.size || 0) > REQUISITION_ATTACHMENT_MAX_BYTES);
+  if (oversized) {
+    return {
+      files: [],
+      error: `${oversized.name || 'That file'} is larger than the 15 MB per-file limit.`,
+    };
+  }
+  return { files: next, error: '' };
+};
+
 const isImage = (file) => Boolean(file && (file.type || '').startsWith('image/'));
 
 // One staged attachment = the File + a stable id + (for images) an object URL
@@ -98,6 +187,25 @@ export const isRequisitionBriefReadOnly = (brief) => (
 export const isRelatedRoleBrief = (brief) => (
   brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
 );
+
+const humanizeGapKey = (key) => String(key || '')
+  .replace(/_/g, ' ')
+  .replace(/\b\w/g, (character) => character.toUpperCase())
+  .trim();
+
+export const requisitionGapLabels = (gaps) => {
+  const labels = (Array.isArray(gaps) ? gaps : [])
+    .map((gap) => String(gap?.label || humanizeGapKey(gap?.key) || '').trim())
+    .filter(Boolean);
+  return [...new Set(labels)];
+};
+
+export const requisitionPublishBlockedMessage = (gaps, { relatedRole = false } = {}) => {
+  const labels = requisitionGapLabels(gaps);
+  if (labels.length === 0) return '';
+  const action = relatedRole ? 'create and score candidates' : 'publish this job';
+  return `Complete the required Brief fields before you can ${action}: ${labels.join(', ')}.`;
+};
 
 export const requisitionRoleConflictMessage = (error, { latestLoaded = true } = {}) => {
   const conflict = roleVersionConflict(error);
@@ -378,8 +486,19 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
   // ---- attachments ----
   const addFiles = useCallback((files) => {
-    const staged = Array.from(files || []).filter(Boolean).map(stageFile);
-    if (staged.length) setAttachments((prev) => [...prev, ...staged]);
+    const validation = validateRequisitionAttachments(
+      attachmentsRef.current.map((attachment) => attachment.file),
+      files,
+    );
+    if (validation.error) {
+      setError(validation.error);
+      return;
+    }
+    const staged = validation.files.map(stageFile);
+    if (staged.length) {
+      setError('');
+      setAttachments((prev) => [...prev, ...staged]);
+    }
   }, []);
 
   const onFilePick = useCallback((e) => {
@@ -568,8 +687,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
   // ---- click-to-edit a brief field ----
   const saveField = useCallback(async (key, value, isCustom) => {
-    if (!selectedId) return;
+    if (!selectedId) return false;
     setSavingKey(key);
+    setError('');
     try {
       // Custom fields share one JSON dict, so merge rather than replace —
       // sending just { [key]: value } would wipe sibling custom fields.
@@ -584,10 +704,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       );
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
       patchListRow(selectedId, updated || {}); // title/completeness may move
+      return true;
     } catch (err) {
       if (!(await handleVersionConflict(err))) {
         setError(errorDetail(err, 'Could not save that field. Try again.'));
       }
+      return false;
     } finally {
       setSavingKey(null);
     }
@@ -706,10 +828,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     if (!selectedId) return;
     // Frontend gate mirrors the backend required-field validation and gives the
     // recruiter an immediate, field-oriented message before the request.
-    const remaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
-    if (remaining > 0) {
-      const action = relatedRoleDraft ? 'create this related role' : 'publish';
-      setError(`${remaining} required field${remaining === 1 ? '' : 's'} still needed before you can ${action} — fill them in on the Brief tab or answer the agent.`);
+    const remainingGaps = Array.isArray(brief?.gaps) ? brief.gaps : [];
+    if (remainingGaps.length > 0) {
+      // Keep the control clickable: a click now takes the recruiter directly to
+      // the structured Brief and names every blocker instead of leaving them at
+      // a dead disabled button. The backend still enforces the same gate.
+      setRightTab('brief');
+      setError(requisitionPublishBlockedMessage(
+        remainingGaps,
+        { relatedRole: relatedRoleDraft },
+      ));
       return;
     }
     setPublishing(true);
@@ -953,9 +1081,14 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // Block sends while a switch is in flight (brief null / loadingBrief) so a
   // reply can't post to the wrong requisition, and while a turn is in flight.
   const canSend = Boolean(brief) && !applied && !loadingBrief && (composer.trim() || attachments.length > 0) && !turnInFlight;
-  // Required fields still open → publish is gated (see publish()). Drives the
-  // Publish button's disabled state + hint.
-  const requiredRemaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
+  // Required fields still open → publish is gated inside publish(). The button
+  // remains clickable so it can reveal these exact labels and open the Brief.
+  const requiredGaps = Array.isArray(brief?.gaps) ? brief.gaps : [];
+  const requiredRemaining = requiredGaps.length;
+  const requiredLabels = requisitionGapLabels(requiredGaps);
+  const requiredFieldsHint = requiredLabels.length > 0
+    ? `Required: ${requiredLabels.join(', ')}`
+    : '';
   // The next required field the agent wants (gaps are ordered; first = current).
   const currentGap = (brief?.gaps || [])[0] || null;
 
@@ -1151,15 +1284,15 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                             type="button"
                             className="rq-publish-btn"
                             onClick={publish}
-                            disabled={publishing || requiredRemaining > 0}
-                            title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
+                            disabled={publishing}
+                            title={requiredRemaining > 0 ? requiredFieldsHint : undefined}
                           >
                             {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <GitFork size={15} />} Create and score candidates
                           </button>
                         )}
                         {!applied && requiredRemaining > 0 ? (
                           <span className="rq-publish-hint">
-                            {requiredRemaining} required field{requiredRemaining === 1 ? '' : 's'} still needed
+                            {requiredFieldsHint}
                           </span>
                         ) : null}
                       </div>
@@ -1251,8 +1384,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           type="button"
                           className="rq-btn-sm is-ghost"
                           onClick={publish}
-                          disabled={publishing || requiredRemaining > 0}
-                          title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
+                          disabled={publishing}
+                          title={requiredRemaining > 0 ? requiredFieldsHint : undefined}
                         >
                           {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <RefreshCw size={13} />} Re-publish
                         </button>
@@ -1308,14 +1441,14 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         type="button"
                         className="rq-publish-btn"
                         onClick={publish}
-                        disabled={publishing || requiredRemaining > 0}
-                        title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
+                        disabled={publishing}
+                        title={requiredRemaining > 0 ? requiredFieldsHint : undefined}
                       >
                         {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Rocket size={15} />} Publish job page
                       </button>
                       {requiredRemaining > 0 ? (
                         <span className="rq-publish-hint">
-                          {requiredRemaining} required field{requiredRemaining === 1 ? '' : 's'} still needed
+                          {requiredFieldsHint}
                         </span>
                       ) : null}
                     </div>
@@ -1396,11 +1529,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       >
                         <Paperclip size={14} /> Attach
                       </button>
-                      <span className="rq-attach-hint">transcript or JD screenshot · or paste an image</span>
+                      <span className="rq-attach-hint">JD or transcript · PDF, DOCX, text, or image · max 6 files, 15 MB each</span>
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept={ACCEPT}
+                        accept={REQUISITION_ATTACHMENT_ACCEPT}
                         multiple
                         hidden
                         onChange={onFilePick}

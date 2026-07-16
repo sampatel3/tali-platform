@@ -1,11 +1,14 @@
 """Conversational requisition intake — gap engine, completeness, opening
 message, capture/apply, multimodal assembly, and a monkeypatched chat turn."""
+import io
 from datetime import datetime, timedelta, timezone
 
 from app.llm.structured import StructuredResult
 from app.models import Organization, Role
+from app.platform.config import settings
 from app.services import requisition_chat_service as chat
 from app.services.requisition_chat_service import (
+    BriefFieldChange,
     ChatAttachment,
     ChatCapture,
     apply_capture,
@@ -15,6 +18,7 @@ from app.services.requisition_chat_service import (
     compute_completeness,
     compute_gaps,
     opening_message,
+    prepare_user_turn_content,
     recent_role_titles,
     run_chat_turn,
     seed_opening_message,
@@ -282,6 +286,148 @@ def test_apply_capture_sourcing_signals_list_and_process_text(db):
     assert b.process == "3 rounds: screen, take-home, onsite. Urgent."
 
 
+def test_apply_capture_routes_builtin_template_only_fields_to_custom_fields(db):
+    """Core default-template fields must be first-class capture properties even
+    though RoleBrief stores them in custom_fields."""
+    b, _ = _brief(db)
+    capture = ChatCapture(
+        assistant_reply="Captured from the spec.",
+        domain="Regulated banking",
+        urgency="Urgent",
+        benefits=["Private medical", "Learning budget"],
+        responsibilities=["Build AI services", "Own production reliability"],
+    )
+    apply_capture(db, b, capture, DEFAULT_REQUISITION_TEMPLATE)
+
+    assert b.custom_fields["domain"] == "Regulated banking"
+    assert b.custom_fields["urgency"] == "Urgent"
+    assert b.custom_fields["benefits"] == ["Private medical", "Learning budget"]
+    assert b.custom_fields["responsibilities"] == [
+        "Build AI services",
+        "Own production reliability",
+    ]
+    remaining = {gap["key"] for gap in compute_gaps(b, DEFAULT_REQUISITION_TEMPLATE)}
+    assert "domain" not in remaining
+    assert "urgency" not in remaining
+    assert "responsibilities" not in remaining
+
+
+def test_apply_capture_amends_lists_item_by_item_and_revises_canonical_spec(db):
+    b, _ = _brief(db)
+    update_brief_fields(
+        db,
+        b,
+        must_haves=["Python", "Java"],
+        agent_state={
+            "jd_override": "# Engineer\n\nMust have Python and Java.",
+            "canonical_spec_mode": "verbatim",
+            "job_spec_revision": 1,
+        },
+    )
+    capture = ChatCapture(
+        assistant_reply="Updated.",
+        change_mode="amend",
+        changes=[
+            BriefFieldChange(key="must_haves", operation="remove", value=["Java"]),
+            BriefFieldChange(
+                key="must_haves", operation="add", value=["Azure", "azure"]
+            ),
+        ],
+        canonical_job_spec="# Engineer\n\nMust have Python and Azure.",
+    )
+
+    apply_capture(db, b, capture, DEFAULT_REQUISITION_TEMPLATE)
+
+    assert b.must_haves == ["Python", "Azure"]
+    assert b.agent_state["jd_override"].endswith("Python and Azure.")
+    assert b.agent_state["job_spec_revision"] == 2
+    assert b.agent_state["job_spec_last_change_mode"] == "amend"
+
+
+def test_apply_capture_replace_resets_role_content_but_preserves_related_link(db):
+    b, _ = _brief(db)
+    source = Role(organization_id=b.organization_id, name="Original ATS role")
+    db.add(source)
+    db.flush()
+    b.source_role_id = source.id
+    update_brief_fields(
+        db,
+        b,
+        title="Old Engineer",
+        summary="Old summary",
+        must_haves=["Java"],
+        preferred=["Kafka"],
+        custom_fields={"domain": "Banking", "private_note": "keep"},
+        agent_state={"jd_override": "OLD JD", "job_spec_revision": 1},
+    )
+    capture = ChatCapture(
+        assistant_reply="Replaced.",
+        change_mode="replace",
+        title="AI Engineer",
+        must_haves=["Python"],
+        domain="Healthcare",
+        canonical_job_spec="# AI Engineer\n\nMust have Python.",
+    )
+
+    apply_capture(db, b, capture, DEFAULT_REQUISITION_TEMPLATE)
+
+    assert b.source_role_id == source.id
+    assert b.title == "AI Engineer"
+    assert b.summary is None
+    assert b.must_haves == ["Python"]
+    assert b.preferred == []
+    assert b.custom_fields == {"domain": "Healthcare", "private_note": "keep"}
+    assert b.agent_state["jd_override"].startswith("# AI Engineer")
+    assert b.agent_state["job_spec_last_change_mode"] == "replace"
+
+
+def test_apply_capture_clarification_is_non_mutating_and_keeps_pending_spec(db):
+    b, _ = _brief(db)
+    update_brief_fields(
+        db,
+        b,
+        title="Current role",
+        must_haves=["Python"],
+        agent_state={"jd_override": "CURRENT JD", "job_spec_revision": 1},
+    )
+    capture = ChatCapture(
+        assistant_reply="Replace or amend?",
+        change_mode="clarify",
+        title="Should not apply",
+        changes=[BriefFieldChange(key="must_haves", operation="clear")],
+        pending_job_spec="PROPOSED JD",
+    )
+
+    apply_capture(db, b, capture, DEFAULT_REQUISITION_TEMPLATE)
+
+    assert b.title == "Current role"
+    assert b.must_haves == ["Python"]
+    assert b.agent_state["jd_override"] == "CURRENT JD"
+    assert b.agent_state["pending_job_spec_source"] == "PROPOSED JD"
+
+
+def test_apply_capture_never_leaves_a_stale_verbatim_spec_after_field_edit(db):
+    b, _ = _brief(db)
+    update_brief_fields(
+        db,
+        b,
+        title="Old title",
+        agent_state={"jd_override": "OLD JD", "job_spec_revision": 1},
+    )
+
+    apply_capture(
+        db,
+        b,
+        ChatCapture(assistant_reply="Updated.", title="New title"),
+        DEFAULT_REQUISITION_TEMPLATE,
+    )
+
+    assert b.title == "New title"
+    assert "jd_override" not in b.agent_state
+    assert b.agent_state["canonical_spec_mode"] == "structured"
+    assert b.agent_state["job_spec_revision"] == 2
+
+
 # --------------------------------------------------------------------------- #
 # Multimodal assembly
 # --------------------------------------------------------------------------- #
@@ -311,6 +457,42 @@ def test_transcript_text_reaches_user_turn_content():
     assert "We need a staff PM" in content
 
 
+def test_transcript_and_filename_control_characters_are_sanitized():
+    attachment = ChatAttachment(
+        name="job\x00spec.txt",
+        content_type="text/plain",
+        content=b"Build APIs\x00Own reliability",
+    )
+    persisted = build_persisted_user_message("Use\x00this", [attachment])
+    content, source = prepare_user_turn_content("Use\x00this", [attachment])
+
+    assert "\x00" not in persisted["content"]
+    assert "\x00" not in persisted["attachments"][0]["name"]
+    assert "\x00" not in content
+    assert "\x00" not in source
+    assert "Build APIsOwn reliability" in source
+
+
+def test_large_text_attachment_is_bounded_before_model_and_persistence():
+    large_text = ("TITLE AND SUMMARY\n" + ("x" * 120_000) + "\nREQUIREMENTS END").encode()
+    content, source = prepare_user_turn_content(
+        "Use this",
+        [
+            ChatAttachment(
+                name="large.txt",
+                content_type="text/plain",
+                content=large_text,
+            )
+        ],
+    )
+
+    assert len(source) < 31_000
+    assert len(content) < 31_100
+    assert "TITLE AND SUMMARY" in source
+    assert "REQUIREMENTS END" in source
+    assert "content truncated for safe processing" in source
+
+
 def test_image_attachment_produces_base64_image_block():
     content = build_user_turn_content(
         "what does this say",
@@ -324,6 +506,85 @@ def test_image_attachment_produces_base64_image_block():
     assert src["type"] == "base64" and src["media_type"] == "image/png" and src["data"]
     # The text part is preserved alongside the image.
     assert any(b.get("type") == "text" and "what does this say" in b.get("text", "") for b in content)
+
+
+def test_image_extension_is_recognised_with_octet_stream_mime():
+    attachment = ChatAttachment(
+        name="SPEC.PNG",
+        content_type="application/octet-stream",
+        content=b"\x89PNG-bytes",
+    )
+    persisted = build_persisted_user_message("", [attachment])
+    assert persisted["attachments"] == [{"name": "SPEC.PNG", "kind": "image"}]
+
+    content = build_user_turn_content("read this", [attachment])
+    image_block = next(block for block in content if block.get("type") == "image")
+    assert image_block["source"]["media_type"] == "image/png"
+
+
+def test_docx_attachment_is_extracted_once_and_returned_as_recoverable_source(
+    monkeypatch,
+):
+    calls = []
+
+    def fake_extract_text(content, extension):
+        calls.append((content, extension))
+        return "Senior AI Engineer\nBuild production RAG systems"
+
+    monkeypatch.setattr("app.services.document_service.extract_text", fake_extract_text)
+    content, source = prepare_user_turn_content(
+        "full job spec attached",
+        [
+            ChatAttachment(
+                name="role.docx",
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                content=b"docx-bytes",
+            )
+        ],
+    )
+
+    assert calls == [(b"docx-bytes", "docx")]
+    assert "[Attached document: role.docx]" in content
+    assert "Build production RAG systems" in content
+    assert source == content.split("\n\n", 1)[1]
+
+
+def test_real_docx_table_content_reaches_recoverable_source():
+    from docx import Document
+
+    document = Document()
+    document.add_heading("Senior AI Engineer", level=1)
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Key responsibilities"
+    table.cell(0, 1).text = "Build production RAG services\nOwn model reliability"
+    table.cell(1, 0).text = "Domain"
+    table.cell(1, 1).text = "Regulated banking"
+    stream = io.BytesIO()
+    document.save(stream)
+
+    content, source = prepare_user_turn_content(
+        "Use this full job spec",
+        [
+            ChatAttachment(
+                name="table-spec.docx",
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                content=stream.getvalue(),
+            )
+        ],
+    )
+
+    assert "Senior AI Engineer" in content
+    assert "Key responsibilities" in source
+    assert "Build production RAG services" in source
+    assert "Own model reliability" in source
+    assert "Domain" in source
+    assert "Regulated banking" in source
 
 
 # --------------------------------------------------------------------------- #
@@ -377,13 +638,23 @@ def test_run_chat_turn_applies_capture_appends_messages_shrinks_gaps(db, monkeyp
     assert roles == ["assistant", "user", "assistant"]
     assert b.messages[1]["content"].startswith("We need a backend engineer")
     assert b.messages[1]["attachments"] == [{"name": "notes.txt", "kind": "transcript"}]
-    assert b.messages[2]["content"].startswith("Great")
+    # Attachment replies are grounded in POST-capture gaps, not the model's
+    # stale pre-capture question. Title was captured, so domain is now first.
+    assert b.messages[2]["content"].startswith("I've amended the draft.")
+    assert "Updated: Must-haves" in b.messages[2]["content"]
+    assert "What domain or industry" in b.messages[2]["content"]
 
     # The transcript file content reached the LLM input (multimodal assertion).
     last_user = captured_calls["messages"][-1]
     assert last_user["role"] == "user"
     assert "[Attached transcript: notes.txt]" in last_user["content"]
     assert "team is small" in last_user["content"]
+    # Decoded source survives the turn and is also supplied as source data in
+    # the system prompt, with all gaps exposed for exhaustive extraction.
+    assert "[Attached transcript: notes.txt]" in b.raw_input
+    assert "team is small" in b.raw_input
+    assert "RECOVERABLE SOURCE MATERIAL" in captured_calls["system"]
+    assert "EXTRACT EXHAUSTIVELY" in captured_calls["system"]
     # Metered under the right feature.
     assert captured_calls["feature"] == "requisition_intake_chat"
 
@@ -394,6 +665,686 @@ def test_run_chat_turn_applies_capture_appends_messages_shrinks_gaps(db, monkeyp
     # completeness recomputed: 2/11 required filled (title + must_haves; salary
     # is captured but NOT required, so it doesn't count toward completeness).
     assert b.completeness == round(100 * 2 / 11)
+
+
+def test_attachment_source_is_available_to_later_chat_turns(db, monkeypatch):
+    b, org = _brief(db)
+    template = resolve_template(org)
+    systems = []
+
+    def fake_generate_structured(client, **kwargs):
+        systems.append(kwargs["system"])
+        if len(systems) == 1:
+            return StructuredResult(
+                value=ChatCapture(
+                    assistant_reply="What is the title?",
+                    title="AI Engineer",
+                    domain="Banking",
+                ),
+                ok=True,
+            )
+        return StructuredResult(
+            value=ChatCapture(assistant_reply="What seniority level?"), ok=True
+        )
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    run_chat_turn(
+        db,
+        b,
+        message="Please use this spec",
+        attachments=[
+            ChatAttachment(
+                name="job-spec.txt",
+                content_type="text/plain",
+                content=b"Own our production RAG platform in regulated banking.",
+            )
+        ],
+        template=template,
+        client=object(),
+        model="m",
+    )
+    run_chat_turn(
+        db,
+        b,
+        message="Continue",
+        template=template,
+        client=object(),
+        model="m",
+    )
+
+    assert "Own our production RAG platform" in b.raw_input
+    assert "Own our production RAG platform" in systems[1]
+    assert "RECOVERABLE SOURCE MATERIAL" in systems[1]
+
+
+def test_source_remains_in_exhaustive_mode_until_capture_changes_brief(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+    template = resolve_template(org)
+    systems = []
+
+    def fake_generate_structured(client, **kwargs):
+        systems.append(kwargs["system"])
+        capture = (
+            ChatCapture(assistant_reply="I couldn't find a field yet.")
+            if len(systems) < 3
+            else ChatCapture(assistant_reply="Captured.", title="AI Engineer")
+        )
+        return StructuredResult(value=capture, ok=True)
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    first = run_chat_turn(
+        db,
+        b,
+        message="Use this",
+        attachments=[
+            ChatAttachment(
+                name="spec.txt",
+                content_type="text/plain",
+                content=b"AI engineering role",
+            )
+        ],
+        template=template,
+        client=object(),
+        model="m",
+    )
+    run_chat_turn(db, b, message="Try again", template=template, client=object(), model="m")
+    run_chat_turn(db, b, message="AI Engineer", template=template, client=object(), model="m")
+    run_chat_turn(db, b, message="Continue", template=template, client=object(), model="m")
+
+    assert "EXTRACT EXHAUSTIVELY" in systems[0]
+    assert "EXTRACT EXHAUSTIVELY" in systems[1]
+    assert "EXTRACT EXHAUSTIVELY" in systems[2]
+    assert "EXTRACT EXHAUSTIVELY" not in systems[3]
+    assert "didn't add any new brief fields" in first.value.assistant_reply
+    assert "I've populated" not in first.value.assistant_reply
+
+
+def test_legacy_related_role_override_gets_one_exhaustive_hydration_turn(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+    source = Role(
+        organization_id=org.id,
+        name="AI Engineer",
+        source="workable",
+        workable_job_id="legacy-source",
+    )
+    db.add(source)
+    db.flush()
+    b.source_role_id = source.id
+    b.agent_state = {
+        "jd_override": "# AI Engineer\n\n## Responsibilities\n- Own production RAG reliability."
+    }
+    systems = []
+
+    def fake_generate_structured(client, **kwargs):
+        systems.append(kwargs["system"])
+        return StructuredResult(
+            value=ChatCapture(
+                assistant_reply="What is the title?",
+                title="AI Engineer",
+                responsibilities=["Own production RAG reliability."],
+            ),
+            ok=True,
+        )
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    run_chat_turn(
+        db,
+        b,
+        message="Continue",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+    run_chat_turn(
+        db,
+        b,
+        message="Continue again",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert "Own production RAG reliability" in systems[0]
+    assert "EXTRACT EXHAUSTIVELY" in systems[0]
+    assert "EXTRACT EXHAUSTIVELY" not in systems[1]
+    assert b.raw_input is None  # chat working-copy hydration owns persistence
+    assert b.custom_fields["responsibilities"] == [
+        "Own production RAG reliability."
+    ]
+
+
+def test_current_job_spec_is_the_only_active_source_not_old_provenance(db, monkeypatch):
+    b, org = _brief(db)
+    b.raw_input = "Original attached source"
+    b.agent_state = {"jd_override": "Current edited job specification"}
+    seen = {}
+
+    def fake_generate_structured(client, **kwargs):
+        seen["system"] = kwargs["system"]
+        return StructuredResult(value=ChatCapture(assistant_reply="Next?"), ok=True)
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    run_chat_turn(
+        db,
+        b,
+        message="Continue",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert "Original attached source" not in seen["system"]
+    assert "Current edited job specification" in seen["system"]
+    assert "[ACTIVE CANONICAL JOB SPEC]" in seen["system"]
+
+
+def test_related_role_full_replacement_changes_only_draft_and_canonical_spec(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+    source = Role(
+        organization_id=org.id,
+        name="Original Java Engineer",
+        job_spec_text="# Original\n\nJava role",
+    )
+    db.add(source)
+    db.flush()
+    b.source_role_id = source.id
+    b.title = "Original Java Engineer · Related"
+    b.must_haves = ["Java"]
+    b.preferred = ["Kafka"]
+    b.raw_input = source.job_spec_text
+    b.agent_state = {
+        "jd_override": source.job_spec_text,
+        "canonical_spec_mode": "verbatim",
+        "job_spec_revision": 1,
+    }
+    new_spec = "# AI Engineer\n\nBuild RAG systems with Python."
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(
+                assistant_reply="I used the new spec.",
+                change_mode="replace",
+                title="AI Engineer",
+                must_haves=["Python"],
+                domain="Banking",
+                responsibilities=["Build production RAG systems"],
+                canonical_job_spec=new_spec,
+            ),
+            ok=True,
+        ),
+    )
+
+    result = run_chat_turn(
+        db,
+        b,
+        message="Use this new job spec instead",
+        attachments=[
+            ChatAttachment(
+                name="new-role.txt",
+                content_type="text/plain",
+                content=new_spec.encode(),
+            )
+        ],
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert b.source_role_id == source.id
+    assert source.name == "Original Java Engineer"
+    assert source.job_spec_text.endswith("Java role")
+    assert b.title == "AI Engineer"
+    assert b.must_haves == ["Python"]
+    assert b.preferred == []
+    assert b.agent_state["jd_override"] == new_spec
+    assert b.agent_state["job_spec_revision"] == 2
+    assert "# Original" in b.raw_input
+    assert "Build RAG systems with Python" in b.raw_input
+    assert result.value.assistant_reply.startswith(
+        "I've replaced the role content in this related-role draft."
+    )
+    assert "original ATS role and shared candidate pool are unchanged" in (
+        result.value.assistant_reply
+    )
+
+
+def test_related_role_requirement_refinement_uses_semantic_operations(db, monkeypatch):
+    b, org = _brief(db)
+    source = Role(organization_id=org.id, name="Original role")
+    db.add(source)
+    db.flush()
+    b.source_role_id = source.id
+    b.must_haves = ["Python", "Java"]
+    b.agent_state = {
+        "jd_override": "Must have Python and Java.",
+        "canonical_spec_mode": "verbatim",
+        "job_spec_revision": 1,
+    }
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(
+                assistant_reply="Updated the requirements.",
+                change_mode="amend",
+                changes=[
+                    BriefFieldChange(
+                        key="must_haves", operation="remove", value=["Java"]
+                    ),
+                    BriefFieldChange(
+                        key="must_haves", operation="add", value=["Azure"]
+                    ),
+                ],
+                canonical_job_spec="Must have Python and Azure.",
+            ),
+            ok=True,
+        ),
+    )
+
+    result = run_chat_turn(
+        db,
+        b,
+        message="Keep everything else, remove Java and add Azure",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert b.must_haves == ["Python", "Azure"]
+    assert b.agent_state["jd_override"] == "Must have Python and Azure."
+    assert result.value.assistant_reply.startswith(
+        "I've amended this related-role draft"
+    )
+    assert "Updated: Must-haves" in result.value.assistant_reply
+
+
+def test_ambiguous_full_spec_waits_for_replace_or_amend_choice(db, monkeypatch):
+    b, org = _brief(db)
+    b.title = "Current role"
+    b.must_haves = ["Python"]
+    b.agent_state = {
+        "jd_override": "CURRENT JD",
+        "canonical_spec_mode": "verbatim",
+        "job_spec_revision": 1,
+    }
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(
+                assistant_reply="I need to know how to apply this.",
+                change_mode="clarify",
+                title="Must not apply yet",
+            ),
+            ok=True,
+        ),
+    )
+
+    result = run_chat_turn(
+        db,
+        b,
+        message="Here is another spec",
+        attachments=[
+            ChatAttachment(
+                name="proposal.txt",
+                content_type="text/plain",
+                content=b"# Different role\n\nMust have Go.",
+            )
+        ],
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert b.title == "Current role"
+    assert b.must_haves == ["Python"]
+    assert b.agent_state["jd_override"] == "CURRENT JD"
+    assert "Must have Go" in b.agent_state["pending_job_spec_source"]
+    assert result.value.suggested_replies == [
+        "Replace current draft",
+        "Apply differences only",
+    ]
+    assert "Should I replace the current draft" in result.value.assistant_reply
+    assert b.messages[-1]["change_mode"] == "clarify"
+
+
+def test_new_role_full_spec_becomes_canonical_then_refinements_amend_it(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+    captures = iter(
+        [
+            ChatCapture(
+                assistant_reply="Captured the spec.",
+                change_mode="replace",
+                title="Backend Engineer",
+                must_haves=["Python"],
+                canonical_job_spec="# Backend Engineer\n\nMust have Python.",
+            ),
+            ChatCapture(
+                assistant_reply="Added Postgres.",
+                change_mode="amend",
+                changes=[
+                    BriefFieldChange(
+                        key="must_haves", operation="add", value=["Postgres"]
+                    )
+                ],
+                canonical_job_spec=(
+                    "# Backend Engineer\n\nMust have Python and Postgres."
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(value=next(captures), ok=True),
+    )
+
+    run_chat_turn(
+        db,
+        b,
+        message="Use this full job spec",
+        attachments=[
+            ChatAttachment(
+                name="job.txt",
+                content_type="text/plain",
+                content=b"# Backend Engineer\n\nMust have Python.",
+            )
+        ],
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+    refined = run_chat_turn(
+        db,
+        b,
+        message="Keep everything else and add Postgres as a must-have",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert b.must_haves == ["Python", "Postgres"]
+    assert b.agent_state["jd_override"].endswith("Python and Postgres.")
+    assert b.agent_state["job_spec_revision"] == 2
+    assert refined.value.assistant_reply.startswith("I've amended the draft.")
+    assert "Updated: Must-haves" in refined.value.assistant_reply
+
+
+def test_existing_and_related_draft_changes_use_reasoning_model(db, monkeypatch):
+    first, org = _brief(db)
+    related = create_brief(db, organization_id=org.id)
+    source = Role(organization_id=org.id, name="Source role")
+    db.add(source)
+    db.flush()
+    related.source_role_id = source.id
+    related.agent_state = {"jd_override": "CURRENT JD"}
+    seen_models = []
+    monkeypatch.setattr(settings, "CLAUDE_CHAT_MODEL", "haiku-test")
+    monkeypatch.setattr(settings, "CLAUDE_MODEL", "sonnet-test")
+
+    def fake_generate_structured(client, **kwargs):
+        seen_models.append(kwargs["model"])
+        return StructuredResult(value=ChatCapture(assistant_reply="Next?"), ok=True)
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    run_chat_turn(
+        db,
+        first,
+        message="We need an engineer",
+        template=resolve_template(org),
+        client=object(),
+    )
+    run_chat_turn(
+        db,
+        related,
+        message="Change the requirements",
+        template=resolve_template(org),
+        client=object(),
+    )
+
+    assert seen_models == ["haiku-test", "sonnet-test"]
+
+
+def test_corrupt_document_does_not_claim_the_brief_was_populated(db, monkeypatch):
+    b, org = _brief(db)
+    monkeypatch.setattr(
+        "app.services.document_service.extract_text",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt")),
+    )
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(
+                assistant_reply="I couldn't extract text from that document."
+            ),
+            ok=True,
+        ),
+    )
+
+    result = run_chat_turn(
+        db,
+        b,
+        message="Use this",
+        attachments=[
+            ChatAttachment(
+                name="broken.pdf",
+                content_type="application/pdf",
+                content=b"not-a-pdf",
+            )
+        ],
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert "couldn't extract usable content" in result.value.assistant_reply
+    assert "I've populated the brief" not in result.value.assistant_reply
+
+
+def test_partial_attachment_failure_is_disclosed_after_other_source_is_captured(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+    monkeypatch.setattr(
+        "app.services.document_service.extract_text",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt")),
+    )
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(assistant_reply="Captured.", title="AI Engineer"),
+            ok=True,
+        ),
+    )
+
+    result = run_chat_turn(
+        db,
+        b,
+        message="Use both files",
+        attachments=[
+            ChatAttachment(
+                name="notes.txt",
+                content_type="text/plain",
+                content=b"AI Engineer",
+            ),
+            ChatAttachment(
+                name="broken.pdf",
+                content_type="application/pdf",
+                content=b"not-a-pdf",
+            ),
+        ],
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert result.value.assistant_reply.startswith("I've amended the draft")
+    assert "couldn't read every attachment" in result.value.assistant_reply
+
+
+def test_chat_replaces_false_publish_claim_with_capability_grounding(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(
+                assistant_reply=(
+                    "Perfect — the job is published and live for sourcing now."
+                )
+            ),
+            ok=True,
+        ),
+    )
+    result = run_chat_turn(
+        db,
+        b,
+        message="Yes, publish now",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    reply = result.value.assistant_reply
+    assert "published and live" not in reply
+    assert "haven't performed the requested action" in reply
+    assert "chat only saves brief fields" in reply
+    assert b.status == "draft"
+    assert b.role_id is None
+
+
+def test_action_receipts_are_grounded_without_domain_language_false_positives(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+    replies = iter(
+        [
+            "Done — your job is live.",
+            "Got it — Publishing Manager is the title.",
+            "Got it — publishing weekly reports is a responsibility.",
+            "Done — I have posted the job.",
+            "Done — the opening is active.",
+            "Candidates should have published research.",
+        ]
+    )
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(assistant_reply=next(replies)), ok=True
+        ),
+    )
+
+    launched = run_chat_turn(
+        db,
+        b,
+        message="Please launch it",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+    titled = run_chat_turn(
+        db,
+        b,
+        message="We need a publishing manager",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+    responsibility = run_chat_turn(
+        db,
+        b,
+        message="They need to publish weekly reports",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+    posted = run_chat_turn(
+        db,
+        b,
+        message="Please post it",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+    activated = run_chat_turn(
+        db,
+        b,
+        message="Activate the opening",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+    research = run_chat_turn(
+        db,
+        b,
+        message="The role will publish research",
+        template=resolve_template(org),
+        client=object(),
+        model="m",
+    )
+
+    assert "job is live" not in launched.value.assistant_reply
+    assert "haven't performed the requested action" in launched.value.assistant_reply
+    assert titled.value.assistant_reply == "Got it — Publishing Manager is the title."
+    assert responsibility.value.assistant_reply == (
+        "Got it — publishing weekly reports is a responsibility."
+    )
+    for result in (posted, activated):
+        assert "haven't performed the requested action" in result.value.assistant_reply
+    assert research.value.assistant_reply == "Candidates should have published research."
+
+
+def test_document_turn_asks_only_first_post_capture_gap(db, monkeypatch):
+    b, org = _brief(db)
+    template = resolve_template(org)
+    monkeypatch.setattr(
+        chat,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=ChatCapture(
+                assistant_reply="What role are you hiring for?",
+                title="AI Engineer",
+                domain="Banking",
+                seniority="Senior",
+                summary="Build production AI applications",
+            ),
+            ok=True,
+        ),
+    )
+
+    result = run_chat_turn(
+        db,
+        b,
+        message="",
+        attachments=[
+            ChatAttachment(
+                name="role.txt",
+                content_type="text/plain",
+                content=b"Senior AI Engineer in banking",
+            )
+        ],
+        template=template,
+        client=object(),
+        model="m",
+    )
+
+    assert "What role are you hiring for?" not in result.value.assistant_reply
+    assert "Is this onsite, hybrid, or remote?" in result.value.assistant_reply
 
 
 def test_run_chat_turn_image_block_reaches_llm(db, monkeypatch):
@@ -523,6 +1474,28 @@ def test_build_chat_system_prompt_omits_recent_roles_line_when_none(db):
     b, _o = _brief(db)
     prompt = build_chat_system_prompt(b, resolve_template(_o), focus_gaps=[], recent_titles=[])
     assert "recent roles at this org" not in prompt
+
+
+def test_build_chat_system_prompt_forbids_unreceipted_publish_claims(db):
+    b, org = _brief(db)
+    prompt = build_chat_system_prompt(
+        b,
+        resolve_template(org),
+        focus_gaps=[],
+        recent_titles=[],
+        source_material="[Attached document: role.docx]\nAI Engineer",
+        document_turn=True,
+    )
+    assert "this chat can save brief fields only" in prompt
+    assert "NEVER claim" in prompt
+    assert "Publish job page" in prompt
+    assert "EXTRACT EXHAUSTIVELY" in prompt
+    assert "RECOVERABLE SOURCE MATERIAL" in prompt
+    assert "Captured-so-far values are authoritative" in prompt
+    assert "CHANGE INTENT" in prompt
+    assert "change_mode='replace'" in prompt
+    assert "add Azure and remove Java" in prompt
+    assert "CANONICAL SPEC" in prompt
 
 
 def test_run_chat_turn_passes_recent_titles_into_system_prompt(db, monkeypatch):
