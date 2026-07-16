@@ -188,6 +188,23 @@ export const isRelatedRoleBrief = (brief) => (
   brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
 );
 
+// The list and detail endpoints normally carry the same persisted title, but
+// related-role drafts also have a durable source name. Use one display contract
+// everywhere so a partial/stale detail payload can never leave the main header
+// blank while the sidebar still has a useful label.
+export const requisitionDisplayTitle = (brief) => {
+  const title = String(brief?.title || '').trim();
+  if (title) return title;
+  const sourceName = String(brief?.source_role?.name || brief?.source_role_name || '').trim();
+  if (isRelatedRoleBrief(brief) && sourceName) return `${sourceName} · Related`;
+  return 'Untitled job';
+};
+
+export const requisitionHeaderStatusLabel = (brief) => {
+  if (!isRelatedRoleBrief(brief)) return requisitionStatusLabel(brief?.status);
+  return isRequisitionBriefReadOnly(brief) ? 'Related role' : 'Related draft';
+};
+
 const humanizeGapKey = (key) => String(key || '')
   .replace(/_/g, ' ')
   .replace(/\b\w/g, (character) => character.toUpperCase())
@@ -1170,7 +1187,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     className={`rq-side-item${b.id === selectedId ? ' is-active' : ''}`}
                     onClick={() => select(b.id)}
                   >
-                    <span className="rq-side-title">{b.title || 'Untitled job'}</span>
+                    <span className="rq-side-title">{requisitionDisplayTitle(b)}</span>
                     <span className="rq-side-meta">
                       <span className={`rq-dot ${isPublishedRequisition(b.status) ? 'is-published' : 'is-open'}`} />
                       {isRelatedRoleBrief(b)
@@ -1221,15 +1238,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
             </div>
           ) : (
             <>
-              <header className="rq-main-head">
+              <header className={`rq-main-head${relatedRoleDraft ? ' is-related' : ''}`}>
                 <div className="rq-main-head-titles">
-                  <h1 className="rq-main-title">{brief.title || 'Untitled job'}</h1>
+                  <h1 className="rq-main-title">{requisitionDisplayTitle(brief)}</h1>
                   <div className="rq-main-sub">
-                    <span className="rq-status-chip">
-                      {relatedRoleDraft
-                        ? (applied ? 'Related role created' : 'Related role draft')
-                        : requisitionStatusLabel(brief.status)}
-                    </span>
+                    <span className="rq-status-chip">{requisitionHeaderStatusLabel(brief)}</span>
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
                   {/* Hiring department folded into the header (no separate

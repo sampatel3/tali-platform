@@ -11,7 +11,9 @@ import {
   reloadRequisitionAfterRoleConflict,
   requisitionAtsBridgeModel,
   requisitionAtsProvider,
+  requisitionDisplayTitle,
   requisitionGapLabels,
+  requisitionHeaderStatusLabel,
   requisitionPublishBlockedMessage,
   requisitionRoleConflictMessage,
   requisitionStatusLabel,
@@ -47,6 +49,22 @@ describe('requisition lifecycle labels', () => {
     expect(isRelatedRoleBrief({ brief_kind: 'related_role', status: 'draft' })).toBe(true);
     expect(isRelatedRoleBrief({ source_role_id: 42, status: 'applied' })).toBe(true);
     expect(isRelatedRoleBrief({ brief_kind: 'standard', status: 'draft' })).toBe(false);
+  });
+
+  it('keeps related-role titles and the compact header status present', () => {
+    const relatedDraft = {
+      brief_kind: 'related_role',
+      source_role_id: 42,
+      source_role: { name: 'AI Engineer' },
+      title: '   ',
+      status: 'draft',
+    };
+
+    expect(requisitionDisplayTitle(relatedDraft)).toBe('AI Engineer · Related');
+    expect(requisitionHeaderStatusLabel(relatedDraft)).toBe('Related draft');
+    expect(requisitionHeaderStatusLabel({ ...relatedDraft, status: 'applied' })).toBe('Related role');
+    expect(requisitionDisplayTitle({ title: 'Platform AI Engineer' })).toBe('Platform AI Engineer');
+    expect(requisitionDisplayTitle({ title: '   ' })).toBe('Untitled job');
   });
 
   it('reloads the authoritative requisition after a stale linked write', async () => {
