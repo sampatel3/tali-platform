@@ -167,7 +167,13 @@ def report_public_url(token: str) -> str:
 
 def _scrub(snapshot: dict[str, Any]) -> dict[str, Any]:
     snap = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else {}
-    return _scrub_value(snap)
+    scrubbed = _scrub_value(snap)
+    # A snapshot-level timestamp explains evidence freshness and is not PII.
+    # Candidate-level ``created_at`` fields remain omitted by the recursive
+    # key policy because they expose internal application chronology.
+    if isinstance(scrubbed, dict) and "created_at" in snap:
+        scrubbed["created_at"] = _scrub_value(snap["created_at"])
+    return scrubbed
 
 
 def scrub_public_query(query: str | None) -> str | None:

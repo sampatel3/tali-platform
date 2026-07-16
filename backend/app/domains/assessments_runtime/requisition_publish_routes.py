@@ -15,7 +15,7 @@ from ...models.job_hiring_team import (
     TEAM_ROLE_HIRING_MANAGER,
     JobHiringTeam,
 )
-from ...models.role_brief import RoleBrief
+from ...models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
 from ...models.user import User
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
@@ -23,6 +23,11 @@ from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.requisition_chat_capture import compute_gaps
 from ...services.requisition_reconfiguration import (
     prepare_running_role_reconfiguration,
+)
+from ...services.related_role_service import (
+    RelatedRoleError,
+    create_related_role,
+    related_role_created_payload,
 )
 from ...services.requisition_template_service import resolve_template
 from ...services.role_brief_service import (
@@ -44,7 +49,7 @@ from ...services.task_provisioning_service import (
     role_assessment_input_text,
 )
 from ..identity_access.organization_serialization import resolve_active_ats
-from .requisition_shared import _ats_spec, _get_brief, _job_page_url, _org
+from .requisition_shared import _ats_spec, _job_page_url, _org
 from .job_authorization import JobPermission, require_job_permission
 from .roles_management_routes import (
     _request_autogenerate_assessment_task,
@@ -98,8 +103,45 @@ def publish_requisition(
     initial_role_id = (
         int(brief_probe.role_id) if brief_probe.role_id is not None else None
     )
+    source_role_id = (
+        int(brief_probe.source_role_id)
+        if brief_probe.source_role_id is not None
+        else None
+    )
     locked: Role | None = None
-    if initial_role_id is not None:
+    if source_role_id is not None:
+        # Related-role creation is a source-job mutation boundary. Lock and
+        # authorize the original ATS role before the draft, preserving the
+        # platform-wide Role -> RoleBrief lock order.
+        locked = require_job_permission(
+            db,
+            current_user=current_user,
+            role_id=initial_role_id or source_role_id,
+            permission=JobPermission.EDIT_ROLE,
+        )
+        brief = (
+            db.query(RoleBrief)
+            .filter(
+                RoleBrief.id == brief_id,
+                RoleBrief.organization_id == current_user.organization_id,
+            )
+            .with_for_update(of=RoleBrief)
+            .populate_existing()
+            .first()
+        )
+        if brief is None:
+            raise HTTPException(status_code=404, detail="Requisition not found")
+        if int(brief.source_role_id or 0) != source_role_id:
+            raise HTTPException(
+                status_code=409,
+                detail="The related-role draft's source changed; refresh and retry.",
+            )
+        if (int(brief.role_id) if brief.role_id is not None else None) != initial_role_id:
+            raise HTTPException(
+                status_code=409,
+                detail="The related-role draft changed; refresh and retry.",
+            )
+    elif initial_role_id is not None:
         locked = require_job_permission(
             db,
             current_user=current_user,
@@ -168,6 +210,34 @@ def publish_requisition(
                 "the role can be scored and run by the agent."
             ),
         )
+    if source_role_id is not None:
+        if initial_role_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="This related-role draft has already been created.",
+            )
+        try:
+            related, evaluation_counts = create_related_role(
+                db,
+                role_id=source_role_id,
+                organization_id=int(current_user.organization_id),
+                creator_user_id=int(current_user.id),
+                name=(brief.title or "Untitled related role"),
+                job_spec_text=data.jd_markdown,
+                brief=brief,
+            )
+        except RelatedRoleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        receipt = related_role_created_payload(related, evaluation_counts)
+        return {
+            **receipt,
+            "related_role": True,
+            "status": BRIEF_STATUS_APPLIED,
+            "role_id": int(related.id),
+            "version": int(related.version or 1),
+            "job_status": related.job_status,
+            "source_role_id": source_role_id,
+        }
     ref_code = ensure_ref_code(db, brief)
     old_intent_fingerprint: str | None = None
     role_was_enabled = False

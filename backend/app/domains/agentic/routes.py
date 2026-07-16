@@ -13,15 +13,14 @@
 
 All endpoints are org-scoped via ``get_current_user``.
 """
+
 from __future__ import annotations
 
-import hashlib
 import logging
-import secrets
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import case, desc, or_
 from sqlalchemy.orm import Session
@@ -29,15 +28,13 @@ from sqlalchemy.orm import Session
 from ...actions import approve_decision as approve_decision_action
 from ...actions import override_decision as override_decision_action
 from ...actions.types import Actor
-from ...agent_runtime import budget_guard
 from ...agent_chat.run_history import public_failure_summary
-from ...deps import get_current_user, require_org_owner
+from ...deps import get_current_user
 from ...domains.assessments_runtime.pipeline_service import (
     is_post_handover_workable_stage,
 )
 from ...domains.assessments_runtime.job_authorization import (
     JobPermission,
-    has_job_permission_for_role,
     require_job_permission,
 )
 from ...domains.assessments_runtime.role_support import is_resolved
@@ -48,44 +45,57 @@ from ...services.decision_presentation_service import (
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
 from ...services.role_concurrency import (
     assert_role_version,
-    bump_role_version,
-    role_query_for_update,
 )
 from ...services.role_change_audit import (
-    ROLE_CHANGE_ACTION_AGENT_PAUSED,
-    ROLE_CHANGE_ACTION_AGENT_RESUMED,
-    add_role_change_event,
-    capture_role_change_snapshot,
-    infer_legacy_unique_org_actor,
     latest_role_change_actor,
-)
-from ...services.manual_agent_run_dispatch import (
-    ManualRunDispatchConflict,
-    publish_manual_run,
 )
 from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.workspace_agent_control import (
-    WORKSPACE_MANUAL_PAUSE_REASON,
     workspace_agent_pause_state,
 )
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
-from ...models.agent_needs_input import AgentNeedsInput
 from ...models.agent_run import AgentRun
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
-from ...models.candidate_application_event import CandidateApplicationEvent
-from ...models.organization import Organization
 from ...models.role import Role
 from ...models.user import User
-from ...models.workspace_agent_control_event import WorkspaceAgentControlEvent
 from ...platform.database import get_db
-from ...platform.request_context import get_request_id
-from ._activity_feed import (
-    AgentActivityPayload,
-    build_activity_feed,
-    confidence_to_float,
-)
+from ._activity_feed import confidence_to_float
 from ._reasoning_text import humanize_reasoning
+from .manual_run_routes import (
+    RunNowBody as RunNowBody,
+    RunNowResult as RunNowResult,
+    _run_now_dispatch_identity as _run_now_dispatch_identity,
+    router as manual_run_router,
+    run_now as run_now,
+)
+from .role_control_routes import (
+    MANUAL_PAUSE_REASON as MANUAL_PAUSE_REASON,
+    RoleAgentPauseResult as RoleAgentPauseResult,
+    RoleVersionCommand as RoleVersionCommand,
+    _compensate_failed_agent_dispatch as _compensate_failed_agent_dispatch,
+    pause_role_agent as pause_role_agent,
+    resume_role_agent as resume_role_agent,
+    router as role_control_router,
+)
+from .status_routes import (
+    AgentStatusActivity as AgentStatusActivity,
+    AgentStatusCurrentRun as AgentStatusCurrentRun,
+    AgentStatusPausedBy as AgentStatusPausedBy,
+    AgentStatusPayload as AgentStatusPayload,
+    AgentStatusPendingBreakdown as AgentStatusPendingBreakdown,
+    agent_activity as agent_activity,
+    agent_status as agent_status,
+    router as status_router,
+)
+from .workspace_control_routes import (
+    BulkAgentPauseResult as BulkAgentPauseResult,
+    WorkspaceControlCommand as WorkspaceControlCommand,
+    _workspace_control_conflict as _workspace_control_conflict,
+    pause_all_agents as pause_all_agents,
+    resume_all_agents as resume_all_agents,
+    router as workspace_control_router,
+)
 
 
 router = APIRouter(tags=["agentic"])
@@ -258,91 +268,6 @@ class DiscardBody(BaseModel):
     expected_version: int = Field(ge=1)
 
 
-class RunNowBody(BaseModel):
-    application_id: Optional[int] = Field(default=None, ge=1)
-    # Stable across client retries. The conventional Idempotency-Key header is
-    # also accepted; supplying both requires an exact match.
-    idempotency_key: Optional[str] = Field(default=None, min_length=1, max_length=128)
-
-
-class RoleVersionCommand(BaseModel):
-    expected_version: int = Field(ge=1)
-
-
-class AgentStatusActivity(BaseModel):
-    event_type: str
-    reason: Optional[str] = None
-    actor_type: str
-    application_id: Optional[int] = None
-    candidate_name: Optional[str] = None
-    created_at: datetime
-
-
-class AgentStatusCurrentRun(BaseModel):
-    id: int
-    started_at: datetime
-    status: str
-    decisions_emitted: int
-    tools_called: Optional[list[dict[str, Any]]] = None
-
-
-class AgentStatusPausedBy(BaseModel):
-    user_id: Optional[int] = None
-    name: Optional[str] = None
-    is_current_user: bool
-    changed_at: Optional[datetime] = None
-    attribution: Literal["verified", "inferred", "unavailable"]
-    source: Literal[
-        "role_change_event",
-        "legacy_unique_member",
-        "legacy_history",
-        "workspace_control",
-    ]
-
-
-class AgentStatusPendingBreakdown(BaseModel):
-    total: int
-    decisions: int
-    questions: int
-
-
-class AgentStatusPayload(BaseModel):
-    role_id: int
-    enabled: bool
-    # Viewer-specific capability from the same hiring-team policy enforced by
-    # every role agent mutation. Clients use it only to render controls as
-    # read-only; the mutation endpoints remain the authority.
-    can_control_agent: bool = False
-    # Effective state follows workspace > role precedence. The legacy
-    # paused_at/reason/by fields remain the effective display contract so old
-    # clients stop immediately on a workspace hold; the explicit role_* fields
-    # preserve the local desired state underneath that overlay.
-    paused: bool = False
-    pause_scope: Optional[Literal["workspace", "role"]] = None
-    paused_at: Optional[datetime] = None
-    paused_reason: Optional[str] = None
-    paused_by: Optional[AgentStatusPausedBy] = None
-    role_paused_at: Optional[datetime] = None
-    role_paused_reason: Optional[str] = None
-    role_paused_by: Optional[AgentStatusPausedBy] = None
-    workspace_paused: bool = False
-    workspace_paused_at: Optional[datetime] = None
-    workspace_paused_reason: Optional[str] = None
-    workspace_paused_by: Optional[AgentStatusPausedBy] = None
-    workspace_control_version: int = 1
-    last_run_at: Optional[datetime] = None
-    bootstrap_status: Optional[str] = None
-    bootstrap_error: Optional[str] = None
-    bootstrap_started_at: Optional[datetime] = None
-    bootstrap_completed_at: Optional[datetime] = None
-    pending_decisions: int
-    pending_breakdown: AgentStatusPendingBreakdown
-    monthly_budget_cents: Optional[int] = None
-    monthly_spent_cents: int
-    current_run: Optional[AgentStatusCurrentRun] = None
-    last_activity: Optional[AgentStatusActivity] = None
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -430,8 +355,12 @@ def _decision_to_payload(
         taali_score = _first_score(
             evidence.get("taali_score"),
             evidence.get("role_fit_score"),
-            getattr(application, "taali_score_cache_100", None) if application else None,
-            getattr(application, "role_fit_score_cache_100", None) if application else None,
+            getattr(application, "taali_score_cache_100", None)
+            if application
+            else None,
+            getattr(application, "role_fit_score_cache_100", None)
+            if application
+            else None,
         )
 
     score_provenance = None
@@ -453,23 +382,38 @@ def _decision_to_payload(
     # candidate report (cv_match_details.requirements_assessment). Capped + gated
     # like taali_score so a pre-screen reject never leaks a stale match.
     requirements = None
-    if str(decision.decision_type) != "skip_assessment_reject" and application is not None:
+    if (
+        str(decision.decision_type) != "skip_assessment_reject"
+        and application is not None
+    ):
         details = getattr(application, "cv_match_details", None)
-        ra = details.get("requirements_assessment") if isinstance(details, dict) else None
+        ra = (
+            details.get("requirements_assessment")
+            if isinstance(details, dict)
+            else None
+        )
         if isinstance(ra, list) and ra:
             rows: list[dict[str, Any]] = []
             for item in ra[:6]:
                 if not isinstance(item, dict):
                     continue
-                label = str(item.get("criterion_text") or item.get("requirement") or "").strip()
+                label = str(
+                    item.get("criterion_text") or item.get("requirement") or ""
+                ).strip()
                 if not label:
                     continue
                 raw = item.get("match_score")
-                rows.append({
-                    "label": label,
-                    "score": round(float(raw)) if isinstance(raw, (int, float)) else None,
-                    "status": (str(item.get("status") or "").strip().lower() or None),
-                })
+                rows.append(
+                    {
+                        "label": label,
+                        "score": round(float(raw))
+                        if isinstance(raw, (int, float))
+                        else None,
+                        "status": (
+                            str(item.get("status") or "").strip().lower() or None
+                        ),
+                    }
+                )
             requirements = rows or None
 
     return AgentDecisionPayload(
@@ -572,12 +516,20 @@ def list_agent_decisions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved", "decided", "current"):
+    if status not in AGENT_DECISION_STATUSES and status not in (
+        "all",
+        "resolved",
+        "decided",
+        "current",
+    ):
         raise HTTPException(status_code=422, detail=f"unsupported status={status!r}")
 
     query = (
         db.query(AgentDecision, Candidate, Role)
-        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
         .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .outerjoin(Role, Role.id == AgentDecision.role_id)
         .filter(AgentDecision.organization_id == current_user.organization_id)
@@ -593,17 +545,13 @@ def list_agent_decisions(
             # The Hub queue shows actionable (pending) rows AND in-flight
             # (processing) ones — the latter rendered greyed/at-bottom so a
             # recruiter can't double-approve while the background batch runs.
-            query = query.filter(
-                AgentDecision.status.in_(("pending", "processing"))
-            )
+            query = query.filter(AgentDecision.status.in_(("pending", "processing")))
         elif status == "resolved":
             # History: the inverse of the queue — every decision that has
             # left the recruiter's queue (approved / overridden / taught /
             # discarded / expired). Excludes the live queue states
             # (pending, processing) which are still actionable elsewhere.
-            query = query.filter(
-                AgentDecision.status.notin_(("pending", "processing"))
-            )
+            query = query.filter(AgentDecision.status.notin_(("pending", "processing")))
         elif status == "decided":
             # Calls a human actually made — approved or overridden — and
             # nothing else. Narrower than ``resolved`` on purpose: the Hub's
@@ -611,9 +559,7 @@ def list_agent_decisions(
             # folding in bulk discarded/expired rows (a purged queue can
             # produce hundreds at once) would push genuine decisions out of
             # the window and blank the panel.
-            query = query.filter(
-                AgentDecision.status.in_(("approved", "overridden"))
-            )
+            query = query.filter(AgentDecision.status.in_(("approved", "overridden")))
         elif status == "current":
             # Candidate-report lens: an actionable recommendation wins over
             # history; otherwise retain the last decision a human actually
@@ -675,9 +621,7 @@ def list_agent_decisions(
             live_first, desc(AgentDecision.created_at), desc(AgentDecision.id)
         )
     else:
-        query = query.order_by(
-            desc(AgentDecision.created_at), desc(AgentDecision.id)
-        )
+        query = query.order_by(desc(AgentDecision.created_at), desc(AgentDecision.id))
     query = query.limit(limit)
     rows = query.all()
 
@@ -744,7 +688,10 @@ def list_agent_decisions(
         if decision.status == "pending":
             try:
                 report = decision_staleness.evaluate(
-                    db, decision, application=app, role=role,
+                    db,
+                    decision,
+                    application=app,
+                    role=role,
                     cache=staleness_cache,
                 )
                 is_stale = report.is_stale
@@ -754,7 +701,9 @@ def list_agent_decisions(
                 pass
         payloads.append(
             _decision_to_payload(
-                decision, candidate, role,
+                decision,
+                candidate,
+                role,
                 application=app,
                 is_stale=is_stale,
                 staleness_reasons=reasons,
@@ -855,11 +804,15 @@ def needs_reeval_count(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/agent-decisions/{decision_id}/approve", response_model=AgentDecisionPayload)
+@router.post(
+    "/agent-decisions/{decision_id}/approve", response_model=AgentDecisionPayload
+)
 def approve(
     decision_id: int,
     body: ApproveBody = Body(default_factory=ApproveBody),
-    force: bool = Query(default=False, description="Approve even if the inputs are stale (A4)"),
+    force: bool = Query(
+        default=False, description="Approve even if the inputs are stale (A4)"
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -886,6 +839,7 @@ def approve(
         )
     if pre_decision is not None and pre_decision.status == "pending" and not force:
         from ...services import decision_staleness
+
         try:
             report = decision_staleness.evaluate(db, pre_decision)
             if report.is_stale:
@@ -937,7 +891,9 @@ def approve(
     except Exception as exc:
         db.rollback()
         logger.exception("Failed to approve agent decision %s", decision_id)
-        raise HTTPException(status_code=500, detail="Failed to approve decision") from exc
+        raise HTTPException(
+            status_code=500, detail="Failed to approve decision"
+        ) from exc
     candidate = (
         db.query(Candidate)
         .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
@@ -958,7 +914,9 @@ def approve(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/agent-decisions/{decision_id}/override", response_model=AgentDecisionPayload)
+@router.post(
+    "/agent-decisions/{decision_id}/override", response_model=AgentDecisionPayload
+)
 def override(
     decision_id: int,
     body: OverrideBody = Body(default_factory=OverrideBody),
@@ -1024,7 +982,9 @@ def override(
     except Exception as exc:
         db.rollback()
         logger.exception("Failed to override agent decision %s", decision_id)
-        raise HTTPException(status_code=500, detail="Failed to override decision") from exc
+        raise HTTPException(
+            status_code=500, detail="Failed to override decision"
+        ) from exc
     candidate = (
         db.query(Candidate)
         .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
@@ -1057,7 +1017,9 @@ class ReEvaluateResult(BaseModel):
     pause_scope: Optional[Literal["workspace", "role"]] = None
 
 
-@router.post("/agent-decisions/{decision_id}/re-evaluate", response_model=ReEvaluateResult)
+@router.post(
+    "/agent-decisions/{decision_id}/re-evaluate", response_model=ReEvaluateResult
+)
 def re_evaluate(
     decision_id: int,
     db: Session = Depends(get_db),
@@ -1085,7 +1047,9 @@ def re_evaluate(
         .first()
     )
     if decision is None:
-        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"agent_decision {decision_id} not found"
+        )
     require_job_permission(
         db,
         current_user=current_user,
@@ -1151,7 +1115,9 @@ def re_evaluate(
         except Exception:
             db.rollback()
             logger.exception("re-score failed decision_id=%s", decision_id)
-            raise HTTPException(status_code=500, detail="Re-score failed. Please try again.")
+            raise HTTPException(
+                status_code=500, detail="Re-score failed. Please try again."
+            )
         return ReEvaluateResult(
             decision_id=decision_id,
             role_id=int(decision.role_id),
@@ -1178,7 +1144,9 @@ def re_evaluate(
     except Exception as exc:
         db.rollback()
         logger.exception("Failed to re-evaluate agent decision %s", decision_id)
-        raise HTTPException(status_code=500, detail="Failed to re-evaluate decision") from exc
+        raise HTTPException(
+            status_code=500, detail="Failed to re-evaluate decision"
+        ) from exc
     # Enqueue a focused cycle. If the role is paused we still discarded the
     # stale decision (the recruiter asked for it) but report queued=False.
     queued = False
@@ -1365,7 +1333,9 @@ def bulk_approve(
     reported in ``failures`` without halting the batch; a decision whose
     Workable writeback ultimately fails is returned to the queue by the task.
     """
-    requested = list(dict.fromkeys(int(x) for x in body.decision_ids))  # de-dupe, preserve order
+    requested = list(
+        dict.fromkeys(int(x) for x in body.decision_ids)
+    )  # de-dupe, preserve order
     note = (body.note or "").strip() or None
     role_ids = {
         int(role_id)
@@ -1437,7 +1407,9 @@ def bulk_override(
             status_code=422,
             detail=f"unsupported bulk override_action={action!r}; expected one of {sorted(_BULK_OVERRIDE_ACTIONS)}",
         )
-    requested = list(dict.fromkeys(int(x) for x in body.decision_ids))  # de-dupe, preserve order
+    requested = list(
+        dict.fromkeys(int(x) for x in body.decision_ids)
+    )  # de-dupe, preserve order
     note = (body.note or "").strip() or None
     stages = body.workable_target_stages or {}
 
@@ -1464,9 +1436,13 @@ def bulk_override(
     for decision_id in requested:
         decision = rows.get(decision_id)
         if decision is None:
-            failures.append(BulkApproveFailure(decision_id=decision_id, error="not found"))
+            failures.append(
+                BulkApproveFailure(decision_id=decision_id, error="not found")
+            )
             continue
-        stage = stages.get(str(decision.role_id)) if decision.role_id is not None else None
+        stage = (
+            stages.get(str(decision.role_id)) if decision.role_id is not None else None
+        )
         try:
             if action == "skip_assessment_advance":
                 # Reclassify into the advance queue (sync, no Workable write);
@@ -1530,7 +1506,9 @@ def list_agent_runs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(AgentRun).filter(AgentRun.organization_id == current_user.organization_id)
+    q = db.query(AgentRun).filter(
+        AgentRun.organization_id == current_user.organization_id
+    )
     if role_id is not None:
         q = q.filter(AgentRun.role_id == int(role_id))
     q = q.order_by(desc(AgentRun.started_at)).limit(limit)
@@ -1538,1078 +1516,11 @@ def list_agent_runs(
 
 
 # ---------------------------------------------------------------------------
-# POST /roles/{id}/agent/run-now
+# Composed role-agent control routers
 # ---------------------------------------------------------------------------
 
 
-class RunNowResult(BaseModel):
-    role_id: int
-    queued: bool
-    task_id: Optional[str] = None
-    detail: Optional[str] = None
-    blocked: bool = False
-    pause_scope: Optional[Literal["workspace", "role"]] = None
-    status: Optional[str] = None
-    application_id: Optional[int] = None
-    agent_run_id: Optional[int] = None
-    dispatch_pending: bool = False
-    replayed: bool = False
-    intent_persisted: bool = False
-    # True only when this request's Celery publish returned successfully;
-    # None means a replay cannot know whether an earlier ambiguous attempt was
-    # accepted and therefore must not claim it was queued.
-    broker_accepted: Optional[bool] = None
-    idempotency_key: Optional[str] = None
-
-
-def _run_now_dispatch_identity(
-    *,
-    organization_id: int,
-    user_id: int,
-    body_key: str | None,
-    header_key: str | None,
-) -> tuple[str, str | None]:
-    """Return a scoped durable key and the explicit client key, if supplied.
-
-    Legacy callers that send neither idempotency field inherit the request id
-    installed by middleware. Retrying with the same ``X-Request-ID`` therefore
-    replays the same intent; new ordinary clicks still receive distinct ids.
-    """
-
-    normalized_body = str(body_key or "").strip() or None
-    normalized_header = str(header_key or "").strip() or None
-    if header_key is not None and normalized_header is None:
-        raise HTTPException(status_code=422, detail="Idempotency-Key cannot be empty")
-    if normalized_header is not None and len(normalized_header) > 128:
-        raise HTTPException(
-            status_code=422,
-            detail="Idempotency-Key must be 128 characters or fewer",
-        )
-    if normalized_body is not None and normalized_header is not None:
-        if normalized_body != normalized_header:
-            raise HTTPException(
-                status_code=422,
-                detail="Body and header idempotency keys must match",
-            )
-    explicit_key = normalized_header or normalized_body
-    request_token = (
-        explicit_key
-        or str(get_request_id() or "").strip()
-        or secrets.token_urlsafe(24)
-    )
-    digest = hashlib.sha256(request_token.encode("utf-8")).hexdigest()
-    return (
-        f"http-run-now/{int(organization_id)}/{int(user_id)}/{digest}",
-        explicit_key,
-    )
-
-
-@router.get("/roles/{role_id}/agent/status", response_model=AgentStatusPayload)
-def agent_status(
-    role_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Consolidated agent state for the role — backs the top bar's poll.
-
-    One call returns: enabled flag, paused state, monthly spend vs cap,
-    in-flight cycle (if any), pending decision count, and the latest
-    agent/recruiter event for the live tick.
-    """
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == current_user.organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if role is None:
-        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
-
-    now = datetime.now(timezone.utc)
-    # "pending" rolls up both decisions awaiting recruiter approve/override
-    # and open orchestrator questions awaiting an answer. The Review queue
-    # UI surfaces both kinds in one place — counts must follow.
-    pending_decisions_count = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.organization_id == current_user.organization_id,
-            AgentDecision.role_id == role_id,
-            AgentDecision.status == "pending",
-            or_(
-                AgentDecision.snoozed_until.is_(None),
-                AgentDecision.snoozed_until <= now,
-            ),
-        )
-        .count()
-    )
-    open_needs_input_count = (
-        db.query(AgentNeedsInput)
-        .filter(
-            AgentNeedsInput.organization_id == current_user.organization_id,
-            AgentNeedsInput.role_id == role_id,
-            AgentNeedsInput.resolved_at.is_(None),
-            AgentNeedsInput.dismissed_at.is_(None),
-        )
-        .count()
-    )
-    pending = int(pending_decisions_count) + int(open_needs_input_count)
-
-    current_run_row = (
-        db.query(AgentRun)
-        .filter(
-            AgentRun.organization_id == current_user.organization_id,
-            AgentRun.role_id == role_id,
-            AgentRun.status == "running",
-        )
-        .order_by(desc(AgentRun.started_at))
-        .first()
-    )
-    current_run = (
-        AgentStatusCurrentRun(
-            id=int(current_run_row.id),
-            started_at=current_run_row.started_at,
-            status=str(current_run_row.status),
-            decisions_emitted=int(current_run_row.decisions_emitted or 0),
-            tools_called=current_run_row.tools_called,
-        )
-        if current_run_row is not None
-        else None
-    )
-
-    activity_row = (
-        db.query(CandidateApplicationEvent, Candidate)
-        .join(
-            CandidateApplication,
-            CandidateApplication.id == CandidateApplicationEvent.application_id,
-        )
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplicationEvent.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
-        )
-        .order_by(desc(CandidateApplicationEvent.created_at))
-        .limit(1)
-        .first()
-    )
-    last_activity = None
-    if activity_row is not None:
-        event, candidate = activity_row
-        last_activity = AgentStatusActivity(
-            event_type=str(event.event_type),
-            reason=event.reason,
-            actor_type=str(event.actor_type),
-            application_id=int(event.application_id),
-            candidate_name=getattr(candidate, "full_name", None) if candidate else None,
-            created_at=event.created_at,
-        )
-
-    monthly_spent = budget_guard.month_to_date_spend_cents(db, role=role)
-
-    role_paused_by = None
-    if role.agent_paused_at is not None and budget_guard.is_manual_pause_reason(
-        role.agent_paused_reason
-    ):
-        pause_actor = latest_role_change_actor(
-            db,
-            organization_id=int(current_user.organization_id),
-            role_id=role_id,
-            action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
-        )
-        if pause_actor is not None:
-            # The matching append-only event is the source of truth. Its user
-            # can be unavailable after account deletion, but the event time is
-            # still useful and must not be replaced with a different member.
-            pause_actor_user_id = pause_actor.get("user_id")
-            role_paused_by = AgentStatusPausedBy(
-                user_id=(
-                    int(pause_actor_user_id)
-                    if pause_actor_user_id is not None
-                    else None
-                ),
-                name=pause_actor.get("name"),
-                is_current_user=(
-                    pause_actor_user_id is not None
-                    and int(pause_actor_user_id) == int(current_user.id)
-                ),
-                changed_at=pause_actor.get("changed_at"),
-                attribution=(
-                    "verified" if pause_actor_user_id is not None else "unavailable"
-                ),
-                source="role_change_event",
-            )
-        else:
-            # Migration 169 introduced role_change_events without fabricating
-            # history for already-paused roles. A sole surviving account that
-            # predates such a pause is useful context, but remains explicitly
-            # inferred because deleted historical users cannot be recovered.
-            inferred_actor = infer_legacy_unique_org_actor(
-                db,
-                organization_id=int(current_user.organization_id),
-                changed_at=role.agent_paused_at,
-            )
-            inferred_user_id = (
-                inferred_actor.get("user_id") if inferred_actor is not None else None
-            )
-            role_paused_by = AgentStatusPausedBy(
-                user_id=(
-                    int(inferred_user_id) if inferred_user_id is not None else None
-                ),
-                name=(
-                    inferred_actor.get("name")
-                    if inferred_actor is not None
-                    else None
-                ),
-                is_current_user=(
-                    inferred_user_id is not None
-                    and int(inferred_user_id) == int(current_user.id)
-                ),
-                changed_at=role.agent_paused_at,
-                attribution=("inferred" if inferred_actor is not None else "unavailable"),
-                source=(
-                    "legacy_unique_member"
-                    if inferred_actor is not None
-                    else "legacy_history"
-                ),
-            )
-
-    workspace_pause = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    workspace_paused_by = (
-        AgentStatusPausedBy(**workspace_pause["paused_by"])
-        if workspace_pause["paused_by"] is not None
-        else None
-    )
-    enabled = bool(role.agentic_mode_enabled)
-    if enabled and workspace_pause["paused"]:
-        effective_paused = True
-        pause_scope: Literal["workspace", "role"] | None = "workspace"
-        effective_paused_at = workspace_pause["paused_at"]
-        effective_paused_reason = workspace_pause["reason"]
-        effective_paused_by = workspace_paused_by
-    elif enabled and role.agent_paused_at is not None:
-        effective_paused = True
-        pause_scope = "role"
-        effective_paused_at = role.agent_paused_at
-        effective_paused_reason = role.agent_paused_reason
-        effective_paused_by = role_paused_by
-    else:
-        effective_paused = False
-        pause_scope = None
-        effective_paused_at = None
-        effective_paused_reason = None
-        effective_paused_by = None
-
-    return AgentStatusPayload(
-        role_id=role_id,
-        enabled=enabled,
-        can_control_agent=has_job_permission_for_role(
-            db,
-            current_user=current_user,
-            role=role,
-            permission=JobPermission.CONTROL_AGENT,
-        ),
-        paused=effective_paused,
-        pause_scope=pause_scope,
-        paused_at=effective_paused_at,
-        paused_reason=effective_paused_reason,
-        paused_by=effective_paused_by,
-        role_paused_at=role.agent_paused_at,
-        role_paused_reason=role.agent_paused_reason,
-        role_paused_by=role_paused_by,
-        workspace_paused=bool(workspace_pause["paused"]),
-        workspace_paused_at=workspace_pause["paused_at"],
-        workspace_paused_reason=workspace_pause["reason"],
-        workspace_paused_by=workspace_paused_by,
-        workspace_control_version=int(workspace_pause["version"]),
-        last_run_at=role.agent_last_run_at,
-        bootstrap_status=getattr(role, "agent_bootstrap_status", None),
-        bootstrap_error=getattr(role, "agent_bootstrap_error", None),
-        bootstrap_started_at=getattr(role, "agent_bootstrap_started_at", None),
-        bootstrap_completed_at=getattr(role, "agent_bootstrap_completed_at", None),
-        pending_decisions=pending,
-        pending_breakdown=AgentStatusPendingBreakdown(
-            total=pending,
-            decisions=int(pending_decisions_count),
-            questions=int(open_needs_input_count),
-        ),
-        monthly_budget_cents=role.monthly_usd_budget_cents,
-        monthly_spent_cents=monthly_spent,
-        current_run=current_run,
-        last_activity=last_activity,
-    )
-
-
-@router.get("/roles/{role_id}/agent/activity", response_model=AgentActivityPayload)
-def agent_activity(
-    role_id: int,
-    limit: int = Query(default=50, ge=1, le=200),
-    before: Optional[datetime] = Query(default=None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Reverse-chronological feed of what the agent has been doing on this role.
-
-    Merges four sources, all already persisted by the runtime:
-      * agent_runs           — cycle started/finished/failed/paused
-      * agent_decisions      — what got scored and recommended
-      * candidate_application_events (actor=agent) — stage moves it made
-      * agent_needs_input    — questions the agent raised + their resolution
-
-    Cursor pagination via ``before`` (ISO timestamp). ``has_more`` is a
-    cheap hint — true iff any source returned exactly ``limit`` rows.
-    """
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == current_user.organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if role is None:
-        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
-
-    entries, has_more = build_activity_feed(
-        db,
-        organization_id=current_user.organization_id,
-        role_id=role_id,
-        limit=limit,
-        before=before,
-    )
-    return AgentActivityPayload(role_id=role_id, entries=entries, has_more=has_more)
-
-
-@router.post(
-    "/roles/{role_id}/agent/run-now",
-    response_model=RunNowResult,
-    response_model_exclude_unset=True,
-)
-def run_now(
-    role_id: int,
-    body: RunNowBody = Body(default_factory=RunNowBody),
-    idempotency_key_header: Optional[str] = Header(
-        default=None,
-        alias="Idempotency-Key",
-    ),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
-    )
-    if not bool(role.agentic_mode_enabled):
-        raise HTTPException(
-            status_code=409,
-            detail="agent is not enabled for this role",
-        )
-    workspace_pause = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    if bool(workspace_pause["paused"]):
-        return RunNowResult(
-            role_id=role_id,
-            queued=False,
-            task_id=None,
-            blocked=True,
-            pause_scope="workspace",
-            detail="agent run blocked while the workspace agent is paused",
-        )
-    if role.agent_paused_at is not None:
-        return RunNowResult(
-            role_id=role_id,
-            queued=False,
-            task_id=None,
-            blocked=True,
-            pause_scope="role",
-            detail=f"agent is paused: {role.agent_paused_reason or 'unspecified'}",
-        )
-
-    application_id = int(body.application_id) if body.application_id is not None else None
-    if application_id is not None:
-        application = (
-            db.query(CandidateApplication.id)
-            .filter(
-                CandidateApplication.id == application_id,
-                CandidateApplication.role_id == int(role.id),
-                CandidateApplication.organization_id
-                == int(current_user.organization_id),
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .one_or_none()
-        )
-        if application is None:
-            raise HTTPException(
-                status_code=404,
-                detail="application not found for this role",
-            )
-
-    dispatch_key, explicit_key = _run_now_dispatch_identity(
-        organization_id=int(current_user.organization_id),
-        user_id=int(current_user.id),
-        body_key=body.idempotency_key,
-        header_key=idempotency_key_header,
-    )
-    try:
-        publish_result = publish_manual_run(
-            role=role,
-            application_id=application_id,
-            dispatch_key=dispatch_key,
-        )
-    except ManualRunDispatchConflict as exc:
-        logger.info(
-            "manual run idempotency conflict role_id=%s user_id=%s",
-            role_id,
-            current_user.id,
-        )
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "MANUAL_RUN_IDEMPOTENCY_CONFLICT",
-                "message": "That idempotency key was already used for a different run scope.",
-            },
-        ) from exc
-
-    dispatch_pending = bool(publish_result.get("dispatch_pending"))
-    replayed = bool(publish_result.get("replayed"))
-    response: dict[str, Any] = {
-        "role_id": int(role.id),
-        "application_id": application_id,
-        # ``queued`` means this request observed successful broker publication,
-        # not merely that a durable intent exists.
-        "queued": bool(publish_result.get("broker_accepted") is True),
-        "task_id": publish_result.get("task_id"),
-        "status": "dispatch_pending"
-        if dispatch_pending
-        else str(publish_result.get("status") or "queued"),
-        "agent_run_id": publish_result.get("agent_run_id"),
-        "dispatch_pending": dispatch_pending,
-        "replayed": replayed,
-        "intent_persisted": bool(publish_result.get("intent_persisted")),
-        "broker_accepted": publish_result.get("broker_accepted"),
-    }
-    if dispatch_pending:
-        response["detail"] = (
-            "Run request saved; broker dispatch is pending automatic recovery."
-        )
-    elif replayed:
-        response["detail"] = "Existing run request replayed without another publish."
-    if explicit_key is not None:
-        response["idempotency_key"] = explicit_key
-
-    return RunNowResult(**response)
-
-
-# Reason stamped on a recruiter-initiated org-wide pause. Distinct from the
-# orchestrator's budget reasons so the activity tick / panel copy reads as a
-# deliberate pause rather than "monthly budget reached".
-MANUAL_PAUSE_REASON = "paused by recruiter"
-
-
-def _compensate_failed_agent_dispatch(
-    db: Session,
-    *,
-    role_id: int,
-    dispatched_version: int,
-    current_user: User,
-) -> None:
-    """Pause a failed resume without overwriting a later recruiter action."""
-
-    role = (
-        role_query_for_update(
-            db,
-            role_id=role_id,
-            organization_id=int(current_user.organization_id),
-        )
-        .populate_existing()
-        .first()
-    )
-    # The dispatch result belongs to the state that was just resumed. If a
-    # recruiter deleted, disabled, or independently paused the role after that
-    # commit, their newer control is already the safe terminal state.
-    if (
-        role is None
-        or int(role.version or 1) != int(dispatched_version)
-        or not bool(role.agentic_mode_enabled)
-        or role.agent_paused_at is not None
-    ):
-        db.commit()
-        return
-
-    compensation_before = capture_role_change_snapshot(role)
-    compensation_from = int(role.version or 1)
-    budget_guard.pause_role(db, role=role, reason="agent bootstrap dispatch failed")
-    role.agent_bootstrap_status = "failed"
-    role.agent_bootstrap_error = "agent bootstrap dispatch failed"
-    role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
-    compensation_to = bump_role_version(role)
-    add_role_change_event(
-        db,
-        role=role,
-        before=compensation_before,
-        action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
-        actor_user_id=int(current_user.id),
-        from_version=compensation_from,
-        to_version=compensation_to,
-        reason="agent bootstrap dispatch failed",
-        request_id=get_request_id(),
-    )
-    db.commit()
-
-
-class BulkAgentPauseResult(BaseModel):
-    """Outcome of a workspace pause-overlay transition."""
-
-    affected: int  # enabled roles whose effective state changed this call
-    enabled_count: int  # agent-enabled roles considered
-    skipped: int = 0  # newly unblocked roles not immediately dispatched
-    workspace_paused: bool
-    workspace_control_version: int
-    paused_at: Optional[datetime] = None
-    paused_reason: Optional[str] = None
-    paused_by: Optional[AgentStatusPausedBy] = None
-
-
-class WorkspaceControlCommand(BaseModel):
-    expected_control_version: int = Field(ge=1)
-
-
-def _workspace_control_conflict(state: dict[str, Any]) -> HTTPException:
-    paused_at = state["paused_at"]
-    paused_by = state["paused_by"]
-    last_change = state.get("last_change")
-    return HTTPException(
-        status_code=409,
-        detail={
-            "message": (
-                "Workspace agent control changed after you opened this page. "
-                "The latest state is shown; review it and try again."
-            ),
-            "current": {
-                "workspace_paused": bool(state["paused"]),
-                "workspace_control_version": int(state["version"]),
-                "paused_at": (
-                    paused_at.isoformat()
-                    if isinstance(paused_at, datetime)
-                    else paused_at
-                ),
-                "paused_reason": state["reason"],
-                "paused_by": (
-                    AgentStatusPausedBy(**paused_by).model_dump(mode="json")
-                    if paused_by is not None
-                    else None
-                ),
-                "changed_by": (
-                    {
-                        **last_change,
-                        "changed_at": (
-                            last_change["changed_at"].isoformat()
-                            if isinstance(last_change.get("changed_at"), datetime)
-                            else last_change.get("changed_at")
-                        ),
-                    }
-                    if last_change is not None
-                    else None
-                ),
-            },
-        },
-    )
-
-
-@router.post("/agent/pause-all", response_model=BulkAgentPauseResult)
-def pause_all_agents(
-    body: WorkspaceControlCommand,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_org_owner),
-):
-    """Apply the workspace pause overlay without rewriting role controls.
-
-    Role-level run/pause/off choices and review queues remain untouched. A
-    workspace resume therefore restores the exact per-role desired state that
-    existed underneath this hold instead of accidentally resuming roles that a
-    recruiter or runtime guard had paused independently.
-    """
-    organization = (
-        db.query(Organization)
-        .filter(
-            Organization.id == int(current_user.organization_id),
-        )
-        .with_for_update(of=Organization)
-        .one()
-    )
-    current_state = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    # Same-target retries are idempotent even when their expected version is
-    # stale. Preserve the original actor/time instead of letting a retry claim
-    # someone else's already-current pause.
-    if (
-        not current_state["paused"]
-        and int(body.expected_control_version) != int(current_state["version"])
-    ):
-        raise _workspace_control_conflict(current_state)
-    enabled_count = (
-        db.query(Role.id)
-        .filter(
-            Role.organization_id == int(current_user.organization_id),
-            Role.deleted_at.is_(None),
-            Role.agentic_mode_enabled.is_(True),
-        )
-        .count()
-    )
-    locally_running_count = (
-        db.query(Role.id)
-        .filter(
-            Role.organization_id == int(current_user.organization_id),
-            Role.deleted_at.is_(None),
-            Role.agentic_mode_enabled.is_(True),
-            Role.agent_paused_at.is_(None),
-        )
-        .count()
-    )
-    affected = 0
-    if organization.agent_workspace_paused_at is None:
-        now = datetime.now(timezone.utc)
-        from_version = int(organization.agent_workspace_control_version or 1)
-        to_version = from_version + 1
-        organization.agent_workspace_paused_at = now
-        organization.agent_workspace_paused_reason = WORKSPACE_MANUAL_PAUSE_REASON
-        organization.agent_workspace_paused_by_user_id = int(current_user.id)
-        organization.agent_workspace_paused_by_name = str(
-            current_user.full_name or current_user.email
-        )[:200]
-        organization.agent_workspace_control_version = to_version
-        db.add(
-            WorkspaceAgentControlEvent(
-                organization_id=int(current_user.organization_id),
-                actor_user_id=int(current_user.id),
-                actor_name=str(current_user.full_name or current_user.email)[:200],
-                action="paused",
-                from_version=from_version,
-                to_version=to_version,
-                reason=WORKSPACE_MANUAL_PAUSE_REASON,
-                request_id=get_request_id(),
-                created_at=now,
-            )
-        )
-        affected = int(locally_running_count)
-        db.commit()
-    state = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    return BulkAgentPauseResult(
-        affected=affected,
-        enabled_count=int(enabled_count),
-        workspace_paused=bool(state["paused"]),
-        workspace_control_version=int(state["version"]),
-        paused_at=state["paused_at"],
-        paused_reason=state["reason"],
-        paused_by=(
-            AgentStatusPausedBy(**state["paused_by"])
-            if state["paused_by"] is not None
-            else None
-        ),
-    )
-
-
-@router.post("/agent/resume-all", response_model=BulkAgentPauseResult)
-def resume_all_agents(
-    body: WorkspaceControlCommand,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_org_owner),
-):
-    """Clear only the workspace overlay and wake locally runnable roles.
-
-    Local manual, budget and runtime pauses are deliberately not cleared. This
-    is the critical distinction between workspace Resume and a role Resume.
-    """
-    organization = (
-        db.query(Organization)
-        .filter(Organization.id == int(current_user.organization_id))
-        .with_for_update(of=Organization)
-        .one()
-    )
-    current_state = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    # Resume retries after another caller already resumed are harmless. A stale
-    # command that would actually clear a newer pause must be rejected.
-    if (
-        current_state["paused"]
-        and int(body.expected_control_version) != int(current_state["version"])
-    ):
-        raise _workspace_control_conflict(current_state)
-    enabled_count = (
-        db.query(Role.id)
-        .filter(
-            Role.organization_id == int(current_user.organization_id),
-            Role.deleted_at.is_(None),
-            Role.agentic_mode_enabled.is_(True),
-        )
-        .count()
-    )
-    roles = (
-        db.query(Role)
-        .filter(
-            Role.organization_id == current_user.organization_id,
-            Role.deleted_at.is_(None),
-            Role.agentic_mode_enabled.is_(True),
-            Role.agent_paused_at.is_(None),
-        )
-        .order_by(Role.id)
-        .all()
-    )
-    was_paused = organization.agent_workspace_paused_at is not None
-    workspace_resume_version = int(organization.agent_workspace_control_version or 1)
-    if was_paused:
-        now = datetime.now(timezone.utc)
-        from_version = int(organization.agent_workspace_control_version or 1)
-        to_version = from_version + 1
-        organization.agent_workspace_paused_at = None
-        organization.agent_workspace_paused_reason = None
-        organization.agent_workspace_paused_by_user_id = None
-        organization.agent_workspace_paused_by_name = None
-        organization.agent_workspace_control_version = to_version
-        workspace_resume_version = to_version
-        db.add(
-            WorkspaceAgentControlEvent(
-                organization_id=int(current_user.organization_id),
-                actor_user_id=int(current_user.id),
-                actor_name=str(current_user.full_name or current_user.email)[:200],
-                action="resumed",
-                from_version=from_version,
-                to_version=to_version,
-                reason="workspace resumed by recruiter",
-                request_id=get_request_id(),
-                created_at=now,
-            )
-        )
-        db.commit()
-
-    dispatch_failed = 0
-    if was_paused:
-        from ...services.agent_activation_readiness import activation_readiness
-
-    for role in roles if was_paused else []:
-        if not budget_guard.check_monthly_usd(db, role=role).ok:
-            dispatch_failed += 1
-            continue
-        if not activation_readiness(role).get("ready"):
-            dispatch_failed += 1
-            continue
-        try:
-            from ...tasks.agent_tasks import agent_cohort_tick_role
-
-            agent_cohort_tick_role.delay(
-                int(role.id),
-                activation=False,
-                dispatch_role_version=int(role.version or 1),
-                dispatch_workspace_version=workspace_resume_version,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to enqueue workspace-resume cycle for role_id=%s", role.id
-            )
-            dispatch_failed += 1
-
-    state = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    return BulkAgentPauseResult(
-        affected=(len(roles) if was_paused else 0),
-        enabled_count=int(enabled_count),
-        skipped=dispatch_failed,
-        workspace_paused=bool(state["paused"]),
-        workspace_control_version=int(state["version"]),
-        paused_at=state["paused_at"],
-        paused_reason=state["reason"],
-        paused_by=None,
-    )
-
-
-class RoleAgentPauseResult(BaseModel):
-    """Outcome of a per-role manual pause / resume."""
-
-    role_id: int
-    version: int
-    paused: bool  # is the role paused after this call?
-    pause_scope: Optional[Literal["workspace", "role"]] = None
-    resumed: bool = False  # did this call actually clear a pause?
-    reason: Optional[str] = None
-
-
-@router.post("/roles/{role_id}/agent/pause", response_model=RoleAgentPauseResult)
-def pause_role_agent(
-    role_id: int,
-    body: RoleVersionCommand,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Manually soft-pause ONE role's agent — the per-role twin of pause-all.
-
-    Sets ``agent_paused_at`` (the flag the cohort sweeps honour, so the agent
-    stops scoring/spending on the next beat) while leaving
-    ``agentic_mode_enabled`` true. Crucially this KEEPS the role's pending
-    decisions, and ``resume`` brings it straight back. Distinct from turning
-    the agent off (PATCH ``agentic_mode_enabled=false``), which stops the agent
-    indefinitely and doesn't auto-resume — neither path discards the queue.
-    Idempotent: pausing an already-paused role is a no-op.
-    """
-    require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
-    )
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == current_user.organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .with_for_update(of=Role)
-        .first()
-    )
-    if role is None:
-        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
-    assert_role_version(
-        role,
-        expected_version=body.expected_version,
-        current_role=lambda: {
-            "id": int(role.id),
-            "version": int(role.version or 1),
-            "agentic_mode_enabled": bool(role.agentic_mode_enabled),
-            "agent_paused_at": role.agent_paused_at.isoformat()
-            if role.agent_paused_at
-            else None,
-            "agent_paused_reason": role.agent_paused_reason,
-        },
-        changed_by=lambda: latest_role_change_actor(
-            db,
-            organization_id=int(current_user.organization_id),
-            role_id=role_id,
-        ),
-    )
-    if not bool(role.agentic_mode_enabled):
-        raise HTTPException(
-            status_code=409, detail="agent is not enabled for this role"
-        )
-    if role.agent_paused_at is None:
-        audit_before = capture_role_change_snapshot(role)
-        audit_from = int(role.version or 1)
-        budget_guard.pause_role(db, role=role, reason=MANUAL_PAUSE_REASON)
-        audit_to = bump_role_version(role)
-        add_role_change_event(
-            db,
-            role=role,
-            before=audit_before,
-            action=ROLE_CHANGE_ACTION_AGENT_PAUSED,
-            actor_user_id=int(current_user.id),
-            from_version=audit_from,
-            to_version=audit_to,
-            reason=MANUAL_PAUSE_REASON,
-            request_id=get_request_id(),
-        )
-        db.commit()
-    workspace_pause = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    return RoleAgentPauseResult(
-        role_id=role_id,
-        version=int(role.version or 1),
-        paused=(
-            bool(role.agentic_mode_enabled)
-            and (bool(workspace_pause["paused"]) or role.agent_paused_at is not None)
-        ),
-        pause_scope=(
-            "workspace"
-            if workspace_pause["paused"]
-            else ("role" if role.agent_paused_at is not None else None)
-        ),
-        reason=(
-            workspace_pause["reason"]
-            if workspace_pause["paused"]
-            else role.agent_paused_reason
-        ),
-    )
-
-
-@router.post("/roles/{role_id}/agent/resume", response_model=RoleAgentPauseResult)
-def resume_role_agent(
-    role_id: int,
-    body: RoleVersionCommand,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Resume ONE paused role, if it's back under its monthly cap.
-
-    Reuses ``budget_guard.resume_if_under_budget`` (the same guard as
-    resume-all and the cap-raise auto-resume) so a genuinely over-budget role
-    stays paused rather than resuming only to re-pause next cycle. On a real
-    resume we kick an immediate review cycle so the recruiter doesn't wait up
-    to 60 minutes for the next beat — mirroring the PATCH resume path.
-    """
-    require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
-    )
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == current_user.organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .with_for_update(of=Role)
-        .first()
-    )
-    if role is None:
-        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
-    assert_role_version(
-        role,
-        expected_version=body.expected_version,
-        current_role=lambda: {
-            "id": int(role.id),
-            "version": int(role.version or 1),
-            "agentic_mode_enabled": bool(role.agentic_mode_enabled),
-            "agent_paused_at": role.agent_paused_at.isoformat()
-            if role.agent_paused_at
-            else None,
-            "agent_paused_reason": role.agent_paused_reason,
-        },
-        changed_by=lambda: latest_role_change_actor(
-            db,
-            organization_id=int(current_user.organization_id),
-            role_id=role_id,
-        ),
-    )
-    # Surface a concrete production-runtime failure on the explicit endpoint.
-    # The shared budget_guard repeats this check at the mutation boundary so
-    # non-HTTP resume paths fail closed too; this preflight exists to return an
-    # actionable 503 instead of a misleading ``resumed=false`` when the budget
-    # itself is already clear.
-    if (
-        bool(role.agentic_mode_enabled)
-        and role.agent_paused_at is not None
-        and budget_guard.check_monthly_usd(db, role=role).ok
-    ):
-        from ...services.agent_activation_readiness import (
-            activation_readiness,
-            readiness_message,
-        )
-
-        readiness = activation_readiness(role)
-        if not readiness.get("ready"):
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Agent runtime is not ready: "
-                    f"{readiness_message(readiness)}. The role remains paused."
-                ),
-            )
-    audit_before = capture_role_change_snapshot(role)
-    audit_from = int(role.version or 1)
-    resumed = budget_guard.resume_if_under_budget(
-        db,
-        role=role,
-        explicit=True,
-    )
-    if resumed:
-        audit_to = bump_role_version(role)
-        add_role_change_event(
-            db,
-            role=role,
-            before=audit_before,
-            action=ROLE_CHANGE_ACTION_AGENT_RESUMED,
-            actor_user_id=int(current_user.id),
-            from_version=audit_from,
-            to_version=audit_to,
-            reason="resume requested by recruiter",
-            request_id=get_request_id(),
-        )
-        db.commit()
-        from ...services.workspace_agent_control import (
-            workspace_agent_control_snapshot,
-        )
-
-        workspace_held, _workspace_control_version = (
-            workspace_agent_control_snapshot(
-                db,
-                organization_id=int(current_user.organization_id),
-            )
-        )
-        if not workspace_held:
-            try:
-                from ...tasks.agent_tasks import agent_cohort_tick_role
-
-                agent_cohort_tick_role.delay(
-                    int(role.id),
-                    activation=False,
-                    dispatch_role_version=int(audit_to),
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to enqueue resume cycle for role_id=%s", role.id
-                )
-                _compensate_failed_agent_dispatch(
-                    db,
-                    role_id=int(role.id),
-                    dispatched_version=int(audit_to),
-                    current_user=current_user,
-                )
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "The agent worker queue is unavailable. The role was left "
-                        "paused; retry Resume."
-                    ),
-                )
-    workspace_pause = workspace_agent_pause_state(
-        db,
-        organization_id=int(current_user.organization_id),
-        current_user_id=int(current_user.id),
-    )
-    return RoleAgentPauseResult(
-        role_id=role_id,
-        version=int(role.version or 1),
-        paused=(
-            bool(role.agentic_mode_enabled)
-            and (bool(workspace_pause["paused"]) or role.agent_paused_at is not None)
-        ),
-        pause_scope=(
-            "workspace"
-            if workspace_pause["paused"]
-            else ("role" if role.agent_paused_at is not None else None)
-        ),
-        resumed=resumed,
-        reason=(
-            workspace_pause["reason"]
-            if workspace_pause["paused"]
-            else role.agent_paused_reason
-        ),
-    )
+router.include_router(status_router)
+router.include_router(manual_run_router)
+router.include_router(workspace_control_router)
+router.include_router(role_control_router)

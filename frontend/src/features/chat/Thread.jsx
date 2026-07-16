@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { CircleAlert, Database } from 'lucide-react';
 
 import { ChatActivity, ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
+import { Button } from '../../shared/ui/TaaliPrimitives';
 import {
   MotionChatItem,
   MotionDisclosure,

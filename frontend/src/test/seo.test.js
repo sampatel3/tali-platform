@@ -239,6 +239,15 @@ describe('sitemap + internal linking', () => {
     expect(sitemap).toContain('<loc>https://www.taali.ai/blog/ai-native-coding-and-knowledge-work</loc>');
   });
 
+  it('keeps the SPA blog article on a single document h1 hierarchy', () => {
+    const postSource = read('src/features/blog/posts/ai-native-coding-and-knowledge-work.md');
+    const headings = postSource.match(/^#{1,6}\s.+$/gm) || [];
+
+    expect(headings.filter((heading) => heading.startsWith('# '))).toHaveLength(1);
+    expect(headings).toContain('## Part 1 — AI-native coding');
+    expect(headings).toContain('### Give the agent a memory: `CLAUDE.md` and `AGENTS.md`');
+  });
+
   it('links the guides from the home-page crawlable fallback', () => {
     for (const slug of ['/agentic-hiring', '/ai-native-hiring', '/ai-native-assessments']) {
       expect(indexHtml).toContain(`href="${slug}"`);

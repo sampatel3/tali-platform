@@ -131,7 +131,7 @@ taali-platform/
 - **Candidate detail actions:** Additional one-off recruiter exports/actions can still be added, but they are not part of the autonomous requisition funnel.
 - **Workable stage mapping:** Candidate import, scoring, invite delivery, and the configured assessment-stage/note handoff are automatic for linked agent roles. Configure the organization's interview-stage target once to allow autonomous Workable advancement; without it, the local pipeline advances and the external move remains a safe human handoff.
 - **Stripe webhooks:** `checkout.session.completed` is the sole credit-grant event. Additional events may be handled for observability, but payment-intent events must never grant credits independently.
-- **Frontend test quality:** the audited 127-file/873-test suite is warning-free; CI rejects React scheduling, router-future, Motion reduced-preference, and generic warning regressions instead of suppressing them.
+- **Frontend test quality:** the audited 142-file/1,008-test suite is warning-free; CI rejects React scheduling, router-future, Motion reduced-preference, and generic warning regressions instead of suppressing them.
 - **Monitoring:** Structured JSON logs and readiness checks are built in. External error tracking, independent uptime checks, and managed database backups remain recommended production operations.
 
 ---

@@ -56,6 +56,15 @@ class RoleBrief(Base):
     )
     # Null until the brief is materialized onto a role (recruiter publishes).
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
+    # Set only for a related-role draft. The original ATS role remains the
+    # candidate/stage authority; ``role_id`` is filled with the new Taali
+    # scoring view once the recruiter confirms creation.
+    source_role_id = Column(
+        Integer,
+        ForeignKey("roles.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     status = Column(String, nullable=False, server_default=BRIEF_STATUS_DRAFT)
     source_kind = Column(String, nullable=True)
 
@@ -141,7 +150,8 @@ class RoleBrief(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    role = relationship("Role")
+    role = relationship("Role", foreign_keys=[role_id])
+    source_role = relationship("Role", foreign_keys=[source_role_id])
     client = relationship("Client")
     # The PUBLIC job page published from this brief (one-per-brief, None until
     # the recruiter publishes). View-only: the page is written via

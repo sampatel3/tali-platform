@@ -78,7 +78,7 @@ export function useAgentRequestReply({ value, onChange, onAnswer }) {
     const generation = generationRef.current;
     setError('');
     setSubmitting(true);
-    let saved = false;
+    let saved;
     try {
       saved = await onAnswer?.(requestIdFor(request), { value: parsed.value });
     } catch {

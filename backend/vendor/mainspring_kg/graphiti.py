@@ -41,7 +41,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .base import EpisodePayload, KnowledgeGraphBackend, Priors, ReplayResult
+from .base import EpisodePayload, Priors, ReplayResult
 
 
 # Tunables for the GraphRAG read path (mirror tali's GraphPriorsSubAgent

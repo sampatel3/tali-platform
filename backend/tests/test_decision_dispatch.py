@@ -22,6 +22,7 @@ from app.models.background_job_run import (
 )
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
@@ -68,6 +69,15 @@ def _seed(db, *, workable_connected=False):
         is_superuser=False,
     )
     db.add(user)
+    db.flush()
+    db.add(
+        JobHiringTeam(
+            organization_id=org.id,
+            role_id=role.id,
+            user_id=user.id,
+            team_role=TEAM_ROLE_RECRUITER,
+        )
+    )
     db.flush()
     return org, role, user
 

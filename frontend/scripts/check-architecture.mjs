@@ -24,9 +24,9 @@ const OVERSIZED_PAGE_BASELINES = new Map([
   ['src/features/dashboard/DashboardPageContent.jsx', 650],
   ['src/features/dev/ButtonShowcasePage.jsx', 685],
   ['src/features/home/HomePage.jsx', 686],
-  ['src/features/jobs/JobPipelinePage.jsx', 2666],
+  ['src/features/jobs/JobPipelinePage.jsx', 2621],
   ['src/features/jobs/JobsPage.jsx', 963],
-  ['src/features/requisitions/RequisitionsPage.jsx', 1281],
+  ['src/features/requisitions/RequisitionsPage.jsx', 1202],
   ['src/features/settings/RecruiterSettingsPage.jsx', 2496],
   ['src/features/settings/RequisitionTemplatePage.jsx', 537],
 ]);

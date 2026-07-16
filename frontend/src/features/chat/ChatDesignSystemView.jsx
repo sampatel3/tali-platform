@@ -210,17 +210,17 @@ const FEED_ERROR_ITEM = {
     summary: 'The cycle ended early. Six decisions were retained and unfinished work can retry safely.',
     occurred_at: '2026-07-16T10:26:00Z',
     details: [
-      { label: 'Agent run', value: '#7042' },
+      { label: 'Agent run', value: 'Run 7042' },
       { label: 'Work retained', value: '6 decisions' },
     ],
     suggestions: [
       {
         label: 'Explain stop',
-        prompt: 'Explain why agent run #7042 stopped and what is safe to retry.',
+        prompt: 'Explain why agent run 7042 stopped and what is safe to retry.',
       },
       {
         label: 'Preview retry',
-        prompt: 'Preview the unfinished work from agent run #7042 before retrying it.',
+        prompt: 'Preview the unfinished work from agent run 7042 before retrying it.',
       },
     ],
   }],

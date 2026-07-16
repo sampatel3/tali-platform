@@ -93,6 +93,12 @@ vi.mock('../candidates/CandidateSheet', () => ({
   CandidateSheet: () => null,
 }));
 
+vi.mock('../requisitions/api', () => ({
+  requisitionApi: {
+    createRelated: vi.fn(),
+  },
+}));
+
 // CRUD behavior has its own focused test. Keep this large pipeline suite from
 // scheduling a second independent settings fetch on every Agent settings case.
 vi.mock('./RoleScreeningQuestions', () => ({
@@ -101,6 +107,7 @@ vi.mock('./RoleScreeningQuestions', () => ({
 
 import * as apiClient from '../../shared/api';
 import { clearCache, readCache } from '../../shared/api/resourceCache';
+import { requisitionApi } from '../requisitions/api';
 import { JobPipelinePage } from './JobPipelinePage';
 
 const baseRole = {
@@ -165,6 +172,7 @@ const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
       <Routes>
         <Route path="/jobs/:roleId" element={<JobPipelinePage onNavigate={onNavigate} />} />
         <Route path="/chat/agents/:roleId" element={<div>Role agent chat route</div>} />
+        <Route path="/requisitions" element={<div>Related role draft chat</div>} />
       </Routes>
     </TestMemoryRouter>
   ),
@@ -200,6 +208,7 @@ describe('JobPipelinePage', () => {
     apiClient.agent.listDecisions.mockResolvedValue({ data: [] });
     apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: true } });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
+    requisitionApi.createRelated.mockResolvedValue({ id: 44 });
   });
 
   // Default view is the candidates table; pipeline kanban is opt-in. Tests
@@ -670,16 +679,12 @@ describe('JobPipelinePage', () => {
         job_spec_text: 'AI engineer role requiring Python, production machine learning systems, evaluation, observability, and reliable delivery.',
       },
     });
-    apiClient.roles.previewSister.mockResolvedValue({
-      data: { candidates_total: 2, candidates_with_cv: 2, candidates_missing_cv: 0 },
-    });
     renderPipeline();
 
     fireEvent.click(await screen.findByRole('button', { name: /Create related role/i }));
 
-    expect(await screen.findByRole('heading', { name: /Create a related role/i })).toBeInTheDocument();
-    expect(apiClient.roles.previewSister).toHaveBeenCalledWith(baseRole.id);
-    expect(screen.getByRole('button', { name: /Create and score candidates/i })).toBeEnabled();
+    expect(requisitionApi.createRelated).toHaveBeenCalledWith(baseRole.id);
+    expect(await screen.findByText('Related role draft chat')).toBeInTheDocument();
   });
 
   it('links the job header directly to its role-agent chat', async () => {

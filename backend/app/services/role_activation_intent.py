@@ -17,6 +17,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+from .role_activation_policy import role_policy_snapshot as _role_policy_snapshot
+from .role_activation_task_selection import prepare_activation_task
 
 
 logger = logging.getLogger("taali.role_activation_intent")
@@ -73,43 +75,6 @@ def _write_intent(role: Role, intent: dict[str, Any]) -> None:
     role.assessment_task_provisioning = provisioning
 
 
-def _role_policy_snapshot(role: Role) -> dict[str, Any]:
-    """Capture the role policy an eventual activation worker must preserve."""
-    from .agent_policy_settings import activation_policy_values
-
-    positive = activation_policy_values(role)
-    allowlist = getattr(role, "agent_action_allowlist", None)
-    return {
-        "monthly_usd_budget_cents": getattr(
-            role, "monthly_usd_budget_cents", None
-        ),
-        "auto_promote": positive["auto_promote"],
-        "auto_send_assessment": positive["auto_send_assessment"],
-        "auto_resend_assessment": positive["auto_resend_assessment"],
-        "auto_advance": positive["auto_advance"],
-        "auto_reject": bool(getattr(role, "auto_reject", False)),
-        "auto_reject_pre_screen": bool(
-            getattr(role, "auto_reject_pre_screen", False)
-        ),
-        "auto_skip_assessment": bool(
-            getattr(role, "auto_skip_assessment", False)
-        ),
-        "auto_reject_threshold_mode": getattr(
-            role, "auto_reject_threshold_mode", None
-        ),
-        "score_threshold": getattr(role, "score_threshold", None),
-        "agent_action_allowlist": (
-            list(allowlist) if isinstance(allowlist, (list, tuple)) else None
-        ),
-        "agent_token_budget_per_cycle": getattr(
-            role, "agent_token_budget_per_cycle", None
-        ),
-        "agent_decision_budget_per_cycle": getattr(
-            role, "agent_decision_budget_per_cycle", None
-        ),
-    }
-
-
 def refresh_role_activation_intent_policy(
     role: Role, *, now: datetime | None = None
 ) -> bool:
@@ -159,49 +124,10 @@ def request_role_activation_intent(
     if budget <= 0:
         raise ValueError("monthly_budget_cents must be greater than zero")
 
-    from .task_provisioning_service import (
-        authorize_assessment_task_provisioning,
-        task_provisioning_state,
+    provisioning, exact_task_id, task_selection_error = prepare_activation_task(
+        role,
+        now=current_time,
     )
-
-    try:
-        linked = list(getattr(role, "tasks", None) or [])
-    except Exception:
-        linked = []
-    if not linked:
-        authorize_assessment_task_provisioning(
-            role, reason="agent_turn_on", now=current_time
-        )
-
-    provisioning = task_provisioning_state(role)
-    exact_task_id = None
-    task_selection_error = None
-    if len(linked) == 1:
-        task = linked[0]
-        extra = task.extra_data if isinstance(task.extra_data, dict) else {}
-        generated_review_draft = bool(
-            not bool(task.is_active)
-            and extra.get("generated")
-            and extra.get("needs_review", True)
-        )
-        if bool(task.is_active) or generated_review_draft:
-            # A preserved/manual active task needs no automatic content
-            # approval. In a republish-blocked state, pressing Turn on again is
-            # the explicit human confirmation that it remains the intended
-            # choice. A generated draft follows battle-test → auto-approval.
-            exact_task_id = int(task.id)
-        else:
-            task_selection_error = (
-                "The linked assessment task is inactive and cannot be approved "
-                "automatically because it is not a generated review draft. "
-                "Approve or replace the task, then press Turn on again."
-            )
-    elif len(linked) > 1:
-        task_selection_error = (
-            "Turn on cannot choose safely between multiple linked assessment "
-            "tasks. Keep one intended task (or configure the task experiment) "
-            "and press Turn on again."
-        )
 
     existing = activation_intent_state(role)
     if str(existing.get("status") or "") in ACTIVATION_ACTIVE_STATUSES:

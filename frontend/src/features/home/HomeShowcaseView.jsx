@@ -323,12 +323,12 @@ const SHOWCASE_FEED_ITEMS = [
       summary: 'The cycle ended early. Six decisions were retained and unfinished work can be retried safely.',
       occurred_at: new Date(_NOW - 2 * 60 * 1000).toISOString(),
       details: [
-        { label: 'Agent run', value: '#7042' },
+        { label: 'Agent run', value: 'Run 7042' },
         { label: 'Work retained', value: '6 decisions' },
       ],
       suggestions: [
-        { label: 'Explain stop', prompt: 'Explain why agent run #7042 stopped and what is safe to retry.' },
-        { label: 'Preview retry', prompt: 'Preview the unfinished work from agent run #7042 before retrying it.' },
+        { label: 'Explain stop', prompt: 'Explain why agent run 7042 stopped and what is safe to retry.' },
+        { label: 'Preview retry', prompt: 'Preview the unfinished work from agent run 7042 before retrying it.' },
       ],
     }],
   },
@@ -500,7 +500,7 @@ export const HomeShowcaseView = () => {
   const handleSnooze = () => showToast('Snoozed 1h — it drops back into your queue later.', 'info');
 
   return (
-    <div className="home-app" style={{ height: '100vh' }}>
+    <main className="home-app" style={{ height: '100vh' }}>
       <AgentHeader
         kicker="HUB · 103 AWAITING YOU · 4 ACTIVE ROLES"
         title="Good morning"
@@ -548,7 +548,7 @@ export const HomeShowcaseView = () => {
 
         <ShowcaseDock onAct={(msg) => showToast(msg, 'info')} />
       </div>
-    </div>
+    </main>
   );
 };
 

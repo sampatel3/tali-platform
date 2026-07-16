@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -11,10 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ...components.integrations.workable.service import (
-    WorkableRateLimitError,
-    WorkableService,
-)
+from ...components.integrations.workable.service import WorkableService
 from ...components.integrations.workable import error_policy as workable_error_policy
 from ...deps import get_current_user, require_org_owner
 from ...domains.assessments_runtime.job_authorization import (
@@ -42,10 +37,33 @@ from ...services.role_change_audit import (
 )
 from ...services.role_concurrency import bump_role_version
 from ...services.role_lifecycle import stop_role_for_ats_deletion
+from .lookup_cache import (
+    _LOOKUP_CACHE_FRESH_SECONDS as _LOOKUP_CACHE_FRESH_SECONDS,
+    _LOOKUP_CACHE_RETAIN_SECONDS as _LOOKUP_CACHE_RETAIN_SECONDS,
+    WorkableRateLimitError as WorkableRateLimitError,
+    cached_account_lookup,
+    lookup_cache_redis,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workable", tags=["Workable"])
+
+
+def _lookup_cache_redis():
+    return lookup_cache_redis()
+
+
+def _cached_account_lookup(subdomain: str | None, kind: str, fetch_fn):
+    return cached_account_lookup(
+        subdomain,
+        kind,
+        fetch_fn,
+        redis_factory=_lookup_cache_redis,
+        log=logger,
+        fresh_seconds=_LOOKUP_CACHE_FRESH_SECONDS,
+        retain_seconds=_LOOKUP_CACHE_RETAIN_SECONDS,
+    )
 
 
 class _AdminClearSyncBody(BaseModel):
@@ -552,73 +570,6 @@ def workable_sync_jobs(
     return {"total": len(out), "jobs": out}
 
 
-# Account-level Workable lookups (hiring-team members, disqualification reasons,
-# pipeline stages) are near-static but were fetched live on every Settings load.
-# Workable rate-limits per OAuth token (~10 req/10s), and our limiter is
-# per-process, so a background per-role sync bursting in a worker collides with
-# these user-facing lookups and 429s them — surfaced as a red "Failed to load"
-# toast. Caching them in Redis cuts the call volume (fewer collisions) and, on a
-# transient 429, falls back to the last-known-good value so the blip never
-# reaches the UI. Fresh window is short so real Workable edits still show quickly.
-_LOOKUP_CACHE_FRESH_SECONDS = 600  # serve from cache without a live call
-_LOOKUP_CACHE_RETAIN_SECONDS = 86400  # keep as stale-but-usable fallback for 24h
-
-
-def _lookup_cache_redis():
-    try:
-        import redis  # type: ignore
-
-        return redis.Redis.from_url(settings.REDIS_URL)
-    except Exception:
-        return None
-
-
-def _cached_account_lookup(subdomain: str | None, kind: str, fetch_fn):
-    """Serve a near-static account-level Workable lookup through a short Redis
-    cache, falling back to the last-known-good value when Workable is momentarily
-    rate-limiting. Only non-empty results are cached, so a swallowed-error empty
-    list never evicts a good value."""
-    client = _lookup_cache_redis()
-    key = f"workable_lookup:{(subdomain or '').strip().lower()}:{kind}"
-    cached: dict | None = None
-    if client is not None:
-        try:
-            raw = client.get(key)
-            if raw:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
-                    cached = parsed
-        except Exception:
-            cached = None
-
-    now = time.time()
-    if cached and (now - float(cached.get("synced_at") or 0)) < _LOOKUP_CACHE_FRESH_SECONDS:
-        return cached["data"]
-
-    try:
-        data = fetch_fn()
-    except WorkableRateLimitError:
-        if cached:
-            logger.warning("Workable %s rate-limited; serving cached value", kind)
-            return cached["data"]
-        raise
-
-    if isinstance(data, list) and data:
-        if client is not None:
-            try:
-                client.set(
-                    key,
-                    json.dumps({"data": data, "synced_at": now}),
-                    ex=_LOOKUP_CACHE_RETAIN_SECONDS,
-                )
-            except Exception:
-                pass
-        return data
-    # Live came back empty (genuinely empty, or a swallowed non-429 error):
-    # prefer a good cached copy over an empty one.
-    if cached:
-        return cached["data"]
-    return data
 
 
 @router.get("/members")

@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from app.agent_chat.command_receipts import CommandReceiptConflict
 from app.agent_chat.tools import dispatch_tool as dispatch_agent_tool
 from app.models.agent_conversation import (
     AUTHOR_ROLE_USER,
@@ -26,6 +27,7 @@ from app.models.job_hiring_team import (
 )
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.role_brief import RoleBrief
 from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.taali_chat_message import ROLE_USER, TaaliChatMessage
 from app.models.user import User
@@ -127,6 +129,24 @@ def _taali_tool_row(db, conversation, result):
         )
     )
     db.commit()
+
+
+def _agent_user_turn(db, conversation, user, text="Start that related-role draft."):
+    row = AgentConversationMessage(
+        conversation_id=conversation.id,
+        organization_id=conversation.organization_id,
+        role_id=conversation.role_id,
+        author_role=AUTHOR_ROLE_USER,
+        author_user_id=user.id,
+        kind=MESSAGE_KIND_CHAT,
+        content=[{"type": "text", "text": text}],
+        text=text,
+    )
+    db.add(row)
+    db.flush()
+    conversation.turn_message_id = int(row.id)
+    db.commit()
+    return row
 
 
 def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
@@ -270,6 +290,131 @@ def test_role_agent_crash_rolls_back_related_role_and_replay_creates_once(db):
     # The first delayed kick references rolled-back work and safely no-ops;
     # evaluation recovery remains the fallback if either publish is lost.
     assert dispatch.call_count == 2
+
+
+def test_role_agent_can_start_a_cloned_related_role_requisition_chat(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id, role_id=source.id, title="Related role draft"
+    )
+    db.add(conversation)
+    db.commit()
+    _agent_user_turn(db, conversation, user)
+
+    result = dispatch_agent_tool(
+        "start_related_role_draft",
+        {"name": "AI Engineer · Platform"},
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+
+    assert result["type"] == "related_role_draft"
+    assert result["source_role_id"] == source.id
+    assert result["source_role_name"] == source.name
+    assert result["frontend_url"] == f"/requisitions?brief={result['brief_id']}"
+    brief = db.get(RoleBrief, result["brief_id"])
+    assert brief.source_role_id == source.id
+    assert brief.title == "AI Engineer · Platform"
+    assert brief.agent_state["jd_override"] == source.job_spec_text
+    assert "Tell me what should change" in brief.messages[0]["content"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+    receipt = db.query(ChatCommandReceipt).one()
+    assert receipt.operation == "start_related_role_draft"
+    assert receipt.status == "completed"
+
+    replay = dispatch_agent_tool(
+        "start_related_role_draft",
+        {"name": "AI Engineer · Platform"},
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    db.commit()
+    assert replay == result
+    assert db.query(RoleBrief).count() == 1
+    assert db.query(ChatCommandReceipt).count() == 1
+
+
+def test_role_agent_related_draft_crash_rolls_back_and_replay_creates_once(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Related role draft recovery",
+    )
+    db.add(conversation)
+    db.commit()
+    _agent_user_turn(db, conversation, user)
+    args = {"name": "AI Engineer · Recovery"}
+
+    with patch(
+        "app.agent_chat.tools.complete_command",
+        side_effect=RuntimeError("worker killed before draft receipt"),
+    ):
+        with pytest.raises(RuntimeError, match="worker killed"):
+            dispatch_agent_tool(
+                "start_related_role_draft",
+                args,
+                db=db,
+                role=source,
+                user=user,
+                conversation=conversation,
+            )
+
+    # The handler's savepoint prevents the chat engine from committing a draft
+    # or pending receipt alongside its caught error tool-result.
+    assert db.query(RoleBrief).count() == 0
+    assert db.query(ChatCommandReceipt).count() == 0
+
+    created = dispatch_agent_tool(
+        "start_related_role_draft",
+        args,
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    db.commit()
+    assert created["type"] == "related_role_draft"
+    assert db.query(RoleBrief).count() == 1
+    assert db.query(ChatCommandReceipt).count() == 1
+
+
+def test_role_agent_related_draft_rejects_changed_args_in_the_same_turn(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Related role draft conflict",
+    )
+    db.add(conversation)
+    db.commit()
+    _agent_user_turn(db, conversation, user)
+
+    dispatch_agent_tool(
+        "start_related_role_draft",
+        {"name": "AI Engineer · First"},
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    db.commit()
+
+    with pytest.raises(CommandReceiptConflict, match="scope mismatch"):
+        dispatch_agent_tool(
+            "start_related_role_draft",
+            {"name": "AI Engineer · Different"},
+            db=db,
+            role=source,
+            user=user,
+            conversation=conversation,
+        )
+    assert db.query(RoleBrief).count() == 1
+    assert db.query(ChatCommandReceipt).count() == 1
 
 
 def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):

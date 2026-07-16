@@ -21,6 +21,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..models.user import User
+from . import graph_handlers as _graph_handlers
 from .payloads import (
     SCORE_FIELDS,
     application_detail,
@@ -660,175 +661,20 @@ def graph_search_candidates(
     query: str,
     limit: int = 25,
 ) -> dict[str, Any]:
-    """Knowledge-graph search across the org's Graphiti subgraph.
-
-    Returns candidates whose graph facts mention the query, plus a short
-    list of the actual fact strings so the caller can cite specifics
-    (e.g. "Sam — 'Senior Engineer at Stripe, 2020-2024'").
-    """
-    from ..candidate_graph import client as graph_client
-    from ..candidate_graph import search as graph_search
-
-    text = (query or "").strip()
-    if not text:
-        raise ValueError("query must be non-empty")
-    if not graph_client.is_configured():
-        return {
-            "applications": [],
-            "graph_facts": [],
-            "warnings": [
-                {
-                    "code": "neo4j_unavailable",
-                    "message": "Knowledge graph is not configured for this deployment.",
-                }
-            ],
-        }
-
-    payload = graph_search.subgraph_for_query(
-        organization_id=int(user.organization_id), query=text
+    return _graph_handlers.graph_search_candidates(
+        db,
+        user,
+        query=query,
+        limit=limit,
     )
-    # Person nodes carry a ``taali_id`` in extras when synced from candidates.
-    candidate_ids: list[int] = []
-    seen: set[int] = set()
-    for node in payload.nodes:
-        if node.label != "Person":
-            continue
-        raw = node.extra.get("taali_id") if isinstance(node.extra, dict) else None
-        try:
-            cid = int(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            cid = None
-        if cid is None or cid in seen:
-            continue
-        seen.add(cid)
-        candidate_ids.append(cid)
-
-    if not candidate_ids:
-        return {
-            "applications": [],
-            "graph_facts": _facts_from_payload(payload, limit=10),
-            "graph": _graph_topology(payload),
-            "warnings": [],
-        }
-
-    apps = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-        )
-        .filter(
-            CandidateApplication.organization_id == user.organization_id,
-            CandidateApplication.candidate_id.in_(candidate_ids),
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-        )
-        .all()
-    )
-    apps.sort(
-        key=lambda a: (a.taali_score_cache_100 if a.taali_score_cache_100 is not None else float("-inf")),
-        reverse=True,
-    )
-    capped = apps[: max(1, min(int(limit), 100))]
-    return {
-        "applications": [application_summary(a) for a in capped],
-        "graph_facts": _facts_from_payload(payload, limit=10),
-        "graph": _graph_topology(payload),
-        "warnings": [],
-    }
 
 
 def _graph_topology(payload) -> dict[str, Any]:
-    """Convert a GraphPayload into a thin ``{nodes, edges}`` shape for
-    inline visualisation in the chat UI. Hard-cap at 60 nodes / 100 edges
-    so an over-broad query can't blow up the React renderer.
-
-    The two slices are NOT independent — slicing nodes and edges by
-    position lets through edges that reference nodes outside the kept
-    set, and cytoscape throws synchronously when that happens (which
-    React then surfaces as the global "Something went wrong" error
-    boundary). We guarantee referential integrity here:
-
-    1. Take the first 100 edges.
-    2. Collect every node id those edges reference, plus the first 60
-       payload nodes, capped at 60 total.
-    3. Drop any edge whose source/target isn't in the kept node set.
-    """
-    raw_nodes = payload.nodes or []
-    raw_edges = payload.edges or []
-
-    # Step 1: pick edges first so we know which nodes we MUST keep.
-    candidate_edges = list(raw_edges[:100])
-
-    # Step 2: build the kept-nodes set, prioritising endpoints of the
-    # chosen edges (so the graph is connected) over the head-of-list
-    # fallback nodes.
-    nodes_by_id = {n.id: n for n in raw_nodes}
-    kept_ids: list[str] = []
-    seen_kept: set[str] = set()
-
-    def _try_add(node_id: str) -> None:
-        if not node_id or node_id in seen_kept:
-            return
-        node = nodes_by_id.get(node_id)
-        if node is None:
-            return
-        if len(kept_ids) >= 60:
-            return
-        seen_kept.add(node_id)
-        kept_ids.append(node_id)
-
-    for edge in candidate_edges:
-        _try_add(edge.source)
-        _try_add(edge.target)
-    # Fill remaining capacity with head-of-list nodes so an empty-edge
-    # payload still surfaces something.
-    for node in raw_nodes:
-        if len(kept_ids) >= 60:
-            break
-        _try_add(node.id)
-
-    nodes_out = [
-        {
-            "id": nodes_by_id[node_id].id,
-            "label": nodes_by_id[node_id].label,
-            "name": nodes_by_id[node_id].name,
-            "extra": nodes_by_id[node_id].extra if isinstance(nodes_by_id[node_id].extra, dict) else {},
-        }
-        for node_id in kept_ids
-    ]
-
-    # Step 3: keep only edges whose endpoints survived the node cap.
-    edges_out = [
-        {
-            "source": edge.source,
-            "target": edge.target,
-            "label": edge.label,
-            "fact": (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None,
-        }
-        for edge in candidate_edges
-        if edge.source in seen_kept and edge.target in seen_kept
-    ]
-    return {"nodes": nodes_out, "edges": edges_out}
+    return _graph_handlers.graph_topology(payload)
 
 
 def _facts_from_payload(payload, *, limit: int) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for edge in payload.edges or []:
-        fact = (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None
-        if not fact:
-            continue
-        out.append(
-            {
-                "fact": str(fact),
-                "source": edge.source,
-                "target": edge.target,
-                "label": str(edge.label),
-            }
-        )
-        if len(out) >= limit:
-            break
-    return out
+    return _graph_handlers.facts_from_payload(payload, limit=limit)
 
 
 def get_candidate_cv(

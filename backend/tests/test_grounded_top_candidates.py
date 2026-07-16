@@ -999,6 +999,7 @@ def test_report_scrub_drops_structured_and_embedded_contact_pii():
         "created_at": "2026-07-15T08:30:00Z",
         "candidates": [{
             "candidate_name": "X",
+            "created_at": "2026-07-14T09:15:00Z",
             "candidate_email": "x@y.com",
             "candidate_phone": "+971 50 123 4567",
             "candidate_summary": "Email x@y.com or call +971 (50) 123-4567.",
@@ -1013,6 +1014,7 @@ def test_report_scrub_drops_structured_and_embedded_contact_pii():
     out = _scrub(snap)
     assert "candidate_email" not in out["candidates"][0]
     assert "candidate_phone" not in out["candidates"][0]
+    assert "created_at" not in out["candidates"][0]
     assert out["candidates"][0]["candidate_name"] == "X"
     assert out["candidates"][0]["candidate_summary"] == (
         "Email [email redacted] or call [phone redacted]."

@@ -184,6 +184,7 @@ def test_manual_batch_route_persists_then_dispatches_celery(db, monkeypatch):
         hashed_password="x",
         full_name="Owner",
         organization_id=org.id,
+        role="owner",
     )
     db.add(user)
     db.commit()

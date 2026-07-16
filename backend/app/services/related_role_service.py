@@ -8,6 +8,7 @@ validation, roster accounting, and worker-dispatch behaviour.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 from typing import Any
 
@@ -20,9 +21,14 @@ from ..models.job_hiring_team import (
     TEAM_ROLE_HIRING_MANAGER,
     JobHiringTeam,
 )
+from ..models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFERRED
 from ..models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
+from ..models.role_brief import RoleBrief
 from ..tasks.sister_role_tasks import score_sister_role
 from .ats_role_lifecycle import ats_job_lifecycle
+from .requisition_chat_capture import compute_completeness
+from .role_brief_service import create_brief, materialize_brief_to_role
+from .role_criteria_service import sync_derived_criteria
 from .sister_role_service import ensure_sister_evaluations
 
 logger = logging.getLogger("taali.related_roles")
@@ -33,6 +39,37 @@ ESTIMATED_SCORE_COST_USD = 0.083
 
 class RelatedRoleError(ValueError):
     """A user-correctable related-role validation error."""
+
+
+_BRIEF_CLONE_FIELDS = (
+    "summary",
+    "department",
+    "location_city",
+    "location_country",
+    "workplace_type",
+    "employment_type",
+    "seniority",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "salary_period",
+    "openings",
+    "target_start",
+    "client_id",
+    "client_rate",
+    "must_haves",
+    "preferred",
+    "dealbreakers",
+    "success_profile",
+    "priorities",
+    "tradeoffs",
+    "calibration_exemplars",
+    "sourcing_signals",
+    "assessment_focus",
+    "process",
+    "evp",
+    "custom_fields",
+)
 
 
 def get_related_role_source(
@@ -121,6 +158,164 @@ def preview_related_role(
     }
 
 
+def create_related_role_draft(
+    db: Session,
+    *,
+    role_id: int,
+    organization_id: int,
+    creator_user_id: int,
+    template: dict[str, Any],
+    name: str | None = None,
+    job_spec_text: str | None = None,
+    commit: bool = True,
+) -> RoleBrief:
+    """Clone an ATS role into the existing conversational job-draft model.
+
+    The clone is a snapshot: subsequent chat/edit turns change only this draft.
+    ``source_role_id`` remains the durable coupling pointer used when the draft
+    is finally converted into a related scoring role.
+    """
+    source = get_related_role_source(
+        db,
+        role_id=role_id,
+        organization_id=organization_id,
+        lock_for_update=True,
+    )
+    clean_name = str(name or "").strip()
+    if len(clean_name) > 200:
+        raise RelatedRoleError("The related-role name must be 200 characters or fewer.")
+    clean_spec_override = (
+        str(job_spec_text).strip() if job_spec_text is not None else None
+    )
+    # Whitespace-only optional input means "clone the source", not "erase the
+    # source specification".  Enforce the same payload ceiling as direct role
+    # creation at the service boundary so REST and chat callers agree.
+    if not clean_spec_override:
+        clean_spec_override = None
+    if clean_spec_override is not None and len(clean_spec_override) > 100_000:
+        raise RelatedRoleError("The job specification is too long.")
+
+    source_brief = (
+        db.query(RoleBrief)
+        .filter(
+            RoleBrief.organization_id == int(organization_id),
+            RoleBrief.role_id == int(source.id),
+        )
+        .order_by(RoleBrief.id.desc())
+        .first()
+    )
+    brief = create_brief(
+        db,
+        organization_id=int(organization_id),
+        created_by_user_id=int(creator_user_id),
+        source_kind="conversational",
+    )
+    brief.source_role_id = int(source.id)
+
+    if source_brief is not None:
+        for field in _BRIEF_CLONE_FIELDS:
+            setattr(brief, field, deepcopy(getattr(source_brief, field, None)))
+
+    brief.title = clean_name or f"{source.name} · Related"
+    brief.summary = brief.summary or source.description
+    for field in (
+        "department",
+        "location_city",
+        "location_country",
+        "workplace_type",
+        "employment_type",
+        "salary_min",
+        "salary_max",
+        "salary_currency",
+        "salary_period",
+    ):
+        if getattr(brief, field, None) in (None, ""):
+            setattr(brief, field, deepcopy(getattr(source, field, None)))
+
+    criteria_by_bucket: dict[str, list[str]] = {
+        BUCKET_MUST: [],
+        BUCKET_PREFERRED: [],
+        BUCKET_CONSTRAINT: [],
+    }
+    for criterion in source.criteria:
+        if criterion.deleted_at is not None or not str(criterion.text or "").strip():
+            continue
+        criteria_by_bucket.setdefault(criterion.bucket, []).append(
+            str(criterion.text).strip()
+        )
+    brief.must_haves = brief.must_haves or criteria_by_bucket[BUCKET_MUST]
+    brief.preferred = brief.preferred or criteria_by_bucket[BUCKET_PREFERRED]
+    brief.dealbreakers = brief.dealbreakers or criteria_by_bucket[BUCKET_CONSTRAINT]
+
+    source_override = (
+        (source_brief.agent_state or {}).get("jd_override")
+        if source_brief is not None
+        else None
+    )
+    cloned_spec = str(
+        clean_spec_override
+        if clean_spec_override is not None
+        else (source.job_spec_text or source_override or "")
+    ).strip()
+    state: dict[str, Any] = {
+        "related_role_source_snapshot": {
+            "role_id": int(source.id),
+            "role_name": source.name,
+            "role_version": int(source.version or 1),
+        }
+    }
+    if cloned_spec:
+        state["jd_override"] = cloned_spec
+    brief.agent_state = state
+
+    provider = ats_job_lifecycle(source).provider
+    provider_label = "Bullhorn" if provider == "bullhorn" else "Workable"
+    copied_note = (
+        "including its complete job specification"
+        if cloned_spec
+        else "using the role details currently available"
+    )
+    brief.messages = [
+        {
+            "role": "assistant",
+            "content": (
+                f"I've copied **{source.name}** into a new related-role draft, "
+                f"{copied_note}. Tell me what should change for this version. "
+                "You can describe only the differences; I'll keep the complete "
+                "specification updated on the right. When you're ready, you'll "
+                "review the shared candidate count and create the new scoring "
+                f"role. Candidate stages and actions will stay coupled to the original {provider_label} job."
+            ),
+            "attachments": [],
+            "suggested_replies": [],
+        }
+    ]
+    brief.completeness = compute_completeness(brief, template)
+    db.flush()
+    if commit:
+        db.commit()
+        db.refresh(brief)
+    return brief
+
+
+def related_role_draft_payload(brief: RoleBrief) -> dict[str, Any]:
+    source = brief.source_role
+    return {
+        "type": "related_role_draft",
+        "created": True,
+        "brief_id": int(brief.id),
+        "source_role_id": int(brief.source_role_id),
+        "source_role_name": source.name if source is not None else None,
+        "proposed_name": brief.title,
+        "completeness": int(brief.completeness or 0),
+        "frontend_url": f"/requisitions?brief={brief.id}",
+        "message": (
+            "Created a pre-populated related-role draft in the job-creation chat. "
+            "Review the cloned specification, describe any differences, then confirm creation and scoring there."
+        ),
+    }
+
+
 def create_related_role(
     db: Session,
     *,
@@ -129,6 +324,7 @@ def create_related_role(
     creator_user_id: int,
     name: str,
     job_spec_text: str,
+    brief: RoleBrief | None = None,
     commit: bool = True,
     dispatch: bool = True,
 ) -> tuple[Role, dict[str, int]]:
@@ -182,6 +378,24 @@ def create_related_role(
     db.add(related)
     try:
         db.flush()
+        if brief is not None:
+            if int(brief.organization_id) != int(organization_id):
+                raise RelatedRoleError("The related-role draft belongs to another organization.")
+            if int(brief.source_role_id or 0) != int(source.id):
+                raise RelatedRoleError("The related-role draft is linked to a different source role.")
+            if brief.role_id is not None:
+                raise RelatedRoleError("This related-role draft has already been created.")
+            brief.role_id = int(related.id)
+            # Reuse the normal requisition materializer so structured fields,
+            # recruiter criteria, and the rich brief remain identical whether
+            # a job started natively or as a related scoring view.
+            materialize_brief_to_role(
+                db,
+                brief,
+                mark_applied=True,
+                job_spec_text=clean_spec,
+            )
+        sync_derived_criteria(db, related)
         source_members = (
             db.query(JobHiringTeam)
             .filter(
@@ -263,8 +477,10 @@ def related_role_created_payload(
 __all__ = [
     "RelatedRoleError",
     "create_related_role",
+    "create_related_role_draft",
     "get_related_role_source",
     "preview_related_role",
     "related_role_created_payload",
+    "related_role_draft_payload",
     "related_role_roster_counts",
 ]

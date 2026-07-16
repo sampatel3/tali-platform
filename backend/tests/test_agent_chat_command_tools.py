@@ -93,9 +93,9 @@ def _persist_confirmation(db, *, conversation, user):
 
 def test_registry_exposes_every_new_command_once():
     names = [tool["name"] for tool in AGENT_CHAT_TOOLS]
-    # The two related-role tools were added upstream while this command suite
-    # was being built; keep the exact count aligned with the merged registry.
-    assert len(names) == len(set(names)) == 37
+    # Keep the exact count aligned with the merged registry and prove both
+    # explicit-report publication and related-draft handoff remain available.
+    assert len(names) == len(set(names)) == 38
     assert {
         "list_pending_decisions",
         "approve_decision",
@@ -113,6 +113,7 @@ def test_registry_exposes_every_new_command_once():
         "post_workable_note",
         "run_agent_now",
         "create_top_candidates_report",
+        "start_related_role_draft",
     }.issubset(names)
     assert "create_related_role" in MUTATING_TOOL_NAMES
 

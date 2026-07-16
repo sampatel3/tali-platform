@@ -110,7 +110,7 @@ export const useAgentStatus = (roleId) => {
         await refetch({ force: true });
       }
     }
-  }, [refetch]);
+  }, [refetch, roleId]);
 
   // Preserve the small imperative patch API used for budget and queue updates,
   // but invalidate a request that began before the local patch.

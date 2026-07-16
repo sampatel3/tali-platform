@@ -110,7 +110,17 @@ def test_generated_drafts_filter_in_sql_and_requisition_list_is_summary_paged(cl
     assert first.status_code == later.status_code == 200
     assert len(first.json()) == 25
     assert len(later.json()) == 5
-    assert all(set(row) == {"id", "title", "status", "completeness"} for row in first.json())
+    summary_keys = {
+        "id",
+        "source_role_id",
+        "brief_kind",
+        "title",
+        "status",
+        "completeness",
+    }
+    assert all(set(row) == summary_keys for row in first.json())
+    assert all(row["source_role_id"] is None for row in first.json())
+    assert all(row["brief_kind"] == "standard" for row in first.json())
     detail = client.get(f"/api/v1/requisitions/{later.json()[0]['id']}", headers=headers).json()
     assert detail["messages"] == [{"role": "user", "content": "confidential history"}]
     assert client.get("/api/v1/requisitions?limit=101", headers=headers).status_code == 422

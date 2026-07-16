@@ -1,4 +1,4 @@
-"""Transactional idempotency for later-turn confirmed chat commands."""
+"""Transactional idempotency for server-bound Agent Chat commands."""
 
 from __future__ import annotations
 
@@ -10,6 +10,12 @@ from typing import Any
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
+from ..models.agent_conversation import (
+    AUTHOR_ROLE_USER,
+    MESSAGE_KIND_CHAT,
+    AgentConversation,
+    AgentConversationMessage,
+)
 from ..models.chat_command_receipt import (
     CHAT_COMMAND_COMPLETED,
     CHAT_COMMAND_PENDING,
@@ -192,6 +198,73 @@ def begin_command(
     )
 
 
+def begin_agent_turn_command(
+    db: Session,
+    *,
+    conversation: AgentConversation,
+    organization_id: int,
+    role_id: int,
+    requested_by_user_id: int,
+    operation: str,
+    arguments: Any,
+) -> CommandReceiptClaim:
+    """Claim one idempotent command bound to the durable recruiter turn.
+
+    Some immediate, spend-free chat writes do not need a second human
+    confirmation, but they still need the same crash/replay guarantee as a
+    confirmed paid command.  The server-owned ``turn_message_id`` is stable
+    across model retries and worker redelivery; a provider tool-use id is not.
+    Validate that row's full tenant/role/author scope before deriving a token.
+    """
+
+    conversation_id = int(conversation.id or 0)
+    turn_message_id = int(conversation.turn_message_id or 0)
+    expected_scope = (
+        conversation_id > 0
+        and turn_message_id > 0
+        and int(conversation.organization_id) == int(organization_id)
+        and int(conversation.role_id) == int(role_id)
+    )
+    if not expected_scope:
+        raise CommandReceiptConflict(
+            "agent command is not bound to a durable recruiter turn"
+        )
+    turn = (
+        db.query(AgentConversationMessage.id)
+        .filter(
+            AgentConversationMessage.id == turn_message_id,
+            AgentConversationMessage.conversation_id == conversation_id,
+            AgentConversationMessage.organization_id == int(organization_id),
+            AgentConversationMessage.role_id == int(role_id),
+            AgentConversationMessage.author_role == AUTHOR_ROLE_USER,
+            AgentConversationMessage.author_user_id == int(requested_by_user_id),
+            AgentConversationMessage.kind == MESSAGE_KIND_CHAT,
+        )
+        .one_or_none()
+    )
+    if turn is None:
+        raise CommandReceiptConflict(
+            "agent command recruiter-turn scope does not match"
+        )
+    check = ConfirmationCheck(
+        ok=True,
+        reason="durable_agent_turn",
+        payload={},
+        token=f"agent-turn:{conversation_id}:{turn_message_id}",
+    )
+    return begin_command(
+        db,
+        check=check,
+        conversation_kind="agent",
+        conversation_id=conversation_id,
+        organization_id=int(organization_id),
+        role_id=int(role_id),
+        requested_by_user_id=int(requested_by_user_id),
+        operation=operation,
+        arguments=arguments,
+    )
+
+
 def abandon_uncommitted_command(
     db: Session,
     claim: CommandReceiptClaim,
@@ -231,6 +304,7 @@ __all__ = [
     "CommandReceiptClaim",
     "CommandReceiptConflict",
     "abandon_uncommitted_command",
+    "begin_agent_turn_command",
     "begin_command",
     "complete_command",
     "lookup_command",

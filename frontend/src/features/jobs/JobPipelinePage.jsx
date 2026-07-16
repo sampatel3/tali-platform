@@ -4,10 +4,7 @@ import '../../styles/03-settings-agent.css';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
-  GitFork,
   Link2,
-  MessageSquare,
-  RefreshCw,
   Send,
   Sparkles,
 } from 'lucide-react';
@@ -26,6 +23,7 @@ import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
 import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
 import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
+import { requisitionApi } from '../requisitions/api';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import {
@@ -43,9 +41,9 @@ import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { conflictActorLabel, reconcileRoleVersionConflict, roleExpectedVersion, roleVersionConflict, versionedRolePayload } from './roleConcurrency';
-import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
 import { ReachOutDialog } from './ReachOutDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import { JobPipelineHeaderActions } from './JobPipelineHeaderActions';
 import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
 import {
   agentIntakeLifecycleCopy,
@@ -217,8 +215,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
   const [sisterRescoring, setSisterRescoring] = useState(false);
   const [sisterPollVersion, setSisterPollVersion] = useState(0);
-  const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
   const [processDialogOpen, setProcessDialogOpen] = useState(false);
+  const [startingRelatedRole, setStartingRelatedRole] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [roleDetailLoading, setRoleDetailLoading] = useState(true);
@@ -1155,6 +1153,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [loadRoleWorkspace, numericRoleId, rolesApi, showToast, sisterRescoring]);
 
+  const handleStartRelatedRole = useCallback(async () => {
+    if (!role?.id || startingRelatedRole) return;
+    setStartingRelatedRole(true);
+    try {
+      const draft = await requisitionApi.createRelated(role.id);
+      if (!draft?.id) throw new Error('Related-role draft was not returned.');
+      navigate(`/requisitions?brief=${encodeURIComponent(draft.id)}`);
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to start the related-role draft.'), 'error');
+    } finally {
+      setStartingRelatedRole(false);
+    }
+  }, [navigate, role?.id, showToast, startingRelatedRole]);
+
   const handleOpenRoleSettings = () => {
     document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   };
@@ -1565,90 +1577,29 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         period={false}
         breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
         actions={(
-          <>
-            {/* Reverse deep-link to the Hub: the total includes candidate
-                decisions and open agent questions, so call them review items
-                rather than implying every item is a decision. */}
-            {(roleAgent?.pending || 0) > 0 ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                title={rolePendingReviewTitle}
-                aria-label={`${rolePendingReviewTitle}. Open the Home review queue.`}
-                onClick={() => {
-                  // SPA nav — a full document reload here re-downloads the JS
-                  // bundle and re-runs the auth/bootstrap chain (several extra
-                  // UAE round-trips) and discards in-memory state.
-                  const params = new URLSearchParams({
-                    role: String(role?.id || ''),
-                    status: 'pending',
-                  });
-                  navigate(`/home?${params.toString()}`);
-                }}
-              >
-                Review {roleAgent.pending} {roleAgent.pending === 1 ? 'item' : 'items'} →
-              </button>
-            ) : null}
-            {role?.role_kind === 'sister' ? (
-              <button type="button" className="btn btn-outline btn-sm" onClick={handleRescoreSister} disabled={sisterRescoring || sisterScoringStatus?.status === 'running'}>
-                {sisterRescoring || sisterScoringStatus?.status === 'running' ? <Spinner size={12} /> : <RefreshCw size={12} />}
-                {sisterScoringStatus?.status === 'running' ? `Scoring ${sisterScoringStatus.progress_percent || 0}%` : 'Re-score roster'}
-              </button>
-            ) : null}
-            {role?.role_kind !== 'sister' ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => setProcessDialogOpen(true)}
-                disabled={['pending', 'queued', 'starting', 'running', 'cancelling'].includes(
-                  String(processJobs?.[numericRoleId]?.status || '').toLowerCase(),
-                )}
-                title="Fetch CVs, pre-screen, score, and update semantic search in one governed run"
-              >
-                <RefreshCw size={12} />
-                {['pending', 'queued', 'starting', 'running', 'cancelling'].includes(
-                  String(processJobs?.[numericRoleId]?.status || '').toLowerCase(),
-                ) ? 'Processing…' : 'Process candidates'}
-              </button>
-            ) : null}
-            {role?.role_kind !== 'sister' ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => navigate(`/chat/agents/${role.id}`)}
-                title="Open this job's agent chat"
-              >
-                <MessageSquare size={12} />
-                Ask agent
-              </button>
-            ) : null}
-            {role?.role_kind !== 'sister' && externalProvider ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => setSisterDialogOpen(true)}
-                title={`Create a separate scoring role over this ${externalProviderLabel} candidate pool`}
-              >
-                <GitFork size={12} />
-                Create related role
-              </button>
-            ) : null}
-            {canEditJobSpec ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => {
-                  setJobSpecError('');
-                  setJobSpecConflict(null);
-                  setSpecEditorDirty(false);
-                  setEditingSpec(true);
-                  setActiveView('activity');
-                }}
-              >
-                Edit job spec
-              </button>
-            ) : null}
-          </>
+          <JobPipelineHeaderActions
+            canEditJobSpec={canEditJobSpec}
+            externalProvider={externalProvider}
+            externalProviderLabel={externalProviderLabel}
+            navigate={navigate}
+            onEditJobSpec={() => {
+              setJobSpecError('');
+              setJobSpecConflict(null);
+              setSpecEditorDirty(false);
+              setEditingSpec(true);
+              setActiveView('activity');
+            }}
+            onOpenProcessDialog={() => setProcessDialogOpen(true)}
+            onRescoreSister={handleRescoreSister}
+            onStartRelatedRole={handleStartRelatedRole}
+            processStatus={processJobs?.[numericRoleId]?.status}
+            role={role}
+            roleAgent={roleAgent}
+            rolePendingReviewTitle={rolePendingReviewTitle}
+            sisterRescoring={sisterRescoring}
+            sisterScoringStatus={sisterScoringStatus}
+            startingRelatedRole={startingRelatedRole}
+          />
         )}
         postTitle={(
           <div className="ah-facts">
@@ -2429,17 +2380,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           variant="danger"
           onClose={() => setPendingRoleView(null)}
           onConfirm={discardSpecAndNavigate}
-        />
-
-        <CreateSisterRoleDialog
-          open={sisterDialogOpen}
-          sourceRole={role}
-          rolesApi={rolesApi}
-          onClose={() => setSisterDialogOpen(false)}
-          onCreated={(createdRole) => {
-            setSisterDialogOpen(false);
-            if (createdRole?.id) navigate(`/jobs/${createdRole.id}`);
-          }}
         />
 
         <ProcessCandidatesDialog

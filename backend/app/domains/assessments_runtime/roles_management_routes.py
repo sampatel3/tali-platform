@@ -33,28 +33,13 @@ from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...models.org_criterion import (
-    BUCKET_PREFERRED,
-    CRITERION_BUCKETS,
-)
-from ...models.role_criterion import (
-    CRITERION_SOURCE_DERIVED,
-    CRITERION_SOURCE_RECRUITER,
-    RoleCriterion,
-)
 from ...schemas.role import (
     JobStatusUpdate,
     RoleClientUpdate,
     RoleCreate,
-    RoleCriterionCreate,
-    RoleCriterionResponse,
-    RoleCriterionUpdate,
-    RoleFeedbackNoteCreate,
-    RoleFeedbackNoteResponse,
     RoleJobSpecUpdate,
     RoleJobSpecUpdateResponse,
     RoleResponse,
-    RoleTaskLinkRequest,
     RoleUpdate,
     RoleVersionCommand,
 )
@@ -71,10 +56,8 @@ from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.job_page_lifecycle import role_accepts_native_applications
 from ...services.role_criteria_service import (
-    reset_role_to_workspace,
     sync_all_criteria,
     sync_derived_criteria,
-    sync_role_with_workspace,
 )
 from ...services.role_concurrency import (
     assert_role_version,
@@ -84,7 +67,6 @@ from ...services.role_concurrency import (
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_DISABLED,
     ROLE_CHANGE_ACTION_AGENT_ENABLED,
-    ROLE_CHANGE_ACTION_DELETED,
     ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
     ROLE_CHANGE_ACTION_UPDATED,
     add_role_change_event,
@@ -99,43 +81,14 @@ from .job_authorization import JobPermission, require_job_permission
 from .pipeline_service import role_pipeline_counts, role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
 from .role_collection_queries import apply_role_search, count_roles, role_relationship_counts
+from .role_management_route_support import (
+    _add_role_change_boundary as _add_role_change_boundary,
+)
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.roles")
 
 
-def _add_role_change_boundary(
-    db: Session,
-    *,
-    role: Role,
-    current_user: User,
-    action: str,
-    reason: str,
-    before: dict | None = None,
-) -> int:
-    """Advance a role revision for related shared configuration.
-
-    Criteria, client links, and task associations live outside the ``roles``
-    table but still invalidate an open job editor snapshot. Their audit event
-    may therefore have an empty column diff while retaining actor/action/time.
-    """
-
-    audit_before = before if before is not None else capture_role_change_snapshot(role)
-    from_version = int(role.version or 1)
-    to_version = bump_role_version(role)
-    add_role_change_event(
-        db,
-        role=role,
-        before=audit_before,
-        action=action,
-        actor_user_id=int(current_user.id),
-        from_version=from_version,
-        to_version=to_version,
-        reason=reason,
-        request_id=get_request_id(),
-        allow_empty_changes=True,
-    )
-    return to_version
 
 
 @router.get("/roles/{role_id}/change-events")
@@ -1637,435 +1590,8 @@ def suggested_auto_reject_threshold(
     return rec.to_dict()
 
 
-# ---------------------------------------------------------------------------
-# Per-role criteria — chip CRUD, sync, reset
-# ---------------------------------------------------------------------------
 
 
-def _get_role_criterion(
-    db: Session, role: Role, criterion_id: int
-) -> RoleCriterion:
-    chip = (
-        db.query(RoleCriterion)
-        .filter(
-            RoleCriterion.id == criterion_id,
-            RoleCriterion.role_id == role.id,
-            RoleCriterion.deleted_at.is_(None),
-            RoleCriterion.source != CRITERION_SOURCE_DERIVED,
-        )
-        .first()
-    )
-    if chip is None:
-        raise HTTPException(status_code=404, detail="Criterion not found")
-    return chip
-
-
-def _next_role_criterion_ordering(db: Session, role: Role) -> int:
-    last = (
-        db.query(RoleCriterion)
-        .filter(
-            RoleCriterion.role_id == role.id,
-            RoleCriterion.deleted_at.is_(None),
-            RoleCriterion.source != CRITERION_SOURCE_DERIVED,
-        )
-        .order_by(RoleCriterion.ordering.desc(), RoleCriterion.id.desc())
-        .first()
-    )
-    return (last.ordering + 1) if last else 0
-
-
-# Pre-screen only reads must-have + constraint criteria — it explicitly
-# ignores nice-to-haves. So preferred-only edits don't change the
-# pre-screen prompt and shouldn't invalidate any candidate's score.
-# Edits that touch must-have OR constraint (either side of the
-# transition) DO change the pre-screen prompt and need an invalidation
-# wave.
-_INVALIDATING_BUCKETS = {"must", "constraint"}
-
-
-def _commit_role_criterion_change(
-    db: Session,
-    role: Role,
-    *,
-    current_user: User,
-    invalidate_scores: bool = True,
-) -> None:
-    """Commit a chip CRUD. Optionally NULLs every scored application's
-    pre-screen + cv_match scores so the UI shows "needs rescore" until
-    the agent re-evaluates against the new criteria.
-
-    ``invalidate_scores`` defaults to ``True`` (the historical, safe
-    behavior — invalidate on any change). Per-chip CRUD handlers
-    (create / update / delete) pass an explicit value computed from
-    the bucket transition; bulk workspace re-sync / reset handlers
-    pass nothing and get the safe default.
-    """
-    db.flush()
-    if invalidate_scores:
-        mark_role_scores_stale(db, role.id)
-    _add_role_change_boundary(
-        db,
-        role=role,
-        current_user=current_user,
-        action="role_criteria_updated",
-        reason="job criteria updated",
-    )
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update role criteria")
-
-
-@router.post(
-    "/roles/{role_id}/criteria",
-    response_model=RoleCriterionResponse,
-    status_code=201,
-)
-def create_role_criterion(
-    role_id: int,
-    data: RoleCriterionCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.EDIT_ROLE,
-    )
-    assert_role_version(role, expected_version=data.expected_version)
-    bucket = data.bucket or BUCKET_PREFERRED
-    if bucket not in CRITERION_BUCKETS:
-        raise HTTPException(status_code=422, detail="Invalid bucket")
-    chip = RoleCriterion(
-        role_id=role.id,
-        source=CRITERION_SOURCE_RECRUITER,
-        ordering=int(data.ordering) if data.ordering is not None else _next_role_criterion_ordering(db, role),
-        weight=float(data.weight) if data.weight is not None else 1.0,
-        must_have=(bucket == "must"),
-        bucket=bucket,
-        org_criterion_id=None,
-        text=data.text.strip(),
-    )
-    db.add(chip)
-    _commit_role_criterion_change(
-        db,
-        role,
-        current_user=current_user,
-        invalidate_scores=bucket in _INVALIDATING_BUCKETS,
-    )
-    db.refresh(chip)
-    return RoleCriterionResponse.model_validate(chip).model_copy(
-        update={"role_version": int(role.version or 1)}
-    )
-
-
-@router.patch(
-    "/roles/{role_id}/criteria/{criterion_id}",
-    response_model=RoleCriterionResponse,
-)
-def update_role_criterion(
-    role_id: int,
-    criterion_id: int,
-    data: RoleCriterionUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.EDIT_ROLE,
-    )
-    assert_role_version(role, expected_version=data.expected_version)
-    chip = _get_role_criterion(db, role, criterion_id)
-    updates = data.model_dump(exclude_unset=True)
-    updates.pop("expected_version", None)
-    old_bucket = chip.bucket
-    text_changed = "text" in updates and updates["text"] is not None and updates["text"].strip() != (chip.text or "")
-    bucket_changed = "bucket" in updates and updates["bucket"] is not None and updates["bucket"] != chip.bucket
-    if "text" in updates and updates["text"] is not None:
-        chip.text = updates["text"].strip()
-    if "bucket" in updates and updates["bucket"] is not None:
-        if updates["bucket"] not in CRITERION_BUCKETS:
-            raise HTTPException(status_code=422, detail="Invalid bucket")
-        chip.bucket = updates["bucket"]
-        chip.must_have = chip.bucket == "must"
-    if "ordering" in updates and updates["ordering"] is not None:
-        chip.ordering = int(updates["ordering"])
-    if "weight" in updates and updates["weight"] is not None:
-        chip.weight = float(updates["weight"])
-    # Mark customized so a later "Sync workspace" doesn't overwrite recruiter
-    # edits to a workspace-derived chip. Pure ordering/weight tweaks don't
-    # count as content customization.
-    if (text_changed or bucket_changed) and chip.org_criterion_id is not None:
-        chip.customized_at = datetime.now(timezone.utc)
-    # Invalidate scores if the edit could have changed the pre-screen
-    # prompt: text/bucket edits where either the old OR new bucket is
-    # must-have/constraint. Pure ordering/weight tweaks, and pure
-    # preferred→preferred text edits, don't trigger.
-    needs_invalidation = (text_changed or bucket_changed) and (
-        old_bucket in _INVALIDATING_BUCKETS or chip.bucket in _INVALIDATING_BUCKETS
-    )
-    _commit_role_criterion_change(
-        db,
-        role,
-        current_user=current_user,
-        invalidate_scores=needs_invalidation,
-    )
-    db.refresh(chip)
-    return RoleCriterionResponse.model_validate(chip).model_copy(
-        update={"role_version": int(role.version or 1)}
-    )
-
-
-@router.delete(
-    "/roles/{role_id}/criteria/{criterion_id}",
-    status_code=204,
-)
-def delete_role_criterion(
-    role_id: int,
-    criterion_id: int,
-    expected_version: int = Query(ge=1),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.EDIT_ROLE,
-    )
-    assert_role_version(role, expected_version=expected_version)
-    chip = _get_role_criterion(db, role, criterion_id)
-    old_bucket = chip.bucket
-    # If this chip was inherited from workspace, remember the suppression so
-    # "Sync workspace" doesn't immediately re-add it. Pure role-only chips
-    # just go away.
-    if chip.org_criterion_id is not None:
-        suppressed = list(role.suppressed_org_criterion_ids or [])
-        if chip.org_criterion_id not in suppressed:
-            suppressed.append(int(chip.org_criterion_id))
-        role.suppressed_org_criterion_ids = suppressed
-    db.delete(chip)
-    _commit_role_criterion_change(
-        db,
-        role,
-        current_user=current_user,
-        invalidate_scores=old_bucket in _INVALIDATING_BUCKETS,
-    )
-    return None
-
-
-@router.post("/roles/{role_id}/criteria/sync", response_model=RoleResponse)
-def sync_role_criteria_with_workspace(
-    role_id: int,
-    data: RoleVersionCommand,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Re-apply workspace text + bucket on non-customized, non-suppressed
-    role chips, add any newly-introduced workspace chips, drop the
-    workspace link on chips whose workspace counterpart is gone."""
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.EDIT_ROLE,
-    )
-    assert_role_version(role, expected_version=data.expected_version)
-    sync_role_with_workspace(db, role)
-    _commit_role_criterion_change(db, role, current_user=current_user)
-    db.refresh(role)
-    return role_to_response(role)
-
-
-@router.post("/roles/{role_id}/criteria/reset", response_model=RoleResponse)
-def reset_role_criteria_to_workspace(
-    role_id: int,
-    data: RoleVersionCommand,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Hard-delete every recruiter chip on this role and re-snapshot
-    workspace defaults. Suppressions are cleared. ``derived_from_spec``
-    chips are untouched."""
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.EDIT_ROLE,
-    )
-    assert_role_version(role, expected_version=data.expected_version)
-    reset_role_to_workspace(db, role)
-    _commit_role_criterion_change(db, role, current_user=current_user)
-    db.refresh(role)
-    return role_to_response(role)
-
-
-@router.post("/roles/{role_id}/star", response_model=RoleResponse)
-def star_role(
-    role_id: int,
-    data: RoleVersionCommand,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Mark a role as starred for auto-sync + real-time scoring.
-
-    Side-effect: kick off an immediate Workable sync filtered to this role
-    so the recruiter sees fresh candidates within seconds rather than
-    waiting up to 15 min for the next Beat tick. Skipped silently for
-    manual roles (no workable_job_id) or when another sync is already
-    running for the org.
-    """
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.EDIT_ROLE,
-    )
-    assert_role_version(role, expected_version=data.expected_version)
-    audit_before = capture_role_change_snapshot(role)
-    role.starred_for_auto_sync = True
-    # A manual star is sticky — it must survive Workable state changes, so it
-    # is never flagged auto-managed (only the published-state automation sets
-    # that flag, and only it removes such stars).
-    role.star_auto_managed = False
-    if capture_role_change_snapshot(role) != audit_before:
-        _add_role_change_boundary(
-            db,
-            role=role,
-            current_user=current_user,
-            action="role_starred",
-            reason="role starred for synchronization",
-            before=audit_before,
-        )
-    try:
-        db.commit()
-        db.refresh(role)
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to star role")
-
-    if (role.source == "workable") and (role.workable_job_id or "").strip():
-        try:
-            from ..workable_sync.routes import kick_off_filtered_sync
-
-            org = (
-                db.query(Organization)
-                .filter(Organization.id == current_user.organization_id)
-                .first()
-            )
-            if org is not None:
-                kick_off_filtered_sync(
-                    db,
-                    org=org,
-                    job_shortcodes=[str(role.workable_job_id).strip()],
-                    requested_by_user_id=current_user.id,
-                    mode="full",
-                )
-        except Exception:
-            logger.exception(
-                "Failed to kick off immediate sync after starring role_id=%s",
-                role.id,
-            )
-
-    return role_to_response(role)
-
-
-@router.delete("/roles/{role_id}/star", response_model=RoleResponse)
-def unstar_role(
-    role_id: int,
-    expected_version: int = Query(ge=1),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.EDIT_ROLE,
-    )
-    assert_role_version(role, expected_version=expected_version)
-    # Live (published) roles are always kept in continuous sync — ignore
-    # attempts to unstar them. The next jobs-only sync would re-star them
-    # anyway; refusing here avoids a confusing flicker and keeps the
-    # invariant server-side.
-    job_state = ""
-    if isinstance(role.workable_job_data, dict):
-        job_state = str(role.workable_job_data.get("state") or "").strip().lower()
-    if job_state == "published":
-        return role_to_response(role)
-    audit_before = capture_role_change_snapshot(role)
-    role.starred_for_auto_sync = False
-    role.star_auto_managed = False
-    if capture_role_change_snapshot(role) != audit_before:
-        _add_role_change_boundary(
-            db,
-            role=role,
-            current_user=current_user,
-            action="role_unstarred",
-            reason="role removed from synchronization favorites",
-            before=audit_before,
-        )
-    try:
-        db.commit()
-        db.refresh(role)
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to unstar role")
-    return role_to_response(role)
-
-
-@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_role(
-    role_id: int,
-    expected_version: int = Query(ge=1),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.DELETE_ROLE,
-    )
-    assert_role_version(role, expected_version=expected_version)
-    has_applications = db.query(CandidateApplication).filter(
-        CandidateApplication.organization_id == current_user.organization_id,
-        CandidateApplication.role_id == role.id,
-    ).first()
-    if has_applications:
-        raise HTTPException(status_code=400, detail="Cannot delete role with applications")
-    in_use = db.query(Assessment).filter(
-        Assessment.organization_id == current_user.organization_id,
-        Assessment.role_id == role.id,
-    ).first()
-    if in_use:
-        raise HTTPException(status_code=400, detail="Cannot delete role with assessments")
-    audit_before = capture_role_change_snapshot(role)
-    audit_from_version = int(role.version or 1)
-    audit_to_version = bump_role_version(role)
-    add_role_change_event(
-        db,
-        role=role,
-        before=audit_before,
-        action=ROLE_CHANGE_ACTION_DELETED,
-        actor_user_id=int(current_user.id),
-        from_version=audit_from_version,
-        to_version=audit_to_version,
-        reason="role deleted",
-        request_id=get_request_id(),
-        allow_empty_changes=True,
-    )
-    try:
-        db.delete(role)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete role")
-    return None
 
 
 @router.put("/roles/{role_id}/job-spec", response_model=RoleJobSpecUpdateResponse)
@@ -2425,261 +1951,37 @@ def regenerate_interview_focus(
     }
 
 
-@router.get("/roles/{role_id}/tasks")
-def list_role_tasks(
-    role_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = (
-        db.query(Role)
-        .options(joinedload(Role.tasks))
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == current_user.organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    from ...services.task_battle_test import battle_test_summary
-
-    return [
-        {
-            "id": t.id,
-            "name": t.name,
-            "description": t.description,
-            "scenario": t.scenario,
-            "difficulty": t.difficulty,
-            "duration_minutes": t.duration_minutes,
-            "task_type": t.task_type,
-            "is_active": bool(t.is_active),
-            "generated": bool(
-                isinstance(t.extra_data, dict) and t.extra_data.get("generated")
-            ),
-            "needs_review": bool(
-                isinstance(t.extra_data, dict) and t.extra_data.get("needs_review")
-            ),
-            "battle_test": (
-                battle_test_summary(t)
-                if isinstance(t.extra_data, dict) and t.extra_data.get("generated")
-                else None
-            ),
-        }
-        for t in (role.tasks or [])
-    ]
-
-
-@router.post("/roles/{role_id}/tasks")
-def add_role_task(
-    role_id: int,
-    data: RoleTaskLinkRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
-    )
-    assert_role_version(role, expected_version=data.expected_version)
-    task = db.query(Task).filter(
-        Task.id == data.task_id,
-        (Task.organization_id == current_user.organization_id) | (Task.organization_id == None),  # noqa: E711
-    ).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if not any(t.id == task.id for t in (role.tasks or [])):
-        role.tasks.append(task)
-        _add_role_change_boundary(
-            db,
-            role=role,
-            current_user=current_user,
-            action="role_task_linked",
-            reason=f"assessment task {task.id} linked",
-        )
-    try:
-        # Linking an already-active task fills the activation gap immediately;
-        # an inactive generated draft intentionally leaves the prompt open
-        # until the shared approval service activates it.
-        db.flush()
-        from ...services.agent_activation_checklist import (
-            resolve_satisfied_activation_questions,
-        )
-
-        resolve_satisfied_activation_questions(db, role=role)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to link task to role")
-    return {
-        "success": True,
-        "role_id": role.id,
-        "task_id": task.id,
-        "version": int(role.version or 1),
-    }
-
-
-@router.delete("/roles/{role_id}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_role_task(
-    role_id: int,
-    task_id: int,
-    expected_version: int = Query(ge=1),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
-    )
-    assert_role_version(role, expected_version=expected_version)
-    in_use = db.query(Assessment).filter(
-        Assessment.organization_id == current_user.organization_id,
-        Assessment.role_id == role.id,
-        Assessment.task_id == task_id,
-    ).first()
-    if in_use:
-        raise HTTPException(status_code=400, detail="Cannot unlink task that already has assessments")
-    had_task = any(t.id == task_id for t in (role.tasks or []))
-    role.tasks = [t for t in (role.tasks or []) if t.id != task_id]
-    enabled_last_task_removed = bool(
-        had_task
-        and role.agentic_mode_enabled
-        and not any(bool(task.is_active) for task in (role.tasks or []))
-        and not bool(role.auto_skip_assessment)
-    )
-    if enabled_last_task_removed:
-        # Choosing "No assessment task" is the recruiter's explicit choice to
-        # bypass that stage. Keep the live role internally consistent instead
-        # of silently translating taskless send decisions into advances while
-        # settings still claim assessment skipping is off.
-        role.auto_skip_assessment = True
-    if had_task:
-        _add_role_change_boundary(
-            db,
-            role=role,
-            current_user=current_user,
-            action="role_task_unlinked",
-            reason=f"assessment task {task_id} unlinked",
-        )
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to unlink task from role")
-    if enabled_last_task_removed:
-        try:
-            from ...services.bulk_decision_service import (
-                reconcile_pending_positive_decisions,
-            )
-
-            reconcile_pending_positive_decisions(db, role=role)
-            db.commit()
-        except Exception:
-            logger.exception(
-                "Assessment-stage reconcile failed after task unlink role_id=%s",
-                role.id,
-            )
-            db.rollback()
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Recruiter feedback notes — freeform observations about agent behaviour on
-# this role. Append-only timeline; the most-recent N rows are inlined into
-# the agent's system prompt by ``system_prompt._render_recruiter_feedback_notes``
-# so the agent picks the feedback up on the next cycle.
-# ---------------------------------------------------------------------------
-
-
-def _serialize_feedback_note(row, *, role_version: int | None = None) -> dict:
-    author = row.author
-    return {
-        "id": int(row.id),
-        "role_id": int(row.role_id),
-        "author_user_id": int(row.author_user_id) if row.author_user_id else None,
-        "author_name": (
-            (author.full_name if getattr(author, "full_name", None) else author.email)
-            if author
-            else None
-        ),
-        "note": row.note,
-        "created_at": row.created_at,
-        "role_version": role_version,
-    }
-
-
-@router.get(
-    "/roles/{role_id}/feedback-notes",
-    response_model=list[RoleFeedbackNoteResponse],
+# Keep the historical import surface while each cohesive route group owns its
+# own router. Including them here preserves the public API assembled by
+# assessments_runtime.routes.
+from .role_criteria_routes import (  # noqa: E402
+    _INVALIDATING_BUCKETS as _INVALIDATING_BUCKETS,
+    _commit_role_criterion_change as _commit_role_criterion_change,
+    _get_role_criterion as _get_role_criterion,
+    _next_role_criterion_ordering as _next_role_criterion_ordering,
+    create_role_criterion as create_role_criterion,
+    delete_role_criterion as delete_role_criterion,
+    reset_role_criteria_to_workspace as reset_role_criteria_to_workspace,
+    router as role_criteria_router,
+    sync_role_criteria_with_workspace as sync_role_criteria_with_workspace,
+    update_role_criterion as update_role_criterion,
 )
-def list_role_feedback_notes(
-    role_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    from ...agent_runtime.role_feedback_notes import list_notes
-
-    role = get_role(role_id, current_user.organization_id, db)
-    rows = list_notes(db, role_id=role.id, limit=200)
-    return [_serialize_feedback_note(r) for r in rows]
-
-
-@router.post(
-    "/roles/{role_id}/feedback-notes",
-    response_model=RoleFeedbackNoteResponse,
-    status_code=status.HTTP_201_CREATED,
+from .role_lifecycle_routes import (  # noqa: E402
+    delete_role as delete_role,
+    router as role_lifecycle_router,
+    star_role as star_role,
+    unstar_role as unstar_role,
 )
-def create_role_feedback_note(
-    role_id: int,
-    data: RoleFeedbackNoteCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    from ...agent_runtime.role_feedback_notes import create_note
+from .role_task_feedback_routes import (  # noqa: E402
+    _serialize_feedback_note as _serialize_feedback_note,
+    add_role_task as add_role_task,
+    create_role_feedback_note as create_role_feedback_note,
+    list_role_feedback_notes as list_role_feedback_notes,
+    list_role_tasks as list_role_tasks,
+    remove_role_task as remove_role_task,
+    router as role_task_feedback_router,
+)
 
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
-    )
-    assert_role_version(
-        role,
-        expected_version=data.expected_version,
-        current_role=lambda: role_to_response(role).model_dump(mode="json"),
-        changed_by=lambda: latest_role_change_actor(
-            db,
-            organization_id=int(current_user.organization_id),
-            role_id=int(role.id),
-        ),
-    )
-    try:
-        row = create_note(
-            db,
-            organization_id=int(current_user.organization_id),
-            role_id=int(role.id),
-            note=data.note,
-            author_user_id=int(current_user.id),
-        )
-        role_version = _add_role_change_boundary(
-            db,
-            role=role,
-            current_user=current_user,
-            action="role_feedback_note_added",
-            reason=f"agent feedback note {int(row.id)} added",
-        )
-        db.commit()
-        db.refresh(row)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc))
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to create role feedback note for role_id=%s", role_id)
-        raise HTTPException(status_code=500, detail="Failed to create feedback note")
-    return _serialize_feedback_note(row, role_version=role_version)
+router.include_router(role_criteria_router)
+router.include_router(role_lifecycle_router)
+router.include_router(role_task_feedback_router)

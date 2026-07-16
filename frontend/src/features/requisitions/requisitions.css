@@ -401,6 +401,70 @@ a.rq-btn-sm { text-decoration: none; }
   gap: 10px;
   min-width: 0;
 }
+.rq-related-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 9px;
+  width: min(520px, 100%);
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--purple-soft) 58%, var(--bg));
+}
+.rq-related-source,
+.rq-related-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rq-related-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--purple-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.rq-related-source-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rq-related-source-link:hover { color: var(--purple-2); text-decoration: underline; }
+.rq-related-provider {
+  padding: 2px 7px;
+  border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line));
+  border-radius: 999px;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+}
+.rq-related-metrics {
+  color: var(--mute);
+  font-size: 0.72rem;
+}
+.rq-related-metrics span + span::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--mute-2);
+}
+.rq-related-metrics strong { color: var(--ink); font-weight: 600; }
+.rq-related-hint {
+  max-width: 500px;
+  margin: 0;
+  color: var(--mute);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  text-align: right;
+}
 /* "Share with client" trigger — a ghost button with a subtle purple lean so it
    reads as a distinct, friendly action next to Publish. */
 .rq-share-btn { border-color: color-mix(in oklab, var(--purple) 32%, var(--line)); color: var(--purple-2); }

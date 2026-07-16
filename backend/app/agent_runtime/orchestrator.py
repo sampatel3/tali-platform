@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session
 
 from ..agent_chat.events import try_post_agent_run_event
 from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
-from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.organization import Organization
 from ..models.role import Role
 from ..platform.config import settings
@@ -37,6 +36,7 @@ from ..services.provider_usage_admission import (
 from ..services.usage_credit_reservations import InsufficientRoleBudgetError
 from ..services.usage_metering_service import InsufficientCreditsError
 from . import budget_guard, calibration, data_readiness
+from .cycle_events import emit_cycle_abort_event as _emit_cycle_abort_event
 from .system_prompt import PROMPT_VERSION, build_system_prompt
 from .tool_registry import (
     dispatch,
@@ -77,51 +77,6 @@ def _tool_round_signature(blocks: list[dict[str, Any]]) -> str:
         if block.get("type") == "tool_use"
     ]
     return json.dumps(calls, sort_keys=True, separators=(",", ":"), default=str)
-
-
-def _emit_cycle_abort_event(
-    db: Session,
-    *,
-    run: AgentRun,
-    application_id: Optional[int],
-    reason: str,
-) -> None:
-    """C6: emit a CandidateApplicationEvent so the recruiter sees the
-    abort in the candidate timeline. Without this signal, aborted /
-    budget_paused / failed cycles are invisible until the recruiter
-    digs into the AgentRun table — silent failure is the worst trust
-    killer.
-
-    Only emits when there's a focus application — cron triggers without
-    a specific candidate are surfaced via the role-level banner on the
-    Decision Hub (driven by AgentRun.status), not per-candidate events.
-    Failure here is logged and swallowed; never breaks the run path.
-    """
-    if application_id is None:
-        return
-    try:
-        idempotency_key = f"agent_cycle_aborted:run:{int(run.id) if run.id else 0}"
-        db.add(
-            CandidateApplicationEvent(
-                application_id=int(application_id),
-                organization_id=int(run.organization_id),
-                event_type="agent_cycle_aborted",
-                actor_type="agent",
-                actor_id=int(run.id) if run.id else None,
-                reason=reason,
-                idempotency_key=idempotency_key,
-                event_metadata={
-                    "agent_run_id": int(run.id) if run.id else None,
-                    "status": str(run.status),
-                    "trigger": str(run.trigger),
-                },
-            )
-        )
-    except Exception:  # pragma: no cover — defensive
-        logger.exception(
-            "agent_cycle_aborted event emit failed run_id=%s app_id=%s",
-            getattr(run, "id", None), application_id,
-        )
 
 
 def _block_to_dict(block: Any) -> dict[str, Any]:

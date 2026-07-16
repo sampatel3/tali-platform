@@ -32,12 +32,14 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from ..models.role import Role
 from ..models.role_change_event import RoleChangeEvent
-from ..models.user import User
+from .role_change_provenance import (
+    infer_legacy_unique_org_actor as infer_legacy_unique_org_actor,
+    latest_role_change_actor as latest_role_change_actor,
+)
 
 
 ROLE_CHANGE_ACTION_UPDATED = "role_updated"
@@ -423,107 +425,6 @@ def list_role_change_events(
     if before_id is not None:
         query = query.filter(RoleChangeEvent.id < int(before_id))
     return query.order_by(RoleChangeEvent.id.desc()).limit(bounded_limit).all()
-
-
-def latest_role_change_actor(
-    session: Session,
-    organization_id: int,
-    role_id: int,
-    *,
-    action: str | None = None,
-) -> dict[str, Any] | None:
-    """Describe the actor on the latest tenant-scoped role change.
-
-    ``action`` narrows the lookup to one audit action when the caller needs
-    provenance for a specific piece of current state (for example, the human
-    who paused an agent).  Without this filter an unrelated later role edit
-    could be misreported as the actor responsible for that state transition.
-
-    The outer join keeps the conflict response useful after an actor account is
-    deleted: ``user_id``, ``name`` and ``email`` become null while
-    ``changed_at`` still identifies when the conflicting change occurred.
-    """
-
-    query = (
-        session.query(RoleChangeEvent, User)
-        .outerjoin(
-            User,
-            and_(
-                RoleChangeEvent.actor_user_id == User.id,
-                User.organization_id == RoleChangeEvent.organization_id,
-            ),
-        )
-        .filter(
-            RoleChangeEvent.organization_id == int(organization_id),
-            RoleChangeEvent.role_id == int(role_id),
-        )
-    )
-    if action is not None:
-        normalized_action = str(action).strip()
-        if not normalized_action:
-            return None
-        query = query.filter(RoleChangeEvent.action == normalized_action)
-    row = query.order_by(RoleChangeEvent.id.desc()).first()
-    if row is None:
-        return None
-    event, user = row
-    return {
-        "user_id": int(user.id) if user is not None else None,
-        "name": (
-            str(user.full_name)[:200]
-            if user is not None and user.full_name is not None
-            else None
-        ),
-        "email": (
-            str(user.email)[:320]
-            if user is not None and user.email is not None
-            else None
-        ),
-        "changed_at": (
-            event.created_at.isoformat() if event.created_at is not None else None
-        ),
-    }
-
-
-def infer_legacy_unique_org_actor(
-    session: Session,
-    *,
-    organization_id: int,
-    changed_at: datetime,
-) -> dict[str, Any] | None:
-    """Return the sole surviving org member who predates a legacy change.
-
-    Roles changed before :mod:`role_change_events` was introduced have no
-    verified actor record.  When exactly one surviving user account existed by
-    the time of the change, that account is useful *inferred* provenance for
-    the status UI.  Callers must label it as inferred and must never use it for
-    authorization, conflict ownership, or append-only audit history.
-
-    Inactive users remain candidates because this describes historical state,
-    not present-day access.  Limiting to two rows makes the ambiguity check
-    bounded; zero or multiple plausible users deliberately returns ``None``.
-    A deleted historical account cannot be recovered by this helper, which is
-    why its result must not be presented as verified attribution.
-    """
-
-    users = (
-        session.query(User)
-        .filter(
-            User.organization_id == int(organization_id),
-            User.created_at <= changed_at,
-        )
-        .order_by(User.id.asc())
-        .limit(2)
-        .all()
-    )
-    if len(users) != 1:
-        return None
-    user = users[0]
-    return {
-        "user_id": int(user.id),
-        "name": str(user.full_name)[:200] if user.full_name is not None else None,
-        "changed_at": changed_at,
-    }
 
 
 def serialize_role_change_event(event: RoleChangeEvent) -> dict[str, Any]:
