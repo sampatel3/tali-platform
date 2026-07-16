@@ -295,8 +295,9 @@ describe('LandingPreviewPage', () => {
     expect(screen.getAllByText('Maya Chen').length).toBeGreaterThan(0);
     // The control section embeds the REAL AgentDecisionCard (its recommendation
     // slab), and the wedge embeds the REAL 5-Ds AssessmentScorecard — each in a
-    // "Live component" frame.
-    expect(screen.getAllByText(/Agent recommends/i).length).toBeGreaterThan(0);
+    // "Live component" frame. The redesigned kicker reads "✦ Agent" + a
+    // confidence chip rather than the old "Agent recommends" prose.
+    expect(screen.getAllByText(/Confidence 91%/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeTruthy();
     expect(screen.getAllByText('Delegation').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Live component/i).length).toBeGreaterThan(0);

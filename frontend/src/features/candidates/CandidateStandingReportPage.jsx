@@ -1287,20 +1287,32 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ) : null}
 
               {/* (1) Why this verdict — recruiters with a live decision see the
-                  reasoning + deterministic trace; clients, the demo, and the
-                  un-decided tail fall back to the holistic summary so there's
-                  always a "why". The score ring, recommendation, flags and the
-                  demoted scores now live in the DecisionRail (left). */}
+                  report-density narrative (verdict + causal reason + summary);
+                  the decision explanation is recruiter-only, so it never renders
+                  on client/share views. The score ring, recommendation, flags and
+                  the demoted scores now live in the DecisionRail (left). */}
               {!isClientView && agentDecision ? (
                 <VerdictDetail decision={agentDecision} />
-              ) : reportModel?.recruiterSummaryText ? (
-                <section className="mc-why" aria-label="Candidate summary">
-                  <div className="mc-kicker">CANDIDATE SUMMARY</div>
-                  <p className="mc-why-reason">
-                    {normaliseDecisionText(reportModel.recruiterSummaryText)}
-                  </p>
-                </section>
               ) : null}
+
+              {/* Standalone candidate summary — suppressed when the recruiter's
+                  report-density narrative above already carries the decision's
+                  candidate_summary (so the same synthesis never appears twice).
+                  Kept for client/share views and any recruiter view without a
+                  decision summary, where it may be the only "why" surface. */}
+              {(() => {
+                const verdictShowsSummary = !isClientView && agentDecision
+                  && Boolean(normaliseDecisionText(agentDecision.candidate_summary));
+                if (verdictShowsSummary || !reportModel?.recruiterSummaryText) return null;
+                return (
+                  <section className="mc-why" aria-label="Candidate summary">
+                    <div className="mc-kicker">CANDIDATE SUMMARY</div>
+                    <p className="mc-why-reason">
+                      {normaliseDecisionText(reportModel.recruiterSummaryText)}
+                    </p>
+                  </section>
+                );
+              })()}
 
               {/* (1b) Flags — claims & signals the agent couldn't corroborate
                   (cv_match_details.claims_to_verify + score_summary.integrity),

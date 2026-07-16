@@ -86,21 +86,37 @@ describe('DecisionRail score ring', () => {
 });
 
 describe('DecisionRail recommendation attribution', () => {
-  it('labels deterministic recommendations as policy and omits model confidence', () => {
+  it('labels deterministic recommendations as policy with a rule chip and no model confidence', () => {
     renderRail({
       decision: {
         ...baseDecision,
         confidence: 1,
-        decision_explanation: { source: 'policy', summary: 'Advance recommended.' },
+        decision_explanation: {
+          source: 'policy',
+          rule: 'role_fit_score >= role_fit_min',
+          summary: 'Advance recommended.',
+          score_context: { role_fit_score: 72, threshold: 55, threshold_passed: true },
+        },
       },
     });
-    expect(screen.getByText('Policy recommends')).toBeInTheDocument();
+    expect(screen.getByText('Policy')).toBeInTheDocument();
+    expect(screen.getByText('72 ≥ 55')).toBeInTheDocument();
     expect(screen.queryByText(/Confidence 100%/i)).not.toBeInTheDocument();
+    // The rail carries no prose — the full explanation lives in the report body.
+    expect(screen.queryByText('Advance recommended.')).not.toBeInTheDocument();
   });
 
-  it('keeps confidence on agent judgment', () => {
-    renderRail();
-    expect(screen.getByText(/Agent recommends · Confidence 90%/i)).toBeInTheDocument();
+  it('shows the agent confidence chip and no "recommends" prose', () => {
+    renderRail({
+      decision: {
+        ...baseDecision,
+        confidence: 0.9,
+        decision_explanation: { source: 'agent', summary: 'Advance recommended.' },
+      },
+    });
+    expect(screen.getByText('Agent')).toBeInTheDocument();
+    expect(screen.getByText('Confidence 90%')).toBeInTheDocument();
+    expect(screen.queryByText(/recommends/i)).not.toBeInTheDocument();
   });
 });
 
