@@ -411,10 +411,19 @@ class ApplicationResponse(BaseModel):
     cv_match_details: Optional[dict] = None
     cv_match_scored_at: Optional[datetime] = None
     # "cancelled" covers legacy CvScoreJob rows written before the score-
-    # invalidation rework (~370 rows across roles 110–113). The writer is
-    # gone from current code but the rows remain; rejecting them here
-    # 500s every /applications listing that touches them.
-    score_status: Optional[Literal["pending", "running", "done", "error", "stale", "cancelled", "unscorable"]] = None
+    # invalidation rework. "retry_wait" is the durable related-role state
+    # while scoring waits for authority or a transient retry. Rejecting either
+    # valid persisted state here 500s every /applications listing that touches it.
+    score_status: Optional[Literal[
+        "pending",
+        "running",
+        "retry_wait",
+        "done",
+        "error",
+        "stale",
+        "cancelled",
+        "unscorable",
+    ]] = None
     # Present when this row is projected into a sister role. ``id`` remains the
     # canonical source application id so every stage/outcome action routes to
     # the ATS-owning application rather than a cloned pipeline record.

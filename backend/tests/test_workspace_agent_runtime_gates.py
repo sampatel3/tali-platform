@@ -12,6 +12,7 @@ from app.services.job_page_lifecycle import (
     INTAKE_WORKSPACE_PAUSED,
     native_intake_state,
     role_allows_new_paid_ats_work,
+    role_paid_ats_work_block_reason,
 )
 from app.services.role_execution_guard import automatic_role_action_block_reason
 from app.tasks.agent_tasks import agent_cohort_tick_role, agent_manual_run
@@ -105,6 +106,7 @@ def test_workspace_pause_closes_native_intake_and_paid_ats_automation(db):
     intake = native_intake_state(role, db=db)
 
     assert intake == {"ready": False, "reason": INTAKE_WORKSPACE_PAUSED}
+    assert role_paid_ats_work_block_reason(role, db=db) == INTAKE_WORKSPACE_PAUSED
     assert role_allows_new_paid_ats_work(role, db=db) is False
     # The role-local desired state remains untouched under the overlay.
     assert role.agentic_mode_enabled is True

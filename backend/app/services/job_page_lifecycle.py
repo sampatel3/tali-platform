@@ -143,43 +143,55 @@ def lock_native_intake_authority(
     return live_role if role_accepts_native_applications(live_role, db=db) else None
 
 
-def role_allows_new_paid_ats_work(
+def role_paid_ats_work_block_reason(
     role: Role | None,
     *,
     db: Session | None = None,
-) -> bool:
-    """Whether an ATS import may launch new model-backed parse/score work.
+) -> str | None:
+    """Explain why an ATS role cannot launch model-backed parse/score work.
 
     ``starred_for_auto_sync`` deliberately is *not* an execution grant.  The
     star is sticky adoption/cadence metadata, whereas Turn on/Pause/Turn off is
     the live authority for autonomous spend.  Sync may therefore continue to
-    refresh ATS metadata for a starred role while this returns ``False``.
+    refresh ATS metadata for a starred role while this reports a block reason.
 
     Provider lifecycle is fail-closed for explicit terminal states but remains
     permissive when an older payload has no state field, matching the existing
     Workable and Bullhorn import compatibility rules.
     """
 
-    if role is None or getattr(role, "deleted_at", None) is not None:
-        return False
+    if role is None:
+        return INTAKE_ROLE_MISSING
+    if getattr(role, "deleted_at", None) is not None:
+        return INTAKE_ROLE_DELETED
     if (getattr(role, "role_kind", None) or ROLE_KIND_STANDARD) != ROLE_KIND_STANDARD:
-        return False
+        return "role_not_standard"
     if not bool(getattr(role, "agentic_mode_enabled", False)):
-        return False
+        return INTAKE_AGENT_OFF
     if getattr(role, "agent_paused_at", None) is not None:
-        return False
+        return INTAKE_AGENT_PAUSED
     if _workspace_agent_paused(db, role):
-        return False
+        return INTAKE_WORKSPACE_PAUSED
 
     job_status = getattr(role, "job_status", None)
     if job_status is not None and job_status != JOB_STATUS_OPEN:
-        return False
+        return INTAKE_JOB_NOT_OPEN
 
     ats = ats_job_lifecycle(role)
     if ats.external_job_id and ats.external_job_live is False:
-        return False
+        return INTAKE_ATS_JOB_NOT_LIVE
 
-    return True
+    return None
+
+
+def role_allows_new_paid_ats_work(
+    role: Role | None,
+    *,
+    db: Session | None = None,
+) -> bool:
+    """Whether an ATS import may launch new model-backed parse/score work."""
+
+    return role_paid_ats_work_block_reason(role, db=db) is None
 
 
 __all__ = [
@@ -194,5 +206,6 @@ __all__ = [
     "native_intake_state",
     "role_accepts_native_applications",
     "role_allows_new_paid_ats_work",
+    "role_paid_ats_work_block_reason",
     "role_uses_managed_native_lifecycle",
 ]

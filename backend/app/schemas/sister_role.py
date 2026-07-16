@@ -33,6 +33,9 @@ class SisterRoleScoringStatus(BaseModel):
     status: str
     counts: dict[str, int]
     total: int
+    scoreable_total: int
+    scored: int
     completed: int
     progress_percent: float
+    waiting_reason: str | None = None
     top_candidates: list[dict[str, Any]] = Field(default_factory=list)
