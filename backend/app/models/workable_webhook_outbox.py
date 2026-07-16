@@ -40,10 +40,12 @@ WORKABLE_OUTBOX_KINDS = (
 
 # Row lifecycle (mirrors the other outboxes).
 WORKABLE_OUTBOX_STATUS_PENDING = "pending"
+WORKABLE_OUTBOX_STATUS_PROCESSING = "processing"
 WORKABLE_OUTBOX_STATUS_SENT = "sent"
 WORKABLE_OUTBOX_STATUS_FAILED = "failed"
 WORKABLE_OUTBOX_STATUSES = (
     WORKABLE_OUTBOX_STATUS_PENDING,
+    WORKABLE_OUTBOX_STATUS_PROCESSING,
     WORKABLE_OUTBOX_STATUS_SENT,
     WORKABLE_OUTBOX_STATUS_FAILED,
 )
@@ -73,6 +75,8 @@ class WorkableWebhookOutbox(Base):
     )
     attempts = Column(Integer, nullable=False, server_default="0")
     last_error = Column(Text, nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
 
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -93,6 +97,7 @@ __all__ = [
     "WORKABLE_OUTBOX_KIND_EXPIRED",
     "WORKABLE_OUTBOX_KINDS",
     "WORKABLE_OUTBOX_STATUS_PENDING",
+    "WORKABLE_OUTBOX_STATUS_PROCESSING",
     "WORKABLE_OUTBOX_STATUS_SENT",
     "WORKABLE_OUTBOX_STATUS_FAILED",
     "WORKABLE_OUTBOX_STATUSES",

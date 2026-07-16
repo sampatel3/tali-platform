@@ -65,6 +65,7 @@ MESSAGE_STATUS_DRAFTING = "drafting"
 MESSAGE_STATUS_DRAFT = "draft"
 MESSAGE_STATUS_APPROVED = "approved"
 MESSAGE_STATUS_QUEUED = "queued"
+MESSAGE_STATUS_SENDING = "sending"
 MESSAGE_STATUS_SENT = "sent"
 MESSAGE_STATUS_DELIVERED = "delivered"
 MESSAGE_STATUS_OPENED = "opened"
@@ -82,6 +83,7 @@ MESSAGE_STATUSES = (
     MESSAGE_STATUS_DRAFT,
     MESSAGE_STATUS_APPROVED,
     MESSAGE_STATUS_QUEUED,
+    MESSAGE_STATUS_SENDING,
     MESSAGE_STATUS_SENT,
     MESSAGE_STATUS_DELIVERED,
     MESSAGE_STATUS_OPENED,
@@ -125,7 +127,7 @@ class OutreachCampaign(Base):
     role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=True)
 
     name = Column(String, nullable=False)
-    status = Column(String, nullable=False, server_default=CAMPAIGN_STATUS_DRAFT)
+    status = Column(String, nullable=False, server_default=CAMPAIGN_STATUS_DRAFT, index=True)
     # Recruiter-editable pitch context fed to the drafter.
     brief = Column(Text, nullable=True)
     # CTA target — the role's published JobPage token, resolved at creation if
@@ -184,7 +186,7 @@ class OutreachMessage(Base):
 
     subject = Column(String, nullable=True)
     body = Column(Text, nullable=True)
-    status = Column(String, nullable=False, server_default=MESSAGE_STATUS_PENDING)
+    status = Column(String, nullable=False, server_default=MESSAGE_STATUS_PENDING, index=True)
 
     # Resend correlation id, stored at send time; the webhook looks messages up
     # by this. Unique so a stray duplicate event can't fan out.
@@ -194,6 +196,15 @@ class OutreachMessage(Base):
         String, nullable=False, unique=True, index=True, default=_mint_interest_token
     )
     error = Column(String, nullable=True)
+
+    # The message row doubles as the durable provider-send outbox. ``queued``
+    # is recruiter-authorised work waiting for a worker; ``sending`` is a
+    # bounded lease.  Beat can safely recover an expired lease, and Resend's
+    # stable per-row idempotency key prevents a duplicate email when a provider
+    # accepted a request but its response was lost.
+    delivery_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    delivery_next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    delivery_lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
 
     sent_at = Column(DateTime(timezone=True), nullable=True)
     delivered_at = Column(DateTime(timezone=True), nullable=True)

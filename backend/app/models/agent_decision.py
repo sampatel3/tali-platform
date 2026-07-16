@@ -85,6 +85,15 @@ class AgentDecision(Base):
     resolution_note = Column(Text, nullable=True)
     override_action = Column(String, nullable=True)
 
+    # A recruiter-requested fresh agent cycle is durable even if the broker is
+    # unavailable after this decision is discarded. The wrapper task leases
+    # this receipt and marks it complete only after the focused cycle returns.
+    reevaluation_status = Column(String(24), nullable=True, index=True)
+    reevaluation_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    reevaluation_next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    reevaluation_lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
+    reevaluation_error = Column(String(500), nullable=True)
+
     # Hub-era fields (migration 063):
     #   feedback_id: links to the latest decision_feedback row when the human
     #     disposition was ``taught``.

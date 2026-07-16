@@ -48,10 +48,12 @@ BRAIN_FEED_KINDS = (
 
 # Row lifecycle (mirrors graph_episode_outbox).
 BRAIN_FEED_STATUS_PENDING = "pending"
+BRAIN_FEED_STATUS_PROCESSING = "processing"
 BRAIN_FEED_STATUS_SENT = "sent"
 BRAIN_FEED_STATUS_FAILED = "failed"
 BRAIN_FEED_STATUSES = (
     BRAIN_FEED_STATUS_PENDING,
+    BRAIN_FEED_STATUS_PROCESSING,
     BRAIN_FEED_STATUS_SENT,
     BRAIN_FEED_STATUS_FAILED,
 )
@@ -75,6 +77,8 @@ class BrainFeedOutbox(Base):
     )
     attempts = Column(Integer, nullable=False, server_default="0")
     last_error = Column(Text, nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
 
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -95,6 +99,7 @@ __all__ = [
     "BRAIN_FEED_KIND_USAGE",
     "BRAIN_FEED_KINDS",
     "BRAIN_FEED_STATUS_PENDING",
+    "BRAIN_FEED_STATUS_PROCESSING",
     "BRAIN_FEED_STATUS_SENT",
     "BRAIN_FEED_STATUS_FAILED",
     "BRAIN_FEED_STATUSES",

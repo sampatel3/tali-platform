@@ -3,10 +3,11 @@
 Distinct from ``decision_policies``:
 - ``decision_policies`` holds the *rule-driven* verdict policy
   (threshold sheet + rule list); existing engine reads from it.
-- ``policy_versions`` holds *fitted* models: one row per nightly fit,
-  shadow-evaluated and promoted by the promotion gate (Phase 5). The
-  Phase 3 code writes candidate rows here; the Phase 5 promotion gate
-  flips the status.
+- ``policy_versions`` holds *fitted* models produced by the nightly fitter.
+  The automatic per-decision shadow/promotion lifecycle is currently dormant:
+  candidate rows remain fail-closed and can support governed safety checks,
+  but are not activated by the production scheduler. Shadow/gate primitives
+  remain available for an explicit future rollout.
 
 Statuses:
   candidate  -> just fit, not yet evaluated
@@ -14,9 +15,10 @@ Statuses:
   live       -> the active fitted policy for (org, role)
   archived   -> superseded by a newer live version (kept for rollback)
   rejected   -> failed the promotion gate
+  superseded -> replaced by a newer pending nightly candidate before promotion
 
-Multiple ``candidate`` and ``shadow`` rows may exist concurrently per
-(org, role); only one ``live`` row at a time.
+The nightly fitter bounds its own pending output to one ``candidate`` per
+(org, role). Explicit/manual ``shadow`` rows are not touched by that cleanup.
 """
 
 from __future__ import annotations
@@ -26,7 +28,6 @@ from sqlalchemy import (
     BigInteger,
     Column,
     DateTime,
-    Float,
     ForeignKey,
     Integer,
     String,
@@ -37,7 +38,14 @@ from sqlalchemy.sql import func
 from ..platform.database import Base
 
 
-POLICY_VERSION_STATUSES = ("candidate", "shadow", "live", "archived", "rejected")
+POLICY_VERSION_STATUSES = (
+    "candidate",
+    "shadow",
+    "live",
+    "archived",
+    "rejected",
+    "superseded",
+)
 POLICY_MODEL_KINDS = ("logistic_pooled", "gbm_pooled")  # extensible
 
 

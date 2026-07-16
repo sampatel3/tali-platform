@@ -11,9 +11,6 @@ Create Date: 2026-04-28
 
 from __future__ import annotations
 
-from alembic import op
-import sqlalchemy as sa
-
 revision = "050_merge_048_049_heads"
 down_revision = ("048_add_graph_sync_state", "049_add_role_starred_for_auto_sync")
 branch_labels = None

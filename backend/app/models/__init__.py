@@ -24,6 +24,8 @@ from .job_page import (
 )
 from .screening_question import QUESTION_KINDS, ScreeningQuestion
 from .eeo_response import EEOResponse
+from .prescreen_adverse_impact_audit import PrescreenAdverseImpactAudit
+from .prescreen_batch_item import PrescreenBatchItem
 from .data_subject_request import (
     DSR_STATUS_COMPLETED,
     DSR_STATUS_PENDING,
@@ -104,6 +106,12 @@ from .background_job_run import (
     SCOPE_KIND_ORG,
     SCOPE_KIND_ROLE,
 )
+from .chat_command_receipt import (
+    CHAT_COMMAND_COMPLETED,
+    CHAT_COMMAND_PENDING,
+    CHAT_COMMAND_STATUSES,
+    ChatCommandReceipt,
+)
 from .taali_chat_conversation import TaaliChatConversation
 from .taali_chat_message import (
     ROLE_ASSISTANT,
@@ -111,7 +119,12 @@ from .taali_chat_message import (
     TAALI_CHAT_ROLES,
     TaaliChatMessage,
 )
-from .agent_run import AGENT_RUN_STATUSES, AGENT_RUN_TRIGGERS, AgentRun
+from .agent_run import (
+    AGENT_RUN_DISPATCHING,
+    AGENT_RUN_STATUSES,
+    AGENT_RUN_TRIGGERS,
+    AgentRun,
+)
 from .agent_decision import (
     AGENT_DECISION_HUMAN_DISPOSITIONS,
     AGENT_DECISION_STATUSES,
@@ -200,6 +213,7 @@ from .workable_webhook_outbox import (
     WORKABLE_OUTBOX_STATUSES,
     WorkableWebhookOutbox,
 )
+from .fireflies_webhook_inbox import FirefliesWebhookInbox
 from .email_suppression import (
     SUPPRESSION_REASONS,
     SUPPRESSION_REASON_RANK,
@@ -239,6 +253,9 @@ __all__ = [
     "role_tasks",
     "ScreeningQuestion",
     "QUESTION_KINDS",
+    "EEOResponse",
+    "PrescreenAdverseImpactAudit",
+    "PrescreenBatchItem",
     "RoleBrief",
     "BRIEF_SOURCES",
     "BRIEF_STATUSES",
@@ -308,12 +325,17 @@ __all__ = [
     "JOB_KINDS",
     "SCOPE_KIND_ROLE",
     "SCOPE_KIND_ORG",
+    "ChatCommandReceipt",
+    "CHAT_COMMAND_PENDING",
+    "CHAT_COMMAND_COMPLETED",
+    "CHAT_COMMAND_STATUSES",
     "TaaliChatConversation",
     "TaaliChatMessage",
     "TAALI_CHAT_ROLES",
     "ROLE_USER",
     "ROLE_ASSISTANT",
     "AgentRun",
+    "AGENT_RUN_DISPATCHING",
     "AGENT_RUN_TRIGGERS",
     "AGENT_RUN_STATUSES",
     "AgentDecision",
@@ -374,6 +396,7 @@ __all__ = [
     "WorkableWebhookOutbox",
     "WORKABLE_OUTBOX_KINDS",
     "WORKABLE_OUTBOX_STATUSES",
+    "FirefliesWebhookInbox",
     "EmailSuppression",
     "SUPPRESSION_REASONS",
     "SUPPRESSION_REASON_RANK",

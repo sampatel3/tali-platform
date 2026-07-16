@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -7,6 +7,14 @@ from ..platform.database import Base
 
 class ApplicationInterview(Base):
     __tablename__ = "application_interviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "provider",
+            "provider_meeting_id",
+            name="uq_application_interviews_provider_meeting",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)

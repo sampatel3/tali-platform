@@ -1,8 +1,6 @@
-version: "3.9"
-
 services:
   postgres:
-    image: postgres:15
+    image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_USER: taali

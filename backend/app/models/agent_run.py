@@ -6,7 +6,15 @@ from ..platform.database import Base
 
 
 AGENT_RUN_TRIGGERS = ("event", "cron", "manual")
-AGENT_RUN_STATUSES = ("running", "succeeded", "failed", "budget_paused", "aborted")
+AGENT_RUN_DISPATCHING = "dispatching"
+AGENT_RUN_STATUSES = (
+    AGENT_RUN_DISPATCHING,
+    "running",
+    "succeeded",
+    "failed",
+    "budget_paused",
+    "aborted",
+)
 
 
 class AgentRun(Base):
@@ -17,6 +25,10 @@ class AgentRun(Base):
     role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
     trigger = Column(String, nullable=False)
     trigger_event_id = Column(Integer, ForeignKey("candidate_application_events.id"), nullable=True)
+    # Stable receipt for user-authorised cycles whose task can be redelivered
+    # after an ambiguous broker publish or worker crash. NULL for scheduled and
+    # legacy cycles; unique when supplied by a durable dispatch owner.
+    dispatch_key = Column(String(200), nullable=True, unique=True, index=True)
     status = Column(String, nullable=False, default="running")
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     finished_at = Column(DateTime(timezone=True), nullable=True)
