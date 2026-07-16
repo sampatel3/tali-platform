@@ -8,8 +8,7 @@ import React, {
   useState,
 } from 'react';
 
-import { organizations as orgsApi } from '../shared/api/orgClient';
-import { roles as rolesApi } from '../shared/api/rolesClient';
+import { organizations as orgsApi, roles as rolesApi } from '../shared/api';
 import { useAuth } from '../context/AuthContext';
 import { jobTrackingScope, scopedJobTrackingKey } from '../shared/jobs/jobTrackingStorage';
 

@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
-import { organizations as organizationsApi } from '../api/orgClient';
+import { organizations as organizationsApi } from '../api';
 import {
   readDarkModePreference,
   setDarkModePreference,

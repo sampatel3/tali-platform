@@ -5,6 +5,14 @@ vi.mock('./RoleScreeningQuestions', () => ({
   default: () => <div data-testid="screening-question-editor" />,
 }));
 
+vi.mock('./RoleFeedbackNotes', () => ({
+  default: () => <div data-testid="role-feedback-notes" />,
+}));
+
+vi.mock('./RecruiterAnswersLog', () => ({
+  default: () => <div data-testid="recruiter-answers-log" />,
+}));
+
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 
 // Minimal props: the tab renders the autonomy toggles from the role record.
