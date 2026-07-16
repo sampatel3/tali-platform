@@ -90,7 +90,7 @@ causal explanation. The branch is published as draft PR #1043 and remains
 undeployed.
 
 The authoritative final backend run used the exact locked Python 3.11.9
-environment with all 157 hashed development pins. The final frontend run used
+environment with all 158 hashed development pins. The final frontend run used
 a clean detached worktree with the CI runtime, Node 22.23.1 and npm 10.9.8;
 exact install, audit, all gates, production build, bundle budget, and built-route
 smoke passed. The backend deployment image also pins Python 3.11.9; the
@@ -174,6 +174,7 @@ Vitals run was performed.
 | New unverified users could log in while UI/product copy implied verification. | Account-control inconsistency. | Login now requires verification. Migration 172 safely grandfathers already-active owners so rollout does not lock out existing workspaces. Verification-token replay and password-reset invalidation are tested. | **Fixed locally; migration required.** |
 | A late profile-bootstrap response could restore a logged-out user or clear a newer login after token/session rotation. | Cross-session state could reappear, a valid newer login could disappear, or a half-login token could remain cached. | Authentication requests now carry a generation and token identity. Logout/new login invalidates older success and failure handlers, failed profile bootstrap rolls back private state, and same-session sliding-token rotation remains valid. | **Fixed locally; 4 race regressions passed.** |
 | Password guidance treated bcrypt's limit like a character count. | A multibyte password could cross bcrypt's boundary despite appearing shorter than 72 characters. | Backend validation and frontend copy now state and enforce the 72 **UTF-8 byte** limit; the unused Passlib dependency was removed. | **Fixed locally and boundary-tested.** |
+| Python virtual environments retained an untracked bundled `setuptools` 65.5.0. | GitHub's installed-environment audit reported six findings across four advisories, and the production virtual environment could inherit the same bootstrap-package drift outside the runtime lock. | `setuptools==83.0.0` is now a direct production input and therefore appears in both exact hashed locks. A lock contract prevents silently dropping the replacement; no audit exception or mutable upgrade command was added. | **Fixed locally; fresh Python 3.11.9 dev install and a production-shaped 65.5.0→83.0.0 runtime replacement both passed hash install, integrity, import, and vulnerability audit.** |
 | API key administration and organization security/integration settings were not uniformly owner-only. | Workspace members could control machine credentials or access policy. | API-key create/list/revoke and organization mutation now require an organization owner. | **Fixed locally.** |
 | Workable OAuth callback state was not cryptographically bound to the initiating user/workspace. | Login CSRF or cross-workspace connection risk. | Short-lived signed state includes user, organization, audience, and nonce; callback verification rejects invalid or expired state. Frontend forwards the state value. | **Fixed locally.** |
 | Workable base/pagination URLs could change origin. | SSRF/credential-forwarding risk. | Callback and pagination URL validation now enforce safe schemes and the approved origin; tests reject unsafe origin changes. | **Fixed locally.** |
@@ -470,10 +471,10 @@ The exact workflow supply-chain pins are
 `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`.
 PostgreSQL is
 `postgres:16.14@sha256:17e67d7b9890c99b055ba1e0d5c5be4ec27c9d3a72bda32db24a5e5d8a85af0c`.
-The 157-pin/3,237-hash development-inclusive lock records input digest
-`4b686ff622e8415dc009908a9e7318b0f359303eb9e21b1d233e7c341ff05c09`.
-The 125-pin/2,959-hash production runtime lock records input digest
-`64f9f4dd6b03651f423123b28f2549f51b10e147f8e9f6858789a954c61ddfef`.
+The 158-pin/3,239-hash development-inclusive lock records input digest
+`af3b38cf333482046c6c93f908adb87c754f7da46a06388eff74fe522ca32c04`.
+The 126-pin/2,961-hash production runtime lock records input digest
+`f2ace965813908ee8256b11240f95cffc7818b1cc064c8d1899656a6151067f0`.
 Both verifiers recompute their own inputs before installation; runtime import,
 integrity, and vulnerability-audit checks passed. All 34 tracked shell scripts
 passed `bash -n`, both workflow YAML files parsed, and all 12 third-party action
@@ -506,9 +507,9 @@ Do not sum these figures; several sets overlap.
 | Full frontend gated Vitest | Clean Node 22.23.1/npm 10.9.8 install: 156 files / 1,102 tests passed in 33.83 seconds; zero warning, unhandled-error, or unexpected-network diagnostics. Six network-isolation component tests cover feedback ordering/submission/version conflicts and recruiter Q&A success/empty/error states. Nine decision-presentation regressions added through PRs #1041/#1044 and reconciliation cover compact summaries, density, null display values, non-duplicated policy causes, and context-only rationale. CI preserves Vitest failures and independently fails on warning and network-leak classes. |
 | Frontend production build + bundle budget | Clean Node 22.23.1/npm 10.9.8 install: 3,410 modules built in 1.82 seconds; 208 files, 5,734,576 bytes raw (5.4689 MiB), 2,652,028 bytes gzip level 9 (2.5292 MiB), and 6,373,376 allocated bytes (6.0781 MiB on the retained temporary worktree filesystem). Raw/gzip bytes: main JS 71,502/19,405, CSS 231,546/39,670, graph 434,159/135,770, charts 412,998/105,280, Job Pipeline 174,018/49,132, Requisitions 45,601/13,038, Client Intake 12,641/4,298, and Candidate Standing Report 80,693/22,992. Bundle budgets and all 14 built-route HTTP smokes passed. |
 | Frontend dependency audit | 0 vulnerabilities |
-| Complete default non-production backend pytest selection | Locked CPython 3.11.9: 5,936 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 244.15-second final-integration-tree run. PostgreSQL behavior is covered separately below. |
+| Complete default non-production backend pytest selection | Locked CPython 3.11.9: 5,937 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 260.61-second final-integration-tree run after the secure packaging-tool replacement. PostgreSQL behavior is covered separately below. |
 | Backend coverage | 75.928303% combined line-and-branch coverage (70,403/92,723 covered units): 56,581/71,325 lines (79.328426%) and 13,822/21,398 branches (64.594822%). The enforced combined floor remains 74%; the ignored originals were left intact and copies were preserved outside the worktree after measurement, with neither committed. |
-| Backend dependency integrity/audit | Both exact locks passed integrity/parity; runtime import and `pip-audit` verification found zero known vulnerabilities |
+| Backend dependency integrity/audit | Both exact locks passed integrity/parity. Fresh Python 3.11.9 dev and production-shaped runtime installs replaced bundled `setuptools` with the exact 83.0.0 pin; runtime import and both `pip-audit` checks found zero known vulnerabilities. |
 | Static/syntax/diff checks | Full backend `compileall` and Ruff scopes passed; both workflow YAML files, all 34 tracked shell scripts, and 12 action pins passed their checks; tracked and staged diff checks were clean |
 | PostgreSQL migration/invariants | Fresh `000→179`, existing `178→179`, and `179→178→179` passed on retained PostgreSQL 16.14; raw autogenerate parity was zero twice, schema invariants passed, and orphan preflight failed before writes with revision/data unchanged |
 | Database/release evidence | 78 passed / 4 skipped. Skipped fixtures require creating and dropping databases; equivalent migration/invariant/fail-closed paths were exercised manually on retained databases, with no database or container deleted. |
@@ -630,9 +631,9 @@ less useful.
 ### Local verification results
 
 Complete default non-production backend suite on locked Python 3.11.9:
-**5,936 passed, 8 skipped, 16 live production-smoke tests deselected, zero
+**5,937 passed, 8 skipped, 16 live production-smoke tests deselected, zero
 failures, and zero warnings** in
-one uninterrupted final-integration-tree run (244.15 seconds). Live production
+one uninterrupted final-integration-tree run (260.61 seconds). Live production
 smoke was not run from this unreviewed tree.
 
 Backend coverage: **75.928303% combined line-and-branch** — 70,403/92,723

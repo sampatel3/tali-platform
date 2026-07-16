@@ -46,12 +46,12 @@ historical record of the completed Jobs-first redesign, not a current backlog.
   waits for PostgreSQL, applies `alembic upgrade head`, then starts uvicorn.
   PostgreSQL and Redis are Railway add-ons; repository deployment wrappers select
   and validate web plus the general and scoring workers.
-- **Dependency locks:** CI installs the 157-pin/3,237-hash development-inclusive
+- **Dependency locks:** CI installs the 158-pin/3,239-hash development-inclusive
   `requirements-lock.txt` (input digest
-  `4b686ff622e8415dc009908a9e7318b0f359303eb9e21b1d233e7c341ff05c09`).
-  Production validates and installs only the 125-pin/2,959-hash
+  `af3b38cf333482046c6c93f908adb87c754f7da46a06388eff74fe522ca32c04`).
+  Production validates and installs only the 126-pin/2,961-hash
   `requirements-runtime-lock.txt` (input digest
-  `64f9f4dd6b03651f423123b28f2549f51b10e147f8e9f6858789a954c61ddfef`)
+  `f2ace965813908ee8256b11240f95cffc7818b1cc064c8d1899656a6151067f0`)
   into `/opt/venv` with `--require-hashes --no-deps` before import and audit
   checks. This keeps test tooling out of runtime without removing capability.
 - **Frontend:** Vercel; build from `frontend/` with `npm run build`; `VITE_API_URL` points to backend.

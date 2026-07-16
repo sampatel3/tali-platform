@@ -135,6 +135,19 @@ def test_repository_locks_are_current_and_runtime_excludes_dev_tools() -> None:
         assert f"{package}==" not in runtime_lock
 
 
+def test_repository_replaces_the_python_images_bundled_setuptools() -> None:
+    runtime_requirements = (BACKEND_ROOT / "requirements.txt").read_text().splitlines()
+    setuptools_pin = next(
+        (line for line in runtime_requirements if line.startswith("setuptools==")),
+        None,
+    )
+
+    assert setuptools_pin is not None
+    for lock_name in ("requirements-lock.txt", "requirements-runtime-lock.txt"):
+        lock = (BACKEND_ROOT / lock_name).read_text()
+        assert f"{setuptools_pin} \\" in lock
+
+
 def test_runtime_compiler_targets_supported_linux_and_embeds_digest(
     tmp_path: Path, monkeypatch
 ) -> None:
