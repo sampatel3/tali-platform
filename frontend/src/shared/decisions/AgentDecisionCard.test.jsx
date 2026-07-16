@@ -8,7 +8,7 @@
 // candidates get no banner.
 
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentDecisionCard } from './AgentDecisionCard';
@@ -101,33 +101,43 @@ describe('AgentDecisionCard reject consequence copy', () => {
 });
 
 describe('AgentDecisionCard decision narrative', () => {
-  it('shows a policy cause separately from the complete candidate summary', () => {
+  it('labels a policy recommendation with a rule chip, hides confidence, and gates the causal sentence behind why?', () => {
     renderCard({
       ...baseDecision,
       confidence: 1,
       candidate_summary: '18 years in Lakehouse and dimensional modelling. The material gap is unproven knowledge-graph delivery.',
       decision_explanation: {
         source: 'policy',
+        rule: 'must_have_blocked',
         summary: 'Reject recommended because 2 must-have requirements were marked missing.',
         context: 'The 72 role-fit score cleared the 55 threshold; the hard must-have rule took priority.',
         factors: [
           { label: 'Knowledge graph development', status: 'missing' },
           { label: 'Ontology and taxonomy design', status: 'missing' },
         ],
+        policy_revision_id: 7,
       },
     });
 
-    expect(screen.getByText(/^Policy recommends$/i)).toBeInTheDocument();
+    // Kicker: "Policy" + the rule chip. No "recommends", no confidence text.
+    expect(screen.getByText('Policy')).toBeInTheDocument();
+    expect(screen.getByText('2 must-haves missing')).toBeInTheDocument();
     expect(screen.queryByText(/Confidence 100%/i)).not.toBeInTheDocument();
+
+    // The causal sentence is collapsed until "why?" is clicked.
+    expect(screen.queryByText(/2 must-have requirements were marked missing/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'why?' }));
     expect(screen.getByText(/2 must-have requirements were marked missing/i)).toBeInTheDocument();
-    expect(screen.getByText('Knowledge graph development')).toBeInTheDocument();
+    expect(screen.getByText(/policy revision #7/)).toBeInTheDocument();
+
+    // Factor chips + the full candidate summary render in the card narrative.
+    expect(screen.getByText(/Knowledge graph development/)).toBeInTheDocument();
     expect(screen.getByText(
       '18 years in Lakehouse and dimensional modelling. The material gap is unproven knowledge-graph delivery.',
     )).toBeInTheDocument();
-    expect(screen.getByText('CANDIDATE SUMMARY')).toBeInTheDocument();
   });
 
-  it('retains confidence wording for genuine agent judgment', () => {
+  it('surfaces confidence as the chip for genuine agent judgment', () => {
     renderCard({
       ...baseDecision,
       confidence: 0.84,
@@ -139,7 +149,29 @@ describe('AgentDecisionCard decision narrative', () => {
       candidate_summary: 'Partial role fit.',
     });
 
-    expect(screen.getByText(/Agent recommends · Confidence 84%/i)).toBeInTheDocument();
+    expect(screen.getByText('Agent')).toBeInTheDocument();
+    expect(screen.getByText('Confidence 84%')).toBeInTheDocument();
+    // Agent reasoning prints inline, so no redundant "why?" disclosure.
+    expect(screen.queryByRole('button', { name: 'why?' })).not.toBeInTheDocument();
+    expect(screen.getByText('Reject recommended after reviewing the conflicting evidence.')).toBeInTheDocument();
+  });
+
+  it('renders a 2-line clamp with a Show more toggle on a long card summary', () => {
+    const longSummary = 'Partial fit — this candidate brings deep distributed-systems experience across a decade of '
+      + 'high-scale platforms, with strong AWS depth and a proven verification habit, but the knowledge-graph '
+      + 'delivery the role hinges on is unproven and stays the material open question.';
+    renderCard({
+      ...baseDecision,
+      decision_explanation: { source: 'policy', rule: 'must_have_blocked', factors: [] },
+      candidate_summary: longSummary,
+    });
+
+    // Verdict pill split off the head; the body carries a Show more/less toggle.
+    expect(screen.getByText('Partial fit')).toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Show more' });
+    expect(toggle).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument();
   });
 });
 

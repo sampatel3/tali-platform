@@ -7,7 +7,7 @@ import { DecisionNarrative } from '../../shared/decisions/DecisionNarrative';
 
 export const VerdictDetail = ({ decision = null }) => {
   if (!decision) return null;
-  return <DecisionNarrative decision={decision} />;
+  return <DecisionNarrative decision={decision} density="report" />;
 };
 
 export default VerdictDetail;

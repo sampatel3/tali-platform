@@ -1846,6 +1846,17 @@ button.eng-badge-button:focus-visible {
   color: var(--purple);
   margin: 8px 0 0;
 }
+/* Rule chip on the recommendation kicker — the score / must-have / confidence
+   summary as a small pill. Opts out of the kicker's uppercasing. */
+.dossier-rail .dr-rec-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
 .dossier-rail .dr-rec-btn {
   width: 100%;
   display: inline-flex;

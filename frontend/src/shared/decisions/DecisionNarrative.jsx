@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 import './decisionNarrative.css';
 import { normaliseDecisionText } from './decisionText';
+import { ruleChipText, splitVerdict } from './decisionPresentation';
 
 const normalise = normaliseDecisionText;
 
@@ -12,8 +13,60 @@ const statusLabel = (value) => {
   return 'Missing';
 };
 
-export const DecisionNarrative = ({ decision, compact = false }) => {
+// Body longer than this clamps to 2 lines with a Show more toggle. A length
+// heuristic — not a layout measurement — where ~180 chars is roughly two lines
+// at the summary's width; shorter bodies never render a toggle they don't need.
+const CLAMP_CHARS = 180;
+
+// 2-line-clamped prose + Show more/less, shown only when the text is long enough
+// to overflow. Used for the card-density candidate summary and agent reasoning.
+const ClampBlock = ({ text, className }) => {
+  const [expanded, setExpanded] = useState(false);
+  const clampable = text.length > CLAMP_CHARS;
+  return (
+    <>
+      <p className={`${className}${clampable && !expanded ? ' is-clamped' : ''}`}>{text}</p>
+      {clampable ? (
+        <button
+          type="button"
+          className="decision-narrative-toggle"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </>
+  );
+};
+
+// Factor chips — small "✕ label" pills, status in the title tooltip. `max`
+// chips render, the rest collapse into a "+N more" tail.
+const FactorChips = ({ factors, max }) => {
+  const shown = factors.slice(0, max);
+  const extra = factors.length - shown.length;
+  return (
+    <div className="decision-narrative-chips" aria-label="Decisive requirements">
+      {shown.map((factor, index) => (
+        <span
+          key={`${normalise(factor.label)}-${index}`}
+          className="decision-narrative-chip"
+          title={statusLabel(factor.status)}
+        >
+          ✕ {normalise(factor.label)}
+        </span>
+      ))}
+      {extra > 0 ? <span className="decision-narrative-chip-more">+{extra} more</span> : null}
+    </div>
+  );
+};
+
+// `density` picks the surface: 'card' (AgentDecisionCard / rail — chips + clamped
+// summary, no boxed prose) or 'report' (candidate report — one merged FIT SUMMARY
+// block). `compact` is the retired boolean prop: true maps to density='card'.
+export const DecisionNarrative = ({ decision, density = 'report', compact = false }) => {
   if (!decision) return null;
+  const resolvedDensity = compact ? 'card' : density;
 
   const explanation = decision.decision_explanation && typeof decision.decision_explanation === 'object'
     ? decision.decision_explanation
@@ -22,42 +75,98 @@ export const DecisionNarrative = ({ decision, compact = false }) => {
   const candidateSummary = normalise(decision.candidate_summary);
   const context = normalise(explanation?.context);
   const factors = Array.isArray(explanation?.factors)
-    ? explanation.factors.filter((item) => item && normalise(item.label)).slice(0, compact ? 3 : 5)
+    ? explanation.factors.filter((item) => item && normalise(item.label))
     : [];
+  // Dedupe: a candidate summary that just restates the decision reason adds
+  // nothing — drop it.
   const showCandidateSummary = candidateSummary
     && candidateSummary.toLowerCase() !== decisionReason.toLowerCase();
   const source = explanation?.source === 'policy' ? 'policy' : 'agent';
+  const { verdict, body } = splitVerdict(candidateSummary);
 
   if (!decisionReason && !candidateSummary) return null;
 
-  return (
-    <div className={`decision-narrative${compact ? ' is-compact' : ''}`}>
-      {decisionReason ? (
-        <section className="decision-narrative-block decision-narrative-decision" aria-label="Why this decision">
-          <div className="decision-narrative-kicker">
-            {source === 'policy' ? 'WHY THE POLICY RECOMMENDS THIS' : 'WHY THE AGENT RECOMMENDS THIS'}
-          </div>
-          <p className="decision-narrative-primary">{decisionReason}</p>
-          {factors.length ? (
-            <ul className="decision-narrative-factors" aria-label="Decisive requirements">
-              {factors.map((factor, index) => (
-                <li key={`${normalise(factor.label)}-${index}`}>
-                  <span>{normalise(factor.label)}</span>
-                  <b>{statusLabel(factor.status)}</b>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {context ? <p className="decision-narrative-context">{context}</p> : null}
-        </section>
-      ) : null}
+  // Legacy cached payloads have no structured explanation — degrade to the
+  // pre-redesign plain reasoning paragraph + candidate summary, no chips/pills.
+  if (!explanation) {
+    return (
+      <div className={`decision-narrative is-${resolvedDensity}`}>
+        {decisionReason ? (
+          <section className="decision-narrative-block" aria-label="Why this decision">
+            <div className="decision-narrative-kicker">
+              {source === 'policy' ? 'WHY THE POLICY RECOMMENDS THIS' : 'WHY THE AGENT RECOMMENDS THIS'}
+            </div>
+            <p className="decision-narrative-primary">{decisionReason}</p>
+          </section>
+        ) : null}
+        {showCandidateSummary ? (
+          <section className="decision-narrative-block decision-narrative-candidate" aria-label="Candidate summary">
+            <div className="decision-narrative-kicker">CANDIDATE SUMMARY</div>
+            <p className="decision-narrative-summary">{candidateSummary}</p>
+          </section>
+        ) : null}
+      </div>
+    );
+  }
 
-      {showCandidateSummary ? (
-        <section className="decision-narrative-block decision-narrative-candidate" aria-label="Candidate summary">
-          <div className="decision-narrative-kicker">CANDIDATE SUMMARY</div>
-          <p className="decision-narrative-summary">{candidateSummary}</p>
-        </section>
-      ) : null}
+  if (resolvedDensity === 'card') {
+    const showMustHaveChips = source === 'policy'
+      && explanation.rule === 'must_have_blocked'
+      && factors.length > 0;
+    return (
+      <div className="decision-narrative is-card">
+        {showMustHaveChips ? <FactorChips factors={factors} max={3} /> : null}
+
+        {/* Agent judgment renders its reasoning here; policy prose moves to the
+            card's own "why?" disclosure so it doesn't crowd the summary. */}
+        {source !== 'policy' && decisionReason ? (
+          <section className="decision-narrative-block" aria-label="Why this decision">
+            <div className="decision-narrative-kicker">WHY THE AGENT RECOMMENDS THIS</div>
+            <ClampBlock text={decisionReason} className="decision-narrative-primary" />
+          </section>
+        ) : null}
+
+        {showCandidateSummary ? (
+          <section className="decision-narrative-block decision-narrative-candidate" aria-label="Candidate summary">
+            <div className="decision-narrative-kicker">CANDIDATE SUMMARY</div>
+            {verdict ? <span className="decision-narrative-pill">{verdict}</span> : null}
+            <ClampBlock text={body} className="decision-narrative-summary" />
+          </section>
+        ) : null}
+      </div>
+    );
+  }
+
+  // report density — one merged FIT SUMMARY block: source · chip · decision type
+  // heading, un-clamped summary, then the causal sentence as a quiet note.
+  const sourceLabel = source === 'policy' ? 'Policy' : 'Agent';
+  const chip = ruleChipText(decision);
+  const decisionWords = normalise(String(decision.decision_type || '').replace(/_/g, ' '));
+  const headParts = [`✦ ${sourceLabel}`, chip, decisionWords].filter(Boolean);
+  const revisionId = explanation.policy_revision_id;
+  const causal = context ? `${decisionReason} ${context}` : decisionReason;
+
+  return (
+    <div className="decision-narrative is-report">
+      <section className="decision-narrative-block" aria-label="Fit summary">
+        <div className="decision-narrative-kicker is-mute">FIT SUMMARY</div>
+        <div className="decision-narrative-head">
+          {verdict ? <span className="decision-narrative-pill">{verdict}</span> : null}
+          {headParts.length ? (
+            <span className="decision-narrative-rulechip">{headParts.join(' · ')}</span>
+          ) : null}
+        </div>
+        {factors.length ? <FactorChips factors={factors} max={5} /> : null}
+        {showCandidateSummary ? <p className="decision-narrative-summary">{body}</p> : null}
+        {causal ? (
+          <div className="decision-narrative-note">
+            <p className="decision-narrative-note-text">{causal}</p>
+            {revisionId != null ? (
+              <div className="decision-narrative-prov">policy revision #{revisionId}</div>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 };

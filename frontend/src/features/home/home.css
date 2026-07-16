@@ -830,6 +830,54 @@
   min-width: 240px;
   max-width: 100%;
 }
+/* Rule chip riding the recommendation kicker — the score / must-have / confidence
+   summary as a small pill. Opts out of the kicker's uppercasing so "72 ≥ 55"
+   reads verbatim. */
+.rq-rec-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+/* "why?" disclosure — a quiet toggle + a collapsed panel holding the causal
+   sentence (and the policy revision when the API sends one). */
+.rq-rec-why {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--purple);
+  font: inherit;
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.02em;
+  text-transform: none;
+  cursor: pointer;
+}
+.rq-rec-why:hover { text-decoration: underline; }
+.rq-rec-why-panel {
+  max-width: 420px;
+  margin: 9px auto 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--purple) 18%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--purple-soft) 45%, var(--bg-2));
+  text-align: left;
+}
+.rq-rec-why-text {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+.rq-rec-prov {
+  margin-top: 6px;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.03em;
+}
 
 /* "Show all / fewer" toggle under the capped Recent-decisions feed. */
 .rq-feed-toggle {

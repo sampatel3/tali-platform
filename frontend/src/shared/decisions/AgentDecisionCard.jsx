@@ -10,7 +10,7 @@
 // surface rendering this card gets them without remembering to import the CSS
 // itself (same pattern ActivityFeed uses). Duplicate CSS imports are deduped
 // by the bundler.
-import React from 'react';
+import React, { useState } from 'react';
 import {
   AlertTriangle,
   Brain,
@@ -38,6 +38,8 @@ import {
 import { ScoreProvenance } from '../../features/candidates/ScoreProvenance';
 import { IntegrityFlags } from './IntegrityFlags';
 import { DecisionNarrative } from './DecisionNarrative';
+import { ruleChipText } from './decisionPresentation';
+import { normaliseDecisionText } from './decisionText';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from './decisionActions';
 import '../../features/home/home.css';
 
@@ -59,6 +61,9 @@ const fmtAppliedDate = (v) => {
 // action bar) — keeping the identical header, deep-links, integrity flags and
 // requirement bars. One card, two surfaces, guaranteed in lockstep.
 export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onReEvaluate, busy, middleSlot = null, hideDecisionParts = false, statusPill = null }) => {
+  // "why?" disclosure on the recommendation kicker — the causal sentence that
+  // no longer prints inline on policy-source cards (it lives here now).
+  const [whyOpen, setWhyOpen] = useState(false);
   if (!decision) {
     return (
       <section className="rq-hybrid-detail">
@@ -89,7 +94,24 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const isRejectType = isRejectDecisionType(decision.decision_type);
   const postHandoverWarn = isRejectType && Boolean(decision.candidate_post_handover);
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
-  const decisionSource = decision?.decision_explanation?.source === 'policy' ? 'policy' : 'agent';
+  const recExplanation = decision.decision_explanation && typeof decision.decision_explanation === 'object'
+    ? decision.decision_explanation
+    : null;
+  const decisionSource = recExplanation?.source === 'policy' ? 'policy' : 'agent';
+  const recChip = ruleChipText(decision);
+  const whyText = recExplanation
+    ? normaliseDecisionText([recExplanation.summary, recExplanation.context].filter(Boolean).join(' '))
+    : '';
+  const recRevisionId = recExplanation?.policy_revision_id;
+  // "why?" is the single home for the policy causal sentence (the card narrative
+  // drops it for policy). Agent cards already print that sentence inline, so the
+  // disclosure would only duplicate it — omit it there.
+  const showWhy = decisionSource === 'policy' && Boolean(whyText);
+  // ScoreProvenance renders nothing without an engine version / scored-at; mirror
+  // that so the merged provenance row doesn't print a dangling separator.
+  const scoreProvenance = decision?.score_summary?.score_provenance;
+  const hasProvenance = Boolean(scoreProvenance
+    && (scoreProvenance.engine_version || scoreProvenance.scored_at));
   const PrimaryIcon = spec.primaryIcon || Check;
   const primaryTitle = staleEngineOnly
     ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
@@ -130,13 +152,15 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {[decision.role_name, decision.candidate_email].filter(Boolean).join(' · ')}
           </div>
-          <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
-          {decision.applied_at ? (
-            <div
-              style={{ fontSize: 11, color: 'var(--mute)', marginTop: 2 }}
-              title="When this application was submitted — how fresh the candidate is"
-            >
-              Applied {fmtAppliedDate(decision.applied_at)} · {formatRelativeAge(decision.applied_at)} ago
+          {hasProvenance || decision.applied_at ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--mute)', marginTop: 2 }}>
+              <ScoreProvenance provenance={scoreProvenance} density="full" />
+              {hasProvenance && decision.applied_at ? <span aria-hidden="true">·</span> : null}
+              {decision.applied_at ? (
+                <span title="When this application was submitted — how fresh the candidate is">
+                  Applied {fmtAppliedDate(decision.applied_at)} · {formatRelativeAge(decision.applied_at)} ago
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -217,18 +241,34 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             {spec.primaryLabel}
           </Button>
           <div className="rq-rec-kl">
-            <Sparkles size={12} aria-hidden="true" /> {decisionSource === 'policy' ? 'Policy recommends' : 'Agent recommends'}
-            {decisionSource === 'agent' && decision.confidence != null
-              ? ` · Confidence ${Math.round(decision.confidence * 100)}%`
-              : ''}
+            <Sparkles size={12} aria-hidden="true" /> {decisionSource === 'policy' ? 'Policy' : 'Agent'}
+            {recChip ? <span className="rq-rec-chip">{recChip}</span> : null}
+            {showWhy ? (
+              <button
+                type="button"
+                className="rq-rec-why"
+                onClick={() => setWhyOpen((value) => !value)}
+                aria-expanded={whyOpen}
+              >
+                why?
+              </button>
+            ) : null}
           </div>
           {isRejectType ? (
             <div className="rq-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
           ) : null}
+          {showWhy && whyOpen ? (
+            <div className="rq-rec-why-panel" role="region" aria-label="Why this recommendation">
+              <p className="rq-rec-why-text">{whyText}</p>
+              {recRevisionId != null ? (
+                <div className="rq-rec-prov">policy revision #{recRevisionId}</div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
-      {!hideDecisionParts ? <DecisionNarrative decision={decision} compact /> : null}
+      {!hideDecisionParts ? <DecisionNarrative decision={decision} density="card" /> : null}
 
       {/* Trust readout right under the summary — the specific things to verify
           and the cross-source corroborations we confirmed. Same component the

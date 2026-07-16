@@ -8,13 +8,6 @@
   min-width: 0;
 }
 
-.decision-narrative-decision {
-  padding: 12px 14px;
-  border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line));
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--purple-soft) 55%, var(--bg-2));
-}
-
 .decision-narrative-candidate {
   padding: 0 2px;
 }
@@ -33,8 +26,7 @@
 }
 
 .decision-narrative-primary,
-.decision-narrative-summary,
-.decision-narrative-context {
+.decision-narrative-summary {
   margin: 0;
   color: var(--ink-2);
   font-size: var(--fs-body-lg);
@@ -46,49 +38,118 @@
   font-weight: 600;
 }
 
-.decision-narrative-context {
-  margin-top: 8px;
-  color: var(--mute);
-  font-size: var(--fs-body);
-}
+/* ── Redesign (density card/report): rule chip, verdict pill, factor chips ── */
 
-.decision-narrative-factors {
-  display: grid;
-  gap: 5px;
-  margin: 9px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.decision-narrative-factors li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+.decision-narrative.is-card {
   gap: 10px;
-  align-items: start;
-  padding-top: 5px;
-  border-top: 1px solid color-mix(in oklab, var(--purple) 12%, var(--line));
-  color: var(--ink-2);
-  font-size: var(--fs-body);
-  line-height: 1.45;
 }
 
-.decision-narrative-factors b {
+.decision-narrative-kicker.is-mute {
+  color: var(--mute);
+}
+
+/* Verdict pill — the "Partial fit" head split off the candidate summary. */
+.decision-narrative-pill {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  font-size: var(--fs-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Clamp the summary/reasoning to two lines until Show more expands it. */
+.decision-narrative-summary.is-clamped,
+.decision-narrative-primary.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.decision-narrative-toggle {
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--purple);
+  font: inherit;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.decision-narrative-toggle:hover {
+  text-decoration: underline;
+}
+
+/* Factor chips — "✕ label" pills; the "+N more" tail reads as quiet text. */
+.decision-narrative-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.decision-narrative-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--purple-soft) 55%, var(--bg-2));
+  color: var(--ink-2);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+}
+
+.decision-narrative-chip-more {
+  color: var(--mute);
+  font-size: var(--fs-caption);
+}
+
+/* report density — merged FIT SUMMARY block. */
+.decision-narrative-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.decision-narrative-head .decision-narrative-pill {
+  margin-bottom: 0;
+}
+
+.decision-narrative-rulechip {
   color: var(--purple);
   font-family: var(--font-mono);
   font-size: var(--fs-eyebrow);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
+  letter-spacing: 0.03em;
 }
 
-@media (max-width: 640px) {
-  .decision-narrative-decision {
-    padding: 11px 12px;
-  }
+/* Causal sentence under the summary — a quiet left-border note. */
+.decision-narrative-note {
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+}
 
-  .decision-narrative-factors li {
-    grid-template-columns: 1fr;
-    gap: 2px;
-  }
+.decision-narrative-note-text {
+  margin: 0;
+  color: var(--mute);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+
+.decision-narrative-prov {
+  margin-top: 5px;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.03em;
 }
