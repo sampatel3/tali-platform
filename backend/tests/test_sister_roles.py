@@ -72,6 +72,9 @@ def _scorable_evaluation(db, *, organization_id: int):
             "A detailed related-role specification requiring production Python, "
             "RAG evaluation, distributed systems, and operational reliability."
         ),
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+        auto_skip_assessment=True,
     )
     db.add(sister)
     db.flush()
@@ -130,7 +133,14 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     assert sister["workable_job_id"] is None
     assert sister["effective_workable_job_id"] == source.workable_job_id
     assert sister["applications_count"] == 2
-    assert body["evaluation_counts"] == {"total": 2, "pending": 1, "unscorable": 1}
+    assert sister["agentic_mode_enabled"] is True
+    assert sister["monthly_usd_budget_cents"] > 0
+    assert body["evaluation_counts"] == {
+        "total": 2,
+        "pending": 1,
+        "unscorable": 0,
+        "excluded": 1,
+    }
     dispatch.assert_called_once()
     fallback_membership = (
         db.query(JobHiringTeam)
@@ -152,7 +162,7 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
         .order_by(SisterRoleEvaluation.source_application_id)
         .all()
     )
-    assert [item.status for item in evaluations] == ["pending", "unscorable"]
+    assert [item.status for item in evaluations] == ["pending", "excluded"]
 
     open_rows = client.get(
         f"/api/v1/roles/{sister['id']}/applications",
@@ -186,7 +196,104 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     )
     assert rejected_rows.status_code == 200
     assert rejected_rows.json()[0]["id"] == applications[1].id
-    assert rejected_rows.json()[0]["score_status"] == "unscorable"
+    assert rejected_rows.json()[0]["score_status"] == "excluded"
+
+
+def test_related_roles_keep_independent_stages_but_share_global_rejection(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    source = Role(
+        organization_id=user.organization_id,
+        name="Shared ATS role",
+        source="workable",
+        workable_job_id="SHARED-ATS",
+        workable_job_data={"state": "published"},
+        job_spec_text="Original role with a complete enough specification for testing.",
+    )
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="shared-related@example.com",
+        full_name="Shared Candidate",
+        cv_text="Production Python and distributed systems experience.",
+    )
+    db.add_all([source, candidate])
+    db.flush()
+    application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=candidate.id,
+        role_id=source.id,
+        source="manual",
+        pipeline_stage="applied",
+        application_outcome="open",
+        cv_text=candidate.cv_text,
+    )
+    db.add(application)
+    db.flush()
+    related_roles = []
+    for name in ("Related A", "Related B"):
+        role = Role(
+            organization_id=user.organization_id,
+            name=name,
+            source="sister",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=source.id,
+            job_spec_text=f"{name} complete role specification with enough screening detail.",
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=5000,
+            auto_skip_assessment=True,
+        )
+        db.add(role)
+        db.flush()
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=user.organization_id,
+                role_id=role.id,
+                source_application_id=application.id,
+                status="done",
+                spec_fingerprint=name,
+                role_fit_score=80,
+            )
+        )
+        related_roles.append(role)
+    db.commit()
+
+    moved = client.patch(
+        f"/api/v1/roles/{related_roles[0].id}/applications/{application.id}/stage",
+        json={"pipeline_stage": "advanced"},
+        headers=headers,
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["pipeline_stage"] == "advanced"
+
+    untouched = client.get(
+        f"/api/v1/roles/{related_roles[1].id}/applications",
+        headers=headers,
+    ).json()[0]
+    assert untouched["pipeline_stage"] == "applied"
+    db.expire_all()
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "applied"
+
+    rejected = client.patch(
+        f"/api/v1/applications/{application.id}/outcome",
+        json={"application_outcome": "rejected", "reason": "Not proceeding"},
+        headers=headers,
+    )
+    assert rejected.status_code == 200, rejected.text
+    for role in related_roles:
+        row = client.get(
+            f"/api/v1/roles/{role.id}/applications",
+            params={"application_outcome": "rejected"},
+            headers=headers,
+        ).json()[0]
+        assert row["application_outcome"] == "rejected"
+        assert row["related_role_availability"] == "disqualified"
+    statuses = {
+        row.status
+        for row in db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.source_application_id == application.id)
+        .all()
+    }
+    assert statuses == {"excluded"}
 
 
 def test_related_role_uses_cloned_requisition_chat_then_creates_coupled_scoring_role(
@@ -265,7 +372,8 @@ def test_related_role_uses_cloned_requisition_chat_then_creates_coupled_scoring_
     assert receipt["evaluation_counts"] == {
         "total": 2,
         "pending": 1,
-        "unscorable": 1,
+        "unscorable": 0,
+        "excluded": 1,
     }
     dispatch.assert_called_once()
 
@@ -352,7 +460,7 @@ def test_create_related_role_from_bullhorn_uses_same_shared_roster(client, db):
     dispatch.assert_called_once()
 
 
-def test_sister_role_cannot_enable_candidate_automation(client, db):
+def test_sister_role_can_enable_scoring_agent_but_not_candidate_automation(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
     source, _ = _source_role_with_candidates(db, organization_id=user.organization_id)
@@ -363,6 +471,7 @@ def test_sister_role_cannot_enable_candidate_automation(client, db):
         role_kind=ROLE_KIND_SISTER,
         ats_owner_role_id=source.id,
         job_spec_text="A complete alternate specification for an AI engineer with strong platform depth.",
+        auto_skip_assessment=True,
     )
     db.add(sister)
     db.commit()
@@ -372,8 +481,16 @@ def test_sister_role_cannot_enable_candidate_automation(client, db):
         json={"expected_version": int(sister.version or 1), "agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
         headers=headers,
     )
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    sister = db.get(Role, sister.id)
+    response = client.patch(
+        f"/api/v1/roles/{sister.id}",
+        json={"expected_version": int(sister.version or 1), "auto_advance": True},
+        headers=headers,
+    )
     assert response.status_code == 409
-    assert "score-only" in response.json()["detail"]
+    assert "shared" in response.json()["detail"]
 
 
 def test_preview_rejects_non_ats_source(client, db):
@@ -404,6 +521,9 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
         role_kind=ROLE_KIND_SISTER,
         ats_owner_role_id=source.id,
         job_spec_text="A detailed alternate AI engineer specification focused on RAG evaluation and reliability.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+        auto_skip_assessment=True,
     )
     db.add(sister)
     db.flush()
@@ -447,9 +567,9 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
     assert saved.details["role_fit_score"] == 86.0
     metering = holistic_match.call_args.kwargs["metering_context"]
     assert metering["organization_id"] == user.organization_id
-    assert metering["role_id"] == source.id
+    assert metering["role_id"] == sister.id
     assert metering["entity_id"] == f"sister_evaluation:{evaluation.id}"
-    assert metering["role_id"] != sister.id
+    assert metering["role_id"] != source.id
 
 
 def test_related_role_transient_failures_continue_after_fast_retry_budget(
@@ -501,7 +621,7 @@ def test_related_role_transient_failures_continue_after_fast_retry_budget(
     assert saved.role_fit_score == 88.0
 
 
-def test_related_role_hard_admission_uses_source_role_budget(
+def test_related_role_hard_admission_uses_its_own_budget(
     client, db, monkeypatch
 ):
     headers, email = auth_headers(client)
@@ -511,9 +631,10 @@ def test_related_role_hard_admission_uses_source_role_budget(
         db, organization_id=user.organization_id
     )
     # One cent is deliberately below the provider hold used by the fake
-    # scoring boundary. The score-only projection has no cap, so this test
-    # fails if metering ever regresses back to evaluation.role_id.
-    source.monthly_usd_budget_cents = 1
+    # scoring boundary. This fails if metering regresses to the source role
+    # instead of the related role's independent Agent budget.
+    sister = db.get(Role, evaluation.role_id)
+    sister.monthly_usd_budget_cents = 1
     db.commit()
 
     from app.services.pricing_service import Feature
@@ -566,7 +687,8 @@ def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
     source, evaluation = _scorable_evaluation(
         db, organization_id=user.organization_id
     )
-    source.agent_paused_at = datetime.now(timezone.utc)
+    sister = db.get(Role, evaluation.role_id)
+    sister.agent_paused_at = datetime.now(timezone.utc)
     db.commit()
 
     from app.tasks.sister_role_tasks import (
@@ -595,8 +717,8 @@ def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
     assert status_body["scored"] == 0
     assert status_body["progress_percent"] == 0
 
-    source = db.get(Role, source.id)
-    source.agent_paused_at = None
+    sister = db.get(Role, evaluation.role_id)
+    sister.agent_paused_at = None
     saved.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     db.commit()
     with (
@@ -617,6 +739,43 @@ def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
 
     db.expire_all()
     assert db.get(SisterRoleEvaluation, evaluation.id).status == "done"
+
+
+def test_related_role_resume_kick_immediately_releases_authority_wait(client, db):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    sister = db.get(Role, evaluation.role_id)
+    sister.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    from app.tasks.sister_role_tasks import (
+        score_sister_evaluation,
+        score_sister_role,
+    )
+
+    assert score_sister_evaluation.run(evaluation.id)["status"] == "authority_blocked"
+    sister = db.get(Role, evaluation.role_id)
+    sister.agent_paused_at = None
+    db.commit()
+
+    published: list[int] = []
+    with patch.object(
+        score_sister_evaluation,
+        "apply_async",
+        lambda *, args, queue: published.append(args[0]),
+    ):
+        result = score_sister_role.run(sister.id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert result["queued"] == 1
+    assert published == [evaluation.id]
+    assert saved.status == "pending"
+    assert saved.next_attempt_at is None
 
 
 def test_related_role_stale_worker_and_secret_broker_error_self_recover(
@@ -798,6 +957,7 @@ def test_workable_candidate_without_cv_becomes_scorable_when_cv_arrives(client, 
     from app.services.sister_role_service import ensure_application_sister_evaluations
 
     application = applications[1]
+    application.application_outcome = "open"
     assert ensure_application_sister_evaluations(
         db, application, sister_roles=[sister]
     ) == []

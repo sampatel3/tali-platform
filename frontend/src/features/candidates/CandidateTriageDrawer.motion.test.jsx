@@ -170,6 +170,26 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
   });
 
+  it('warns that rejecting a linked candidate rejects every related role', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+          isRelatedRole
+        />
+      </MotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/Reject everywhere/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /original role and every related role/i,
+    );
+  });
+
   it.each([
     ['queued', /Bullhorn rejection queued/i, false],
     ['failed', /Bullhorn rejection sync failed/i, false],

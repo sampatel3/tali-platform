@@ -90,6 +90,7 @@ import {
   RelatedRolePipelineLabel,
   RelatedRoleScoringInlineStatus,
   relatedRoleScoringActionLabel,
+  useEffectiveRelatedAgentResume,
   useRelatedRoleScoringPolling,
 } from './relatedRoleScoringUi';
 
@@ -1237,6 +1238,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     handleRoleVersionConflict,
     showToast,
   });
+  const handleResumeEffectiveAgent = useEffectiveRelatedAgentResume({ agentStatus, onResumeRole: handleResumeAgent, refetchAgentStatus, resumeWorkspace: apiClient.agent.resumeAll, reloadRole: loadRoleWorkspace, setPollingVersion: setSisterPollVersion, showToast });
 
   // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
   // AgentHeader with a role-scoped agent panel on the right. Builds the
@@ -1489,6 +1491,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       return;
     }
     setActivationPreflight(null);
+    if (role?.role_kind === 'sister') return activateAgentWithAssessmentChoice(monthlyBudgetCents, 'skip_assessment');
     const activeTasks = (roleTasks || []).filter((task) => task?.is_active !== false);
     if (Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment) || activeTasks.length > 0) {
       activateAgentWithAssessmentChoice(monthlyBudgetCents);
@@ -1681,19 +1684,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             ) : null}
           </div>
         )}
-        agent={role?.role_kind === 'sister' ? null : roleAgent}
-        onActivateAgent={role?.role_kind === 'sister' ? undefined : handleActivateAgent}
-        onPauseAgent={role?.role_kind === 'sister' ? undefined : handlePauseAgent}
-        onResumeAgent={role?.role_kind === 'sister' ? undefined : handleResumeAgent}
-        onTurnOffAgent={role?.role_kind === 'sister' ? undefined : handleTurnOffAgent}
-        onAgentSettings={role?.role_kind === 'sister' ? undefined : goToAgentSettings}
-        controlsDisabledReason={role?.role_kind === 'sister' ? null : roleAgentControlDisabledReason}
+        agent={roleAgent}
+        onActivateAgent={handleActivateAgent}
+        onPauseAgent={handlePauseAgent}
+        onResumeAgent={handleResumeEffectiveAgent}
+        onTurnOffAgent={handleTurnOffAgent}
+        onAgentSettings={goToAgentSettings}
+        controlsDisabledReason={roleAgentControlDisabledReason}
       />
       {role?.role_kind === 'sister' ? (
         <RelatedRoleContextBanner
           role={role}
           providerLabel={externalProviderLabel}
           status={sisterScoringStatus}
+          agentStatus={agentStatus}
+          onResumeWorkspace={handleResumeEffectiveAgent}
           onOpenOriginal={() => navigate(`/jobs/${role.ats_owner_role_id}`)}
         />
       ) : null}
@@ -1762,6 +1767,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       <div className="count">{formatCount(stage.items.length)}</div>
                     </div>
                     {visibleItems.map((application) => {
+                      const relatedRoleLocked = application?.related_role_availability === 'disqualified';
                       const cvRaw = application?.cv_match_score;
                       const cvPct = cvRaw != null && Number.isFinite(Number(cvRaw))
                         ? Math.round(Number(cvRaw))
@@ -1785,7 +1791,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       return (
                         <div
                           key={application.id}
-                          className={`kanban-card text-left ${isReview ? 'is-review' : ''}`}
+                          className={`kanban-card text-left ${isReview ? 'is-review' : ''}${relatedRoleLocked ? ' related-role-locked' : ''}`}
                           onMouseEnter={() => hoverPrefetchRef.current.start(application.id)}
                           onMouseLeave={() => hoverPrefetchRef.current.cancel()}
                         >
@@ -2275,7 +2281,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         return (
                           <React.Fragment key={application.id}>
                             <tr
-                              className={isAgentRow ? 'agent-row' : ''}
+                              className={`${isAgentRow ? 'agent-row ' : ''}${application?.related_role_availability === 'disqualified' ? 'related-role-locked' : ''}`.trim()}
                               onClick={(event) => handlePipelineReportClick(event, application)}
                               onMouseEnter={() => hoverPrefetchRef.current.start(application.id)}
                               onMouseLeave={() => hoverPrefetchRef.current.cancel()}

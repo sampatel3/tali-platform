@@ -24,6 +24,7 @@ SISTER_EVAL_RETRY_WAIT = "retry_wait"
 SISTER_EVAL_DONE = "done"
 SISTER_EVAL_ERROR = "error"
 SISTER_EVAL_UNSCORABLE = "unscorable"
+SISTER_EVAL_EXCLUDED = "excluded"
 SISTER_EVAL_STATUSES = {
     SISTER_EVAL_PENDING,
     SISTER_EVAL_RUNNING,
@@ -31,15 +32,17 @@ SISTER_EVAL_STATUSES = {
     SISTER_EVAL_DONE,
     SISTER_EVAL_ERROR,
     SISTER_EVAL_UNSCORABLE,
+    SISTER_EVAL_EXCLUDED,
 }
 
 
 class SisterRoleEvaluation(Base):
-    """The current sister-role evaluation for one source application.
+    """Role-owned workflow state over one canonical ATS application.
 
-    The source application retains ATS stage, outcome, notes, and identifiers.
-    This row only owns the alternate fit result, so Workable state can never
-    fork between two Taali role rows.
+    The source application keeps the provider identifiers and the shared ATS
+    outcome.  Each related role owns its alternate score and Taali pipeline
+    stage here, allowing the same candidate to progress differently in each
+    role without cloning or forking the provider application.
     """
 
     __tablename__ = "sister_role_evaluations"
@@ -49,6 +52,9 @@ class SisterRoleEvaluation(Base):
             name="uq_sister_evaluations_role_application",
         ),
         Index("ix_sister_evaluations_role_status", "role_id", "status"),
+        Index(
+            "ix_sister_evaluations_role_pipeline_stage", "role_id", "pipeline_stage"
+        ),
         Index("ix_sister_evaluations_recovery", "status", "next_attempt_at"),
     )
 
@@ -66,6 +72,15 @@ class SisterRoleEvaluation(Base):
         nullable=False, index=True,
     )
     status = Column(String(length=16), nullable=False, default=SISTER_EVAL_PENDING)
+    pipeline_stage = Column(
+        String(length=32), nullable=False, default="applied", server_default="applied"
+    )
+    pipeline_stage_updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    pipeline_stage_source = Column(
+        String(length=16), nullable=False, default="system", server_default="system"
+    )
     spec_fingerprint = Column(String(length=64), nullable=False)
     cv_fingerprint = Column(String(length=64), nullable=True)
     role_fit_score = Column(Float, nullable=True)

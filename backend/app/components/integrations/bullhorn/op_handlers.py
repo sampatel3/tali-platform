@@ -96,6 +96,30 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
             role=getattr(app, "role", None),
         )
     _raise_if_failed(result, default_action="move")
+    acting_role_id = payload.get("acting_role_id")
+    if acting_role_id is not None:
+        from ....models.role import Role
+        from ....services.sister_role_service import related_role_advance_note
+
+        acting_role = db.get(Role, int(acting_role_id))
+        if (
+            acting_role is not None
+            and int(acting_role.ats_owner_role_id or 0) == int(app.role_id)
+        ):
+            candidate = getattr(app, "candidate", None)
+            bullhorn_candidate_id = str(
+                getattr(candidate, "bullhorn_candidate_id", None) or ""
+            ).strip()
+            if bullhorn_candidate_id:
+                note_result = provider.post_note(
+                    candidate_id=bullhorn_candidate_id,
+                    member_id="",
+                    body=related_role_advance_note(
+                        acting_role, getattr(app, "role", None)
+                    ),
+                    role=getattr(app, "role", None),
+                )
+                _raise_if_failed(note_result, default_action="note")
     append_application_event(
         db,
         app=app,

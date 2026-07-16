@@ -116,6 +116,8 @@ const REJECT_VALUE = '__reject__';
 export function CandidateTriageDrawer({
   application,
   roleId = null,
+  isRelatedRole = false,
+  hasRelatedRoles = false,
   roleTasks = [],
   mode = 'inline',
   activityLabel = '',
@@ -606,13 +608,25 @@ export function CandidateTriageDrawer({
               <div className="ctc-card-sub">Closes the application</div>
             </button>
           </div>
-          {/* Reject is always allowed, including after provider hand-off. A
-              later-stage reject updates the owning ATS, so warn first. */}
-          {isRejectSelected && isPostHandoverAtsStage ? (
+          {/* Rejection changes the one canonical ATS application, so it is
+              global across the original and every related-role funnel. */}
+          {isRejectSelected ? (
             <div className="ctc-reject-warning" role="alert">
-              <strong>Heads up —</strong> this candidate is in{' '}
-              <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}, so rejecting will update them there.
-              You can still reject — just make sure that&apos;s intended.
+              {isRelatedRole || hasRelatedRoles ? (
+                <>
+                  <strong>Reject everywhere —</strong> this is one shared {providerLabel} application.
+                  Rejecting here disqualifies the candidate in the original role and every related role.
+                  {isPostHandoverAtsStage ? (
+                    <> They are currently in <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}.</>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <strong>Heads up —</strong> this candidate is in{' '}
+                  <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}, so rejecting will update them there.
+                  You can still reject — just make sure that&apos;s intended.
+                </>
+              )}
             </div>
           ) : null}
           <div className="ctc-action-row">

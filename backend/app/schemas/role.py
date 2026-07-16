@@ -423,6 +423,7 @@ class ApplicationResponse(BaseModel):
         "stale",
         "cancelled",
         "unscorable",
+        "excluded",
     ]] = None
     # Present when this row is projected into a sister role. ``id`` remains the
     # canonical source application id so every stage/outcome action routes to
@@ -431,6 +432,9 @@ class ApplicationResponse(BaseModel):
     operational_role_name: Optional[str] = None
     sister_role_id: Optional[int] = None
     source_role_score: Optional[float] = None
+    related_role_availability: Optional[Literal[
+        "active", "external_advanced", "disqualified"
+    ]] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
     workable_stage: Optional[str] = None
@@ -529,6 +533,19 @@ class ApplicationStageUpdate(BaseModel):
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
+
+
+class WorkableMoveStageRequest(BaseModel):
+    """Recruiter hand-back to the active ATS.
+
+    Workable receives its remote stage slug. Bullhorn receives Taali's stage
+    intent and resolves it through the organization's explicit stage map.
+    ``acting_role_id`` attributes a shared-application move to a related role.
+    """
+
+    target_stage: str = Field(min_length=1, max_length=200)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    acting_role_id: Optional[int] = Field(default=None, ge=1)
 
 
 class ApplicationOutcomeUpdate(BaseModel):
