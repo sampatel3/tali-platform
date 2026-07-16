@@ -35,6 +35,7 @@ import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import FirefliesWebhookUrlField from './FirefliesWebhookUrlField';
 import { OwnerOnlyFieldset, OwnerOnlyNotice } from './OwnerOnlySettings';
 import WorkableRolePicker from './WorkableRolePicker';
+import { SectionPanel, SettingsNavLink, ToggleCard } from './SettingsViewPrimitives';
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
   { id: 'r_candidates', label: 'r_candidates', description: 'Read candidate profiles and stages.' },
@@ -121,6 +122,15 @@ const buildWorkableScopeSelection = (scopes = []) => {
   };
 };
 
+const resolveAgentDefaultBoolean = (defaults, key, legacyKey, fallback = false) => {
+  if (defaults?.[key] != null) return Boolean(defaults[key]);
+  const legacyAutonomy = defaults?.autonomy;
+  if (legacyKey && legacyAutonomy?.[legacyKey] != null) {
+    return Boolean(legacyAutonomy[legacyKey]);
+  }
+  return fallback;
+};
+
 const normalizeWorkableError = (input) => {
   const raw = (input || '').toString();
   const lower = raw.toLowerCase();
@@ -169,36 +179,6 @@ const workableStageLabel = (stage) => (
 );
 
 const canonicalSection = (raw) => SECTION_ALIASES[String(raw || '').trim().toLowerCase()] || 'org';
-
-const SectionPanel = ({ id, title, subtitle, children, tone = '' }) => (
-  <section id={id} className={`settings-panel ${tone}`.trim()}>
-    <h2>
-      {title}
-      <em>.</em>
-    </h2>
-    <p className="sub">{subtitle}</p>
-    {children}
-  </section>
-);
-
-const ToggleCard = ({ title, description, checked, onChange, badge = null }) => (
-  <div className="settings-toggle-card">
-    <div>
-      <h4>{title}</h4>
-      <p>{description}</p>
-    </div>
-    <div className="settings-toggle-card-action">
-      {badge}
-      <button
-        type="button"
-        className={`sw ${checked ? 'on' : ''}`}
-        aria-label={title}
-        aria-pressed={checked}
-        onClick={() => onChange(!checked)}
-      />
-    </div>
-  </div>
-);
 
 // Settings → AI agent tab. Workspace defaults inherited at role-create
 // time: a chip-based requirements list (must / preferred / constraint),
@@ -347,16 +327,6 @@ const AgentDefaultsForm = ({
     </>
   );
 };
-
-const SettingsNavLink = ({ active, label, onClick }) => (
-  <button
-    type="button"
-    className={`mc-settings-link ${active ? 'on' : ''}`.trim()}
-    onClick={onClick}
-  >
-    {label}
-  </button>
-);
 
 const toAedWithUsdLabel = (rawValue, fallbackAmount = null, options = {}) => {
   const numeric = typeof rawValue === 'number'
@@ -802,11 +772,21 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       budgetUsd: String((seedBudgetCents / 100).toFixed(2)),
       threshold: Math.max(0, Math.min(100, seedThreshold)),
       thresholdMode: agentDefaults.threshold_mode === 'auto' ? 'auto' : 'manual',
-      autoSendAssessment: agentDefaults.auto_send_assessment !== false,
-      autoResendAssessment: agentDefaults.auto_resend_assessment !== false,
-      autoAdvance: agentDefaults.auto_advance !== false,
-      autoRejectPreScreen: Boolean(agentDefaults.auto_reject_pre_screen),
-      autoSkipAssessment: Boolean(agentDefaults.auto_skip_assessment),
+      autoSendAssessment: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_send_assessment', 'auto_invite_above'
+      ),
+      autoResendAssessment: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_resend_assessment', 'auto_invite_above'
+      ),
+      autoAdvance: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_advance', 'auto_advance_high_score'
+      ),
+      autoRejectPreScreen: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_reject_pre_screen', 'auto_reject_below', true
+      ),
+      autoSkipAssessment: resolveAgentDefaultBoolean(
+        agentDefaults, 'auto_skip_assessment'
+      ),
     });
     const firefliesConfig = orgData.fireflies_config || {};
     setFirefliesForm({

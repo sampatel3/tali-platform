@@ -118,9 +118,12 @@ class TestGenerateAndLink:
         mock_gen.return_value = GeneratedSpecResult(spec=spec, valid=True, errors=[], attempts=1)
         fake_task = SimpleNamespace(id=99, task_key="secops_x")
         mock_persist.return_value = fake_task
-        out = generate_and_link_task_for_role(MagicMock(), _role(), api_key="sk-x", organization_id=2)
+        db = MagicMock()
+        out = generate_and_link_task_for_role(
+            db, _role(), api_key="sk-x", organization_id=2
+        )
         assert out is fake_task
-        mock_repo.assert_called_once_with(fake_task)
+        mock_repo.assert_called_once_with(db, fake_task)
         mock_link.assert_called_once()
         # The generator got the role's JD + a kind hint.
         kw = mock_gen.call_args.kwargs

@@ -72,7 +72,7 @@ describe('CandidateTriageDrawer shared motion', () => {
         <CandidateTriageDrawer
           application={application}
           roleId={9}
-          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          roleTasks={[{ id: 5, name: 'Backend take-home', is_active: true }]}
           agentRunning
         />
       </TestMotionSystemProvider>,
@@ -99,7 +99,7 @@ describe('CandidateTriageDrawer shared motion', () => {
         <CandidateTriageDrawer
           application={application}
           roleId={9}
-          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          roleTasks={[{ id: 5, name: 'Backend take-home', is_active: true }]}
         />
       </TestMotionSystemProvider>,
     );
@@ -118,7 +118,7 @@ describe('CandidateTriageDrawer shared motion', () => {
         <CandidateTriageDrawer
           application={application}
           roleId={17}
-          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          roleTasks={[{ id: 5, name: 'Backend take-home', is_active: true }]}
           isRelatedRole
           agentRunning
           onSendAssessment={onSendAssessment}
@@ -173,7 +173,7 @@ describe('CandidateTriageDrawer shared motion', () => {
         <CandidateTriageDrawer
           application={application}
           roleId={9}
-          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          roleTasks={[{ id: 5, name: 'Backend take-home', is_active: true }]}
           onSendAssessment={onSendAssessment}
         />
       </TestMotionSystemProvider>,
@@ -187,6 +187,64 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(onSendAssessment).toHaveBeenCalledWith(application, '5');
   });
 
+  it('retains inactive and unknown task links without making them sendable or part of A/B', async () => {
+    const onSendAssessment = vi.fn();
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[
+            { id: 5, name: 'Retired exercise', is_active: false },
+            { id: 6, name: 'Malformed legacy exercise' },
+            { id: 7, name: 'Approved exercise', is_active: true },
+          ]}
+          onSendAssessment={onSendAssessment}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+
+    expect(screen.getByRole('button', { name: /Retired exercise.*retained for history/i }))
+      .toBeDisabled();
+    expect(screen.getByRole('button', { name: /Malformed legacy exercise.*availability unconfirmed/i }))
+      .toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Auto.*A\/B split/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send invite' }));
+    expect(onSendAssessment).toHaveBeenCalledOnce();
+    expect(onSendAssessment).toHaveBeenCalledWith(application, '7');
+  });
+
+  it('excludes inactive and unknown task links from retake choices', async () => {
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{ ...application, valid_assessment_id: 914 }}
+          roleId={9}
+          roleTasks={[
+            { id: 5, name: 'Retired exercise', is_active: false },
+            { id: 6, name: 'Malformed legacy exercise' },
+            { id: 7, name: 'Approved exercise', is_active: true },
+          ]}
+          onSendAssessment={vi.fn()}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    fireEvent.click(screen.getByRole('button', { name: 'Send retake' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Task' }));
+
+    expect(screen.getByRole('option', { name: 'Approved exercise' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Retired exercise' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Malformed legacy exercise' }))
+      .not.toBeInTheDocument();
+  });
+
   it('opens the retake dialog for an existing assessment and submits its reason', async () => {
     const onSendAssessment = vi.fn().mockResolvedValue(true);
     render(
@@ -194,7 +252,7 @@ describe('CandidateTriageDrawer shared motion', () => {
         <CandidateTriageDrawer
           application={{ ...application, valid_assessment_id: 912 }}
           roleId={9}
-          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          roleTasks={[{ id: 5, name: 'Backend take-home', is_active: true }]}
           onSendAssessment={onSendAssessment}
         />
       </TestMotionSystemProvider>,
@@ -229,7 +287,7 @@ describe('CandidateTriageDrawer shared motion', () => {
         <CandidateTriageDrawer
           application={{ ...application, valid_assessment_id: 913 }}
           roleId={9}
-          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          roleTasks={[{ id: 5, name: 'Backend take-home', is_active: true }]}
           onSendAssessment={onSendAssessment}
         />
       </TestMotionSystemProvider>,
@@ -275,7 +333,7 @@ describe('CandidateTriageDrawer shared motion', () => {
         <CandidateTriageDrawer
           application={application}
           roleId={9}
-          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          roleTasks={[{ id: 5, name: 'Backend take-home', is_active: true }]}
           canMutate={false}
         />
       </TestMotionSystemProvider>,

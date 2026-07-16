@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from ...platform.database import get_db
 from ...platform.admin_auth import require_admin_secret
@@ -15,7 +15,6 @@ from ...models.user import User
 from ...models.task import Task
 from ...schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from ...services.task_repo_service import (
-    build_default_repo_structure,
     recreate_task_main_repo,
     repo_file_count,
     task_main_repo_path,
@@ -23,7 +22,6 @@ from ...services.task_repo_service import (
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_approval_service import (
     TaskApprovalError,
-    approve_task_for_use,
 )
 from ...services.task_catalog import (
     canonical_task_catalog_dir,
@@ -33,34 +31,27 @@ from ...services.task_spec_loader import load_task_specs
 from .task_collection_queries import (
     apply_task_collection_filters,
     task_facets,
+    task_tenant_visibility_filter,
     visible_task_filter,
 )
+from .task_update_policy import (
+    ensure_repo_structure,
+    normalize_task_payload,
+    protect_system_task_metadata,
+)
+from .task_update_command import execute_task_update
+from .task_generated_approval_command import approve_generated_task_command
+from .task_role_scope import (
+    lock_task_role_scope,
+    reconcile_assessment_stage_changes,
+    require_unlinked_task,
+)
+from .task_reference_guard import require_task_unreferenced
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 _TEMPLATE_SYNC_ATTEMPTED = False
-
-
-def _normalize_task_payload(payload: dict) -> dict:
-    """Map alternate task payload keys into persisted model fields."""
-    normalized = dict(payload)
-
-    expected_insights = normalized.pop("expected_insights", None)
-    valid_solutions = normalized.pop("valid_solutions", None)
-    expected_approaches = normalized.pop("expected_approaches", None)
-
-    if expected_insights is not None or valid_solutions is not None or expected_approaches is not None:
-        extra_data = normalized.get("extra_data") or {}
-        if expected_insights is not None:
-            extra_data["expected_insights"] = expected_insights
-        if valid_solutions is not None:
-            extra_data["valid_solutions"] = valid_solutions
-        if expected_approaches is not None:
-            extra_data["expected_approaches"] = expected_approaches
-        normalized["extra_data"] = extra_data
-
-    return normalized
 
 
 def _ensure_task_authoring_enabled() -> None:
@@ -70,43 +61,6 @@ def _ensure_task_authoring_enabled() -> None:
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail="Task authoring via API is disabled. Tasks are backend-managed only.",
     )
-
-
-def _ensure_repo_structure(payload: Dict[str, Any], fallback_task: Optional[Task] = None) -> Dict[str, Any]:
-    normalized = dict(payload)
-    if normalized.get("repo_structure"):
-        return normalized
-
-    starter_in_payload = "starter_code" in normalized
-    test_in_payload = "test_code" in normalized
-    if (
-        fallback_task is not None
-        and getattr(fallback_task, "repo_structure", None)
-        and not starter_in_payload
-        and not test_in_payload
-    ):
-        return normalized
-
-    starter_code = normalized.get("starter_code")
-    test_code = normalized.get("test_code")
-    if fallback_task is not None:
-        starter_code = starter_code if starter_code is not None else getattr(fallback_task, "starter_code", None)
-        test_code = test_code if test_code is not None else getattr(fallback_task, "test_code", None)
-
-    if not starter_code and not test_code:
-        return normalized
-
-    task_name = normalized.get("name") or (getattr(fallback_task, "name", None) if fallback_task is not None else None)
-    scenario = normalized.get("scenario") or normalized.get("description") or (
-        getattr(fallback_task, "scenario", None) if fallback_task is not None else None
-    )
-    normalized["repo_structure"] = build_default_repo_structure(
-        starter_code,
-        test_code,
-        task_name=task_name,
-        scenario=scenario,
-    )
-    return normalized
 
 
 def _serialize_task_response(task: Task) -> TaskResponse:
@@ -133,10 +87,10 @@ def _sync_template_task_specs_if_needed(db: Session) -> None:
     global _TEMPLATE_SYNC_ATTEMPTED
     if _TEMPLATE_SYNC_ATTEMPTED:
         return
-    _TEMPLATE_SYNC_ATTEMPTED = True
 
     # Preserve current tests that rely on an empty sqlite task catalog.
     if settings.DATABASE_URL.startswith("sqlite"):
+        _TEMPLATE_SYNC_ATTEMPTED = True
         return
 
     tasks_dir = _resolve_tasks_dir()
@@ -155,14 +109,10 @@ def _sync_template_task_specs_if_needed(db: Session) -> None:
 
     try:
         stats = sync_template_task_specs(db, specs)
+        _TEMPLATE_SYNC_ATTEMPTED = True
         if any(stats.values()):
-            logger.info(
-                "Task template sync complete: created=%d updated=%d deactivated=%d preserved_referenced=%d",
-                stats["created"],
-                stats["updated"],
-                stats["deactivated"],
-                stats["preserved_referenced"],
-            )
+            log = logger.warning if stats["version_required"] or stats["preserved_referenced"] else logger.info
+            log("Task template sync complete: %s", stats)
     except Exception:
         db.rollback()
         logger.exception("Task template sync failed during DB update.")
@@ -189,10 +139,12 @@ def admin_delete_template_task(
             Task.is_template == True,
             Task.organization_id == None,
         )
+        .with_for_update(of=Task)
         .first()
     )
     if not task:
         raise HTTPException(status_code=404, detail=f"No template task found with task_key={task_key!r}")
+    require_task_unreferenced(db, task_id=int(task.id))
     db.delete(task)
     db.commit()
     return {"status": "ok", "message": f"Deleted template task task_key={task_key!r}"}
@@ -207,16 +159,25 @@ def create_task(
     current_user: User = Depends(get_current_user),
 ):
     _ensure_task_authoring_enabled()
-    payload = _normalize_task_payload(data.model_dump())
-    payload = _ensure_repo_structure(payload)
+    payload = normalize_task_payload(data.model_dump())
+    payload = protect_system_task_metadata(payload)
+    payload = ensure_repo_structure(payload)
     task = Task(organization_id=current_user.organization_id, **payload)
     db.add(task)
     try:
         db.flush()
-        recreate_task_main_repo(task)
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        repo_service.create_template_repo(task)
-        db.commit()
+        from ...services.task_repository_serialization import (
+            task_repository_write_mutex,
+        )
+
+        with task_repository_write_mutex(db, task_id=int(task.id)):
+            recreate_task_main_repo(task)
+            repo_service = AssessmentRepositoryService(
+                settings.GITHUB_ORG,
+                settings.GITHUB_TOKEN,
+            )
+            repo_service.create_template_repo(task)
+            db.commit()
         db.refresh(task)
     except Exception:
         db.rollback()
@@ -306,40 +267,40 @@ def approve_generated_task(
     ``is_active=True`` and clears ``needs_review``. Repository failure is
     fail-closed: the draft remains inactive and can be retried safely.
     """
-    task = (
-        db.query(Task)
-        .filter(Task.id == task_id, Task.organization_id == current_user.organization_id)
-        .first()
-    )
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
-    if not extra.get("generated"):
-        raise HTTPException(status_code=400, detail="Task is not a generated draft")
-
     try:
-        approve_task_for_use(
+        result = approve_generated_task_command(
             db,
-            task,
-            user_id=int(current_user.id),
+            task_id=task_id,
+            current_user=current_user,
         )
-        db.commit()
-        db.refresh(task)
+        task = result.task
     except TaskApprovalError as exc:
-        db.rollback()
         logger.warning(
             "generated task approval blocked by repository readiness task_id=%s: %s",
-            task.id,
+            task_id,
             exc,
         )
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=(
+                status.HTTP_409_CONFLICT
+                if exc.code == "task_approval_superseded"
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
             detail=exc.public_detail,
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
-        db.rollback()
-        logger.exception("Unexpected generated task approval failure task_id=%s", task.id)
+        logger.exception(
+            "Unexpected generated task approval failure task_id=%s",
+            task_id,
+        )
         raise HTTPException(status_code=500, detail="Failed to approve task")
+    reconcile_assessment_stage_changes(
+        db,
+        role_ids=result.changed_stage_role_ids,
+        role_versions=result.role_versions,
+    )
     return _serialize_task_response(task)
 
 
@@ -349,22 +310,19 @@ def reject_generated_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Reject (delete) a generated draft. Only un-approved generated drafts
-    can be rejected this way."""
-    task = (
-        db.query(Task)
-        .filter(Task.id == task_id, Task.organization_id == current_user.organization_id)
-        .first()
+    """Reject an unapproved, unreferenced generated draft."""
+    scope = lock_task_role_scope(
+        db,
+        task_id=task_id,
+        current_user=current_user,
     )
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = scope.task
     extra = task.extra_data if isinstance(task.extra_data, dict) else {}
     if not extra.get("generated") or task.is_active:
         raise HTTPException(status_code=400, detail="Only un-approved generated drafts can be rejected")
-    # Unlink from any roles, then delete the draft.
+    require_unlinked_task(scope, operation="reject")
+    require_task_unreferenced(db, task_id=int(task.id))
     try:
-        from sqlalchemy import text as _text
-        db.execute(_text("DELETE FROM role_tasks WHERE task_id = :t"), {"t": int(task.id)})
         db.delete(task)
         db.commit()
     except Exception:
@@ -382,7 +340,7 @@ def get_task_rubric(
     """Return task-specific evaluator rubric criteria for recruiter scoring UI."""
     task = db.query(Task).filter(
         Task.id == task_id,
-        (Task.organization_id == current_user.organization_id) | (Task.is_template == True),
+        task_tenant_visibility_filter(current_user.organization_id),
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -404,7 +362,7 @@ def get_task(
 ):
     task = db.query(Task).filter(
         Task.id == task_id,
-        (Task.organization_id == current_user.organization_id) | (Task.is_template == True),
+        task_tenant_visibility_filter(current_user.organization_id),
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -419,26 +377,14 @@ def update_task(
     current_user: User = Depends(get_current_user),
 ):
     _ensure_task_authoring_enabled()
-    task = db.query(Task).filter(
-        Task.id == task_id,
-        Task.organization_id == current_user.organization_id,
-    ).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    update_data = _normalize_task_payload(data.model_dump(exclude_unset=True))
-    update_data = _ensure_repo_structure(update_data, fallback_task=task)
-    for k, v in update_data.items():
-        setattr(task, k, v)
-    try:
-        db.flush()
-        recreate_task_main_repo(task)
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        repo_service.create_template_repo(task)
-        db.commit()
-        db.refresh(task)
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update task")
+    task = execute_task_update(
+        db,
+        task_id=task_id,
+        payload=data.model_dump(exclude_unset=True),
+        current_user=current_user,
+        recreate_repository=recreate_task_main_repo,
+        repository_service_factory=AssessmentRepositoryService,
+    )
     return _serialize_task_response(task)
 
 
@@ -449,22 +395,14 @@ def delete_task(
     current_user: User = Depends(get_current_user),
 ):
     _ensure_task_authoring_enabled()
-    from ...models.assessment import Assessment
-    task = db.query(Task).filter(
-        Task.id == task_id,
-        Task.organization_id == current_user.organization_id,
-    ).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    in_use = db.query(Assessment).filter(
-        Assessment.task_id == task_id,
-        Assessment.organization_id == current_user.organization_id,
-    ).first()
-    if in_use:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot delete task: it is used by one or more assessments",
-        )
+    scope = lock_task_role_scope(
+        db,
+        task_id=task_id,
+        current_user=current_user,
+    )
+    task = scope.task
+    require_unlinked_task(scope, operation="delete")
+    require_task_unreferenced(db, task_id=int(task.id))
     db.delete(task)
     try:
         db.commit()

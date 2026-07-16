@@ -213,16 +213,8 @@ def _kick_cycle(role: Role, *, activation: bool = False) -> bool:
 
 
 def _needs_durable_task_activation(role: Role) -> bool:
-    """Whether first activation must provision/approve an assessment task.
-
-    Keep this aligned with the role-page Turn-on control: an explicit assessment
-    skip can use the immediate activation path. A generated draft (or no task
-    yet) belongs to the persisted activation intent. A republish-blocked role
-    also uses that path even when it preserved an active manual task: this Turn
-    on is the required HITL confirmation, and the durable worker records the
-    reconfiguration resolution before switching the role back ON.
-    """
-    if bool(role.agentic_mode_enabled) or bool(role.auto_skip_assessment):
+    """Whether Turn on must complete durable task generation/confirmation."""
+    if bool(role.agentic_mode_enabled):
         return False
     provisioning = (
         role.assessment_task_provisioning
@@ -230,11 +222,14 @@ def _needs_durable_task_activation(role: Role) -> bool:
         else {}
     )
     reconfiguration = provisioning.get("reconfiguration")
-    if (
+    blocked_reconfiguration = bool(
         isinstance(reconfiguration, dict)
         and str(reconfiguration.get("status") or "") == "blocked"
-    ):
+    )
+    if blocked_reconfiguration:
         return True
+    if bool(role.auto_skip_assessment):
+        return False
     return not any(bool(task.is_active) for task in list(role.tasks or []))
 
 
@@ -247,8 +242,8 @@ def _queue_durable_activation(
     """Persist first Turn on, then make only best-effort latency kicks.
 
     Generation, battle testing, repository verification, readiness and the
-    OFF->ON transition are all recovered by backend sweeps.  The chat request is
-    therefore safe to close immediately after this commit.
+    OFF-to-ON transition are recovered by backend sweeps. A blocked republish
+    uses the same path to record the recruiter's preserved-task confirmation.
     """
     from ..services.role_activation_intent import (
         activation_intent_task_ready,
@@ -364,9 +359,9 @@ def set_agent_state(
 ) -> dict[str, Any]:
     """``activate`` (turn on / resume) or ``pause`` the role's agent.
 
-    First activation grants reversible positive autonomy by default, while the
-    irreversible reject rail remains human-confirmed. Production activation and
-    every resume fail closed on runtime/readiness or bootstrap dispatch errors.
+    First activation preserves the HITL-safe action policy. Production
+    activation and every resume fail closed on runtime/readiness or bootstrap
+    dispatch errors.
     """
     act = (action or "").strip().lower()
 
@@ -391,10 +386,6 @@ def set_agent_state(
                 ),
                 "agent": _state(role),
             }
-        # A fresh role without an active assessment uses the exact same durable
-        # one-click path as the role-page button. Do this before synchronous
-        # readiness: task generation/approval is part of that saved command, not
-        # a prerequisite the recruiter must satisfy manually.
         if _needs_durable_task_activation(role):
             return _queue_durable_activation(db, role, user_id=int(user_id))
         from ..services.agent_activation_readiness import (
@@ -453,8 +444,8 @@ def set_agent_state(
                     ),
                     "agent": _state(role),
                 }
-        # Preserve concrete action-level choices on activation. A truly legacy
-        # role with no choices gets the historical all-positive-actions default.
+        # Preserve concrete action-level choices on activation. Nullable
+        # granular columns continue to inherit the legacy aggregate switch.
         if not was_enabled:
             policy = activation_policy_values(role)
             role.auto_promote = policy["auto_promote"]
@@ -653,25 +644,6 @@ def adjust_agent_settings(
             "agent": _state(role),
         }
 
-    if (
-        auto_skip_assessment is False
-        and bool(role.agentic_mode_enabled)
-        and not any(bool(task.is_active) for task in (role.tasks or []))
-    ):
-        return {
-            "type": "agent_settings",
-            "ok": False,
-            "reason": "assessment_task_required",
-            "message": (
-                "Choose an active assessment task before turning assessment "
-                "skipping off for this running role."
-            ),
-            "changed": [],
-            "resumed": False,
-            "resume_error": None,
-            "agent": _state(role),
-        }
-
     audit_before = capture_role_change_snapshot(role)
     audit_from = int(role.version or 1)
     changed: list[str] = []
@@ -775,20 +747,29 @@ def adjust_agent_settings(
     dispatched_version = int(role.version or 1)
     workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))
     workspace_held = bool(workspace_pause["paused"])
+    defer_skip_reconcile_for_resume = bool(
+        skip_changed and resumed and not workspace_held
+    )
     # An assessment-stage flip re-flows already-pending send/advance cards
-    # right away — same reconcile the settings-UI PATCH runs (Codex #866).
-    if skip_changed:
+    # right away unless this same command resumed the role. In that case the
+    # broker must accept the promised bootstrap before reflow can auto-execute.
+    if skip_changed and not defer_skip_reconcile_for_resume:
         try:
             from ..services.bulk_decision_service import (
                 reconcile_pending_positive_decisions,
             )
 
-            reconcile_pending_positive_decisions(db, role=role)
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=dispatched_version,
+            )
             db.commit()
         except Exception:  # pragma: no cover — never block the turn
             logger.exception(
                 "assessment-stage reconcile failed for role_id=%s", role.id
             )
+            db.rollback()
     resume_error = None
     compensation_skipped = False
     if resumed and not workspace_held and not _kick_cycle(role):
@@ -824,6 +805,24 @@ def adjust_agent_settings(
                 "worker queue unavailable; newer job settings were preserved"
             )
         resumed = False
+    if defer_skip_reconcile_for_resume and resumed:
+        try:
+            from ..services.bulk_decision_service import (
+                reconcile_pending_positive_decisions,
+            )
+
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=dispatched_version,
+            )
+            db.commit()
+        except Exception:  # pragma: no cover — never block the turn
+            logger.exception(
+                "post-resume assessment-stage reconcile failed role_id=%s",
+                role.id,
+            )
+            db.rollback()
     # Refresh after any dispatch compensation so the response always describes
     # effective authority (workspace overlay first, then the role's local hold).
     workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))

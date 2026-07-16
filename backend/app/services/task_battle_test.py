@@ -21,6 +21,7 @@ loop (docs/ASSESSMENT_E2E_DEEP_DIVE.md §4, P2-3).
 
 from __future__ import annotations
 
+import copy
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -337,13 +338,13 @@ def apply_battle_test_repair(
     """Apply a validated repair in place and durably request a re-test."""
     from .task_catalog import PERSISTED_TASK_SPEC_KEYS
 
-    previous_extra = dict(_extra(task))
+    previous_extra = copy.deepcopy(_extra(task))
     history = [
-        item
+        copy.deepcopy(item)
         for item in (previous_extra.get("battle_test_history") or [])
         if isinstance(item, dict)
     ][-4:]
-    history.append(failed_report)
+    history.append(copy.deepcopy(failed_report))
 
     scenario = spec.get("scenario")
     task.name = spec.get("name", task.name)
@@ -355,15 +356,33 @@ def apply_battle_test_repair(
     task.repo_structure = spec.get("repo_structure")
     task.evaluation_rubric = spec.get("evaluation_rubric")
     task.claude_budget_limit_usd = spec.get("claude_budget_limit_usd")
+    task.is_active = False
 
     extra = {k: v for k, v in spec.items() if k not in PERSISTED_TASK_SPEC_KEYS}
+    # A repair authors new exact content, but it must not erase the immutable
+    # origin/model lineage that explains how this generated task was created.
+    for key, value in previous_extra.items():
+        key_name = str(key or "")
+        if key_name == "provenance" or key_name.startswith(
+            ("provenance_", "generated_", "generation_")
+        ):
+            extra[key] = copy.deepcopy(value)
+    # Generator output is untrusted at this mutation boundary. Approval and
+    # repository proof belong to the superseded content and cannot be replayed.
+    extra.pop("repository_ready", None)
+    extra.pop("battle_test", None)
+    extra.pop("battle_test_provisioning", None)
+    extra.pop("approved_by_user_id", None)
+    for key in list(extra):
+        if str(key).startswith("approved_"):
+            extra.pop(key, None)
     extra["generated"] = True
     extra["needs_review"] = True
     extra["last_revision"] = {
         "source": "automated_battle_test_repair",
         "feedback": feedback[:4000],
     }
-    extra["battle_test_history"] = history
+    extra["battle_test_history"] = history[-5:]
     now = datetime.now(timezone.utc).isoformat()
     extra["battle_test_provisioning"] = {
         "status": BATTLE_TEST_PENDING,

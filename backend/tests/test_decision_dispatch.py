@@ -14,6 +14,7 @@ import pytest
 
 from app.actions import approve_decision as approve_decision_action
 from app.actions.types import ACTOR_RECRUITER, Actor
+from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import AgentDecision
 from app.models.background_job_run import (
     JOB_KIND_DECISION_BATCH,
@@ -25,6 +26,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.task import Task
 from app.models.user import User
 from app.services import background_job_runs
 from app.services.background_job_runs import SCOPE_KIND_ORG
@@ -328,15 +330,42 @@ def test_batch_requeues_failed_decision_to_queue(db):
 
 
 def test_batch_requeues_send_assessment_when_role_has_no_task(db):
-    """Approving a send_assessment recommendation for a role with no linked task
-    must NOT mark the decision approved (nothing was sent) and must NOT requeue
-    with a generic 'unexpected error' — it returns to the queue with a clear,
-    actionable reason the Hub can surface, so the recruiter doesn't loop on it."""
-    org, role, user = _seed(db)  # role seeded with no tasks
+    """A task removed after queueing makes the send card stale at dispatch.
+
+    The policy-current guard deliberately runs before the lower-level send
+    action's missing-task validation. Model a real dispatch race: the card is
+    a valid ``send_assessment`` while queued, then its active task is unlinked
+    before the worker approves it. The worker must fail closed and return the
+    card to HITL with the replacement action, never approve or send it.
+    """
+    org, role, user = _seed(db)
+    task = Task(
+        organization_id=int(org.id),
+        name="Queued assessment",
+        is_active=True,
+    )
+    db.add(task)
+    db.flush()
+    role.tasks.append(task)
     app, decision = _add_decision(
         db, org, role, status="processing", decision_type="send_assessment"
     )
+    role.score_threshold = 50
+    role.auto_reject_threshold_mode = "manual"
+    role.auto_skip_assessment = False
+    app.cv_match_score = 80
+    app.pre_screen_score_100 = 80
+    bootstrap_org(db, organization_id=int(org.id))
     db.commit()
+
+    from app.services.bulk_decision_service._shared import (
+        recompute_persisted_verdict,
+    )
+
+    assert recompute_persisted_verdict(db, role=role, app=app) == "send_assessment"
+    role.tasks.remove(task)
+    db.commit()
+
     out = run_workable_op_task.run(
         job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
         organization_id=int(org.id), op_type="approve_decisions",
@@ -347,7 +376,8 @@ def test_batch_requeues_send_assessment_when_role_has_no_task(db):
     refreshed = db.get(AgentDecision, decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be approved"
     note = (refreshed.resolution_note or "").lower()
-    assert "no active tasks linked" in note
+    assert "assessment_stage_decision_stale" in note
+    assert "'current_decision_type': 'advance_to_interview'" in note
     assert "unexpected error" not in note
 
 

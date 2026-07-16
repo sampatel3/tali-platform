@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from ...agent_chat.draft_tasks import (
     apply_prepared_draft_revision,
-    approve_draft,
     generate_prepared_draft_revision,
     prepare_draft_revision,
 )
@@ -54,6 +53,7 @@ from .bulk_routes import (
     bulk_message,
     router as bulk_router,
 )
+from .draft_approval_command import approve_draft_task_command
 from .route_support import (
     ApproveDraftRequest,
     ReviseDraftRequest,
@@ -254,51 +254,14 @@ def approve_draft_task(
     """Approve (activate) a generated draft from the chat. Narrates the outcome
     into the timeline so the recruiter sees the confirmation in-thread."""
     org_id = _require_org(current_user)
-    role = require_job_permission(
+    return approve_draft_task_command(
         db,
         current_user=current_user,
+        organization_id=org_id,
         role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
+        task_id=task_id,
+        expected_version=body.expected_version,
     )
-    db.refresh(role)
-    _assert_draft_role_version(db, role, body.expected_version)
-    from_version = int(role.version or 1)
-    before = capture_role_change_snapshot(role)
-    result = approve_draft(db, role, task_id, user_id=int(current_user.id))
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error") or "Approve failed")
-    summary = result["summary"]
-    try:
-        to_version = bump_role_version(role)
-        add_role_change_event(
-            db,
-            role=role,
-            before=before,
-            action="role_draft_task_approved",
-            actor_user_id=int(current_user.id),
-            from_version=from_version,
-            to_version=to_version,
-            reason=f"Draft task {int(task_id)} approved from agent chat",
-            allow_empty_changes=True,
-        )
-        conversation = ensure_conversation(db, organization_id=org_id, role=role)
-        post_agent_message(
-            db,
-            conversation=conversation,
-            text=f"Approved **{summary['name']}** — it's live and assignable now.",
-        )
-        timeline = build_timeline(db, conversation=conversation, role=role)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    return {
-        "ok": True,
-        "role_id": role.id,
-        "role_version": to_version,
-        "summary": summary,
-        "timeline": timeline,
-    }
 
 
 @router.post("/conversations/{role_id}/draft-tasks/{task_id}/revise")

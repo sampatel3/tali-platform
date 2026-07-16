@@ -89,7 +89,24 @@ _DIRECTION_PHRASES = {
 }
 
 # extra_data keys that are bookkeeping, not part of the task spec.
-_FLAG_KEYS = {"generated", "needs_review", "approved_by_user_id", "last_revision"}
+_FLAG_KEYS = {
+    "generated",
+    "needs_review",
+    "approved_by_user_id",
+    "last_revision",
+    "repository_ready",
+    "battle_test",
+    "battle_test_history",
+    "battle_test_provisioning",
+}
+_VERSIONED_TASK_REQUIRED = (
+    "This task already has assessment history and cannot be revised in place. "
+    "Duplicate it as a new task version, then assign that version going forward."
+)
+_SHARED_DRAFT_REVISION_BLOCKED = (
+    "This draft is assigned to more than one active role. Duplicate it for "
+    "this role before changing another job's assessment."
+)
 
 
 # --- Queries / summaries ----------------------------------------------------
@@ -188,6 +205,37 @@ def count_role_drafts(db: Session, role: Role) -> int:
     return len(_role_draft_tasks(db, role))
 
 
+def _has_assessment_history(db: Session, *, task_id: int) -> bool:
+    from ..domains.tasks_repository.task_reference_guard import (
+        task_content_reference_kinds,
+    )
+
+    return bool(task_content_reference_kinds(db, task_id=int(task_id)))
+
+
+def _live_linked_role_ids(db: Session, *, task_id: int) -> tuple[int, ...]:
+    return tuple(
+        int(row[0])
+        for row in db.query(role_tasks.c.role_id)
+        .join(Role, Role.id == role_tasks.c.role_id)
+        .filter(
+            role_tasks.c.task_id == int(task_id),
+            Role.deleted_at.is_(None),
+        )
+        .order_by(role_tasks.c.role_id.asc())
+        .all()
+    )
+
+
+def _is_exclusive_live_role_draft(
+    db: Session,
+    *,
+    role: Role,
+    task_id: int,
+) -> bool:
+    return _live_linked_role_ids(db, task_id=task_id) == (int(role.id),)
+
+
 # --- Mutations --------------------------------------------------------------
 def _fetch_role_draft(
     db: Session,
@@ -215,13 +263,12 @@ def _fetch_role_draft(
     return task if extra.get("generated") else None
 
 
-def approve_draft(db: Session, role: Role, task_id: int, *, user_id: int) -> dict[str, Any]:
-    """Activate a draft only after its candidate repo is proven usable.
-
-    The caller owns the successful transaction.  In particular, the chat HTTP
-    route composes this task mutation with the shared Role version bump and
-    audit event in one commit.
-    """
+def capture_draft_approval(
+    db: Session,
+    role: Role,
+    task_id: int,
+) -> dict[str, Any]:
+    """Capture exact approval inputs under a short Role→Task preflight."""
     from ..services.role_activation_intent import (
         ACTIVATION_ACTIVE_STATUSES,
         activation_intent_state,
@@ -238,23 +285,118 @@ def approve_draft(db: Session, role: Role, task_id: int, *, user_id: int) -> dic
     task = _fetch_role_draft(db, role, task_id, lock_for_update=True)
     if task is None:
         return {"ok": False, "error": "Draft not found or already approved."}
-    try:
-        from ..services.task_approval_service import approve_task_for_use
+    if not _is_exclusive_live_role_draft(db, role=role, task_id=int(task.id)):
+        return {"ok": False, "error": _SHARED_DRAFT_REVISION_BLOCKED}
 
-        approve_task_for_use(db, task, user_id=int(user_id))
-    except Exception as exc:
-        db.rollback()
-        logger.warning(
-            "draft approval blocked task_id=%s: %s", task.id, exc, exc_info=True
-        )
+    from ..services.task_approval_service import capture_task_approval
+
+    return {"ok": True, "captured": capture_task_approval(task)}
+
+
+def apply_prepared_draft_approval(
+    db: Session,
+    role: Role,
+    task_id: int,
+    prepared: Any,
+    *,
+    user_id: int,
+) -> dict[str, Any]:
+    """Revalidate and apply detached repository work under Role→Task locks."""
+    from ..services.role_activation_intent import (
+        ACTIVATION_ACTIVE_STATUSES,
+        activation_intent_state,
+    )
+
+    if str(activation_intent_state(role).get("status") or "") in ACTIVATION_ACTIVE_STATUSES:
         return {
             "ok": False,
             "error": (
-                "The task repository could not be provisioned and verified, so "
-                "the draft remains inactive. Retry after repository access recovers."
+                "Turn on is already validating and approving this task automatically; "
+                "no separate approval is needed."
             ),
         }
+    task = _fetch_role_draft(db, role, task_id, lock_for_update=True)
+    if task is None:
+        return {"ok": False, "error": "Draft not found or already approved."}
+    if not _is_exclusive_live_role_draft(db, role=role, task_id=int(task.id)):
+        return {"ok": False, "error": _SHARED_DRAFT_REVISION_BLOCKED}
+
+    from ..services.task_approval_service import apply_prepared_task_approval
+
+    apply_prepared_task_approval(
+        db,
+        task,
+        prepared,
+        user_id=int(user_id),
+        approval_role_id=int(role.id),
+    )
+    from ..services.agent_activation_checklist import (
+        resolve_satisfied_activation_questions,
+    )
+
+    resolve_satisfied_activation_questions(db, role=role)
     return {"ok": True, "summary": draft_summary(task)}
+
+
+def approve_draft(db: Session, role: Role, task_id: int, *, user_id: int) -> dict[str, Any]:
+    """Transactional compatibility wrapper for non-HTTP callers.
+
+    Repository ownership begins before capture and lasts through commit. The
+    preflight Task lock is released before provider I/O, then Role→Task state is
+    reacquired and revalidated before activation.
+    """
+    from ..services.task_repository_serialization import (
+        task_repository_write_mutex,
+    )
+
+    role_id = int(role.id)
+    organization_id = int(role.organization_id)
+    with task_repository_write_mutex(db, task_id=task_id):
+        captured = capture_draft_approval(db, role, task_id)
+        if not captured.get("ok"):
+            return captured
+        db.rollback()
+        try:
+            from ..services.task_approval_service import prepare_task_approval
+
+            prepared = prepare_task_approval(captured["captured"])
+            locked_role = (
+                db.query(Role)
+                .filter(
+                    Role.id == role_id,
+                    Role.organization_id == organization_id,
+                    Role.deleted_at.is_(None),
+                )
+                .populate_existing()
+                .with_for_update(of=Role)
+                .one_or_none()
+            )
+            if locked_role is None:
+                raise RuntimeError("Role no longer exists")
+            result = apply_prepared_draft_approval(
+                db,
+                locked_role,
+                task_id,
+                prepared,
+                user_id=int(user_id),
+            )
+            if not result.get("ok"):
+                db.rollback()
+                return result
+            db.commit()
+            return result
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "draft approval blocked task_id=%s: %s", task_id, exc, exc_info=True
+            )
+            return {
+                "ok": False,
+                "error": (
+                    "The task repository could not be provisioned and verified, so "
+                    "the draft remains inactive. Retry after repository access recovers."
+                ),
+            }
 
 
 def _build_feedback(answers: dict[str, Any], note: str | None) -> str:
@@ -302,6 +444,11 @@ def _apply_spec(task: Task, spec: dict[str, Any], *, feedback: str) -> None:
     (so the role link + repo name stay stable), still a draft pending review."""
     from ..services.task_catalog import PERSISTED_TASK_SPEC_KEYS
 
+    current_extra = (
+        copy.deepcopy(task.extra_data)
+        if isinstance(task.extra_data, dict)
+        else {}
+    )
     scenario = spec.get("scenario")
     task.name = spec.get("name", task.name)
     if isinstance(scenario, str):
@@ -312,10 +459,32 @@ def _apply_spec(task: Task, spec: dict[str, Any], *, feedback: str) -> None:
     task.repo_structure = spec.get("repo_structure")
     task.evaluation_rubric = spec.get("evaluation_rubric")
     extra = {k: v for k, v in spec.items() if k not in PERSISTED_TASK_SPEC_KEYS}
+    # Revision invalidates approval/repository proof, but provenance and model
+    # generation identity remain part of the task's audit trail. Keep the
+    # prior execution reports as bounded history rather than silently dropping
+    # evidence when a new battle test is requested.
+    for key, value in current_extra.items():
+        key_name = str(key or "")
+        if key_name == "provenance" or key_name.startswith(
+            ("provenance_", "generated_", "generation_")
+        ):
+            extra[key] = copy.deepcopy(value)
+    history = [
+        copy.deepcopy(item)
+        for item in (current_extra.get("battle_test_history") or [])
+        if isinstance(item, dict)
+    ]
+    previous_report = current_extra.get("battle_test")
+    if isinstance(previous_report, dict):
+        history.append(copy.deepcopy(previous_report))
+    if history:
+        extra["battle_test_history"] = history[-5:]
     extra["generated"] = True
     extra["needs_review"] = True
     extra["last_revision"] = {"feedback": feedback}
-    task.extra_data = extra
+    from ..services.task_battle_test import initialize_battle_test_provisioning
+
+    task.extra_data = initialize_battle_test_provisioning(extra)
 
 
 @dataclass(frozen=True)
@@ -405,6 +574,10 @@ def prepare_draft_revision(
     task = _fetch_role_draft(db, role, task_id)
     if task is None:
         return {"ok": False, "error": "Draft not found or already approved."}
+    if not _is_exclusive_live_role_draft(db, role=role, task_id=int(task.id)):
+        return {"ok": False, "error": _SHARED_DRAFT_REVISION_BLOCKED}
+    if _has_assessment_history(db, task_id=int(task.id)):
+        return {"ok": False, "error": _VERSIONED_TASK_REQUIRED}
     if not api_key:
         return {"ok": False, "error": "No API key configured for revision."}
 
@@ -502,6 +675,10 @@ def apply_prepared_draft_revision(
     )
     if task is None or _task_revision_fingerprint(task) != preparation.task_fingerprint:
         return {"ok": False, "conflict": True, "error": "Draft changed during revision."}
+    if not _is_exclusive_live_role_draft(db, role=role, task_id=int(task.id)):
+        return {"ok": False, "conflict": True, "error": _SHARED_DRAFT_REVISION_BLOCKED}
+    if _has_assessment_history(db, task_id=int(task.id)):
+        return {"ok": False, "error": _VERSIONED_TASK_REQUIRED}
 
     before = _task_mutation_snapshot(task)
     before_fingerprint = preparation.task_fingerprint
@@ -578,6 +755,8 @@ __all__ = [
     "draft_review_card",
     "draft_summary",
     "count_role_drafts",
+    "capture_draft_approval",
+    "apply_prepared_draft_approval",
     "approve_draft",
     "DraftRevisionPreparation",
     "prepare_draft_revision",

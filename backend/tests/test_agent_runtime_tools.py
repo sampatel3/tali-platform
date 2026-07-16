@@ -11,14 +11,18 @@ directly with a synthetic AgentRun. They cover:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy.orm import sessionmaker
 
 from app.actions import approve_decision, queue_decision
 from app.actions.types import Actor
 from app.agent_runtime import tool_registry
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
+from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment
@@ -28,6 +32,7 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
+from app.services.role_execution_guard import assessment_task_is_current
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +173,24 @@ def _make_recruiter(db, org: Organization) -> User:
     db.add(user)
     db.flush()
     return user
+
+
+def _configure_current_positive_policy(
+    db,
+    *,
+    org: Organization,
+    role: Role,
+    app: CandidateApplication,
+    score: float = 85.0,
+) -> None:
+    """Make an unrelated action test's queued positive card current."""
+
+    role.score_threshold = 50
+    role.auto_reject_threshold_mode = "manual"
+    app.cv_match_score = score
+    app.pre_screen_score_100 = score
+    bootstrap_org(db, organization_id=int(org.id))
+    db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +542,9 @@ def test_approve_decision_dispatches_send_assessment(db):
     role = _make_role(db, org)
     role.auto_promote = False
     db.flush()
+    task = _attach_task(db, org, role)
     app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    _configure_current_positive_policy(db, org=org, role=role, app=app)
     user = _make_recruiter(db, org)
 
     decision = AgentDecision(
@@ -531,7 +556,7 @@ def test_approve_decision_dispatches_send_assessment(db):
         recommendation="send_assessment",
         status="pending",
         reasoning="strong candidate",
-        evidence={"task_id": 7, "duration_minutes": 120},
+        evidence={"task_id": int(task.id), "duration_minutes": 120},
         confidence=0.9,
         model_version="m",
         prompt_version="p",
@@ -557,10 +582,237 @@ def test_approve_decision_dispatches_send_assessment(db):
     assert mock_run.called
     kwargs = mock_run.call_args.kwargs
     assert kwargs["application_id"] == int(app.id)
-    assert kwargs["task_id"] == 7
+    assert kwargs["task_id"] == int(task.id)
     assert kwargs["duration_minutes"] == 120
     db.refresh(decision)
     assert decision.status == "approved"
+
+
+@pytest.mark.parametrize(
+    ("stored_type", "initial_skip", "current_type"),
+    [
+        ("send_assessment", False, "advance_to_interview"),
+        ("advance_to_interview", True, "send_assessment"),
+    ],
+)
+def test_approve_positive_decision_rejects_assessment_stage_policy_mismatch(
+    db,
+    stored_type,
+    initial_skip,
+    current_type,
+):
+    """A no-fingerprint card with unchanged scores still cannot execute the
+    obsolete positive action after only the assessment-stage policy changes."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.score_threshold = 50
+    role.auto_reject_threshold_mode = "manual"
+    role.auto_skip_assessment = initial_skip
+    _attach_task(db, org, role)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Stage policy race",
+        email="stage-race@example.test",
+    )
+    app.cv_match_score = 80
+    app.pre_screen_score_100 = 70
+    user = _make_recruiter(db, org)
+    bootstrap_org(db, organization_id=int(org.id))
+    decision = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        decision_type=stored_type,
+        recommendation=stored_type,
+        status="pending",
+        reasoning="strong candidate",
+        evidence={},
+        confidence=0.9,
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"stage-race:{app.id}:{stored_type}",
+        input_fingerprint=None,
+    )
+    db.add(decision)
+    db.commit()
+
+    role.auto_skip_assessment = not initial_skip
+    db.commit()
+
+    with (
+        patch("app.actions.approve_decision.send_assessment.run") as send,
+        patch("app.actions.approve_decision.advance_stage.run") as advance,
+        pytest.raises(HTTPException) as caught,
+    ):
+        approve_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "ASSESSMENT_STAGE_DECISION_STALE"
+    assert caught.value.detail["current_decision_type"] == current_type
+    send.assert_not_called()
+    advance.assert_not_called()
+    db.rollback()
+    db.refresh(decision)
+    assert decision.status == "pending"
+
+
+@pytest.mark.parametrize(
+    "stored_type",
+    ["send_assessment", "advance_to_interview"],
+)
+def test_approve_positive_decision_rejects_current_policy_reject(
+    db,
+    stored_type,
+):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Now rejected",
+        email=f"now-rejected-{stored_type}@example.test",
+    )
+    user = _make_recruiter(db, org)
+    decision = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        decision_type=stored_type,
+        recommendation=stored_type,
+        status="pending",
+        reasoning="stale positive card",
+        evidence={},
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"positive-to-reject:{app.id}:{stored_type}",
+    )
+    db.add(decision)
+    db.commit()
+
+    with (
+        patch(
+            "app.services.bulk_decision_service._shared."
+            "recompute_persisted_verdict",
+            return_value="reject",
+        ),
+        patch("app.actions.approve_decision.send_assessment.run") as send,
+        patch("app.actions.approve_decision.advance_stage.run") as advance,
+        pytest.raises(HTTPException) as caught,
+    ):
+        approve_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "ASSESSMENT_STAGE_DECISION_STALE"
+    assert caught.value.detail["current_decision_type"] == "reject"
+    send.assert_not_called()
+    advance.assert_not_called()
+
+
+def test_approve_positive_decision_fails_closed_when_policy_recompute_fails(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Policy unavailable",
+        email="policy-unavailable@example.test",
+    )
+    user = _make_recruiter(db, org)
+    decision = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="cannot be revalidated",
+        evidence={},
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"policy-recompute-failed:{app.id}",
+    )
+    db.add(decision)
+    db.commit()
+
+    with (
+        patch(
+            "app.services.bulk_decision_service._shared."
+            "recompute_persisted_verdict",
+            side_effect=RuntimeError("temporary policy read failure"),
+        ),
+        patch("app.actions.approve_decision.advance_stage.run") as advance,
+        pytest.raises(HTTPException) as caught,
+    ):
+        approve_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == (
+        "ASSESSMENT_STAGE_DECISION_REFRESH_REQUIRED"
+    )
+    advance.assert_not_called()
+
+
+def test_approve_decision_rejects_terminal_application(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Already withdrawn",
+        email="already-withdrawn@x.test",
+    )
+    user = _make_recruiter(db, org)
+    decision = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="stale card",
+        evidence={},
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"terminal-approve:{app.id}",
+    )
+    app.application_outcome = "withdrawn"
+    db.add(decision)
+    db.commit()
+
+    with (
+        patch("app.actions.approve_decision.advance_stage.run") as advance,
+        pytest.raises(HTTPException) as caught,
+    ):
+        approve_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "APPLICATION_NOT_ACTIONABLE"
+    advance.assert_not_called()
 
 
 def test_approve_decision_dispatches_resend_assessment_invite(db):
@@ -1349,6 +1601,7 @@ def test_auto_promote_role_still_auto_executes_advance(db):
     role = _make_role(db, org)  # auto_promote=True via _make_role default
     db.flush()
     app = _make_application(db, org=org, role=role, name="Strong", email="s@x.test", taali=85.0)
+    _configure_current_positive_policy(db, org=org, role=role, app=app)
     run = _make_agent_run(db, role)
     # The agent evaluated policy first (the normal flow), so the engine verdict
     # is captured and the advance is on-policy — TAA-22's guard lets it auto-execute.
@@ -1448,6 +1701,239 @@ def test_auto_execute_reloads_live_role_and_holds_after_turn_off(db):
     assert "disabled" in decision.evidence["auto_execute_hold"]["detail"]
 
 
+@pytest.mark.parametrize("current_type", ["reject", None])
+def test_auto_execute_positive_fails_closed_on_any_current_policy_mismatch(
+    db,
+    current_type,
+):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Policy drift",
+        email=f"policy-drift-{current_type}@x.test",
+        taali=85.0,
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Previously above the positive threshold",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    with (
+        patch(
+            "app.services.decision_auto_execution_guard."
+            "recompute_persisted_verdict",
+            return_value=current_type,
+        ),
+        patch.object(tool_registry.advance_stage, "run") as advance,
+    ):
+        executed = tool_registry._auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+        )
+
+    assert executed is False
+    advance.assert_not_called()
+    assert decision.status == "pending"
+    hold = decision.evidence["auto_execute_hold"]
+    assert hold["status"] == "decision_policy_stale"
+    assert hold["current_decision_type"] == current_type
+
+
+def test_auto_execute_positive_holds_when_current_policy_cannot_be_recomputed(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Policy probe failed",
+        email="auto-policy-probe-failed@x.test",
+        taali=85.0,
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Previously above the positive threshold",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    with (
+        patch(
+            "app.services.decision_auto_execution_guard."
+            "recompute_persisted_verdict",
+            side_effect=RuntimeError("policy store unavailable"),
+        ),
+        patch.object(tool_registry.advance_stage, "run") as advance,
+    ):
+        executed = tool_registry._auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+        )
+
+    assert executed is False
+    advance.assert_not_called()
+    assert decision.status == "pending"
+    assert decision.evidence["auto_execute_hold"]["status"] == (
+        "decision_policy_refresh_failed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("application_change", "detail"),
+    [
+        ({"deleted_at": datetime.now(timezone.utc)}, "deleted"),
+        ({"application_outcome": "withdrawn"}, "withdrawn"),
+        ({"pipeline_stage": "advanced"}, "advanced"),
+    ],
+)
+def test_auto_execute_positive_holds_terminal_or_deleted_application(
+    db,
+    application_change,
+    detail,
+):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Closed application",
+        email=f"closed-{detail}@x.test",
+        taali=85.0,
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Card predates terminal application state",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    for field, value in application_change.items():
+        setattr(app, field, value)
+    db.flush()
+
+    with patch.object(tool_registry.advance_stage, "run") as advance:
+        executed = tool_registry._auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+        )
+
+    assert executed is False
+    advance.assert_not_called()
+    hold = decision.evidence["auto_execute_hold"]
+    assert hold["status"] == "application_not_actionable"
+    assert detail in hold["detail"]
+
+
+def test_auto_execute_does_not_overwrite_concurrent_resolution_with_hold(db):
+    """A stale worker cannot execute or overwrite a human-resolved card."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Concurrent decision",
+        email="concurrent-decision@x.test",
+        taali=85.0,
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Strong fit before another worker resolved the card",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.commit()
+
+    session_factory = sessionmaker(
+        bind=db.get_bind(),
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    first_worker = session_factory()
+    second_worker = session_factory()
+    try:
+        stale_role = first_worker.get(Role, int(role.id))
+        stale_decision = first_worker.get(AgentDecision, int(decision.id))
+        assert stale_role is not None
+        assert stale_decision is not None
+        first_worker.commit()
+
+        second_worker.query(Role).filter(Role.id == int(role.id)).update(
+            {Role.agentic_mode_enabled: False},
+            synchronize_session=False,
+        )
+        second_worker.query(AgentDecision).filter(
+            AgentDecision.id == int(decision.id)
+        ).update(
+            {
+                AgentDecision.status: "approved",
+                AgentDecision.evidence: {"human_resolution": "preserved"},
+            },
+            synchronize_session=False,
+        )
+        second_worker.commit()
+
+        with patch.object(tool_registry.advance_stage, "run") as advance:
+            executed = tool_registry._auto_execute_decision(
+                first_worker,
+                role=stale_role,
+                decision=stale_decision,
+                decision_type="advance_to_interview",
+            )
+
+        assert executed is False
+        advance.assert_not_called()
+        assert stale_decision.status == "approved"
+        assert stale_decision.evidence == {"human_resolution": "preserved"}
+    finally:
+        first_worker.rollback()
+        second_worker.rollback()
+        first_worker.close()
+        second_worker.close()
+
+
 def test_superseded_assessment_task_result_cannot_auto_advance(db):
     org = _make_org(db)
     role = _make_role(db, org)
@@ -1516,6 +2002,49 @@ def test_superseded_assessment_task_result_cannot_auto_advance(db):
     assert hold["task_id"] == old_task.id
 
 
+def test_global_template_is_a_current_role_assessment_task(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Global Template",
+        email="global-template@example.test",
+    )
+    assessment = _make_assessment(db, org=org, role=role, app=app)
+    task = db.query(Task).filter(Task.id == assessment.task_id).one()
+    task.organization_id = None
+    task.is_template = True
+    role.tasks.append(task)
+    db.flush()
+
+    assert assessment_task_is_current(db, assessment=assessment, role=role)
+
+
+def test_foreign_organization_task_is_never_current_for_role(db):
+    org = _make_org(db)
+    foreign = Organization(name="Foreign", slug=f"foreign-{id(db)}")
+    db.add(foreign)
+    db.flush()
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Foreign Template",
+        email="foreign-template@example.test",
+    )
+    assessment = _make_assessment(db, org=org, role=role, app=app)
+    task = db.query(Task).filter(Task.id == assessment.task_id).one()
+    task.organization_id = int(foreign.id)
+    task.is_template = True
+    role.tasks.append(task)
+    db.flush()
+
+    assert not assessment_task_is_current(db, assessment=assessment, role=role)
+
+
 def test_auto_send_noop_stays_pending_instead_of_false_approval(db):
     """A misconfigured/credit-blocked send result is not an approval: no
     candidate invite exists, so the deterministic card must remain recoverable."""
@@ -1524,6 +2053,8 @@ def test_auto_send_noop_stays_pending_instead_of_false_approval(db):
     app = _make_application(
         db, org=org, role=role, name="Strong", email="held@x.test", taali=90.0
     )
+    _attach_task(db, org, role)
+    _configure_current_positive_policy(db, org=org, role=role, app=app, score=90)
     run = _make_agent_run(db, role)
     decision = queue_decision.run(
         db,
@@ -1564,6 +2095,8 @@ def test_auto_action_exception_rolls_back_partial_candidate_mutations(db):
     app = _make_application(
         db, org=org, role=role, name="Strong", email="rollback@x.test"
     )
+    _attach_task(db, org, role)
+    _configure_current_positive_policy(db, org=org, role=role, app=app)
     run = _make_agent_run(db, role)
     decision = queue_decision.run(
         db,
@@ -1669,6 +2202,7 @@ def test_on_policy_advance_auto_executes(db):
     role.auto_promote = True
     db.flush()
     app = _make_application(db, org=org, role=role, name="Strong", email="s@x.test", taali=88.0)
+    _configure_current_positive_policy(db, org=org, role=role, app=app, score=88)
     run = _make_agent_run(db, role)
     run.__engine_verdicts__ = {int(app.id): "advance_to_interview"}
 
@@ -1704,6 +2238,7 @@ def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
     role.auto_promote = True
     db.flush()
     app = _make_application(db, org=org, role=role, name="Strong", email="s2@x.test", taali=88.0)
+    _configure_current_positive_policy(db, org=org, role=role, app=app, score=88)
     app.cv_match_details = {"summary": "Strong production backend fit. Longer supporting analysis."}
     run = _make_agent_run(db, role)
 

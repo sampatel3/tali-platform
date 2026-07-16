@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
+from ..models.role import Role
 from . import advance_stage, reject_application, send_assessment
 from ._decision_side_effects import apply_decision_side_effects
 from .types import ACTOR_RECRUITER, Actor
@@ -220,20 +221,68 @@ def run(
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="override is recruiter-only")
 
-    # C2: row-level lock so two concurrent overrides don't both dispatch.
-    # See approve_decision.run for the full reasoning.
-    decision_query = (
-        db.query(AgentDecision)
+    # Take mutation locks in the same application -> Organization -> Role ->
+    # decision order as approval. The final decision lock revalidates identity
+    # and actionability before any chosen alternative action is dispatched.
+    decision_identity = (
+        db.query(AgentDecision.application_id)
         .filter(
             AgentDecision.id == decision_id,
             AgentDecision.organization_id == organization_id,
         )
+        .one_or_none()
     )
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        decision_query = decision_query.with_for_update()
-    decision = decision_query.first()
-    if decision is None:
+    if decision_identity is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(decision_identity.application_id),
+            CandidateApplication.organization_id == organization_id,
+        )
+        .populate_existing()
+        .with_for_update(of=CandidateApplication)
+        .one_or_none()
+    )
+    if app is not None:
+        from ..services.workspace_agent_control import (
+            workspace_agent_control_snapshot,
+        )
+
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=organization_id,
+            lock=True,
+        )
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(app.role_id),
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .populate_existing()
+        .with_for_update(of=Role)
+        .one_or_none()
+        if app is not None
+        else None
+    )
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == organization_id,
+            AgentDecision.application_id == int(decision_identity.application_id),
+        )
+        .populate_existing()
+        .with_for_update(of=AgentDecision)
+        .one_or_none()
+    )
+    if decision is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent_decision {decision_id} changed before override",
+        )
     # ``reverted_for_feedback`` (taught) decisions stay actionable so a
     # recruiter can override the corrected row, not just freshly-pending ones.
     # ``processing`` is accepted because the async runner flips the row to it
@@ -242,6 +291,19 @@ def run(
         raise HTTPException(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
+        )
+    from ..services.decision_auto_execution_guard import (
+        application_action_block_reason,
+    )
+
+    application_block = application_action_block_reason(app)
+    if application_block:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "APPLICATION_NOT_ACTIONABLE",
+                "message": application_block,
+            },
         )
 
     metadata = {
@@ -254,20 +316,11 @@ def run(
     }
     idempotency = f"override_decision:{decision.id}"
 
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
-    )
     org = (
         db.query(Organization).filter(Organization.id == organization_id).first()
         if app is not None
         else None
     )
-    role = getattr(app, "role", None) if app is not None else None
 
     # "Did this override freshly reject the candidate?" — gates the deferred
     # Workable disqualify (Taali never emails the candidate; the ATS owns job

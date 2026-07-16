@@ -44,6 +44,7 @@ from ...schemas.role import (
     RoleVersionCommand,
 )
 from ...services.application_events import on_role_jd_attached
+from ...services.agent_control_ats_fence import require_authorized_agent_control_transaction_fence
 from ...services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
     SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
@@ -64,6 +65,14 @@ from ...services.role_concurrency import (
     bump_role_version,
     role_query_for_update,
 )
+from ...services.role_activation_command import (
+    ExplicitAssessmentChoiceRequired,
+    apply_durable_activation_policy,
+    capture_activation_compensation_state,
+    compensate_failed_activation_dispatch,
+    resolve_activation_assessment_action,
+    resolve_reconfiguration_as_skipped,
+)
 from ...services.sister_role_service import pipeline_counts_for_role, related_role_pipeline_counts_bulk
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_DISABLED,
@@ -81,16 +90,18 @@ from .role_support import get_role, role_to_response
 from .job_authorization import JobPermission, require_job_permission
 from .pipeline_service import role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
-from .role_collection_queries import apply_role_search, count_roles, role_relationship_counts
+from .role_collection_queries import apply_role_search, count_roles, role_relationship_counts, role_task_counts
 from .role_management_route_support import (
     _add_role_change_boundary as _add_role_change_boundary,
+)
+from .role_activation_update_preflight import (
+    DirectActivationPreparation,
+    apply_prepared_direct_activation_task,
+    prepare_direct_role_activation,
 )
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.roles")
-
-
-
 
 @router.get("/roles/{role_id}/change-events")
 def get_role_change_events(
@@ -301,11 +312,10 @@ def list_roles(
 ):
     roles_query = (
         db.query(Role)
-        # selectinload tasks for the per-role task count. Criteria are NOT
-        # loaded here: the list serializes with summary=True (see below), which
-        # drops the criteria array entirely, so hydrating it would only transfer
-        # rows we discard. selectin (not joined) keeps ``.limit()`` below
-        # applying cleanly to roles rather than to a tasks cartesian product.
+        # Tasks/criteria are NOT loaded here: the list serializes with
+        # summary=True and relationship counts/effective task state are batched
+        # below. Avoiding task hydration also avoids transferring repository
+        # definitions the list never renders.
         .options(
             joinedload(Role.ats_owner_role),
         )
@@ -331,7 +341,9 @@ def list_roles(
         return []
 
     role_ids = [role.id for role in roles]
-    task_counts, sister_counts = role_relationship_counts(db, role_ids)
+    task_counts, sister_counts, active_task_counts = role_relationship_counts(
+        db, role_ids
+    )
     operational_role_ids = list({
         int(role.ats_owner_role_id or role.id) for role in roles
     })
@@ -438,6 +450,7 @@ def list_roles(
             role,
             summary=True,
             tasks_count=task_counts.get(role.id, 0),
+            has_active_task=active_task_counts.get(role.id, 0) > 0,
             sister_role_count=sister_counts.get(role.id, 0),
             applications_count=app_counts.get(int(role.ats_owner_role_id or role.id), 0),
             stage_counts=pipeline_counts_for_role(db, role, organization_id=current_user.organization_id, standard_counts=stage_counts_by_role.get(int(role.id), {})),
@@ -535,10 +548,13 @@ def get_role_endpoint(
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
     if shell:
+        task_counts, active_task_counts = role_task_counts(db, [int(role.id)])
         return role_to_response(
             role,
             summary=True,
-            tasks_count=0,
+            include_provisioning=True,
+            tasks_count=task_counts.get(int(role.id), 0),
+            has_active_task=active_task_counts.get(int(role.id), 0) > 0,
             applications_count=0,
         )
     return _serialize_role_detail(db, role, current_user.organization_id)
@@ -720,6 +736,40 @@ def update_role(
 ):
     updates = data.model_dump(exclude_unset=True)
     expected_version = int(updates.pop("expected_version"))
+    if updates.get("agentic_mode_enabled") is False:
+        require_authorized_agent_control_transaction_fence(
+            db, current_user=current_user, role_id=role_id
+        )
+    preflight = prepare_direct_role_activation(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        expected_version=expected_version,
+        updates=updates,
+    )
+    try:
+        return _update_role_command(
+            role_id,
+            db=db,
+            current_user=current_user,
+            updates=updates,
+            expected_version=expected_version,
+            activation_preflight=preflight,
+        )
+    finally:
+        if preflight is not None:
+            preflight.release()
+
+
+def _update_role_command(
+    role_id: int,
+    *,
+    db: Session,
+    current_user: User,
+    updates: dict,
+    expected_version: int,
+    activation_preflight: DirectActivationPreparation | None,
+):
     agent_control_fields = {
         "agentic_mode_enabled",
         "agent_action_allowlist",
@@ -769,12 +819,12 @@ def update_role(
     )
     audit_before = capture_role_change_snapshot(role)
     audit_from_version = int(role.version or 1)
-    # Command-only field: never persist it as Role state. It exists so the
-    # necessary candidate-content HITL decision can compose with the one
-    # Turn-on mutation instead of becoming a separate setup workflow.
-    activation_assessment_action = updates.pop(
-        "activation_assessment_action", None
-    )
+    try:
+        activation_assessment_action = resolve_activation_assessment_action(
+            role, updates, updates.pop("activation_assessment_action", None)
+        )
+    except ExplicitAssessmentChoiceRequired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if role_is_score_only(role):
         unsafe_automation = {
             key
@@ -801,19 +851,6 @@ def update_role(
                 "the agent on"
             ),
         )
-    if (
-        updates.get("auto_skip_assessment") is False
-        and bool(role.agentic_mode_enabled)
-        and not any(bool(task.is_active) for task in (role.tasks or []))
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Assign an active assessment task before turning assessment "
-                "skipping off. This candidate-facing workflow change requires "
-                "an explicit task choice."
-            ),
-        )
     if activation_assessment_action == "approve_when_ready":
         if bool(role.agentic_mode_enabled):
             raise HTTPException(status_code=409, detail="The agent is already enabled")
@@ -831,7 +868,7 @@ def update_role(
             request_role_activation_intent,
         )
 
-        activation_policy = activation_policy_values(role, updates)
+        activation_policy = apply_durable_activation_policy(role, updates)
         intent = request_role_activation_intent(
             role,
             user_id=int(current_user.id),
@@ -869,19 +906,19 @@ def update_role(
         # remain durable in Role JSON and the minute sweep retries any broker
         # rejection without requiring this request or browser tab to survive.
         try:
-            if not list(role.tasks or []):
-                from ...tasks.assessment_tasks import generate_assessment_task_for_role
-
-                generate_assessment_task_for_role.delay(
-                    int(role.id), int(role.organization_id)
-                )
-            elif activation_intent_task_ready(role):
+            if activation_intent_task_ready(role):
                 from ...tasks.agent_tasks import agent_cohort_tick_role
 
                 agent_cohort_tick_role.delay(
                     int(role.id),
                     activation=True,
                     activation_intent_id=str(intent["request_id"]),
+                )
+            elif not list(role.tasks or []):
+                from ...tasks.assessment_tasks import generate_assessment_task_for_role
+
+                generate_assessment_task_for_role.delay(
+                    int(role.id), int(role.organization_id)
                 )
         except Exception:
             logger.warning(
@@ -930,17 +967,8 @@ def update_role(
     agent_resumed_now = False
     agent_resume_requested = False
     automatic_budget_resume_check = False
-    activation_previous = {
-        "agentic_mode_enabled": bool(role.agentic_mode_enabled),
-        "agent_paused_at": role.agent_paused_at,
-        "agent_paused_reason": role.agent_paused_reason,
-        "auto_promote": bool(role.auto_promote),
-        "auto_send_assessment": getattr(role, "auto_send_assessment", None),
-        "auto_resend_assessment": getattr(role, "auto_resend_assessment", None),
-        "auto_advance": getattr(role, "auto_advance", None),
-        "starred_for_auto_sync": bool(role.starred_for_auto_sync),
-        "job_status": role.job_status,
-    }
+    activation_previous = capture_activation_compensation_state(role)
+    activation_approved_task_id: int | None = None
     if "agentic_mode_enabled" in updates:
         next_enabled = bool(updates["agentic_mode_enabled"])
         was_enabled = bool(role.agentic_mode_enabled)
@@ -967,150 +995,40 @@ def update_role(
                 from ...services.role_activation_intent import (
                     cancel_role_activation_intent,
                 )
-
                 cancel_role_activation_intent(
                     role,
                     user_id=int(current_user.id),
                     reason="assessment explicitly skipped during Turn on",
                 )
+                resolve_reconfiguration_as_skipped(
+                    role,
+                    user_id=int(current_user.id),
+                )
                 # Feed the effective path into both readiness below and the
                 # normal field assignment later in this transaction.
                 updates["auto_skip_assessment"] = True
-            # The Turn-on command itself is the recruiter's authorization to
-            # use the one generated task that has already passed the automated
-            # sandbox battle test. Requiring a second "approve" click after
-            # Turn on added ceremony without adding a distinct safety choice.
-            # Keep the explicit command supported for older clients, but make
-            # the API's normal one-switch contract work on its own as well.
-            if (
-                activation_assessment_action is None
-                and not was_enabled
-                and not bool(
-                    updates.get(
-                        "auto_skip_assessment",
-                        getattr(role, "auto_skip_assessment", False),
-                    )
-                )
-                and not any(bool(task.is_active) for task in (role.tasks or []))
-            ):
-                generated_drafts = []
-                for task in list(role.tasks or []):
-                    extra = task.extra_data if isinstance(task.extra_data, dict) else {}
-                    if (
-                        not bool(task.is_active)
-                        and extra.get("generated")
-                        and extra.get("needs_review", True)
-                        and (extra.get("battle_test") or {}).get("verdict") == "pass"
-                    ):
-                        generated_drafts.append(task)
-                if len(generated_drafts) == 1:
-                    activation_assessment_action = "approve_generated_task"
-
             if activation_assessment_action == "approve_generated_task":
-                drafts = []
-                for task in list(role.tasks or []):
-                    extra = task.extra_data if isinstance(task.extra_data, dict) else {}
-                    if (
-                        not bool(task.is_active)
-                        and extra.get("generated")
-                        and extra.get("needs_review", True)
-                    ):
-                        drafts.append(task)
-                if len(drafts) != 1:
-                    db.rollback()
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "Turn on can approve exactly one linked generated "
-                            "draft; wait for generation or resolve multiple "
-                            "drafts before retrying."
-                        ),
-                    )
-                draft = drafts[0]
-                extra = draft.extra_data if isinstance(draft.extra_data, dict) else {}
-                verdict = (extra.get("battle_test") or {}).get("verdict")
-                if verdict != "pass":
-                    db.rollback()
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "The generated assessment cannot be approved until "
-                            "its automated battle test passes. Choose Skip "
-                            "assessment or retry after validation completes."
-                        ),
-                    )
-                try:
-                    from ...services.task_approval_service import (
-                        TaskApprovalError,
-                        approve_task_for_use,
-                    )
-
-                    approve_task_for_use(
-                        db,
-                        draft,
-                        user_id=int(current_user.id),
-                    )
-                except TaskApprovalError as exc:
-                    db.rollback()
-                    raise HTTPException(
-                        status_code=503,
-                        detail=(
-                            "The generated assessment repository is not ready; "
-                            f"Turn on was not applied: {exc.public_detail}"
-                        ),
-                    ) from exc
-            # Production activation is a contract, not a hopeful toggle: verify
-            # the live worker plus the external dependencies this role's path
-            # actually uses before changing any state.
-            from ...services.agent_activation_readiness import (
-                activation_readiness,
-                readiness_message,
-            )
-
-            # Evaluate the effective path from this PATCH, not only the stale
-            # persisted value.  Enabling + skipping assessments atomically must
-            # not require email/repository providers the role will not use.
-            activation_policy = activation_policy_values(role, updates)
-            readiness = activation_readiness(
-                role,
-                auto_skip_assessment=(
-                    bool(updates["auto_skip_assessment"])
-                    if updates.get("auto_skip_assessment") is not None
-                    else None
-                ),
-                monthly_usd_budget_cents=int(incoming_budget),
-                auto_send_assessment=activation_policy[
-                    "auto_send_assessment"
-                ],
-                auto_resend_assessment=activation_policy[
-                    "auto_resend_assessment"
-                ],
-                auto_advance=activation_policy["auto_advance"],
-                auto_reject=(
-                    bool(updates["auto_reject"])
-                    if updates.get("auto_reject") is not None
-                    else None
-                ),
-                auto_reject_pre_screen=(
-                    bool(updates["auto_reject_pre_screen"])
-                    if updates.get("auto_reject_pre_screen") is not None
-                    else None
-                ),
-            )
-            if not readiness.get("ready"):
+                activation_approved_task_id = apply_prepared_direct_activation_task(
+                    db,
+                    role=role,
+                    preparation=activation_preflight,
+                    organization_id=int(current_user.organization_id),
+                    user_id=int(current_user.id),
+                )
+            # Worker/provider readiness ran in the preflight phase before any
+            # Role or Task row lock. The exact Role version and optional task
+            # fingerprint are revalidated in this transaction.
+            if activation_preflight is None:
                 db.rollback()
                 raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "Agent runtime is not ready: "
-                        f"{readiness_message(readiness)}. Turn on was not applied."
-                    ),
+                    status_code=409,
+                    detail="Turn on preflight became stale. Refresh the job and retry.",
                 )
         role.agentic_mode_enabled = next_enabled
         agent_activated_now = next_enabled and not was_enabled
         # Snapshot each reversible-action choice at activation. Concrete role
         # settings survive Turn on; a truly legacy role with no granular values
-        # retains the historical one-switch default (all three on).
+        # materializes the same safe HITL default shown by the current UI.
         if agent_activated_now:
             activation_policy = activation_policy_values(role, updates)
             role.auto_promote = activation_policy["auto_promote"]
@@ -1339,39 +1257,32 @@ def update_role(
     try:
         db.commit()
         db.refresh(role)
+        if activation_preflight is not None:
+            activation_preflight.release()
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
-    # An assessment-stage flip must re-flow already-pending send/advance
-    # cards right away — otherwise a skip-toggled role still has assessment
-    # invites sitting in the Decision Hub for one-click approval (Codex #866).
-    # Best-effort: the save already committed; a reconcile failure only means
-    # the next cohort tick converts them instead.
-    if skip_assessment_changed:
+    reconcile_control_version = int(role.version or 1)
+    # A settings-only stage change can re-flow immediately. Activation/resume
+    # must first receive a broker acknowledgement: re-flow may auto-execute a
+    # reversible candidate action, which cannot precede acceptance of the
+    # bootstrap cycle this request promises.
+    if skip_assessment_changed and not (
+        agent_activated_now or agent_resumed_now
+    ):
         try:
             from ...services.bulk_decision_service import (
                 reconcile_pending_positive_decisions,
             )
-            reconcile_pending_positive_decisions(db, role=role)
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=reconcile_control_version,
+            )
             db.commit()
         except Exception:
             logger.exception(
                 "Assessment-stage reconcile failed for role_id=%s", role.id
-            )
-            db.rollback()
-    # On activation, surface every missing-config gap as a NeedsInput row
-    # on the Home hub in one shot — the recruiter sees the full checklist
-    # rather than discovering gaps one cycle at a time. Idempotent on
-    # (role_id, kind). Fires every false→true transition regardless of
-    # whether the role was previously active.
-    if agent_activated_now and str(role.role_kind or "") != ROLE_KIND_SISTER:
-        try:
-            from ...services.agent_activation_checklist import surface_activation_questions
-            surface_activation_questions(db, role=role)
-            db.commit()
-        except Exception:
-            logger.exception(
-                "Activation checklist failed for role_id=%s", role.id
             )
             db.rollback()
     # Activation OR resume kicks the COMPLETE cohort pipeline immediately:
@@ -1407,85 +1318,21 @@ def update_role(
                 "activation" if agent_activated_now else "resume",
                 dispatched_role_id,
             )
-            compensation_role = (
-                role_query_for_update(
-                    db,
-                    role_id=dispatched_role_id,
-                    organization_id=int(current_user.organization_id),
-                )
-                .populate_existing()
-                .first()
+            compensation = compensate_failed_activation_dispatch(
+                db,
+                role_id=dispatched_role_id,
+                organization_id=int(current_user.organization_id),
+                dispatched_role_version=dispatched_role_version,
+                agent_activated_now=bool(agent_activated_now),
+                activation_previous=activation_previous,
+                activation_approved_task_id=activation_approved_task_id,
+                actor_user_id=int(current_user.id),
+                request_id=get_request_id(),
             )
-            can_compensate = (
-                compensation_role is not None
-                and int(compensation_role.version or 1) == dispatched_role_version
-                and bool(compensation_role.agentic_mode_enabled)
-                and (
-                    agent_activated_now
-                    or compensation_role.agent_paused_at is None
-                )
-            )
-            if can_compensate and agent_activated_now:
-                compensation_before = capture_role_change_snapshot(compensation_role)
-                compensation_from = int(compensation_role.version or 1)
-                # Compensate the entire activation contract, not only the
-                # toggle.  Otherwise a broker outage could leave a native job
-                # publicly OPEN and the role auto-promoting/starred while the
-                # agent itself is OFF.
-                compensation_role.agentic_mode_enabled = activation_previous[
-                    "agentic_mode_enabled"
-                ]
-                compensation_role.agent_paused_at = activation_previous[
-                    "agent_paused_at"
-                ]
-                compensation_role.agent_paused_reason = activation_previous[
-                    "agent_paused_reason"
-                ]
-                compensation_role.auto_promote = activation_previous["auto_promote"]
-                for field in GRANULAR_AUTOMATION_FIELDS:
-                    setattr(compensation_role, field, activation_previous[field])
-                compensation_role.starred_for_auto_sync = activation_previous[
-                    "starred_for_auto_sync"
-                ]
-                compensation_role.job_status = activation_previous["job_status"]
-            elif can_compensate:
-                compensation_before = capture_role_change_snapshot(compensation_role)
-                compensation_from = int(compensation_role.version or 1)
-                from ...agent_runtime import budget_guard as _budget_guard
-
-                _budget_guard.pause_role(
-                    db,
-                    role=compensation_role,
-                    reason="agent bootstrap dispatch failed",
-                )
-            if can_compensate:
-                compensation_role.agent_bootstrap_status = "failed"
-                compensation_role.agent_bootstrap_error = (
-                    "agent bootstrap dispatch failed"
-                )
-                compensation_role.agent_bootstrap_completed_at = datetime.now(
-                    timezone.utc
-                )
-                compensation_to = bump_role_version(compensation_role)
-                add_role_change_event(
-                    db,
-                    role=compensation_role,
-                    before=compensation_before,
-                    action="agent_bootstrap_compensated",
-                    actor_user_id=int(current_user.id),
-                    from_version=compensation_from,
-                    to_version=compensation_to,
-                    reason="agent bootstrap dispatch failed",
-                    request_id=get_request_id(),
-                )
             db.commit()
             raise HTTPException(
                 status_code=503,
-                detail=(
-                    "The agent could not be started because the worker queue is "
-                    "unavailable. Its latest shared state was preserved; "
-                    "refresh the job before retrying."
-                ),
+                detail=compensation.detail,
             )
         # Toggling the agent on from Settings doesn't run a chat turn, so if the
         # role still carries OLD-engine scores, drop an opt-in re-score offer
@@ -1531,6 +1378,49 @@ def update_role(
                 logger.exception(
                     "stale-scores chat heads-up failed for role_id=%s", role.id
                 )
+    # Reaching this point means the activation/resume cycle was accepted, or a
+    # workspace-level hold intentionally deferred dispatch. Only now may an
+    # activation-time stage flip replace and potentially auto-execute cards.
+    # A broker failure raises above before any decision/action mutation occurs.
+    if skip_assessment_changed and (
+        agent_activated_now or agent_resumed_now
+    ):
+        try:
+            from ...services.bulk_decision_service import (
+                reconcile_pending_positive_decisions,
+            )
+
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=reconcile_control_version,
+            )
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Assessment-stage reconcile failed for role_id=%s", role.id
+            )
+            db.rollback()
+
+    # Checklist mutations are part of the acknowledged activation experience,
+    # not the pre-dispatch transaction. This also keeps approve-generated-task
+    # compensation exact when the broker rejects the bootstrap.
+    if agent_activated_now and str(role.role_kind or "") != ROLE_KIND_SISTER:
+        try:
+            from ...services.agent_activation_checklist import (
+                resolve_satisfied_activation_questions,
+                surface_activation_questions,
+            )
+
+            if activation_approved_task_id is not None:
+                resolve_satisfied_activation_questions(db, role=role)
+            surface_activation_questions(db, role=role)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Activation checklist failed for role_id=%s", role.id
+            )
+            db.rollback()
     # When the effective downstream boundary moved, run the same deterministic
     # full-score cohort path used by scheduled agent ticks. It re-evaluates
     # bulk-created cards and decides open scored applications against the new

@@ -12,11 +12,16 @@ DIFFICULTY_VALUE = func.lower(func.coalesce(func.nullif(func.trim(Task.difficult
 TYPE_VALUE = func.lower(func.coalesce(func.nullif(func.trim(Task.task_type), ""), "repo"))
 
 
-def visible_task_filter(organization_id: int):
-    return (
-        Task.is_active.is_(True),
-        or_(Task.organization_id == organization_id, Task.is_template.is_(True)),
+def task_tenant_visibility_filter(organization_id: int):
+    """Keep org-owned templates private; only NULL-org templates are global."""
+    return or_(
+        Task.organization_id == organization_id,
+        (Task.organization_id.is_(None) & Task.is_template.is_(True)),
     )
+
+
+def visible_task_filter(organization_id: int):
+    return (Task.is_active.is_(True), task_tenant_visibility_filter(organization_id))
 
 
 def apply_task_collection_filters(
@@ -82,4 +87,9 @@ def task_facets(
     }
 
 
-__all__ = ["apply_task_collection_filters", "task_facets", "visible_task_filter"]
+__all__ = [
+    "apply_task_collection_filters",
+    "task_facets",
+    "task_tenant_visibility_filter",
+    "visible_task_filter",
+]

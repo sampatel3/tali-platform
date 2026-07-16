@@ -204,10 +204,10 @@ class Role(Base):
     # when stale (>1 hour). See the agent's get_cohort_signals tool.
     agent_cohort_signals = Column(JSON, nullable=True)
     agent_cohort_signals_at = Column(DateTime(timezone=True), nullable=True)
-    # Per-role autonomy toggles. Columns default False, but first activation
-    # defaults ``auto_promote`` to True unless the caller explicitly opts out.
-    # Positive/reversible actions may then execute automatically while the role
-    # is enabled, unpaused, on-policy and within its guards.
+    # Per-role autonomy toggles. New roles materialize workspace defaults;
+    # nullable granular columns on legacy rows continue to inherit the old
+    # aggregate ``auto_promote`` value. Positive/reversible actions may execute
+    # automatically only while the role is enabled, unpaused and within guards.
     #
     # ``auto_reject``: opt-in to automatic deterministic pre-screen rejection
     # when provider/policy safeguards also allow it. LLM-authored, full-score
@@ -242,8 +242,9 @@ class Role(Base):
     # entirely — a ``send_assessment`` verdict is translated to
     # ``advance_to_interview`` (the same switch a role with no assessment
     # task gets), so strong candidates land in the Decision Hub advance
-    # queue instead of receiving an assessment invite. Still HITL unless
-    # ``auto_promote`` is also on.
+    # queue instead of receiving an assessment invite. This column retains the
+    # recruiter's preference when no task is linked; taskless effective behavior
+    # is derived without rewriting it. Still HITL unless promotion is enabled.
     auto_skip_assessment = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )

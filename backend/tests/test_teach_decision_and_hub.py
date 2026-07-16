@@ -22,6 +22,7 @@ from fastapi import HTTPException
 
 from app.actions import teach_decision
 from app.actions.types import Actor
+from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import (
     AGENT_DECISION_STATUSES,
     AgentDecision,
@@ -376,6 +377,17 @@ def test_approve_sets_human_disposition(db):
 
     s = _seed(db)
     user = _user(db, s.org)
+
+    # Positive approvals are revalidated against the role's current
+    # deterministic policy before their side effect runs.  Keep this fixture a
+    # genuinely current direct-advance recommendation instead of relying on an
+    # unscored card that the production guard correctly treats as stale.
+    s.role.score_threshold = 50
+    s.role.auto_reject_threshold_mode = "manual"
+    s.application.role_fit_score_cache_100 = 80
+    s.application.pre_screen_score_100 = 80
+    bootstrap_org(db, organization_id=int(s.org.id))
+    db.flush()
 
     # Stub out the side-effect dispatch (advance_stage / reject_application)
     # so we don't need a real pipeline_service in these unit tests.

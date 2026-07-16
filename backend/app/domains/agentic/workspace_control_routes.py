@@ -107,6 +107,13 @@ def pause_all_agents(
     manually or by a runtime guard remain untouched, and any role paused here
     can be resumed independently from its own page.
     """
+    from ...services.agent_control_ats_fence import (
+        require_agent_control_transaction_fence,
+    )
+
+    require_agent_control_transaction_fence(
+        db, organization_id=int(current_user.organization_id)
+    )
     organization = (
         db.query(Organization)
         .filter(

@@ -75,7 +75,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     const { result } = renderHook(() => useCandidateTriage({
       role: { id: 17, role_kind: 'sister' },
       roleApplications: [application],
-      roleTasks: [{ id: 5, name: 'Shared owner task' }],
+      roleTasks: [{ id: 5, name: 'Shared owner task', is_active: true }],
       loadRoleWorkspace: vi.fn(),
       patchApplicationRow,
       showToast,
@@ -105,7 +105,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     const { result } = renderHook(() => useCandidateTriage({
       role: { id: 9, role_kind: 'standard' },
       roleApplications: [application],
-      roleTasks: [{ id: 5, name: 'Backend take-home' }],
+      roleTasks: [{ id: 5, name: 'Backend take-home', is_active: true }],
       loadRoleWorkspace: vi.fn(),
       patchApplicationRow,
       showToast: vi.fn(),
@@ -124,6 +124,60 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     expect(patchApplicationRow).toHaveBeenCalledWith(51);
   });
 
+  it.each([
+    ['inactive', { id: 5, name: 'Retired task', is_active: false }],
+    ['unconfirmed', { id: 5, name: 'Malformed task' }],
+  ])('refuses a direct send through an %s task link', async (_label, task) => {
+    const application = { id: 55, application_outcome: 'open', score_summary: {} };
+    const rolesApi = { createAssessment: vi.fn(), retakeAssessment: vi.fn() };
+    const showToast = vi.fn();
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 9, role_kind: 'standard' },
+      roleApplications: [application],
+      roleTasks: [task],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast,
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    let sent;
+    await act(async () => {
+      sent = await result.current.drawerProps.onSendAssessment(application, '5');
+    });
+
+    expect(sent).toBe(false);
+    expect(rolesApi.createAssessment).not.toHaveBeenCalled();
+    expect(rolesApi.retakeAssessment).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(expect.stringMatching(/inactive or no longer linked/i), 'error');
+  });
+
+  it('refuses a stale direct send while task availability is unconfirmed', async () => {
+    const application = { id: 56, application_outcome: 'open', score_summary: {} };
+    const rolesApi = { createAssessment: vi.fn() };
+    const showToast = vi.fn();
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 9, role_kind: 'standard' },
+      roleApplications: [application],
+      roleTasks: [{ id: 5, name: 'Last known task', is_active: true }],
+      roleTasksFetchKnown: false,
+      roleTasksLoadError: 'Current task assignment could not be loaded.',
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast,
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    await act(async () => {
+      await result.current.drawerProps.onSendAssessment(application, '5');
+    });
+
+    expect(rolesApi.createAssessment).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith('Current task assignment could not be loaded.', 'error');
+  });
+
   it('uses the retake endpoint and preserves an optional replacement reason', async () => {
     const application = {
       id: 52,
@@ -139,7 +193,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     const { result } = renderHook(() => useCandidateTriage({
       role: { id: 9, role_kind: 'standard' },
       roleApplications: [application],
-      roleTasks: [{ id: 6, name: 'Systems exercise' }],
+      roleTasks: [{ id: 6, name: 'Systems exercise', is_active: true }],
       loadRoleWorkspace: vi.fn(),
       patchApplicationRow,
       showToast: vi.fn(),
@@ -182,7 +236,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     const { result } = renderHook(() => useCandidateTriage({
       role: { id: 9, role_kind: 'standard' },
       roleApplications: [application],
-      roleTasks: [{ id: 6, name: 'Systems exercise' }],
+      roleTasks: [{ id: 6, name: 'Systems exercise', is_active: true }],
       loadRoleWorkspace: vi.fn(),
       patchApplicationRow,
       showToast,
@@ -215,7 +269,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     const { result } = renderHook(() => useCandidateTriage({
       role: { id: 9, role_kind: 'standard' },
       roleApplications: [application],
-      roleTasks: [{ id: 5, name: 'Backend take-home' }],
+      roleTasks: [{ id: 5, name: 'Backend take-home', is_active: true }],
       canMutate: false,
       loadRoleWorkspace: vi.fn(),
       patchApplicationRow: vi.fn(),

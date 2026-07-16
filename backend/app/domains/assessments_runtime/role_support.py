@@ -42,7 +42,6 @@ from .pipeline_service import (
 
 
 
-
 def role_has_job_spec(role: Role) -> bool:
     return bool(
         (role.job_spec_file_url or "").strip()
@@ -127,7 +126,8 @@ def role_to_response(
     role: Role,
     *,
     summary: bool = False,
-    tasks_count: int | None = None,
+    include_provisioning: bool = False,
+    tasks_count: int | None = None, has_active_task: bool | None = None,
     sister_role_count: int | None = None,
     applications_count: int | None = None,
     stage_counts: dict[str, int] | None = None,
@@ -236,7 +236,7 @@ def role_to_response(
         auto_resend_assessment=getattr(role, "auto_resend_assessment", None),
         auto_advance=getattr(role, "auto_advance", None),
         auto_skip_assessment=bool(getattr(role, "auto_skip_assessment", False)),
-        agent_effective_policy=effective_agent_policy(role),
+        agent_effective_policy=effective_agent_policy(role, has_active_task=has_active_task),
         workable_actor_member_id=role.workable_actor_member_id,
         starred_for_auto_sync=bool(getattr(role, "starred_for_auto_sync", False)),
         agentic_mode_enabled=bool(getattr(role, "agentic_mode_enabled", False)),
@@ -254,7 +254,7 @@ def role_to_response(
         agent_bootstrap_completed_at=getattr(role, "agent_bootstrap_completed_at", None),
         assessment_task_provisioning=(
             getattr(role, "assessment_task_provisioning", None)
-            if not summary
+            if not summary or include_provisioning
             else None
         ),
         tasks_count=tasks_count,

@@ -2,7 +2,28 @@ import copy
 import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import AliasChoices, BaseModel, Field, field_serializer
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    field_serializer,
+    model_validator,
+)
+
+
+_TASK_UPDATE_NON_NULL_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "task_type",
+        "difficulty",
+        "duration_minutes",
+        "starter_code",
+        "test_code",
+        "is_active",
+        "proctoring_enabled",
+    }
+)
 
 
 def _public_task_extra_data(value: object) -> dict[str, Any] | None:
@@ -10,8 +31,13 @@ def _public_task_extra_data(value: object) -> dict[str, Any] | None:
         return None
     extra = copy.deepcopy(value)
     battle = extra.get("battle_test")
-    if isinstance(battle, dict) and battle.get("error"):
-        battle["error"] = "assessment_task_battle_test_failed"
+    history = extra.get("battle_test_history")
+    reports = [battle]
+    if isinstance(history, list):
+        reports.extend(history)
+    for report in reports:
+        if isinstance(report, dict) and report.get("error"):
+            report["error"] = "assessment_task_battle_test_failed"
     state = extra.get("battle_test_provisioning")
     if isinstance(state, dict) and state.get("last_error"):
         error = str(state["last_error"]).strip()[:2000]
@@ -60,6 +86,10 @@ class TaskUpdate(BaseModel):
     duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
     starter_code: Optional[str] = Field(default=None, min_length=1, max_length=100000)
     test_code: Optional[str] = Field(default=None, min_length=1, max_length=100000)
+    sample_data: Optional[Dict[str, Any]] = None
+    dependencies: Optional[List[str]] = None
+    success_criteria: Optional[Dict[str, Any]] = None
+    test_weights: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
     calibration_prompt: Optional[str] = None
     score_weights: Optional[Dict[str, Any]] = None
@@ -76,6 +106,20 @@ class TaskUpdate(BaseModel):
     valid_solutions: Optional[List[str]] = None
     expected_approaches: Optional[Dict[str, Any]] = None
 
+    @model_validator(mode="after")
+    def reject_explicit_null_for_required_fields(self):
+        """Keep PATCH omission distinct from clearing required task state."""
+
+        null_fields = sorted(
+            field
+            for field in _TASK_UPDATE_NON_NULL_FIELDS
+            if field in self.model_fields_set and getattr(self, field) is None
+        )
+        if null_fields:
+            fields = ", ".join(null_fields)
+            raise ValueError(f"Task fields must not be null: {fields}")
+        return self
+
 
 class TaskResponse(BaseModel):
     id: int
@@ -86,6 +130,10 @@ class TaskResponse(BaseModel):
     duration_minutes: int
     starter_code: Optional[str] = None
     test_code: Optional[str] = None
+    sample_data: Optional[Dict[str, Any]] = None
+    dependencies: Optional[List[str]] = None
+    success_criteria: Optional[Dict[str, Any]] = None
+    test_weights: Optional[Dict[str, Any]] = None
     is_template: bool
     is_active: bool
     created_at: datetime

@@ -37,7 +37,11 @@ logger = logging.getLogger("taali.bulk_decision")
 
 
 def ensure_deterministic_decision(
-    db: Session, *, app: CandidateApplication, role: Role
+    db: Session,
+    *,
+    app: CandidateApplication,
+    role: Role,
+    allow_auto_execute: bool = True,
 ) -> str | None:
     """Make sure a SCORED candidate carries its deterministic verdict —
     generated the moment the score lands, decoupled from the agent cohort tick.
@@ -158,18 +162,23 @@ def ensure_deterministic_decision(
             )
             return None
         if getattr(decision, "_just_created", True):
-            from ...agent_runtime.tool_registry import maybe_auto_execute_decision
+            autonomy: dict[str, object] = {"executed": False}
+            if allow_auto_execute:
+                from ...agent_runtime.tool_registry import (
+                    maybe_auto_execute_decision,
+                )
 
-            autonomy = maybe_auto_execute_decision(
-                db,
-                role=role,
-                decision=decision,
-                decision_type=decision_type,
-                on_policy=True,
-                # A recruiter may already be interviewing this person in the
-                # ATS. Surface the recommendation, never move them silently.
-                force_human_review=post_handover,
-            )
+                autonomy = maybe_auto_execute_decision(
+                    db,
+                    role=role,
+                    decision=decision,
+                    decision_type=decision_type,
+                    on_policy=True,
+                    # A recruiter may already be interviewing this person in
+                    # the ATS. Surface the recommendation, never move them
+                    # silently.
+                    force_human_review=post_handover,
+                )
             logger.info(
                 "score-time deterministic decision app=%s -> %s auto_executed=%s",
                 app.id,

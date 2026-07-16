@@ -23,6 +23,7 @@ from ..domains.assessments_runtime.job_authorization import (
     require_job_permission,
 )
 from ..models.role import Role
+from ..services.agent_control_ats_fence import fence_agent_chat_pause_tool
 from ..services.role_change_audit import (
     add_role_change_event,
     capture_role_change_snapshot,
@@ -285,26 +286,6 @@ MUTATING_TOOL_NAMES = frozenset(
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
@@ -317,6 +298,7 @@ def dispatch_tool(
 ) -> Any:
     """Authorize once, then route one tool to its focused implementation."""
     args = arguments or {}
+    fence_agent_chat_pause_tool(db, role=role, user=user, tool_name=name, arguments=args)
     permission = _MUTATION_PERMISSIONS.get(name)
     if permission is not None:
         role = _locked_authorized_role(

@@ -121,7 +121,7 @@ vi.mock('./RoleScreeningQuestions', () => ({
 }));
 
 import * as apiClient from '../../shared/api';
-import { clearCache, readCache } from '../../shared/api/resourceCache';
+import { clearCache, readCache, writeCache } from '../../shared/api/resourceCache';
 import { clientApi } from '../clients/api';
 import { requisitionApi } from '../requisitions/api';
 import { JobPipelinePage } from './JobPipelinePage';
@@ -256,10 +256,8 @@ describe('JobPipelinePage', () => {
 
   const confirmTurnOnPolicy = async () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByRole('heading', { name: /Turn on this role’s agent/i })).toBeInTheDocument();
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
-    });
+    expect(await screen.findByRole('heading', { name: /Turn on agent/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
   };
 
   it('paints the job shell before a large candidate roster finishes loading', async () => {
@@ -343,6 +341,57 @@ describe('JobPipelinePage', () => {
       node.textContent?.includes('Loading pipeline summary…')
     ))).toBe(true);
     expect(apiClient.roles.getShell).toHaveBeenCalledWith(101);
+  });
+
+  it('preserves warm-cached role detail while its lightweight shell revalidates', async () => {
+    const cachedRole = {
+      ...baseRole,
+      description: 'Cached source description',
+      job_spec_text: 'Description\nCached full job specification survives the shell refresh.',
+      criteria: [{ id: 4, text: 'Cached recruiter requirement', source: 'recruiter' }],
+      requisition: { id: 31, title: 'Cached requisition' },
+      client_id: 8,
+      client_name: 'Cached client',
+      tasks_count: 3,
+      applications_count: 9,
+      pending_decisions_by_type: { rejection: 2 },
+      is_published: true,
+    };
+    writeCache('role-workspace:101', {
+      role: cachedRole,
+      roleTasks: [],
+      assessmentContextTasks: [],
+      roleApplications: baseApplications,
+      workspaceCriteria: [],
+    });
+    apiClient.roles.getShell.mockResolvedValue({
+      data: {
+        ...baseRole,
+        version: 8,
+        description: null,
+        job_spec_text: null,
+        criteria: [],
+        requisition: null,
+        client_id: null,
+        client_name: null,
+        tasks_count: 0,
+        applications_count: 0,
+        stage_counts: {},
+        pending_decisions_by_type: {},
+        active_candidates_count: 0,
+        is_published: false,
+      },
+    });
+    apiClient.roles.get.mockReturnValue(new Promise(() => {}));
+
+    renderPipeline();
+
+    await waitFor(() => expect(apiClient.roles.getShell).toHaveBeenCalledWith(101));
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /View description/i }));
+    expect(await screen.findAllByText('Cached full job specification survives the shell refresh.'))
+      .not.toHaveLength(0);
+    expect(screen.getByText('Cached recruiter requirement')).toBeInTheDocument();
   });
 
   it('does not present the role agent as on before workspace status has loaded', async () => {
@@ -478,6 +527,37 @@ describe('JobPipelinePage', () => {
           auto_send_assessment: false,
           auto_resend_assessment: false,
           auto_advance: false,
+        },
+      },
+    });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    const send = await screen.findByRole('button', { name: 'Auto-send assessments' });
+    expect(send).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(send);
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      auto_send_assessment: true,
+      auto_resend_assessment: false,
+      auto_advance: false,
+      auto_promote: false,
+      expected_version: 7,
+    }));
+  });
+
+  it('does not disable untouched actions when one enabled legacy action changes', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        auto_promote: true,
+        auto_send_assessment: null,
+        auto_resend_assessment: null,
+        auto_advance: null,
+        agent_effective_policy: {
+          auto_send_assessment: true,
+          auto_resend_assessment: true,
+          auto_advance: true,
         },
       },
     });
@@ -694,6 +774,11 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByRole('heading', { name: /^Role specification$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
     expect(apiClient.roles.updateJobSpec).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: /^Scoring settings$/i }));
+    expect(await screen.findByRole('heading', { name: /Related-role scoring/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Auto-send assessments' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
   });
 
   it('shows shared candidates while related scoring waits and labels the original pipeline clearly', async () => {
@@ -864,12 +949,12 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByText(/saved policy keeps running after you close this page/i)).toBeInTheDocument();
-    expect(screen.getByText(/native job page opens for applications/i)).toBeInTheDocument();
-    expect(screen.getByText(/Full CV-score and assessment rejections still need approval/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Assessment invitations require your approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Assessment retries send automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/Full CV-score and assessment rejections always require approval/i)).toBeInTheDocument();
     expect(apiClient.roles.update).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
       agentic_mode_enabled: true,
       auto_promote: false,
@@ -883,7 +968,7 @@ describe('JobPipelinePage', () => {
     ['workable', 'Workable', 'WK-900'],
     ['bullhorn', 'Bullhorn', 'BH-900'],
   ])(
-    'keeps %s as intake when previewing agent activation',
+    'keeps the %s provider lifecycle out of the action-safety confirmation',
     async (provider, label, externalJobId) => {
       apiClient.roles.get.mockResolvedValue({
         data: {
@@ -901,10 +986,9 @@ describe('JobPipelinePage', () => {
       renderPipeline();
 
       fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-
-      expect(await screen.findByText(
-        new RegExp(`${label} remains the intake source`, 'i'),
-      )).toBeInTheDocument();
+      expect(await screen.findByText(/Candidate-action safeguards/i)).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(`${label} remains the intake source`, 'i')))
+        .not.toBeInTheDocument();
     },
   );
 
@@ -969,7 +1053,7 @@ describe('JobPipelinePage', () => {
     );
   });
 
-  it('keeps an untouched first Turn on fully autonomous instead of sending the DB-default legacy false', async () => {
+  it('keeps an untouched first Turn on HITL-safe', async () => {
     apiClient.roles.get.mockResolvedValue({
       data: {
         ...baseRole,
@@ -988,9 +1072,10 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByText(/Initial assessments send automatically; resends run automatically/i)).toBeInTheDocument();
-    expect(screen.getByText(/Qualified candidates advance automatically to recruiter handoff/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    expect(await screen.findByText(/Assessment invitations require your approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Candidate advancement requires your approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pre-screen failures reject automatically/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
     const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
@@ -1005,21 +1090,97 @@ describe('JobPipelinePage', () => {
     expect(activationPayload).not.toHaveProperty('auto_advance');
   });
 
-  it('uses a validated generated assessment from the single Turn on authorization', async () => {
-    apiClient.roles.listTasks.mockResolvedValue({ data: [{
-      id: 707,
-      name: 'Generated debugging exercise',
-      description: 'Repair the supplied service and explain the trade-offs.',
-      scenario: 'Repair the supplied service and explain the trade-offs.',
-      duration_minutes: 45,
-      is_active: false,
-      generated: true,
-      needs_review: true,
-      battle_test: { verdict: 'pass', failed_checks: [] },
-    }] });
+  it('requires an explicit Generate or Skip choice for a known taskless role', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({ data: [] });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByText(/no active task exists; choose Generate or Skip/i))
+      .toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Turn on agent$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate, validate & approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Skip assessment & turn on/i })).toBeInTheDocument();
+    expect(apiClient.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('allows ordinary Turn on when taskless skip is already configured', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, auto_skip_assessment: true } });
+    apiClient.roles.listTasks.mockResolvedValue({ data: [] });
     renderPipeline();
 
     await confirmTurnOnPolicy();
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
+      agentic_mode_enabled: true,
+      expected_version: 7,
+    })));
+    const payload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(payload).not.toHaveProperty('activation_assessment_action');
+  });
+
+  it('does not treat taskless runtime effective skip as a configured Turn-on choice', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        auto_skip_assessment: false,
+        agent_effective_policy: { auto_skip_assessment: true },
+      },
+    });
+    apiClient.roles.listTasks.mockResolvedValue({ data: [] });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+
+    expect(await screen.findByText(/no active task exists; choose Generate or Skip/i))
+      .toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Turn on agent$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate, validate & approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Skip assessment & turn on/i })).toBeInTheDocument();
+    expect(apiClient.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps ordinary Turn on available to confirm a blocked republish', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        assessment_task_provisioning: { reconfiguration: { status: 'blocked' } },
+      },
+    });
+    apiClient.roles.listTasks.mockRejectedValue(new Error('task list unavailable'));
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByText(/confirms the preserved assessment/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    expect(apiClient.roles.update.mock.calls.at(-1)[1])
+      .not.toHaveProperty('activation_assessment_action');
+  });
+
+  it('does not infer tasklessness or skip policy when the task fetch fails', async () => {
+    apiClient.roles.listTasks.mockRejectedValue(new Error('temporary task catalogue failure'));
+    renderPipeline();
+
+    await openAgentSettingsTab();
+    expect(await screen.findByText('Assessment tasks unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('No assessment task assigned')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByText(/current task assignment is unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Turn on agent$/i })).not.toBeInTheDocument();
+    expect(apiClient.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('offers an explicit durable generate-validate-approve activation path', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({ data: [] });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByRole('heading', { name: /Turn on agent/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {
+      name: /Generate, validate & approve, then turn on/i,
+    }));
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
       101,
@@ -1029,7 +1190,28 @@ describe('JobPipelinePage', () => {
         activation_assessment_action: 'approve_when_ready',
       }),
     ));
-    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', {
+      name: /Preparing the assessment and turning on/i,
+    })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Skip assessment & turn on/i })).toBeInTheDocument();
+  });
+
+  it('offers an explicit skip choice without consulting the fetched task list', async () => {
+    apiClient.roles.listTasks.mockRejectedValue(new Error('temporary task catalogue failure'));
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByRole('heading', { name: /Turn on agent/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Skip assessment & turn on/i }));
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
+      101,
+      expect.objectContaining({
+        agentic_mode_enabled: true,
+        auto_skip_assessment: true,
+        activation_assessment_action: 'skip_assessment',
+      }),
+    ));
   });
 
   it('keeps first activation OFF when the authoritative PATCH is pending or rejected', async () => {
@@ -1071,7 +1253,7 @@ describe('JobPipelinePage', () => {
     expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
   });
 
-  it('can explicitly skip a pending generated assessment in the same Turn on action', async () => {
+  it('requires durable Generate confirmation when only an inactive draft exists', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [{
       id: 708,
       name: 'Pending generated exercise',
@@ -1084,24 +1266,19 @@ describe('JobPipelinePage', () => {
     }] });
     renderPipeline();
 
-    await confirmTurnOnPolicy();
-    expect(await screen.findByText(/battle test is still pending/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Skip assessment & turn on/i }));
-    });
-
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
-      101,
-      expect.objectContaining({
-        agentic_mode_enabled: true,
-        auto_skip_assessment: true,
-        activation_assessment_action: 'skip_assessment',
-      }),
-    ));
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(screen.queryByRole('button', { name: /^Turn on agent$/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Generate, validate & approve/i }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(activationPayload.agentic_mode_enabled).toBe(true);
+    expect(activationPayload).not.toHaveProperty('auto_skip_assessment');
+    expect(activationPayload.activation_assessment_action).toBe('approve_when_ready');
+    expect(await screen.findByRole('heading', { name: /Preparing the assessment/i }))
+      .toBeInTheDocument();
   });
 
-  it('persists pending activation immediately without relying on later polling', async () => {
+  it('keeps explicit taskless Skip activation off until the authoritative PATCH succeeds', async () => {
     const pendingDraft = {
       id: 709,
       name: 'Generated systems exercise',
@@ -1113,42 +1290,43 @@ describe('JobPipelinePage', () => {
       battle_test: null,
     };
     apiClient.roles.listTasks.mockResolvedValue({ data: [pendingDraft] });
+    apiClient.roles.get
+      .mockResolvedValueOnce({ data: baseRole })
+      .mockResolvedValue({
+        data: {
+          ...baseRole,
+          agentic_mode_enabled: true,
+          auto_skip_assessment: true,
+        },
+      });
     let resolveActivation;
     apiClient.roles.update.mockReturnValue(new Promise((resolve) => {
       resolveActivation = resolve;
     }));
     renderPipeline();
 
-    await confirmTurnOnPolicy();
-    expect(await screen.findByText(/battle test is still pending/i)).toBeInTheDocument();
-
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
-      101,
-      expect.objectContaining({
-        agentic_mode_enabled: true,
-        activation_assessment_action: 'approve_when_ready',
-      }),
-    ));
-    expect(screen.getAllByText(/Saving Turn-on…/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Your Turn-on request is saved/i)).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Skip assessment & turn on/i }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(activationPayload.agentic_mode_enabled).toBe(true);
+    expect(activationPayload.auto_skip_assessment).toBe(true);
+    expect(activationPayload.activation_assessment_action).toBe('skip_assessment');
+    expect(screen.getByText('Agent off')).toBeInTheDocument();
 
     await act(async () => {
       resolveActivation({
         data: {
           ...baseRole,
-          agentic_mode_enabled: false,
-          assessment_task_provisioning: {
-            activation_intent: { status: 'pending', last_error: null },
-          },
+          agentic_mode_enabled: true,
+          auto_skip_assessment: true,
         },
       });
     });
-    expect(await screen.findByText(/Your Turn-on request is saved/i)).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /^close$/i }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Agent on')).toBeInTheDocument());
   });
 
-  it('shows a failed durable Turn-on as unsaved and leaves retry available', async () => {
+  it('shows a failed durable taskless Turn-on request and leaves the agent off', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [{
       id: 710,
       name: 'Pending generated exercise',
@@ -1162,27 +1340,27 @@ describe('JobPipelinePage', () => {
     });
     renderPipeline();
 
-    await confirmTurnOnPolicy();
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Generate, validate & approve/i }));
 
-    expect(await screen.findByText(/The Turn-on request was not saved/i)).toBeInTheDocument();
-    expect(screen.getByText('Turn-on request failed')).toBeInTheDocument();
-    expect(screen.getByText('Activation authorization could not be persisted.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Retry request/i })).toBeInTheDocument();
-    expect(screen.queryByText(/Your Turn-on request is saved/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'Activation authorization could not be persisted.',
+      'error',
+    ));
     expect(screen.getByText('Agent off')).toBeInTheDocument();
   });
 
   it('shows a persisted queued activation after page reload', async () => {
-    apiClient.roles.get.mockResolvedValue({
-      data: {
-        ...baseRole,
-        agentic_mode_enabled: false,
-        assessment_task_provisioning: {
-          status: 'succeeded',
-          activation_intent: { status: 'pending', last_error: null },
-        },
+    const pendingRole = {
+      ...baseRole,
+      agentic_mode_enabled: false,
+      assessment_task_provisioning: {
+        status: 'succeeded',
+        activation_intent: { status: 'pending', last_error: null },
       },
-    });
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: pendingRole });
+    apiClient.roles.get.mockResolvedValue({ data: pendingRole });
     renderPipeline();
 
     expect(await screen.findByText('Agent turn-on is queued')).toBeInTheDocument();
@@ -1549,7 +1727,7 @@ Banking transformation experience
     expect(await screen.findByRole('heading', { name: /Role criteria/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Screening threshold/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Automatic actions/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Actions without approval/i })).toBeInTheDocument();
 
     // HANDOFF v2 §4.4 / canvas jobs-detail-spec — the Job spec tab renders
     // the formatted Workable-ingested description + "At a glance" sidebar.
@@ -1970,7 +2148,7 @@ Banking transformation experience
     expect(screen.getByRole('button', { name: 'Assign hiring department' })).toBeEnabled();
   });
 
-  it('uses original-role tasks as related candidate context without replacing sister tasks', async () => {
+  it('loads only original-role tasks as related candidate context', async () => {
     const sisterRole = {
       ...baseRole,
       role_kind: 'sister',
@@ -1978,30 +2156,27 @@ Banking transformation experience
       ats_owner_role_id: 77,
       ats_owner_role_name: 'Original role',
     };
-    const sisterTasks = [{ id: 701, name: 'Sister scoring-only task', is_active: true }];
     const originalTasks = [{ id: 702, name: 'Original assessment task', is_active: true }];
     apiClient.roles.getShell.mockResolvedValue({ data: sisterRole });
     apiClient.roles.get.mockResolvedValue({ data: sisterRole });
-    apiClient.roles.listTasks.mockImplementation((id) => Promise.resolve({
-      data: Number(id) === 77 ? originalTasks : sisterTasks,
-    }));
+    apiClient.roles.listTasks.mockResolvedValue({ data: originalTasks });
 
     renderPipeline();
 
     await waitFor(() => {
       expect(readCache('role-workspace:101')?.data).toEqual(expect.objectContaining({
-        roleTasks: sisterTasks,
+        roleTasks: [],
         assessmentContextTasks: originalTasks,
       }));
     });
-    expect(apiClient.roles.listTasks).toHaveBeenCalledWith(101);
+    expect(apiClient.roles.listTasks).toHaveBeenCalledTimes(1);
     expect(apiClient.roles.listTasks).toHaveBeenCalledWith(77);
+    expect(apiClient.roles.listTasks).not.toHaveBeenCalledWith(101);
     expect(screen.getByRole('button', { name: /^Re-score roster$/i })).toBeEnabled();
 
     fireEvent.click((await screen.findByText('Sam Patel')).closest('tr'));
     fireEvent.click(screen.getByRole('tab', { name: /^Send assessment$/i }));
     expect(await screen.findByText('Original assessment task')).toBeInTheDocument();
-    expect(screen.queryByText('Sister scoring-only task')).not.toBeInTheDocument();
   });
 
   it('uses an original role\'s own tasks for candidate assessment context', async () => {
@@ -2024,6 +2199,132 @@ Banking transformation experience
     expect(await screen.findByRole('button', {
       name: /^Role assessment task/i,
     })).toBeInTheDocument();
+  });
+
+  it('describes only confirmed-active tasks in the job-spec assessment highlight', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({
+      data: [
+        { id: 703, name: 'Retired assessment task', is_active: false },
+        { id: 704, name: 'Approved assessment task', is_active: true },
+      ],
+    });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+
+    const highlights = await screen.findByRole('complementary', { name: /At a glance/i });
+    expect(within(highlights).getByText('Approved assessment task')).toBeInTheDocument();
+    expect(within(highlights).queryByText('Retired assessment task')).not.toBeInTheDocument();
+  });
+
+  it('fails candidate assessment controls closed when task context fails, then recovers on retry', async () => {
+    apiClient.roles.listTasks
+      .mockRejectedValueOnce({
+        response: { data: { detail: 'Assessment context is temporarily unavailable.' } },
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 704, name: 'Recovered assessment task', is_active: true }],
+      });
+
+    renderPipeline();
+
+    fireEvent.click((await screen.findByText('Sam Patel')).closest('tr'));
+    fireEvent.click(screen.getByRole('tab', { name: /^Send assessment$/i }));
+    const unavailable = await screen.findByRole('alert');
+    expect(unavailable).toHaveTextContent('Assessment tasks unavailable.');
+    expect(unavailable).toHaveTextContent('Assessment context is temporarily unavailable.');
+    expect(screen.queryByText('No tasks linked to this role yet.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Send invite$/i })).toBeDisabled();
+    const rosterRequestCount = apiClient.roles.listApplications.mock.calls.length;
+
+    fireEvent.click(within(unavailable).getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Assessment tasks unavailable.')).not.toBeInTheDocument();
+      expect(screen.getByText('Recovered assessment task')).toBeInTheDocument();
+    });
+    expect(apiClient.roles.listTasks).toHaveBeenCalledTimes(2);
+    expect(apiClient.roles.listApplications).toHaveBeenCalledTimes(rosterRequestCount);
+  });
+
+  it('does not load the unused organisation task catalogue for a related scoring role', async () => {
+    const sisterRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'Original role',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.get.mockResolvedValue({ data: sisterRole });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Scoring settings$/i }));
+
+    expect(await screen.findByRole('heading', { name: /Related-role scoring/i }))
+      .toBeInTheDocument();
+    expect(apiClient.tasks.list).not.toHaveBeenCalled();
+  });
+
+  it('reports an original-role task failure separately from sister-role task state', async () => {
+    const sisterRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'Original role',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.get.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.listTasks.mockImplementation((id) => (
+      Number(id) === 77
+        ? Promise.reject({
+            response: { data: { detail: 'Original role tasks could not be read.' } },
+          })
+        : Promise.resolve({ data: [{ id: 705, name: 'Sister-only task', is_active: true }] })
+    ));
+
+    renderPipeline();
+
+    fireEvent.click((await screen.findByText('Sam Patel')).closest('tr'));
+    fireEvent.click(screen.getByRole('tab', { name: /^Send assessment$/i }));
+    const unavailable = await screen.findByRole('alert');
+    expect(unavailable).toHaveTextContent('Assessment tasks unavailable.');
+    expect(unavailable).toHaveTextContent('Original role tasks could not be read.');
+    expect(screen.queryByText('Sister-only task')).not.toBeInTheDocument();
+    expect(screen.queryByText('No shared assessment tasks are linked on the original role.'))
+      .not.toBeInTheDocument();
+    const retry = within(unavailable).getByRole('button', { name: 'Retry' });
+    expect(apiClient.roles.listTasks).toHaveBeenCalledTimes(1);
+    expect(apiClient.roles.listTasks).toHaveBeenCalledWith(77);
+    expect(apiClient.roles.listTasks).not.toHaveBeenCalledWith(101);
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(apiClient.roles.listTasks).toHaveBeenCalledTimes(2));
+    expect(apiClient.roles.listTasks.mock.calls.map(([roleId]) => roleId)).toEqual([77, 77]);
+  });
+
+  it('does not substitute sister tasks when the original-role link is missing', async () => {
+    const unlinkedSisterRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: null,
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: unlinkedSisterRole });
+    apiClient.roles.get.mockResolvedValue({ data: unlinkedSisterRole });
+    apiClient.roles.listTasks.mockResolvedValue({
+      data: [{ id: 706, name: 'Sister-only task', is_active: true }],
+    });
+
+    renderPipeline();
+
+    fireEvent.click((await screen.findByText('Sam Patel')).closest('tr'));
+    fireEvent.click(screen.getByRole('tab', { name: /^Send assessment$/i }));
+    const unavailable = await screen.findByRole('alert');
+    expect(unavailable).toHaveTextContent('not linked to an original role');
+    expect(screen.queryByText('Sister-only task')).not.toBeInTheDocument();
+    expect(apiClient.roles.listTasks).not.toHaveBeenCalled();
   });
 
   it('keeps a budget-blocked 200 Resume no-op visibly paused and explains it', async () => {

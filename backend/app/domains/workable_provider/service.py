@@ -26,6 +26,7 @@ from ...models.role import Role
 from ...models.share_link import SHARE_LINK_MODE_CLIENT, ShareLink
 from ...models.task import Task
 from ...platform.config import settings
+from ...services.assessment_repository_operations import create_serialized_assessment_branch
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.agent_policy_settings import apply_workspace_agent_defaults
 from ...services.pre_screening_snapshot import pre_screen_snapshot
@@ -228,6 +229,9 @@ def provision_assessment(
 
     cand = _find_or_create_candidate(db, organization_id, candidate)
     application = _find_or_create_application(db, organization_id, cand.id, role.id)
+    if all(int(linked.id) != int(task.id) for linked in role.tasks):
+        role.tasks.append(task)
+        db.flush()
 
     assessment = Assessment(
         organization_id=organization_id,
@@ -249,10 +253,7 @@ def provision_assessment(
     repo_service = AssessmentRepositoryService(
         settings.GITHUB_ORG, settings.GITHUB_TOKEN
     )
-    branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-    assessment.assessment_repo_url = branch_ctx.repo_url
-    assessment.assessment_branch = branch_ctx.branch_name
-    assessment.clone_command = branch_ctx.clone_command
+    create_serialized_assessment_branch(db, repo_service, assessment)
 
     # Tell Workable the assessment is pending (durable via the outbox).
     outbox.enqueue(

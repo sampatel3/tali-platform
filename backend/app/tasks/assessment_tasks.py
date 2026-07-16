@@ -322,7 +322,7 @@ def repair_generated_task_after_battle_failure(
         )
         db.commit()
         db.refresh(task)
-        _provision_repo_best_effort(task)
+        _provision_repo_best_effort(db, task)
         try:
             battle_test_generated_task.delay(int(task.id), int(organization_id))
         except Exception:
@@ -1482,193 +1482,65 @@ def sweep_assessment_task_provisioning(limit: int = 200):
     """Recover generation, battle-test, and one-click activation outboxes."""
     from datetime import datetime, timezone
 
-    from sqlalchemy.orm import Session, selectinload
+    from sqlalchemy.orm import Session
 
-    from ..models.organization import Organization
-    from ..models.role import Role
-    from ..models.task import Task
     from ..platform.config import settings
     from ..platform.database import SessionLocal
-    from ..services.task_provisioning_service import (
-        PROVISIONING_RECOVERABLE_STATUSES,
-        provisioning_state_is_due,
-        task_provisioning_state,
+    from ..services.assessment_sweep_selection import (
+        select_battle_recovery_batch,
+        select_generation_recovery_batch,
+        select_role_artifact_recovery_batch,
     )
-    from ..services.task_battle_test import battle_test_provisioning_action
-    from ..services.role_activation_intent import (
-        ACTIVATION_ACTIVE_STATUSES,
-        activation_intent_state,
-        activation_intent_task_ready,
-        block_activation_intent_if_task_exhausted,
+    from ..services.role_activation_recovery import (
+        select_activation_recovery_batch,
     )
 
     db: Session = SessionLocal()
-    bounded_limit = max(1, min(int(limit), 1000))
-    rows: list[Role] = []
+    bounded_limit = max(0, min(int(limit), 1000))
     try:
-        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
-            status_expr = Role.assessment_task_provisioning["status"].as_string()
-            rows = (
-                db.query(Role)
-                .join(Organization, Organization.id == Role.organization_id)
-                .filter(
-                    Role.deleted_at.is_(None),
-                    Organization.agent_workspace_paused_at.is_(None),
-                    Role.assessment_task_provisioning.isnot(None),
-                    status_expr.in_(sorted(PROVISIONING_RECOVERABLE_STATUSES)),
-                )
-                .order_by(Role.created_at.asc(), Role.id.asc())
-                .limit(bounded_limit)
-                .all()
-            )
         now = datetime.now(timezone.utc)
-        role_keys = [
-            (int(role.id), int(role.organization_id))
-            for role in rows
-            if provisioning_state_is_due(task_provisioning_state(role), now=now)
-        ]
-        # Generated Task.extra_data is itself the battle-test outbox. Scan a
-        # generous bounded set so legacy generated drafts (created before the
-        # explicit provisioning sub-state) are recovered too.
-        battle_rows = (
-            db.query(Task)
-            .join(Organization, Organization.id == Task.organization_id)
-            .filter(
-                Task.organization_id.isnot(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Task.is_active.is_(False),
-                Task.extra_data.isnot(None),
+        role_keys = []
+        generation_scanned = 0
+        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+            generation_batch = select_generation_recovery_batch(
+                db, limit=bounded_limit, now=now
             )
-            .order_by(Task.created_at.desc(), Task.id.desc())
-            .limit(max(1000, min(bounded_limit * 10, 5000)))
-            .all()
+            role_keys = list(generation_batch.keys)
+            generation_scanned = generation_batch.scanned
+        battle_batch = select_battle_recovery_batch(
+            db, limit=bounded_limit, now=now
         )
-        actionable_tasks = [
-            (int(task.id), int(task.organization_id), action)
-            for task in battle_rows
-            if isinstance(task.extra_data, dict)
-            and task.extra_data.get("generated")
-            and task.extra_data.get("needs_review", True)
-            and (action := battle_test_provisioning_action(task, now=now))
-        ][:bounded_limit]
         battle_keys = [
             (task_id, org_id)
-            for task_id, org_id, action in actionable_tasks
+            for task_id, org_id, action in battle_batch.keys
             if action == "battle_test"
         ]
         repair_keys = [
             (task_id, org_id)
-            for task_id, org_id, action in actionable_tasks
+            for task_id, org_id, action in battle_batch.keys
             if action == "repair"
         ]
-        activation_status = Role.assessment_task_provisioning[
-            "activation_intent"
-        ]["status"].as_string()
-        activation_rows = (
-            db.query(Role)
-            .options(selectinload(Role.tasks))
-            .join(Organization, Organization.id == Role.organization_id)
-            .filter(
-                Role.deleted_at.is_(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Role.agentic_mode_enabled.is_(False),
-                Role.assessment_task_provisioning.isnot(None),
-                activation_status.in_(sorted(ACTIVATION_ACTIVE_STATUSES)),
-            )
-            .order_by(Role.updated_at.asc(), Role.id.asc())
-            .limit(bounded_limit)
-            .all()
+        activation_batch = select_activation_recovery_batch(
+            db,
+            limit=bounded_limit,
+            now=now,
         )
-        activation_blocked = sum(
-            1
-            for role in activation_rows
-            if block_activation_intent_if_task_exhausted(role, now=now)
+        activation_keys = list(activation_batch.keys)
+        activation_blocked = activation_batch.blocked
+        focus_batch = select_role_artifact_recovery_batch(
+            db,
+            section="interview_focus_provisioning",
+            limit=bounded_limit,
+            now=now,
         )
-        if activation_blocked:
-            db.commit()
-        activation_keys = [
-            (
-                int(role.id),
-                str(activation_intent_state(role).get("request_id") or ""),
-            )
-            for role in activation_rows
-            if activation_intent_task_ready(role)
-            and activation_intent_state(role).get("request_id")
-        ]
-        focus_rows = (
-            db.query(Role)
-            .join(Organization, Organization.id == Role.organization_id)
-            .filter(
-                Role.deleted_at.is_(None),
-                Role.agentic_mode_enabled.is_(True),
-                Role.agent_paused_at.is_(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Role.job_spec_text.isnot(None),
-                Role.job_spec_text != "",
-                Role.interview_focus.is_(None),
-            )
-            .order_by(Role.updated_at.asc(), Role.id.asc())
-            .limit(bounded_limit)
-            .all()
+        focus_keys = list(focus_batch.keys)
+        tech_batch = select_role_artifact_recovery_batch(
+            db,
+            section="tech_questions_provisioning",
+            limit=bounded_limit,
+            now=now,
         )
-        focus_keys = []
-        for role in focus_rows:
-            provisioning = (
-                role.assessment_task_provisioning
-                if isinstance(role.assessment_task_provisioning, dict)
-                else {}
-            )
-            focus_state = provisioning.get("interview_focus_provisioning") or {}
-            next_attempt = focus_state.get("next_attempt_at")
-            if next_attempt:
-                try:
-                    parsed = datetime.fromisoformat(
-                        str(next_attempt).replace("Z", "+00:00")
-                    )
-                    if parsed.tzinfo is None:
-                        parsed = parsed.replace(tzinfo=timezone.utc)
-                    if parsed > now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            focus_keys.append(int(role.id))
-        tech_rows = (
-            db.query(Role)
-            .join(Organization, Organization.id == Role.organization_id)
-            .filter(
-                Role.deleted_at.is_(None),
-                Role.agentic_mode_enabled.is_(True),
-                Role.agent_paused_at.is_(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Role.job_spec_text.isnot(None),
-                Role.job_spec_text != "",
-                Role.tech_questions_signature.is_(None),
-            )
-            .order_by(Role.updated_at.asc(), Role.id.asc())
-            .limit(bounded_limit)
-            .all()
-        )
-        tech_keys = []
-        for role in tech_rows:
-            provisioning = (
-                role.assessment_task_provisioning
-                if isinstance(role.assessment_task_provisioning, dict)
-                else {}
-            )
-            tech_state = provisioning.get("tech_questions_provisioning") or {}
-            next_attempt = tech_state.get("next_attempt_at")
-            if next_attempt:
-                try:
-                    parsed = datetime.fromisoformat(
-                        str(next_attempt).replace("Z", "+00:00")
-                    )
-                    if parsed.tzinfo is None:
-                        parsed = parsed.replace(tzinfo=timezone.utc)
-                    if parsed > now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            tech_keys.append(int(role.id))
+        tech_keys = list(tech_batch.keys)
     finally:
         db.close()
 
@@ -1764,14 +1636,14 @@ def sweep_assessment_task_provisioning(limit: int = 200):
             )
     return {
         "status": "ok",
-        "scanned": len(rows),
+        "scanned": generation_scanned,
         "due": len(role_keys),
         "dispatched": dispatched,
         "failed": failed,
         "generation_enabled": bool(
             getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False)
         ),
-        "battle_scanned": len(battle_rows),
+        "battle_scanned": battle_batch.scanned,
         "battle_due": len(battle_keys),
         "battle_dispatched": battle_dispatched,
         "battle_failed": battle_failed,
@@ -1782,10 +1654,13 @@ def sweep_assessment_task_provisioning(limit: int = 200):
         "activation_dispatched": activation_dispatched,
         "activation_failed": activation_failed,
         "activation_blocked": activation_blocked,
+        "activation_scanned": activation_batch.scanned,
         "interview_focus_due": len(focus_keys),
+        "interview_focus_scanned": focus_batch.scanned,
         "interview_focus_dispatched": focus_dispatched,
         "interview_focus_failed": focus_failed,
         "tech_questions_due": len(tech_keys),
+        "tech_questions_scanned": tech_batch.scanned,
         "tech_questions_dispatched": tech_dispatched,
         "tech_questions_failed": tech_failed,
     }

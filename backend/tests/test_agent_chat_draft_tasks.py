@@ -144,6 +144,7 @@ def test_approve_draft_activates(_repo, db):
     user = _user(db, org)
     role = _role(db, org)
     task = _draft(db, org, role)
+    db.commit()
 
     res = dt.approve_draft(db, role, task.id, user_id=int(user.id))
     assert res["ok"] is True
@@ -182,6 +183,66 @@ def test_approve_unknown_draft_fails(db):
     assert res["ok"] is False
 
 
+def test_shared_draft_cannot_be_revised_from_one_role(db):
+    org = _org(db)
+    role = _role(db, org)
+    task = _draft(db, org, role)
+    other = Role(
+        organization_id=org.id,
+        name="Another job",
+        source="manual",
+    )
+    other.tasks.append(task)
+    db.add(other)
+    db.flush()
+
+    result = dt.prepare_draft_revision(
+        db,
+        role,
+        task.id,
+        answers={"issues": ["scope"]},
+        note=None,
+        api_key="sk-test",
+    )
+
+    assert result["ok"] is False
+    assert "more than one active role" in result["error"]
+
+
+def test_draft_revision_rechecks_role_exclusivity_at_apply(db):
+    org = _org(db)
+    role = _role(db, org)
+    task = _draft(db, org, role)
+    prepared = dt.prepare_draft_revision(
+        db,
+        role,
+        task.id,
+        answers={"issues": ["scope"]},
+        note=None,
+        api_key="sk-test",
+    )
+    assert prepared["ok"] is True
+
+    other = Role(
+        organization_id=org.id,
+        name="Newly linked job",
+        source="manual",
+    )
+    other.tasks.append(task)
+    db.add(other)
+    db.flush()
+    result = dt.apply_prepared_draft_revision(
+        db,
+        role,
+        prepared["preparation"],
+        spec={**prepared["preparation"].prior_spec, "name": "Unsafe rewrite"},
+    )
+
+    assert result["ok"] is False
+    assert result["conflict"] is True
+    assert task.name == "Vendor Risk Task"
+
+
 # --- structured reject → revise --------------------------------------------
 def test_build_feedback_maps_structured_answers():
     fb = dt._build_feedback({"issues": ["scenario", "rubric"], "direction": "harder"}, "make it K8s")
@@ -196,6 +257,12 @@ def test_revise_draft_repersists_in_place(mock_revise, db):
     org = _org(db)
     role = _role(db, org)
     task = _draft(db, org, role)
+    task.extra_data = {
+        **task.extra_data,
+        "provenance": {"source": "jd-generator", "request_id": "req-7"},
+        "generation_model": "model-v1",
+        "battle_test_history": [{"verdict": "fail", "run_id": "older"}],
+    }
     original_key = task.task_key
 
     revised_spec = {
@@ -221,6 +288,14 @@ def test_revise_draft_repersists_in_place(mock_revise, db):
     assert task.calibration_prompt == "warm up"
     assert task.extra_data["needs_review"] is True
     assert task.extra_data["last_revision"]["feedback"]
+    assert "battle_test" not in task.extra_data
+    assert task.extra_data["provenance"]["request_id"] == "req-7"
+    assert task.extra_data["generation_model"] == "model-v1"
+    assert [report["verdict"] for report in task.extra_data["battle_test_history"]] == [
+        "fail",
+        "pass",
+    ]
+    assert task.extra_data["battle_test_provisioning"]["status"] == "pending"
     # The structured answers reached the generator as guidance.
     assert "harder" in mock_revise.call_args.kwargs["feedback"].lower()
     assert mock_revise.call_args.kwargs["role_id"] == role.id

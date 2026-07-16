@@ -34,3 +34,37 @@ describe('jobPipelinePageUtils compatibility facade', () => {
     }
   });
 });
+
+describe('legacy role autonomy compatibility', () => {
+  it('reads the effective legacy policy and omits unsaved fields during Turn on', () => {
+    const role = {
+      auto_promote: true,
+      auto_send_assessment: null,
+      auto_resend_assessment: null,
+      auto_advance: null,
+      agent_effective_policy: {
+        auto_send_assessment: true,
+        auto_resend_assessment: true,
+        auto_advance: true,
+        auto_skip_assessment: true,
+      },
+    };
+
+    expect(canonical.resolvedRoleAutomation(role, 'auto_send_assessment')).toBe(true);
+    expect(canonical.resolvedRoleAutomation(role, 'auto_resend_assessment')).toBe(true);
+    expect(canonical.resolvedRoleAutomation(role, 'auto_advance')).toBe(true);
+    expect(canonical.resolvedRoleAutoSkipAssessment(role)).toBe(true);
+    expect(canonical.activationAutonomyPayload(role)).toEqual({});
+  });
+
+  it('counts only explicitly active assessment tasks as activation-ready', () => {
+    expect(canonical.hasActiveAssessmentTask([
+      { id: 1, is_active: false },
+      { id: 2 },
+    ])).toBe(false);
+    expect(canonical.hasActiveAssessmentTask([
+      { id: 1, is_active: false },
+      { id: 2, is_active: true },
+    ])).toBe(true);
+  });
+});

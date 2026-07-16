@@ -128,6 +128,15 @@ def pause_role_agent(
     indefinitely and doesn't auto-resume — neither path discards the queue.
     Idempotent: pausing an already-paused role is a no-op.
     """
+    from ...services.agent_control_ats_fence import (
+        require_authorized_agent_control_transaction_fence,
+    )
+
+    require_authorized_agent_control_transaction_fence(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+    )
     require_job_permission(
         db,
         current_user=current_user,

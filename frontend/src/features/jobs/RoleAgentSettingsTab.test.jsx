@@ -102,7 +102,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(advance).not.toBeDisabled();
   });
 
-  it('previews the first-Turn-on autonomous default for an untouched role', async () => {
+  it('previews safe HITL defaults for an untouched role', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({
@@ -122,14 +122,64 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     const send = screen.getByRole('button', { name: 'Auto-send assessments' });
     const resend = screen.getByRole('button', { name: 'Auto-retry assessment invites' });
     const advance = screen.getByRole('button', { name: 'Auto-advance qualified candidates' });
-    expect(send).toHaveAttribute('aria-pressed', 'true');
-    expect(resend).toHaveAttribute('aria-pressed', 'true');
-    expect(advance).toHaveAttribute('aria-pressed', 'true');
+    expect(send).toHaveAttribute('aria-pressed', 'false');
+    expect(resend).toHaveAttribute('aria-pressed', 'false');
+    expect(advance).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
+      .toHaveAttribute('aria-pressed', 'true');
 
     await act(async () => {
       fireEvent.click(send);
     });
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
+  });
+
+  it('preserves an enabled legacy aggregate until the recruiter changes it', async () => {
+    const onAutonomyChange = vi.fn();
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        auto_promote: true,
+        auto_send_assessment: null,
+        auto_resend_assessment: null,
+        auto_advance: null,
+        agent_effective_policy: {
+          auto_send_assessment: true,
+          auto_resend_assessment: true,
+          auto_advance: true,
+        },
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    const send = screen.getByRole('button', { name: 'Auto-send assessments' });
+    expect(send).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }))
+      .toHaveAttribute('aria-pressed', 'true');
+
+    await act(async () => fireEvent.click(send));
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', false);
+  });
+
+  it('replaces forbidden related-role actions with a clear original-role link', () => {
+    const onAutonomyChange = vi.fn();
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        role_kind: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    expect(screen.getByRole('heading', { name: /Related-role scoring/i })).toBeInTheDocument();
+    expect(screen.getByText(/does not send assessments, reject, or advance candidates/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open original role settings/i }))
+      .toHaveAttribute('href', '/jobs/77?view=role-fit');
+    expect(screen.queryByRole('button', { name: 'Auto-send assessments' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
+    expect(onAutonomyChange).not.toHaveBeenCalled();
   });
 
   it('renders one consolidated deterministic-rejection control', async () => {
@@ -177,15 +227,15 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
 
 describe('RoleAgentSettingsTab assessment task', () => {
   const catalogue = [
-    { id: 700, name: 'Async Debugging Challenge' },
-    { id: 701, name: 'React Component Build' },
+    { id: 700, name: 'Async Debugging Challenge', is_active: true },
+    { id: 701, name: 'React Component Build', is_active: true },
   ];
 
   it('shows the currently-assigned assessment task', () => {
     render(
       <RoleAgentSettingsTab
         {...baseProps()}
-        roleTasks={[{ id: 701, name: 'React Component Build' }]}
+        roleTasks={[{ id: 701, name: 'React Component Build', is_active: true }]}
         allTasks={catalogue}
       />,
     );
@@ -206,18 +256,20 @@ describe('RoleAgentSettingsTab assessment task', () => {
     );
     expect(screen.getByText('No assessment task assigned')).toBeInTheDocument();
     expect(
-      screen.getByText(/Turn on will generate and validate a role-specific task automatically/i),
+      screen.getByText(/Candidates will skip the assessment stage until you assign an active task/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/nothing to send after screening/i)).toBeInTheDocument();
+    const skipToggle = screen.getByRole('button', { name: 'Skip assessment stage' });
+    expect(skipToggle).toHaveAttribute('aria-pressed', 'true');
+    expect(skipToggle).toBeDisabled();
   });
 
-  it('keeps a running taskless role in explicit skip mode until a task is chosen', () => {
+  it('keeps every taskless role in explicit skip mode until a task is chosen', () => {
     const onAutonomyChange = vi.fn();
     render(
       <RoleAgentSettingsTab
         {...baseProps({
-          agentic_mode_enabled: true,
-          auto_skip_assessment: true,
+          agentic_mode_enabled: false,
+          auto_skip_assessment: false,
         })}
         roleTasks={[]}
         allTasks={catalogue}
@@ -226,12 +278,39 @@ describe('RoleAgentSettingsTab assessment task', () => {
     );
 
     expect(
-      screen.getByText(/this running role is skipping the assessment stage/i),
+      screen.getByText(/Candidates will skip the assessment stage until you assign an active task/i),
     ).toBeInTheDocument();
-    const skipToggle = screen.getByRole('button', { name: 'Skip assessment for strong candidates' });
+    const skipToggle = screen.getByRole('button', { name: 'Skip assessment stage' });
     expect(skipToggle).toBeDisabled();
     fireEvent.click(skipToggle);
     expect(onAutonomyChange).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without claiming tasklessness when the task fetch is unconfirmed', () => {
+    const onRetryTasks = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps({ auto_skip_assessment: false })}
+        roleTasks={[]}
+        roleTasksFetchKnown={false}
+        roleTasksLoadError="Assessment tasks could not be loaded."
+        allTasks={catalogue}
+        onRetryTasks={onRetryTasks}
+        onAutonomyChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Assessment tasks unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Assessment tasks could not be loaded.')).toBeInTheDocument();
+    expect(screen.queryByText('No assessment task assigned')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    const skipToggle = screen.getByRole('button', { name: 'Skip assessment stage' });
+    expect(skipToggle).toHaveAttribute('aria-pressed', 'false');
+    expect(skipToggle).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetryTasks).toHaveBeenCalledTimes(1);
   });
 
   it('assigns a task by sending the complete selected ID set', async () => {
@@ -255,7 +334,7 @@ describe('RoleAgentSettingsTab assessment task', () => {
     render(
       <RoleAgentSettingsTab
         {...baseProps()}
-        roleTasks={[{ id: 701, name: 'React Component Build' }]}
+        roleTasks={[{ id: 701, name: 'React Component Build', is_active: true }]}
         allTasks={catalogue}
         onAssignAssessmentTasks={onAssignAssessmentTasks}
       />,
@@ -286,6 +365,29 @@ describe('RoleAgentSettingsTab assessment task', () => {
     expect(onAssignAssessmentTasks).toHaveBeenCalledWith([701]);
   });
 
+  it('retains an inactive linked task when another task is selected', async () => {
+    const onAssignAssessmentTasks = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        roleTasks={[{ id: 799, name: 'Retired linked exercise', is_active: false }]}
+        allTasks={catalogue}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
+      />,
+    );
+
+    expect(screen.getByText('No active assessment task assigned')).toBeInTheDocument();
+    const retained = screen.getByRole('checkbox', { name: /^Retired linked exercise/i });
+    expect(retained).toBeChecked();
+    expect(retained).toBeDisabled();
+    expect(screen.getByText(/Inactive linked task · retained/i)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Async Debugging Challenge' }));
+    });
+    expect(onAssignAssessmentTasks).toHaveBeenCalledWith([799, 700]);
+  });
+
   it('adds search when the task library is long', () => {
     const longCatalogue = Array.from({ length: 7 }, (_, index) => ({
       id: 800 + index,
@@ -305,6 +407,52 @@ describe('RoleAgentSettingsTab assessment task', () => {
     });
     expect(screen.getByRole('checkbox', { name: 'Assessment 7' })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'Assessment 1' })).not.toBeInTheDocument();
+  });
+
+  it('retains a linked task while searching the server catalogue', () => {
+    const onTaskCatalogueSearchChange = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        roleTasks={[{ id: 701, name: 'Linked legacy exercise', is_active: true }]}
+        allTasks={[{ id: 900, name: 'Remote React exercise', is_active: true }]}
+        taskCatalogueHasMore
+        onTaskCatalogueSearchChange={onTaskCatalogueSearchChange}
+        onAssignAssessmentTasks={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search assessment tasks' }), {
+      target: { value: 'Remote React' },
+    });
+
+    expect(screen.getByRole('checkbox', { name: 'Linked legacy exercise' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Remote React exercise' })).toBeInTheDocument();
+    expect(onTaskCatalogueSearchChange).toHaveBeenLastCalledWith('Remote React');
+  });
+
+  it('shows a recoverable catalogue error and exposes explicit pagination', () => {
+    const onRetryTaskCatalogue = vi.fn();
+    const onLoadMoreTaskCatalogue = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        roleTasks={[{ id: 701, name: 'Linked task', is_active: true }]}
+        allTasks={catalogue}
+        taskCatalogueError="The reusable task library is offline."
+        taskCatalogueHasMore
+        onRetryTaskCatalogue={onRetryTaskCatalogue}
+        onLoadMoreTaskCatalogue={onLoadMoreTaskCatalogue}
+        onAssignAssessmentTasks={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Task library unavailable');
+    expect(screen.getByText('The reusable task library is offline.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load more tasks' }));
+    expect(onRetryTaskCatalogue).toHaveBeenCalledTimes(1);
+    expect(onLoadMoreTaskCatalogue).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -361,7 +509,7 @@ describe('RoleAgentSettingsTab budget validation', () => {
 });
 
 describe('RoleAgentSettingsTab related-role and large-roster boundaries', () => {
-  it('keeps scoring and budget editable while related-role candidate actions stay read-only', async () => {
+  it('keeps scoring and budget editable while omitting original-role-only controls', async () => {
     const onAutonomyChange = vi.fn();
     const onAssignAssessmentTasks = vi.fn();
     const setThresholdDraft = vi.fn();
@@ -386,14 +534,15 @@ describe('RoleAgentSettingsTab related-role and large-roster boundaries', () => 
       />,
     );
 
-    expect(screen.getByText(/Related-role Agent is score-only/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { name: /Related-role scoring/i })).toHaveLength(1);
+    expect(screen.queryByText(/Related-role Agent is score-only/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Threshold mode' })).not.toBeDisabled();
-    const threshold = screen.getByRole('slider', { name: 'Screening threshold percent' });
+    const threshold = screen.getByRole('slider', { name: 'Scoring threshold percent' });
     expect(threshold).not.toBeDisabled();
     fireEvent.change(threshold, { target: { value: '61' } });
     expect(setThresholdDraft).toHaveBeenCalledWith('61');
 
-    expect(screen.getByRole('checkbox', { name: 'Owner API exercise' })).toBeDisabled();
+    expect(screen.queryByRole('checkbox', { name: 'Owner API exercise' })).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'Unrelated library task' })).not.toBeInTheDocument();
     for (const label of [
       'Auto-reject pre-screen failures',
@@ -401,9 +550,7 @@ describe('RoleAgentSettingsTab related-role and large-roster boundaries', () => 
       'Auto-retry assessment invites',
       'Auto-advance qualified candidates',
     ]) {
-      const control = screen.getByRole('button', { name: label });
-      expect(control).toBeDisabled();
-      fireEvent.click(control);
+      expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
     }
     expect(onAutonomyChange).not.toHaveBeenCalled();
     expect(onAssignAssessmentTasks).not.toHaveBeenCalled();

@@ -157,6 +157,7 @@ def role_assignable_tasks(
     role: Role,
     *,
     organization_id: int,
+    preview_active_task_id: int | None = None,
 ) -> tuple[list[Task], str | None]:
     """Return every task a future unattended assignment can select.
 
@@ -170,6 +171,10 @@ def role_assignable_tasks(
         task
         for task in (getattr(role, "tasks", None) or [])
         if bool(getattr(task, "is_active", False))
+        or (
+            preview_active_task_id is not None
+            and int(task.id) == int(preview_active_task_id)
+        )
     ]
     if not tasks:
         return [], f"role {role.id} has no active tasks linked"

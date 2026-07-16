@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ...deps import get_current_user
@@ -16,7 +17,10 @@ from ...schemas.role import (
     RoleFeedbackNoteResponse,
     RoleTaskLinkRequest,
 )
-from ...services.role_change_audit import latest_role_change_actor
+from ...services.role_change_audit import (
+    capture_role_change_snapshot,
+    latest_role_change_actor,
+)
 from ...services.role_concurrency import assert_role_version
 from .job_authorization import JobPermission, require_job_permission
 from .role_management_route_support import _add_role_change_boundary
@@ -90,16 +94,52 @@ def add_role_task(
         db.query(Task)
         .filter(
             Task.id == data.task_id,
-            (Task.organization_id == current_user.organization_id)
-            | (Task.organization_id == None),  # noqa: E711
+            or_(
+                Task.organization_id == current_user.organization_id,
+                and_(
+                    Task.organization_id.is_(None),
+                    Task.is_template.is_(True),
+                ),
+            ),
         )
+        .populate_existing()
+        .with_for_update(of=Task)
         .first()
     )
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not any(t.id == task.id for t in (role.tasks or [])):
+    task_extra = task.extra_data if isinstance(task.extra_data, dict) else {}
+    if not bool(task.is_active) and bool(task_extra.get("generated")):
+        other_live_role = (
+            db.query(Role.id)
+            .join(Role.tasks)
+            .filter(
+                Role.id != int(role.id),
+                Role.deleted_at.is_(None),
+                Task.id == int(task.id),
+            )
+            .first()
+        )
+        if other_live_role is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "An inactive generated draft can belong to only one live "
+                    "job. Duplicate it before linking it to another job."
+                ),
+            )
+    had_active_task = any(bool(t.is_active) for t in (role.tasks or []))
+    task_was_linked = any(t.id == task.id for t in (role.tasks or []))
+    first_active_task_linked = bool(
+        not task_was_linked
+        and bool(task.is_active)
+        and not had_active_task
+        and not bool(role.auto_skip_assessment)
+    )
+    reconcile_role_version: int | None = None
+    if not task_was_linked:
         role.tasks.append(task)
-        _add_role_change_boundary(
+        reconcile_role_version = _add_role_change_boundary(
             db,
             role=role,
             current_user=current_user,
@@ -120,6 +160,27 @@ def add_role_task(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to link task to role")
+    if first_active_task_linked:
+        # The configured skip preference stays untouched. Linking the first
+        # active task changes only the effective stage, so re-flow existing
+        # positive cards at the authorized, versioned role boundary.
+        try:
+            from ...services.bulk_decision_service import (
+                reconcile_pending_positive_decisions,
+            )
+
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=int(reconcile_role_version),
+            )
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Assessment-stage reconcile failed after task link role_id=%s",
+                role.id,
+            )
+            db.rollback()
     return {
         "success": True,
         "role_id": role.id,
@@ -145,6 +206,12 @@ def remove_role_task(
         permission=JobPermission.CONTROL_AGENT,
     )
     assert_role_version(role, expected_version=expected_version)
+    # Role is already locked by require_job_permission. Serialize on the exact
+    # task before changing the association or its activation intent so task
+    # approval/deactivation cannot cross this boundary concurrently.
+    db.query(Task).filter(Task.id == int(task_id)).populate_existing().with_for_update(
+        of=Task
+    ).one_or_none()
     in_use = (
         db.query(Assessment)
         .filter(
@@ -158,40 +225,70 @@ def remove_role_task(
         raise HTTPException(
             status_code=400, detail="Cannot unlink task that already has assessments"
         )
-    had_task = any(t.id == task_id for t in (role.tasks or []))
+    linked_task = next(
+        (task for task in (role.tasks or []) if task.id == task_id),
+        None,
+    )
+    had_task = linked_task is not None
+    audit_before = capture_role_change_snapshot(role)
     role.tasks = [t for t in (role.tasks or []) if t.id != task_id]
-    enabled_last_task_removed = bool(
-        had_task
-        and role.agentic_mode_enabled
+    last_active_task_removed = bool(
+        linked_task is not None
+        and bool(linked_task.is_active)
         and not any(bool(task.is_active) for task in (role.tasks or []))
         and not bool(role.auto_skip_assessment)
     )
-    if enabled_last_task_removed:
-        # Choosing "No assessment task" is the recruiter's explicit choice to
-        # bypass that stage. Keep the live role internally consistent instead
-        # of silently translating taskless send decisions into advances while
-        # settings still claim assessment skipping is off.
-        role.auto_skip_assessment = True
+    reconcile_role_version: int | None = None
     if had_task:
-        _add_role_change_boundary(
+        from ...services.role_activation_intent import (
+            block_activation_intent_for_unavailable_selected_task,
+        )
+
+        block_activation_intent_for_unavailable_selected_task(
+            role,
+            task_id=int(task_id),
+            reason=(
+                "The assessment task selected for Turn on was unlinked. Select "
+                "or generate another task, or skip the assessment stage, then "
+                "press Turn on again."
+            ),
+        )
+        reconcile_role_version = _add_role_change_boundary(
             db,
             role=role,
             current_user=current_user,
             action="role_task_unlinked",
             reason=f"assessment task {task_id} unlinked",
+            before=audit_before,
         )
     try:
+        if last_active_task_removed and bool(role.agentic_mode_enabled):
+            from ...services.agent_activation_checklist import (
+                surface_activation_questions,
+            )
+
+            # The role remains configured to use assessments, so losing its
+            # last executable task is an actionable runtime gap, not an
+            # implicit preference rewrite.
+            surface_activation_questions(db, role=role)
         db.commit()
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to unlink task from role")
-    if enabled_last_task_removed:
+    if last_active_task_removed:
+        # Removing the last active task makes the stage effectively skipped,
+        # but must not rewrite the recruiter's configured preference. If an
+        # active task is linked later, that preference takes effect again.
         try:
             from ...services.bulk_decision_service import (
                 reconcile_pending_positive_decisions,
             )
 
-            reconcile_pending_positive_decisions(db, role=role)
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=int(reconcile_role_version),
+            )
             db.commit()
         except Exception:
             logger.exception(

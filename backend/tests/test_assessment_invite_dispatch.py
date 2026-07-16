@@ -883,6 +883,7 @@ def test_idempotency_key_changes_only_for_explicit_resend(db):
 def test_explicit_resend_queues_a_new_provider_generation(db):
     from app.actions.resend_assessment_invite import run
     from app.actions.types import Actor
+    from app.components.notifications import tasks as notification_tasks
 
     org = _make_org(db)
     assessment = _make_assessment(db, org=org)
@@ -891,15 +892,32 @@ def test_explicit_resend_queues_a_new_provider_generation(db):
     assessment.invite_email_id = "em-original"
     assessment.invite_delivered_at = datetime.now(timezone.utc)
 
-    result = run(
-        db,
-        Actor.system(),
-        organization_id=int(org.id),
-        assessment_id=int(assessment.id),
-    )
+    with patch.object(
+        notification_tasks.dispatch_pending_assessment_invite, "delay"
+    ) as kick:
+        result = run(
+            db,
+            Actor.system(),
+            organization_id=int(org.id),
+            assessment_id=int(assessment.id),
+        )
 
-    assert result.status == "queued"
-    assert assessment.invite_email_send_generation == 1
-    assert assessment.invite_email_id is None
-    assert assessment.invite_delivered_at is None
-    assert assessment.application.pipeline_stage == "review"
+        assert result.status == "queued"
+        assert assessment.invite_email_send_generation == 1
+        assert assessment.invite_email_id is None
+        assert assessment.invite_delivered_at is None
+        assert assessment.application.pipeline_stage == "review"
+
+        db.commit()
+        second = run(
+            db,
+            Actor.system(),
+            organization_id=int(org.id),
+            assessment_id=int(assessment.id),
+        )
+        assert second.status == "queued"
+        db.commit()
+
+    assert kick.call_count == 2
+    db.refresh(assessment)
+    assert assessment.invite_email_send_generation == 2

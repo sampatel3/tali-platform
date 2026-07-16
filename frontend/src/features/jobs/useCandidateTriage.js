@@ -112,6 +112,9 @@ export function useCandidateTriage({
   role,
   roleApplications,
   roleTasks,
+  roleTasksFetchKnown = true,
+  roleTasksLoadError = '',
+  onRetryRoleTasks,
   canMutate = true,
   loadRoleWorkspace,
   // Patch a single application row after a mutation instead of reloading the
@@ -135,6 +138,12 @@ export function useCandidateTriage({
     () => roleApplications.find((a) => Number(a?.id) === Number(triageApplicationId)) || null,
     [roleApplications, triageApplicationId],
   );
+  const sendableAssessmentTaskIds = useMemo(() => new Set(
+    (Array.isArray(roleTasks) ? roleTasks : [])
+      .filter((task) => task?.is_active === true)
+      .map((task) => Number(task?.id))
+      .filter(Number.isFinite),
+  ), [roleTasks]);
 
   // Pull the owning provider's stages once the role is known. Workable exposes
   // the job's stage catalogue; Bullhorn exposes the org's explicit remote
@@ -216,6 +225,24 @@ export function useCandidateTriage({
       );
       return false;
     }
+    if (!roleTasksFetchKnown) {
+      showToast(
+        roleTasksLoadError || 'Assessment task availability has not been confirmed. Refresh before sending.',
+        'error',
+      );
+      return false;
+    }
+    const isAuto = String(taskId) === 'auto';
+    const requestedTaskIsAvailable = isAuto
+      ? sendableAssessmentTaskIds.size > 1
+      : sendableAssessmentTaskIds.has(Number(taskId));
+    if (!requestedTaskIsAvailable) {
+      showToast(
+        'That assessment task is inactive or no longer linked. Refresh the task assignment before sending.',
+        'error',
+      );
+      return false;
+    }
     const activeAssessmentId = application?.score_summary?.assessment_id
       || application?.valid_assessment_id
       || null;
@@ -223,7 +250,6 @@ export function useCandidateTriage({
     try {
       // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
       // the arm (50/50, stable per candidate); otherwise force the picked task.
-      const isAuto = String(taskId) === 'auto';
       if (activeAssessmentId) {
         if (isAuto) {
           showToast('Choose the task for this retake.', 'error');
@@ -260,7 +286,8 @@ export function useCandidateTriage({
     } finally {
       setAssessmentBusy(false);
     }
-  }, [canMutate, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [canMutate, role?.role_kind, roleTasksFetchKnown, roleTasksLoadError, rolesApi,
+    refreshRow, sendableAssessmentTaskIds, showToast]);
 
   const handleReject = useCallback(async (application) => {
     if (!application?.id || !canMutate) return;
@@ -433,6 +460,9 @@ export function useCandidateTriage({
     isRelatedRole: role?.role_kind === 'sister',
     hasRelatedRoles: Number(role?.sister_role_count || 0) > 0,
     roleTasks,
+    roleTasksFetchKnown,
+    roleTasksLoadError,
+    onRetryRoleTasks,
     canMutate,
     mode: 'inline',
     stageBusy,
@@ -454,6 +484,9 @@ export function useCandidateTriage({
     role?.role_kind,
     role?.sister_role_count,
     roleTasks,
+    roleTasksFetchKnown,
+    roleTasksLoadError,
+    onRetryRoleTasks,
     canMutate,
     stageBusy,
     assessmentBusy,

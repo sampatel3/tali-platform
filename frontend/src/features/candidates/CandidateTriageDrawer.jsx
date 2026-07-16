@@ -120,6 +120,9 @@ export function CandidateTriageDrawer({
   isRelatedRole = false,
   hasRelatedRoles = false,
   roleTasks = [],
+  roleTasksFetchKnown = true,
+  roleTasksLoadError = '',
+  onRetryRoleTasks = null,
   canMutate = true,
   mode = 'inline',
   activityLabel = '',
@@ -165,6 +168,7 @@ export function CandidateTriageDrawer({
   const [retakeOpen, setRetakeOpen] = useState(false);
   const containerRef = useRef(null);
   const relatedRoleAssessmentNoteId = useId();
+  const taskAvailabilityNoteId = useId();
 
   const applicationId = application?.id || null;
   const assessmentId = useMemo(() => resolveAssessmentId(application), [application]);
@@ -201,6 +205,14 @@ export function CandidateTriageDrawer({
   const atsStageOptions = useMemo(
     () => (Array.isArray(resolvedAtsStages) ? resolvedAtsStages.map(formatAtsStageOption) : []),
     [resolvedAtsStages],
+  );
+  // Explicitly inactive links are retained by the role for audit/history, but
+  // they must never be defaulted, A/B-assigned, sent, or used for a retake.
+  // Current API responses always include the boolean. Missing/malformed flags
+  // fail closed because an assessment invite is an external candidate action.
+  const sendableRoleTasks = useMemo(
+    () => roleTasks.filter((task) => task?.is_active === true),
+    [roleTasks],
   );
   const currentAtsStage = String(
     resolvedAtsProvider === 'bullhorn'
@@ -262,9 +274,9 @@ export function CandidateTriageDrawer({
       // Never preselect an inherited owner task as though it could be sent
       // from this funnel.
       setSelectedTaskId('');
-    } else if (roleTasks.length === 1) {
-      setSelectedTaskId(String(roleTasks[0].id));
-    } else if (roleTasks.length > 1) {
+    } else if (sendableRoleTasks.length === 1) {
+      setSelectedTaskId(String(sendableRoleTasks[0].id));
+    } else if (sendableRoleTasks.length > 1) {
       // Multiple linked tasks ⇒ an A/B is in play. Default to Auto so an
       // active experiment assigns the arm (50/50, stable per candidate)
       // instead of silently forcing whichever task happens to be first —
@@ -273,7 +285,7 @@ export function CandidateTriageDrawer({
     } else {
       setSelectedTaskId('');
     }
-  }, [applicationId, isRelatedRole, roleTasks]);
+  }, [applicationId, isRelatedRole, sendableRoleTasks]);
 
   // Drop the stage selection if the underlying stage list changes (rare,
   // but happens after the provider stage catalogue is fetched).
@@ -331,9 +343,18 @@ export function CandidateTriageDrawer({
   const moveBusy = isRejectSelected ? rejectBusy : atsMovementBusy;
 
   const handleSendAssessmentClick = () => {
+    const selectedTaskAvailable = selectedTaskId === 'auto'
+      ? sendableRoleTasks.length > 1
+      : sendableRoleTasks.some((task) => String(task?.id) === String(selectedTaskId));
     // Keep the UI guard even though the owning hook also rejects this action:
     // inherited tasks must never mutate the canonical owner's application.
-    if (isRelatedRole || !canAct || !selectedTaskId || assessmentBusy) return;
+    if (
+      isRelatedRole
+      || !canAct
+      || !selectedTaskId
+      || !selectedTaskAvailable
+      || assessmentBusy
+    ) return;
     if (assessmentId) {
       setRetakeOpen(true);
       return;
@@ -556,8 +577,25 @@ export function CandidateTriageDrawer({
               Linked tasks below are shown for context only.
             </div>
           ) : null}
+          {!roleTasksFetchKnown ? (
+            <div
+              className="ctc-agent-note"
+              id={taskAvailabilityNoteId}
+              role={roleTasksLoadError ? 'alert' : 'status'}
+            >
+              <span>
+                <strong>{roleTasksLoadError ? 'Assessment tasks unavailable.' : 'Checking assessment tasks…'}</strong>
+                {' '}{roleTasksLoadError || 'Confirming the current assignment before enabling assessment controls.'}
+              </span>
+              {roleTasksLoadError && typeof onRetryRoleTasks === 'function' ? (
+                <Button type="button" variant="secondary" size="sm" onClick={onRetryRoleTasks}>
+                  Retry
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="ctc-cards">
-            {roleTasks.length === 0 ? (
+            {!roleTasksFetchKnown ? null : roleTasks.length === 0 ? (
               <div className="ctc-empty">
                 {isRelatedRole
                   ? 'No shared assessment tasks are linked on the original role.'
@@ -565,7 +603,7 @@ export function CandidateTriageDrawer({
               </div>
             ) : (
               <>
-                {roleTasks.length > 1 ? (
+                {sendableRoleTasks.length > 1 ? (
                   <button
                     type="button"
                     className={`ctc-card ${selectedTaskId === 'auto' ? 'on' : ''}`}
@@ -582,17 +620,24 @@ export function CandidateTriageDrawer({
                 ) : null}
                 {roleTasks.map((task) => {
                   const isOn = String(selectedTaskId) === String(task.id);
+                  const unavailable = task?.is_active !== true;
                   return (
                     <button
                       key={task.id}
                       type="button"
                       className={`ctc-card ${isOn ? 'on' : ''}`}
-                      disabled={!canAct || isRelatedRole}
+                      disabled={!canAct || isRelatedRole || unavailable}
                       onClick={() => setSelectedTaskId(String(task.id))}
                     >
                       <div className="ctc-card-title">{task.name}</div>
                       <div className="ctc-card-sub">
-                        {isRelatedRole ? 'Shared from original role · view only' : '~60 min · in-browser IDE'}
+                        {isRelatedRole
+                          ? 'Shared from original role · view only'
+                          : unavailable
+                            ? (task?.is_active === false
+                              ? 'Inactive linked task · retained for history'
+                              : 'Task availability unconfirmed · retained for history')
+                            : '~60 min · in-browser IDE'}
                       </div>
                     </button>
                   );
@@ -618,8 +663,15 @@ export function CandidateTriageDrawer({
               type="button"
               variant={agentRunning || isRelatedRole ? 'secondary' : 'primary'}
               size="sm"
-              disabled={isRelatedRole || !canAct || !selectedTaskId || assessmentBusy}
-              aria-describedby={isRelatedRole ? relatedRoleAssessmentNoteId : undefined}
+              disabled={!roleTasksFetchKnown || isRelatedRole || !canAct || !selectedTaskId
+                || (selectedTaskId === 'auto'
+                  ? sendableRoleTasks.length <= 1
+                  : !sendableRoleTasks.some((task) => String(task?.id) === String(selectedTaskId)))
+                || assessmentBusy}
+              aria-describedby={[
+                isRelatedRole ? relatedRoleAssessmentNoteId : null,
+                !roleTasksFetchKnown ? taskAvailabilityNoteId : null,
+              ].filter(Boolean).join(' ') || undefined}
               onClick={handleSendAssessmentClick}
             >
               {assessmentBusy ? <Spinner size={14} className="!text-current" /> : null}
@@ -735,7 +787,7 @@ export function CandidateTriageDrawer({
       <RetakeAssessmentDialog
         open={retakeOpen}
         application={application}
-        roleTasks={roleTasks}
+        roleTasks={sendableRoleTasks}
         loading={assessmentBusy}
         defaultTaskId={selectedTaskId === 'auto' ? '' : selectedTaskId}
         onClose={closeRetake}

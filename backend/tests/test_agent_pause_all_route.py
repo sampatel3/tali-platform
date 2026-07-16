@@ -16,6 +16,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
@@ -24,6 +26,30 @@ from app.models.job_hiring_team import JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.workspace_agent_control_event import WorkspaceAgentControlEvent
+
+
+@pytest.fixture(autouse=True)
+def _healthy_agent_control_ats_fence(monkeypatch):
+    """Keep legacy control tests scoped to state semantics, not Redis health."""
+
+    def no_op(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.agent_control_ats_fence."
+        "require_agent_control_transaction_fence",
+        no_op,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_control_ats_fence."
+        "require_authorized_agent_control_transaction_fence",
+        no_op,
+    )
+    monkeypatch.setattr(
+        "app.domains.assessments_runtime.roles_management_routes."
+        "require_authorized_agent_control_transaction_fence",
+        no_op,
+    )
 
 
 def _seed_org_with_agent_roles(org_name: str, *, role_names: list[str]) -> dict:

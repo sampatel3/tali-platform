@@ -137,19 +137,36 @@ const hasConfiguredGranularAutomation = (role) => GRANULAR_AUTOMATION_KEYS
   .some((key) => role?.[key] != null);
 
 export const resolvedRoleAutomation = (role, key) => {
-  if (!hasConfiguredGranularAutomation(role)) return true;
   const effective = role?.agent_effective_policy || {};
   if (effective[key] != null) return Boolean(effective[key]);
   if (role?.[key] != null) return Boolean(role[key]);
+  // Nullable fields identify roles created before action-level controls were
+  // introduced. Their historical aggregate remains authoritative until the
+  // recruiter explicitly materializes a granular policy.
   return Boolean(role?.auto_promote);
 };
 
-export const resolvedDeterministicReject = (role) => Boolean(
-  role?.agent_effective_policy?.auto_reject_pre_screen
-  ?? role?.auto_reject_pre_screen
-) || Boolean(role?.auto_reject);
+export const resolvedDeterministicReject = (role) => {
+  if (role?.auto_reject) return true;
+  const configured = role?.agent_effective_policy?.auto_reject_pre_screen
+    ?? role?.auto_reject_pre_screen;
+  return configured == null ? true : Boolean(configured);
+};
+
+export const resolvedRoleAutoSkipAssessment = (role) => {
+  const effective = role?.agent_effective_policy?.auto_skip_assessment;
+  return effective == null ? Boolean(role?.auto_skip_assessment) : Boolean(effective);
+};
+
+export const hasActiveAssessmentTask = (tasks) => (
+  Array.isArray(tasks) && tasks.some((task) => task?.is_active === true)
+);
 
 export const activationAutonomyPayload = (role) => {
+  // Do not rewrite a legacy all-null policy merely because the recruiter turns
+  // the Agent on. The backend resolves those rows through auto_promote and
+  // preserves their existing power. New roles already store concrete safe
+  // granular defaults.
   if (!hasConfiguredGranularAutomation(role)) return {};
   const payload = {};
   for (const key of GRANULAR_AUTOMATION_KEYS) {

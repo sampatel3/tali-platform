@@ -9,7 +9,11 @@ array search, transaction advisory locks, append-only/unique constraints, and
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -19,6 +23,8 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
+from app.actions import approve_decision
+from app.actions.types import ACTOR_RECRUITER, Actor
 from app.brain_feed import outbox as brain_feed_outbox
 from app.candidate_search.query_builder_sql import apply_parsed_filter
 from app.candidate_search.schemas import ParsedFilter
@@ -34,17 +40,39 @@ from app.models.brain_feed_outbox import (
     BRAIN_FEED_STATUS_PROCESSING,
     BrainFeedOutbox,
 )
+from app.models.assessment import Assessment
+from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import Role, role_tasks
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
+from app.models.task import Task
 from app.models.workspace_pause_migration_audit import WorkspacePauseMigrationAudit
 from app.services.ats_operation_guards import lock_live_application_move
+from app.services.assessment_repository_operations import (
+    create_serialized_assessment_branch,
+)
+from app.services.auto_reject_op import execute_auto_reject_op
+from app.services.bulk_decision_service.stage_toggle import (
+    reconcile_pending_positive_decisions,
+)
 from app.services.provider_usage_admission import serialize_provider_work
+from app.services.role_execution_guard import lock_live_role
+from app.services.task_repository_serialization import (
+    TASK_REPOSITORY_WRITE_LOCK_SCOPE,
+    TaskRepositoryBusyError,
+    task_repository_write_mutex,
+)
+from app.services import task_catalog
+from app.services.task_catalog import (
+    TASK_CATALOG_SYNC_LOCK_SCOPE,
+    serialize_task_catalog_sync,
+    sync_template_task_specs,
+)
 from tests.postgres_support import (
     configured_test_postgres_url,
     isolated_postgres_database,
@@ -125,6 +153,105 @@ def _seed_application(db: Session, *, prefix: str) -> CandidateApplication:
     db.add(application)
     db.flush()
     return application
+
+
+def _seed_pending_positive_decision(
+    db: Session,
+    *,
+    prefix: str,
+) -> tuple[CandidateApplication, AgentDecision]:
+    application = _seed_application(db, prefix=prefix)
+    decision = AgentDecision(
+        organization_id=int(application.organization_id),
+        role_id=int(application.role_id),
+        application_id=int(application.id),
+        decision_type="send_assessment",
+        recommendation="send_assessment",
+        status="pending",
+        reasoning="PostgreSQL lock-order contract",
+        evidence={},
+        model_version="postgres-contract",
+        prompt_version="postgres-contract",
+        idempotency_key=f"{prefix}:send-assessment",
+    )
+    db.add(decision)
+    db.flush()
+    return application, decision
+
+
+class _AuthorityClaimObserved(RuntimeError):
+    pass
+
+
+def _assert_application_lock_precedes_workspace_authority(
+    session_factory,
+    *,
+    organization_id: int,
+    application_id: int,
+    action: Callable[[Session], None],
+) -> None:
+    """Prove the live action holds Application while waiting on Organization."""
+
+    from app.services import workspace_agent_control
+
+    authority_attempted = Event()
+    original_snapshot = workspace_agent_control.workspace_agent_control_snapshot
+
+    def _observed_snapshot(*args, **kwargs):
+        authority_attempted.set()
+        original_snapshot(*args, **kwargs)
+        # Stop immediately after the authority lock is granted so this ordering
+        # contract cannot dispatch any downstream application side effect.
+        raise _AuthorityClaimObserved
+
+    def _run_action() -> None:
+        with session_factory() as action_db:
+            try:
+                action(action_db)
+            except _AuthorityClaimObserved:
+                pass
+            finally:
+                action_db.rollback()
+
+    blocker_db = session_factory()
+    observer_db = session_factory()
+    try:
+        blocker_db.execute(
+            text("SELECT id FROM organizations WHERE id = :org_id FOR UPDATE"),
+            {"org_id": int(organization_id)},
+        )
+        with (
+            patch.object(
+                workspace_agent_control,
+                "workspace_agent_control_snapshot",
+                side_effect=_observed_snapshot,
+            ),
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            future = executor.submit(_run_action)
+            try:
+                reached_authority = authority_attempted.wait(timeout=3)
+                if not reached_authority:
+                    blocker_db.rollback()
+                    future.result(timeout=5)
+                assert reached_authority
+                with pytest.raises(DBAPIError):
+                    observer_db.execute(
+                        text(
+                            "SELECT id FROM candidate_applications "
+                            "WHERE id = :application_id FOR UPDATE NOWAIT"
+                        ),
+                        {"application_id": int(application_id)},
+                    )
+                observer_db.rollback()
+            finally:
+                blocker_db.rollback()
+            future.result(timeout=5)
+    finally:
+        observer_db.rollback()
+        blocker_db.rollback()
+        observer_db.close()
+        blocker_db.close()
 
 
 def test_related_role_and_migration_audit_history_is_database_protected(
@@ -240,6 +367,262 @@ def test_ats_move_lock_serializes_a_concurrent_close(
             {"app_id": application_id},
         )
         close_db.commit()
+
+
+def test_assessment_stage_reconcile_skips_locked_app_and_decision_rows(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """Reflow never waits app/decision -> authority in the inverse order."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"pg-stage-reconcile-{uuid4().hex}"
+    with session_factory.begin() as seed_db:
+        application, decision = _seed_pending_positive_decision(
+            seed_db,
+            prefix=prefix,
+        )
+        role = seed_db.get(Role, int(application.role_id))
+        assert role is not None
+        organization_id = int(application.organization_id)
+        application_id = int(application.id)
+        decision_id = int(decision.id)
+        role_id = int(role.id)
+        role_version = int(role.version or 1)
+
+    blocker_db = session_factory()
+    reconcile_db = session_factory()
+    try:
+        blocker_db.execute(
+            text(
+                "SELECT id FROM candidate_applications "
+                "WHERE id = :application_id FOR UPDATE"
+            ),
+            {"application_id": application_id},
+        )
+        blocker_db.execute(
+            text(
+                "SELECT id FROM agent_decisions "
+                "WHERE id = :decision_id FOR UPDATE"
+            ),
+            {"decision_id": decision_id},
+        )
+        reconcile_db.execute(text("SET LOCAL lock_timeout = '150ms'"))
+
+        assert reconcile_pending_positive_decisions(
+            reconcile_db,
+            role_id=role_id,
+            expected_role_version=role_version,
+        ) == 0
+        # A swallowed lock timeout rolls the session back. Remaining inside the
+        # same live transaction proves both contested rows were SKIP LOCKED.
+        assert reconcile_db.in_transaction()
+        persisted = reconcile_db.get(AgentDecision, decision_id)
+        assert persisted is not None
+        assert persisted.status == "pending"
+        assert int(persisted.organization_id) == organization_id
+    finally:
+        reconcile_db.rollback()
+        blocker_db.rollback()
+        reconcile_db.close()
+        blocker_db.close()
+
+
+def test_approve_decision_locks_application_before_workspace_authority(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """A manual action holds its app before waiting on Organization."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"pg-approve-order-{uuid4().hex}"
+    with session_factory.begin() as seed_db:
+        application, decision = _seed_pending_positive_decision(
+            seed_db,
+            prefix=prefix,
+        )
+        organization_id = int(application.organization_id)
+        application_id = int(application.id)
+        decision_id = int(decision.id)
+
+    _assert_application_lock_precedes_workspace_authority(
+        session_factory,
+        organization_id=organization_id,
+        application_id=application_id,
+        action=lambda action_db: approve_decision.run(
+            action_db,
+            Actor(type=ACTOR_RECRUITER),
+            organization_id=organization_id,
+            decision_id=decision_id,
+        ),
+    )
+
+
+def test_auto_reject_claim_locks_application_before_workspace_authority(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """The deferred ATS claim cannot race a concurrent manual close."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"pg-auto-reject-order-{uuid4().hex}"
+    with session_factory.begin() as seed_db:
+        application = _seed_application(seed_db, prefix=prefix)
+        organization_id = int(application.organization_id)
+        application_id = int(application.id)
+
+    _assert_application_lock_precedes_workspace_authority(
+        session_factory,
+        organization_id=organization_id,
+        application_id=application_id,
+        action=lambda action_db: execute_auto_reject_op(
+            action_db,
+            organization_id,
+            {
+                "application_id": application_id,
+                "actor_type": "auto",
+                "receipt_key": f"{prefix}:receipt",
+            },
+        ),
+    )
+
+
+def test_auto_reject_provider_io_holds_no_application_or_authority_row_locks(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """Application, Organization, and Role are all free during ATS I/O."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"pg-auto-reject-provider-phase-{uuid4().hex}"
+    with session_factory.begin() as seed_db:
+        application = _seed_application(seed_db, prefix=prefix)
+        organization_id = int(application.organization_id)
+        application_id = int(application.id)
+        role_id = int(application.role_id)
+        provider_target_id = f"wk-{uuid4().hex}"
+        application.workable_candidate_id = provider_target_id
+        role = seed_db.get(Role, role_id)
+        assert role is not None
+        role.agentic_mode_enabled = True
+        role.auto_reject = True
+
+    def _deferred_decision(**kwargs) -> dict:
+        kwargs["app"].auto_reject_state = "provider_writeback_in_progress"
+        return {
+            "performed": False,
+            "state": "provider_writeback_in_progress",
+            "reason": "Below threshold",
+            "provider_writeback_required": True,
+            "provider": "workable",
+            "provider_target_id": provider_target_id,
+            "config": {"threshold_100": 50},
+            "snapshot": {"pre_screen_score": 10},
+        }
+
+    def _provider_call(**_kwargs) -> dict:
+        # NOWAIT is the PostgreSQL proof: this second connection would raise if
+        # the worker retained any claim-phase row lock across network I/O.
+        with session_factory() as observer:
+            observer.execute(text("SET LOCAL lock_timeout = '150ms'"))
+            for table, row_id in (
+                ("candidate_applications", application_id),
+                ("organizations", organization_id),
+                ("roles", role_id),
+            ):
+                assert observer.execute(
+                    text(f"SELECT id FROM {table} WHERE id = :id FOR UPDATE NOWAIT"),
+                    {"id": row_id},
+                ).scalar_one() == row_id
+            observer.rollback()
+        return {"success": True, "action": "disqualify", "code": "ok"}
+
+    with session_factory() as worker_db:
+        with (
+            patch(
+                "app.services.application_automation_service.run_auto_reject_if_needed",
+                side_effect=_deferred_decision,
+            ),
+            patch(
+                "app.services.workable_actions_service.disqualify_candidate_in_workable",
+                side_effect=_provider_call,
+            ),
+        ):
+            result = execute_auto_reject_op(
+                worker_db,
+                organization_id,
+                {
+                    "application_id": application_id,
+                    "actor_type": "auto",
+                    "receipt_key": f"{prefix}:receipt",
+                },
+            )
+
+    assert result == {
+        "status": "ok",
+        "application_id": application_id,
+        "performed": True,
+        "provider": "workable",
+    }
+
+
+def test_live_role_guard_locks_workspace_before_flushing_role_update(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """An unflushed Role UPDATE cannot precede workspace authority."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+        autoflush=False,
+    )
+    prefix = f"pg-live-role-flush-order-{uuid4().hex}"
+    with session_factory.begin() as seed_db:
+        application = _seed_application(seed_db, prefix=prefix)
+        organization_id = int(application.organization_id)
+        role_id = int(application.role_id)
+
+    blocker_db = session_factory()
+    action_db = session_factory()
+    try:
+        blocker_db.execute(
+            text("SELECT id FROM organizations WHERE id = :org_id FOR UPDATE"),
+            {"org_id": organization_id},
+        )
+        role = action_db.get(Role, role_id)
+        assert role is not None
+        role.name = "Unflushed role mutation"
+        action_db.execute(text("SET LOCAL lock_timeout = '150ms'"))
+
+        with pytest.raises(DBAPIError):
+            lock_live_role(
+                action_db,
+                role_id=role_id,
+                organization_id=organization_id,
+            )
+
+        # The authority timeout occurred before db.flush(), so this transaction
+        # never emitted the pending Role UPDATE or acquired its row lock.
+        locked_role = (
+            blocker_db.query(Role)
+            .filter(Role.id == role_id)
+            .with_for_update(nowait=True, of=Role)
+            .one()
+        )
+        assert int(locked_role.id) == role_id
+    finally:
+        action_db.rollback()
+        blocker_db.rollback()
+        action_db.close()
+        blocker_db.close()
 
 
 def test_related_action_locks_application_before_related_role(
@@ -624,6 +1007,362 @@ def test_postgres_transaction_advisory_lock_serializes_provider_scope(
         contender.rollback()
         owner.close()
         contender.close()
+
+
+def test_task_repository_mutex_survives_caller_rollback_and_releases(
+    postgres_runtime_engine: Engine,
+) -> None:
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    caller = session_factory()
+    contender = session_factory()
+    task_id = 42_101
+    parameters = {
+        "scope": TASK_REPOSITORY_WRITE_LOCK_SCOPE,
+        "task_id": task_id,
+    }
+    try:
+        with task_repository_write_mutex(caller, task_id=task_id):
+            caller.execute(text("SELECT 1"))
+            caller.rollback()
+            assert contender.execute(
+                text(
+                    "SELECT pg_try_advisory_lock(hashtext(:scope), :task_id)"
+                ),
+                parameters,
+            ).scalar_one() is False
+
+        assert contender.execute(
+            text("SELECT pg_try_advisory_lock(hashtext(:scope), :task_id)"),
+            parameters,
+        ).scalar_one() is True
+        assert contender.execute(
+            text("SELECT pg_advisory_unlock(hashtext(:scope), :task_id)"),
+            parameters,
+        ).scalar_one() is True
+    finally:
+        caller.rollback()
+        contender.execute(text("SELECT pg_advisory_unlock_all()"))
+        contender.rollback()
+        caller.close()
+        contender.close()
+
+
+def test_task_repository_mutex_unlocks_when_caller_raises(
+    postgres_runtime_engine: Engine,
+) -> None:
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    caller = session_factory()
+    contender = session_factory()
+    task_id = 42_102
+    parameters = {
+        "scope": TASK_REPOSITORY_WRITE_LOCK_SCOPE,
+        "task_id": task_id,
+    }
+    try:
+        with pytest.raises(RuntimeError, match="remote sync failed"):
+            with task_repository_write_mutex(caller, task_id=task_id):
+                raise RuntimeError("remote sync failed")
+
+        assert contender.execute(
+            text("SELECT pg_try_advisory_lock(hashtext(:scope), :task_id)"),
+            parameters,
+        ).scalar_one() is True
+        assert contender.execute(
+            text("SELECT pg_advisory_unlock(hashtext(:scope), :task_id)"),
+            parameters,
+        ).scalar_one() is True
+    finally:
+        caller.rollback()
+        contender.execute(text("SELECT pg_advisory_unlock_all()"))
+        contender.rollback()
+        caller.close()
+        contender.close()
+
+
+def test_task_repository_mutex_nonblocking_mode_reports_busy(
+    postgres_runtime_engine: Engine,
+) -> None:
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    owner = session_factory()
+    contender = session_factory()
+    task_id = 42_103
+    try:
+        with task_repository_write_mutex(owner, task_id=task_id):
+            with pytest.raises(TaskRepositoryBusyError):
+                with task_repository_write_mutex(
+                    contender,
+                    task_id=task_id,
+                    wait=False,
+                ):
+                    pytest.fail("busy task repository mutex was acquired")
+
+        with task_repository_write_mutex(
+            contender,
+            task_id=task_id,
+            wait=False,
+        ):
+            pass
+    finally:
+        owner.rollback()
+        contender.rollback()
+        owner.close()
+        contender.close()
+
+
+@pytest.mark.parametrize("mutation", ["inactive", "unlinked"])
+def test_assessment_branch_locks_task_authority_through_caller_commit(
+    postgres_runtime_engine: Engine,
+    mutation: str,
+) -> None:
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"branch-authority-{mutation}-{uuid4().hex}"
+    with session_factory.begin() as seed:
+        organization = Organization(name=prefix, slug=prefix)
+        seed.add(organization)
+        seed.flush()
+        role = Role(
+            organization_id=int(organization.id),
+            name="Branch authority role",
+            source="manual",
+        )
+        task = Task(
+            organization_id=int(organization.id),
+            name="Branch authority task",
+            task_key=prefix,
+            is_active=True,
+        )
+        seed.add_all([role, task])
+        seed.flush()
+        seed.execute(
+            role_tasks.insert().values(role_id=int(role.id), task_id=int(task.id))
+        )
+        assessment = Assessment(
+            organization_id=int(organization.id),
+            role_id=int(role.id),
+            task_id=int(task.id),
+            token=prefix,
+        )
+        seed.add(assessment)
+        seed.flush()
+        organization_id = int(organization.id)
+        role_id = int(role.id)
+        task_id = int(task.id)
+        assessment_id = int(assessment.id)
+
+    provider_entered = Event()
+    release_provider = Event()
+    helper_returned = Event()
+    allow_caller_commit = Event()
+    mutation_started = Event()
+    mutation_committed = Event()
+
+    class BlockingRepository:
+        def create_assessment_branch(self, snapshot, current_assessment_id):
+            assert int(snapshot.id) == task_id
+            assert int(current_assessment_id) == assessment_id
+            provider_entered.set()
+            assert release_provider.wait(timeout=5)
+            return SimpleNamespace(
+                repo_url="https://example.test/assessment.git",
+                branch_name=f"assessment/{assessment_id}",
+                clone_command="git clone example.test/assessment.git",
+            )
+
+    def _provision() -> None:
+        with session_factory() as caller:
+            current = caller.get(Assessment, assessment_id)
+            assert current is not None
+            create_serialized_assessment_branch(
+                caller,
+                BlockingRepository(),
+                current,
+            )
+            helper_returned.set()
+            assert allow_caller_commit.wait(timeout=5)
+            caller.commit()
+
+    def _mutate_authority() -> None:
+        with session_factory() as writer:
+            mutation_started.set()
+            if mutation == "inactive":
+                current = writer.get(Task, task_id)
+                assert current is not None
+                current.is_active = False
+                writer.flush()
+            else:
+                writer.execute(
+                    role_tasks.delete().where(
+                        role_tasks.c.role_id == role_id,
+                        role_tasks.c.task_id == task_id,
+                    )
+                )
+            writer.commit()
+            mutation_committed.set()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            provision_future = executor.submit(_provision)
+            assert provider_entered.wait(timeout=5)
+            mutation_future = executor.submit(_mutate_authority)
+            assert mutation_started.wait(timeout=5)
+            assert mutation_committed.wait(timeout=0.25) is False
+
+            release_provider.set()
+            assert helper_returned.wait(timeout=5)
+            assert mutation_committed.wait(timeout=0.25) is False
+
+            allow_caller_commit.set()
+            provision_future.result(timeout=5)
+            mutation_future.result(timeout=5)
+            assert mutation_committed.is_set()
+    finally:
+        release_provider.set()
+        allow_caller_commit.set()
+        with postgres_runtime_engine.begin() as cleanup:
+            cleanup.execute(delete(Assessment).where(Assessment.id == assessment_id))
+            cleanup.execute(
+                role_tasks.delete().where(role_tasks.c.role_id == role_id)
+            )
+            cleanup.execute(delete(Task).where(Task.id == task_id))
+            cleanup.execute(delete(Role).where(Role.id == role_id))
+            cleanup.execute(
+                delete(Organization).where(Organization.id == organization_id)
+            )
+
+
+def test_postgres_template_catalog_sync_is_serialized_across_workers(
+    postgres_runtime_engine: Engine,
+) -> None:
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    owner = session_factory()
+    contender = session_factory()
+    try:
+        serialize_task_catalog_sync(owner)
+
+        assert contender.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtext(:scope), 0)"),
+            {"scope": TASK_CATALOG_SYNC_LOCK_SCOPE},
+        ).scalar_one() is False
+
+        contender.rollback()
+        owner.rollback()
+        assert contender.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtext(:scope), 0)"),
+            {"scope": TASK_CATALOG_SYNC_LOCK_SCOPE},
+        ).scalar_one() is True
+    finally:
+        owner.rollback()
+        contender.rollback()
+        owner.close()
+        contender.close()
+
+
+def test_postgres_catalog_rechecks_role_reference_after_waiting_for_task_lock(
+    postgres_runtime_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A link committed while sync waits prevents stale deactivation."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"pg-catalog-link-{uuid4().hex}"
+    with session_factory.begin() as seed:
+        organization = Organization(name=prefix, slug=prefix)
+        seed.add(organization)
+        seed.flush()
+        role = Role(
+            organization_id=int(organization.id),
+            name="Catalogue link role",
+        )
+        task = Task(
+            organization_id=None,
+            name="Catalogue template",
+            task_key=prefix,
+            is_template=True,
+            is_active=True,
+        )
+        seed.add_all([role, task])
+        seed.flush()
+        organization_id = int(organization.id)
+        role_id = int(role.id)
+        task_id = int(task.id)
+
+    link_db = session_factory()
+    lock_attempted = Event()
+    original_lock = task_catalog._lock_existing_template
+
+    def _signal_target_lock(db, *, task_id: int, task_key: str):
+        if task_id == int(task_id_for_signal):
+            lock_attempted.set()
+        return original_lock(db, task_id=task_id, task_key=task_key)
+
+    task_id_for_signal = task_id
+    monkeypatch.setattr(
+        task_catalog,
+        "_lock_existing_template",
+        _signal_target_lock,
+    )
+    try:
+        link_db.query(Role).filter(Role.id == role_id).with_for_update(of=Role).one()
+        link_db.query(Task).filter(Task.id == task_id).with_for_update(of=Task).one()
+        link_db.execute(
+            role_tasks.insert().values(role_id=role_id, task_id=task_id)
+        )
+
+        def _run_sync() -> dict[str, int]:
+            with session_factory() as sync_db:
+                return sync_template_task_specs(sync_db, [])
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_sync)
+            reached_lock = lock_attempted.wait(timeout=3)
+            if not reached_lock:
+                link_db.rollback()
+                future.result(timeout=5)
+            assert reached_lock
+            assert future.done() is False
+            link_db.commit()
+            stats = future.result(timeout=5)
+
+        assert stats["preserved_referenced"] == 1
+        assert stats["deactivated"] == 0
+        with session_factory() as verify:
+            assert verify.get(Task, task_id).is_active is True
+            assert verify.execute(
+                role_tasks.select().where(
+                    role_tasks.c.role_id == role_id,
+                    role_tasks.c.task_id == task_id,
+                )
+            ).first() is not None
+    finally:
+        link_db.rollback()
+        link_db.close()
+        with postgres_runtime_engine.begin() as cleanup:
+            cleanup.execute(
+                role_tasks.delete().where(role_tasks.c.task_id == task_id)
+            )
+            cleanup.execute(delete(Task).where(Task.id == task_id))
+            cleanup.execute(delete(Role).where(Role.id == role_id))
+            cleanup.execute(
+                delete(Organization).where(Organization.id == organization_id)
+            )
 
 
 def test_postgres_skip_locked_outbox_claims_are_disjoint(

@@ -34,12 +34,14 @@ from ..domains.assessments_runtime.role_support import (
     latest_valid_role_assessment,
 )
 from ..models.assessment import Assessment
+from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.config import settings
 from ..services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
 )
+from ..services.assessment_repository_operations import create_serialized_assessment_branch
 from ..services.experiment_assignment import (
     RoleTaskMisconfigured,
     resolve_task_and_variant,
@@ -95,7 +97,24 @@ def run(
             status_code=422, detail="duration_minutes must be between 15 and 180"
         )
 
-    app = get_application(application_id, organization_id, db)
+    # Populate the action context, then lock and refresh the canonical
+    # application before taking Organization/Role authority. This preserves
+    # application -> Organization -> Role ordering whether the caller is a
+    # recruiter, an autonomous decision, or a nested approve/override action.
+    get_application(application_id, organization_id, db)
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(organization_id),
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .populate_existing()
+        .with_for_update(of=CandidateApplication)
+        .one_or_none()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found")
     if app.role_id is None:
         raise HTTPException(
             status_code=422,
@@ -135,11 +154,22 @@ def run(
             .one_or_none()
         )
     else:
+        from ..services.workspace_agent_control import (
+            workspace_agent_control_snapshot,
+        )
+
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=int(organization_id),
+            lock=True,
+        )
         role = (
             db.query(Role)
             .options(joinedload(Role.tasks))
             .filter(Role.id == app.role_id, Role.organization_id == organization_id)
-            .first()
+            .populate_existing()
+            .with_for_update(of=Role)
+            .one_or_none()
         )
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {app.role_id} not found")
@@ -243,12 +273,7 @@ def run(
                 repo_service = AssessmentRepositoryService(
                     settings.GITHUB_ORG, settings.GITHUB_TOKEN
                 )
-                branch_ctx = repo_service.create_assessment_branch(
-                    task, int(assessment.id)
-                )
-                assessment.assessment_repo_url = branch_ctx.repo_url
-                assessment.assessment_branch = branch_ctx.branch_name
-                assessment.clone_command = branch_ctx.clone_command
+                create_serialized_assessment_branch(db, repo_service, assessment)
             except AssessmentRepositoryError as exc:
                 logger.exception(
                     "send_assessment: repo provisioning failed assessment_id=%s",

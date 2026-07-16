@@ -248,12 +248,12 @@ def run_workable_op_task(
             heartbeat=True,
             namespace=mutex_namespace,
         )
-        # Workable retains its historical fail-open behavior on Redis errors.
-        # Bullhorn cannot: refresh tokens rotate once, so unguarded concurrent
-        # calls can consume the same token and strand the integration.
-        if lock is None or (
-            lock is False and mutex_namespace == BULLHORN_ORG_MUTEX_NAMESPACE
-        ):
+        # Workable normally fails open on Redis errors. Bullhorn cannot because
+        # concurrent calls can consume its rotating token and strand integration.
+        if lock is None or (lock is False and (
+            mutex_namespace == BULLHORN_ORG_MUTEX_NAMESPACE
+            or op_type == runner.OP_AUTO_REJECT
+        )):
             lock_blocked = True
             for held in reversed(locks):
                 _release_workable_org_mutex(held)

@@ -32,16 +32,11 @@ def activation_readiness(
     auto_advance: bool | None = None,
     auto_reject: bool | None = None,
     auto_reject_pre_screen: bool | None = None,
+    preview_active_task_id: int | None = None,
 ) -> dict[str, Any]:
-    """Return production runtime readiness for this role's actual path.
-
-    Local/test activation stays independent of external services. Production
-    activation verifies the Beat→worker canary, live usage metering, a usable
-    model credential, native application ingress when no ATS job is linked,
-    and the assessment execution/delivery dependencies only when that stage
-    is explicitly enabled. Optional policy arguments are a read-only preview
-    of a role PATCH: Turn on can validate the exact incoming cap and granular
-    policy without mutating the ORM row before every readiness rail passes.
+    """Return production readiness for the role's actual path.
+    Local/test activation stays external-service independent. Policy arguments
+    preview the exact incoming role PATCH without mutating the ORM row.
     """
     from ..platform.startup_validation import is_production_like
 
@@ -174,6 +169,7 @@ def activation_readiness(
         task
         for task in (getattr(role, "tasks", None) or [])
         if bool(getattr(task, "is_active", False))
+        or int(task.id) == preview_active_task_id
     ]
     effective_skip_assessment = (
         bool(getattr(role, "auto_skip_assessment", False))
@@ -210,6 +206,7 @@ def activation_readiness(
                 session,
                 role,
                 organization_id=int(role.organization_id),
+                preview_active_task_id=preview_active_task_id,
             )
         if task_configuration_error:
             reasons.append(
@@ -247,6 +244,8 @@ def activation_readiness(
         elif not task_configuration_error:
             unavailable_repositories: list[str] = []
             for task in assignable_tasks:
+                if int(task.id) == preview_active_task_id:
+                    continue
                 repo_ready, repo_detail = task_repository_readiness(
                     task,
                     settings_obj=settings_obj,

@@ -17,6 +17,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...services.document_service import process_document_upload
+from ...services.assessment_repository_operations import create_serialized_assessment_branch
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from ...services.task_repo_service import normalize_repo_files
@@ -1095,11 +1096,9 @@ def start_or_resume_assessment(
     repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
     if not getattr(assessment, "assessment_branch", None):
         try:
-            repo_service.create_template_repo(task)
-            branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-            assessment.assessment_repo_url = branch_ctx.repo_url
-            assessment.assessment_branch = branch_ctx.branch_name
-            assessment.clone_command = branch_ctx.clone_command
+            create_serialized_assessment_branch(
+                db, repo_service, assessment, wait_for_repository=True
+            )
             db.commit()
         except Exception:
             db.rollback()

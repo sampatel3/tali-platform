@@ -27,7 +27,10 @@ from app.tasks.assessment_tasks import (
     repair_generated_task_after_battle_failure,
     sweep_assessment_task_provisioning,
 )
-from app.services.task_battle_test import initialize_battle_test_provisioning
+from app.services.task_battle_test import (
+    apply_battle_test_repair,
+    initialize_battle_test_provisioning,
+)
 from app.services.task_spec_generator import GeneratedSpecResult
 
 
@@ -227,6 +230,9 @@ def test_task_response_sanitizes_legacy_battle_test_exceptions(db):
     task.extra_data = {
         **dict(task.extra_data or {}),
         "battle_test": {"verdict": "error", "error": f"RuntimeError: {secret}"},
+        "battle_test_history": [
+            {"verdict": "error", "error": f"Earlier RuntimeError: {secret}"}
+        ],
         "battle_test_provisioning": {
             "status": "retry_wait",
             "last_error": f"RuntimeError: {secret}",
@@ -239,11 +245,86 @@ def test_task_response_sanitizes_legacy_battle_test_exceptions(db):
     assert payload["extra_data"]["battle_test"]["error"] == (
         "assessment_task_battle_test_failed"
     )
+    assert payload["extra_data"]["battle_test_history"][0]["error"] == (
+        "assessment_task_battle_test_failed"
+    )
     assert payload["extra_data"]["battle_test_provisioning"]["last_error"] == (
         "assessment_task_processing_failed"
     )
     assert secret not in str(payload)
     assert secret in str(task.extra_data)
+
+
+def test_battle_repair_preserves_lineage_but_invalidates_exact_content_proof():
+    failed_report = {"verdict": "fail", "run_id": "current-failure"}
+    task = Task(
+        id=77,
+        organization_id=8,
+        name="Broken generated task",
+        task_key="repair-lineage",
+        is_active=True,
+        extra_data={
+            "generated": True,
+            "needs_review": False,
+            "approved_by_user_id": 41,
+            "approved_at": "2026-07-15T12:00:00+00:00",
+            "repository_ready": {
+                "verified_at": "2026-07-15T12:00:00+00:00",
+                "repo_url": "https://example.test/old-content",
+            },
+            "provenance": {"source": "jd-generator", "request_id": "req-9"},
+            "provenance_signature": "signed-origin",
+            "generation_model": "generator-v3",
+            "generated_request_id": "generated-9",
+            "battle_test": failed_report,
+            "battle_test_history": [
+                {"verdict": "fail", "run_id": f"older-{index}"}
+                for index in range(6)
+            ],
+        },
+    )
+    repaired_spec = {
+        "task_id": "repair-lineage",
+        "name": "Repaired generated task",
+        "scenario": "Use the repaired candidate repository.",
+        "repo_structure": {"files": {"README.md": "repaired"}},
+        "evaluation_rubric": {},
+        "decision_points": [{"id": "d1"}, {"id": "d2"}],
+        "approved_by_user_id": 999,
+        "approved_at": "forged",
+        "repository_ready": {"repo_url": "forged"},
+        "battle_test": {"verdict": "pass"},
+    }
+
+    apply_battle_test_repair(
+        task,
+        repaired_spec,
+        feedback="Fix the repository",
+        failed_report=failed_report,
+        repair_attempts=1,
+    )
+
+    extra = task.extra_data
+    assert task.is_active is False
+    assert extra["generated"] is True
+    assert extra["needs_review"] is True
+    assert extra["provenance"]["request_id"] == "req-9"
+    assert extra["provenance_signature"] == "signed-origin"
+    assert extra["generation_model"] == "generator-v3"
+    assert extra["generated_request_id"] == "generated-9"
+    assert extra["decision_points"] == [{"id": "d1"}, {"id": "d2"}]
+    assert "approved_by_user_id" not in extra
+    assert "approved_at" not in extra
+    assert "repository_ready" not in extra
+    assert "battle_test" not in extra
+    assert [report["run_id"] for report in extra["battle_test_history"]] == [
+        "older-2",
+        "older-3",
+        "older-4",
+        "older-5",
+        "current-failure",
+    ]
+    assert extra["battle_test_provisioning"]["status"] == "pending"
 
 
 def test_sweep_recovers_generated_task_with_missing_battle_report(db):

@@ -18,6 +18,7 @@ from app.cv_parsing.origins import (
 )
 from app.tasks.assessment_tasks import sweep_assessment_task_provisioning
 from app.tasks.automation_tasks import (
+    generate_application_interview_pack,
     generate_role_interview_focus,
     parse_application_cv_sections,
     regenerate_role_tech_questions,
@@ -86,6 +87,38 @@ def test_queued_interview_focus_does_not_start_after_role_stops(
     assert result["status"] == "skipped"
     assert result["reason"] == "role_not_runnable"
     provider.assert_not_called()
+
+
+def test_application_interview_pack_lock_never_spans_provider_work(db):
+    """Pack refresh is serialized deterministic cache assembly, not LLM work."""
+
+    role = _role(db, suffix="application-pack-cache", enabled=True, paused=False)
+    app = _application(
+        db,
+        role,
+        suffix="application-pack-cache",
+        source="manual",
+    )
+
+    with (
+        patch(
+            "app.services.interview_focus_service.generate_interview_focus_sync"
+        ) as focus_provider,
+        patch(
+            "app.services.role_tech_questions_service.get_or_regenerate"
+        ) as question_provider,
+    ):
+        result = generate_application_interview_pack.run(int(app.id))
+
+    assert result["status"] == "ok"
+    focus_provider.assert_not_called()
+    question_provider.assert_not_called()
+    db.expire_all()
+    persisted = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(app.id)
+    ).one()
+    assert persisted.screening_pack["source"] == "application_generated"
+    assert persisted.tech_interview_pack["source"] == "application_generated"
 
 
 @pytest.mark.parametrize(

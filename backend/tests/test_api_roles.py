@@ -8,6 +8,7 @@ from pypdf import PdfReader
 
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
+from app.models.agent_needs_input import AgentNeedsInput
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.application_interview import ApplicationInterview
 from app.models.candidate import Candidate
@@ -25,13 +26,29 @@ def _role_version(client, headers, role_id: int) -> int:
     return int(response.json()["version"])
 
 
-def test_role_shell_returns_first_paint_payload_without_aggregates(client):
+def test_role_shell_returns_first_paint_payload_without_aggregates(client, db):
     headers, _ = auth_headers(client)
     role = client.post(
         "/api/v1/roles",
         json={"name": "Fast shell role", "description": "Large detail payload"},
         headers=headers,
     ).json()
+    persisted = db.query(Role).filter(Role.id == int(role["id"])).one()
+    persisted.assessment_task_provisioning = {
+        "activation_intent": {
+            "status": "pending",
+            "request_id": "shell-poll-contract",
+        }
+    }
+    task = Task(
+        organization_id=int(role["organization_id"]),
+        name="Shell active-task contract",
+        is_active=True,
+    )
+    db.add(task)
+    db.flush()
+    persisted.tasks.append(task)
+    db.commit()
 
     response = client.get(
         f"/api/v1/roles/{role['id']}?shell=true",
@@ -46,6 +63,12 @@ def test_role_shell_returns_first_paint_payload_without_aggregates(client):
     assert payload["stage_counts"] == {}
     assert payload["pending_decisions_by_type"] == {}
     assert payload["applications_count"] == 0
+    assert payload["tasks_count"] == 1
+    assert payload["agent_effective_policy"]["auto_skip_assessment"] is False
+    assert payload["assessment_task_provisioning"]["activation_intent"] == {
+        "status": "pending",
+        "request_id": "shell-poll-contract",
+    }
 
 
 def test_role_application_assessment_lifecycle(client, db, monkeypatch):
@@ -184,7 +207,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
     db.commit()
 
     with patch(
-        "app.services.agent_activation_readiness.activation_readiness",
+        "app.domains.assessments_runtime.role_activation_update_preflight.activation_readiness",
         return_value={
             "ready": False,
             "production": True,
@@ -214,6 +237,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
         "auto_advance": False,
         "auto_reject": None,
         "auto_reject_pre_screen": True,
+        "preview_active_task_id": None,
     }
     db.expire_all()
     persisted = db.query(Role).filter(Role.id == role.id).one()
@@ -819,7 +843,7 @@ def test_reject_unlink_role_task_when_assessment_exists(client):
     assert "already has assessments" in unlink_resp.json()["detail"].lower()
 
 
-def test_live_role_cannot_enable_assessment_stage_without_active_task(client, db):
+def test_taskless_role_preserves_configured_assessment_intent(client, db):
     headers, _ = auth_headers(client)
     created = client.post(
         "/api/v1/roles",
@@ -827,7 +851,7 @@ def test_live_role_cannot_enable_assessment_stage_without_active_task(client, db
         headers=headers,
     ).json()
     role = db.query(Role).filter(Role.id == created["id"]).one()
-    role.agentic_mode_enabled = True
+    role.agentic_mode_enabled = False
     role.auto_skip_assessment = True
     db.commit()
 
@@ -837,13 +861,16 @@ def test_live_role_cannot_enable_assessment_stage_without_active_task(client, db
         headers=headers,
     )
 
-    assert response.status_code == 409, response.text
-    assert "assign an active assessment task" in response.json()["detail"].lower()
+    assert response.status_code == 200, response.text
+    assert response.json()["auto_skip_assessment"] is False
+    assert response.json()["agent_effective_policy"]["auto_skip_assessment"] is True
     db.expire_all()
-    assert db.query(Role).filter(Role.id == role.id).one().auto_skip_assessment is True
+    assert db.query(Role).filter(Role.id == role.id).one().auto_skip_assessment is False
 
 
-def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
+def test_unlinking_last_active_task_effectively_skips_without_rewriting_intent(
+    client, db
+):
     headers, _ = auth_headers(client)
     task = create_task_via_api(
         client, headers, name="Last live assessment task"
@@ -858,9 +885,13 @@ def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
         json={"task_id": task["id"], "expected_version": created["version"]},
         headers=headers,
     ).status_code == 200
+    db.expire_all()
     role = db.query(Role).filter(Role.id == created["id"]).one()
-    role.agentic_mode_enabled = True
-    role.auto_skip_assessment = False
+    assert role.auto_skip_assessment is False
+    assert client.get(
+        f"/api/v1/roles/{role.id}", headers=headers
+    ).json()["agent_effective_policy"]["auto_skip_assessment"] is False
+    role.agentic_mode_enabled = False
     db.commit()
 
     response = client.delete(
@@ -873,7 +904,92 @@ def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
     db.expire_all()
     persisted = db.query(Role).filter(Role.id == role.id).one()
     assert persisted.tasks == []
-    assert persisted.auto_skip_assessment is True
+    assert persisted.auto_skip_assessment is False
+    fetched = client.get(f"/api/v1/roles/{role.id}", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["agent_effective_policy"]["auto_skip_assessment"] is True
+
+
+def test_enabled_role_surfaces_task_gap_when_last_active_task_is_unlinked(
+    client,
+    db,
+):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(
+        client,
+        headers,
+        name="Enabled role last task",
+    ).json()
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Enabled role task-gap invariant"},
+        headers=headers,
+    ).json()
+    linked = client.post(
+        f"/api/v1/roles/{created['id']}/tasks",
+        json={"task_id": task["id"], "expected_version": created["version"]},
+        headers=headers,
+    )
+    assert linked.status_code == 200, linked.text
+    role = db.query(Role).filter(Role.id == int(created["id"])).one()
+    role.agentic_mode_enabled = True
+    role.auto_skip_assessment = False
+    db.commit()
+
+    response = client.delete(
+        f"/api/v1/roles/{role.id}/tasks/{task['id']}",
+        params={"expected_version": _role_version(client, headers, role.id)},
+        headers=headers,
+    )
+
+    assert response.status_code == 204, response.text
+    db.expire_all()
+    question = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.role_id == int(role.id),
+            AgentNeedsInput.kind == "task_assignment_missing",
+            AgentNeedsInput.resolved_at.is_(None),
+        )
+        .one()
+    )
+    assert "assessment" in question.prompt.lower()
+
+
+def test_linking_first_active_task_preserves_configured_skip(client):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(
+        client, headers, name="Configured skip assessment task"
+    ).json()
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Configured skip link invariant"},
+        headers=headers,
+    ).json()
+    configured = client.patch(
+        f"/api/v1/roles/{created['id']}",
+        json={
+            "auto_skip_assessment": True,
+            "expected_version": created["version"],
+        },
+        headers=headers,
+    )
+    assert configured.status_code == 200, configured.text
+
+    linked = client.post(
+        f"/api/v1/roles/{created['id']}/tasks",
+        json={
+            "task_id": task["id"],
+            "expected_version": configured.json()["version"],
+        },
+        headers=headers,
+    )
+
+    assert linked.status_code == 200, linked.text
+    fetched = client.get(f"/api/v1/roles/{created['id']}", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["auto_skip_assessment"] is True
+    assert fetched.json()["agent_effective_policy"]["auto_skip_assessment"] is True
 
 
 def test_role_budget_rejects_zero_on_create_and_update(client):

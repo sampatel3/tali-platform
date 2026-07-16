@@ -15,7 +15,6 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
-import { loadAllPages } from '../../shared/api/loadAllPages';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
@@ -65,15 +64,18 @@ import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 import { useRoleAutonomyChange } from './useRoleAutonomyChange';
+import { useRoleActivationFlow } from './useRoleActivationFlow';
 import { useRoleAgentControls } from './useRoleAgentControls';
 import { useRoleBriefControls } from './useRoleBriefControls';
+import { useTaskCatalogue } from './useTaskCatalogue';
+import { useRoleTaskRefresh } from './useRoleTaskRefresh';
+import { mergeRoleShell } from './roleShellMerge';
 import {
   EMPTY_FETCH_PROGRESS,
   EMPTY_PRE_SCREEN_PROGRESS,
   EMPTY_PROGRESS,
   GRANULAR_AUTOMATION_KEYS,
   PIPELINE_STAGE_ORDER,
-  activationAutonomyPayload,
   buildApplicationTitle,
   formatDecisionLabel,
   formatRelativeShort,
@@ -81,7 +83,9 @@ import {
   matchesPipelineStage,
   normalizeThreshold,
   resolveOptionalPercent,
+  hasActiveAssessmentTask,
   resolvedDeterministicReject,
+  resolvedRoleAutoSkipAssessment,
   resolvedRoleAutomation,
   summarizeUnscoredApplications,
 } from './jobPipelineUtils';
@@ -101,6 +105,9 @@ import {
 
 const isRelatedRoleApplicationLocked = (application) => (
   ['disqualified', 'closed'].includes(application?.related_role_availability)
+);
+const captureTaskRequest = (request) => request.then(
+  (response) => ({ response, error: null }), (error) => ({ response: null, error }),
 );
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
@@ -230,8 +237,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [criteriaSyncing, setCriteriaSyncing] = useState(false);
   const [criteriaResetting, setCriteriaResetting] = useState(false);
   const [roleTasks, setRoleTasks] = useState([]);
+  const [roleTasksFetchKnown, setRoleTasksFetchKnown] = useState(false);
+  const [roleTasksLoadError, setRoleTasksLoadError] = useState('');
   const [assessmentContextTasks, setAssessmentContextTasks] = useState([]);
-  const [allTasks, setAllTasks] = useState([]);
+  const [assessmentContextTasksFetchKnown, setAssessmentContextTasksFetchKnown] = useState(false);
+  const [assessmentContextTasksLoadError, setAssessmentContextTasksLoadError] = useState('');
   const [roleApplications, setRoleApplications] = useState([]);
   const [applicationsLoading, setApplicationsLoading] = useState(false);
   const [applicationsLoadError, setApplicationsLoadError] = useState('');
@@ -310,6 +320,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [, setRefreshTick] = useState(0);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [activeView, setActiveView] = useRoleView();
+  const taskCatalogue = useTaskCatalogue({
+    // Related roles are score-only and intentionally omit task management.
+    // Wait for the shell before loading the organisation catalogue so a direct
+    // ?view=role-fit link cannot make an unused request while role kind is unknown.
+    enabled: activeView === 'role-fit'
+      && Number(role?.id) === numericRoleId
+      && role?.role_kind !== 'sister',
+    listTasks: tasksApi?.list,
+  });
   const [tableStageFilter, setTableStageFilter] = useState('all');
   // Only the Sourced lens supports selection; sending outreach is its HITL.
   const [selectedSourcedAppIds, setSelectedSourcedAppIds] = useState(() => new Set());
@@ -369,19 +388,39 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   }, [role?.role_kind]);
   // Only the most recent workspace load may write state.
   const loadSeqRef = useRef(0);
+  const taskLoadSeqRef = useRef(0);
   const loadedRoleIdRef = useRef(null);
   const hoverPrefetchRef = useRef(null);
   if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeCandidateCvHoverPrefetch();
+  const { refreshAssessmentTasks, refreshRoleAndTasks } = useRoleTaskRefresh({
+    numericRoleId,
+    role,
+    rolesApi,
+    setAssessmentContextTasks,
+    setAssessmentContextTasksFetchKnown,
+    setAssessmentContextTasksLoadError,
+    setRole,
+    setRoleTasks,
+    setRoleTasksFetchKnown,
+    setRoleTasksLoadError,
+    taskLoadSeqRef,
+  });
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     const seq = (loadSeqRef.current += 1);
+    const taskSeq = (taskLoadSeqRef.current += 1);
     const cacheKey = `role-workspace:${numericRoleId}`;
     const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
     const cached = isColdForRole ? readCache(cacheKey) : null;
+    const shouldMergeShell = Boolean(cached?.data?.role) || !isColdForRole;
     setLoadError('');
     setApplicationsLoadError('');
     setRoleDetailLoadError('');
+    setRoleTasksFetchKnown(false);
+    setRoleTasksLoadError('');
+    setAssessmentContextTasksFetchKnown(false);
+    setAssessmentContextTasksLoadError('');
     if (cached?.data) {
       const c = cached.data;
       setRole(c.role || null);
@@ -397,6 +436,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setRoleDetailLoading(false);
       loadedRoleIdRef.current = numericRoleId;
     } else if (isColdForRole) {
+      setRoleTasks([]);
+      setAssessmentContextTasks([]);
       setLoading(true);
       setRoleDetailLoading(true);
     }
@@ -406,21 +447,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       // Paint from a bounded, single-query shell endpoint. The ordinary role
       // detail endpoint computes funnel and decision aggregates and can be
       // slow on large roles; none of that should block the first useful paint.
-      const shellRes = rolesApi.getShell
+      const readsRoleShell = typeof rolesApi.getShell === 'function';
+      const shellRes = readsRoleShell
         ? await rolesApi.getShell(numericRoleId)
         : await rolesApi.get(numericRoleId);
       if (seq !== loadSeqRef.current) return;
       loadedRoleIdRef.current = numericRoleId;
       let nextRole = shellRes?.data || null;
       setRole((current) => (
-        current && !isColdForRole
-          ? {
-              ...current,
-              ...nextRole,
-              stage_counts: current.stage_counts,
-              pending_decisions_by_type: current.pending_decisions_by_type,
-              active_candidates_count: current.active_candidates_count,
-            }
+        readsRoleShell && current && shouldMergeShell
+          ? mergeRoleShell(current, nextRole)
           : nextRole
       ));
       rolePainted = Boolean(nextRole);
@@ -440,15 +476,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         if (seq === loadSeqRef.current) setRoleDetailLoading(false);
       }
 
-      const assessmentContextRoleId = nextRole?.role_kind === 'sister'
-        && Number.isFinite(Number(nextRole?.ats_owner_role_id))
-        ? Number(nextRole.ats_owner_role_id)
+      const isRelatedAssessmentContext = nextRole?.role_kind === 'sister';
+      const assessmentContextOwnerRoleId = Number(nextRole?.ats_owner_role_id);
+      const hasAssessmentContextOwner = Number.isFinite(assessmentContextOwnerRoleId)
+        && assessmentContextOwnerRoleId > 0;
+      const assessmentContextRoleId = isRelatedAssessmentContext && hasAssessmentContextOwner
+        ? assessmentContextOwnerRoleId
         : numericRoleId;
-      const [tasksRes, contextTasksRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
-        rolesApi.listTasks(numericRoleId).catch(() => ({ data: [] })),
-        assessmentContextRoleId === numericRoleId
-          ? Promise.resolve(null)
-          : rolesApi.listTasks(assessmentContextRoleId).catch(() => ({ data: [] })),
+      const missingAssessmentOwnerError = {
+        response: { data: { detail: 'This related role is not linked to an original role, so its assessment tasks cannot be confirmed.' } },
+      };
+      const [tasksResult, contextTasksResult, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
+        isRelatedAssessmentContext
+          ? Promise.resolve({ response: { data: [] }, error: null })
+          : captureTaskRequest(rolesApi.listTasks(numericRoleId)),
+        isRelatedAssessmentContext
+          ? (hasAssessmentContextOwner
+            ? captureTaskRequest(rolesApi.listTasks(assessmentContextRoleId))
+            : Promise.resolve({ response: null, error: missingAssessmentOwnerError }))
+          : Promise.resolve(null),
         rolesApi.batchScoreStatus(numericRoleId).catch(() => ({ data: null })),
         rolesApi.fetchCvsStatus(numericRoleId).catch(() => ({ data: EMPTY_FETCH_PROGRESS })),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
@@ -456,13 +502,30 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           .catch(() => ({ data: [] })),
       ]);
       if (seq !== loadSeqRef.current) return;
-      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
-      const nextAssessmentContextTasks = contextTasksRes == null
+      const roleTasksKnown = tasksResult.error == null;
+      const nextTasks = roleTasksKnown
+        ? (Array.isArray(tasksResult.response?.data) ? tasksResult.response.data : []) : null;
+      const nextAssessmentContextTasks = contextTasksResult == null
         ? nextTasks
-        : (Array.isArray(contextTasksRes?.data) ? contextTasksRes.data : []);
+        : (contextTasksResult.error == null
+          ? (Array.isArray(contextTasksResult.response?.data) ? contextTasksResult.response.data : []) : null);
+      const assessmentContextKnown = contextTasksResult == null
+        ? roleTasksKnown
+        : contextTasksResult.error == null;
+      const assessmentContextError = contextTasksResult == null
+        ? tasksResult.error
+        : contextTasksResult.error;
       const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
-      setRoleTasks(nextTasks);
-      setAssessmentContextTasks(nextAssessmentContextTasks);
+      if (taskSeq === taskLoadSeqRef.current) {
+        if (nextTasks != null) setRoleTasks(nextTasks);
+        if (nextAssessmentContextTasks != null) setAssessmentContextTasks(nextAssessmentContextTasks);
+        setRoleTasksFetchKnown(roleTasksKnown);
+        setRoleTasksLoadError(roleTasksKnown ? '' : getErrorMessage(tasksResult.error, 'Assessment tasks could not be loaded.'));
+        setAssessmentContextTasksFetchKnown(assessmentContextKnown);
+        setAssessmentContextTasksLoadError(assessmentContextKnown
+          ? ''
+          : getErrorMessage(assessmentContextError, 'Assessment tasks could not be loaded.'));
+      }
       setWorkspaceCriteria(nextCriteria);
       setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
       setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
@@ -488,12 +551,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       } else setSuggestedThreshold(null);
       const nextApps = applicationPayloads;
       setRoleApplications(nextApps);
-      writeCache(cacheKey, {
-        role: nextRole,
-        roleTasks: nextTasks,
-        assessmentContextTasks: nextAssessmentContextTasks,
-        roleApplications: nextApps.slice(0, APPLICATION_ROSTER_PAGE_SIZE),
-        workspaceCriteria: nextCriteria,
+      if (taskSeq === taskLoadSeqRef.current
+        && nextTasks != null && nextAssessmentContextTasks != null) writeCache(cacheKey, {
+        role: nextRole, roleTasks: nextTasks, assessmentContextTasks: nextAssessmentContextTasks,
+        roleApplications: nextApps.slice(0, APPLICATION_ROSTER_PAGE_SIZE), workspaceCriteria: nextCriteria,
       });
       const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
       if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
@@ -583,28 +644,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       void loadRoleWorkspace();
     }
   }, [loadRoleWorkspace, sisterScoringStatus?.status]);
-
-  // Load the org-wide catalogue only when Agent settings needs it.
-  const loadedAllTasksRef = useRef(false);
-  useEffect(() => {
-    if (activeView !== 'role-fit' || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
-    let cancelled = false;
-    const loadAllTasks = async () => {
-      try {
-        const items = await loadAllPages(tasksApi.list);
-        if (!cancelled) {
-          setAllTasks(items);
-          loadedAllTasksRef.current = true;
-        }
-      } catch {
-        if (!cancelled) setAllTasks([]);
-      }
-    };
-    void loadAllTasks();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeView, tasksApi]);
 
   // ── Reload applications when the global context tells us a batch finished ──
   // batchScoreProgress is read from JobStatusContext (single source of truth).
@@ -832,10 +871,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     { title: 'Department', description: roleFactValues.department },
     { title: 'Employment', description: roleFactValues.employment },
     {
-      title: roleTasks.length === 1 ? 'Assessment' : 'Assessments',
-      description: roleTasks.length ? roleTasks.map((task) => task.name).join(' · ') : 'No assessment task linked',
+      title: role?.role_kind === 'sister' ? 'Original-role assessment' : 'Assessment',
+      description: (role?.role_kind === 'sister' ? assessmentContextTasksFetchKnown : roleTasksFetchKnown)
+        ? ((role?.role_kind === 'sister' ? assessmentContextTasks : roleTasks)
+          .filter((task) => task?.is_active === true)
+          .map((task) => task.name).join(' · ') || 'No active assessment task linked')
+        : ((role?.role_kind === 'sister' ? assessmentContextTasksLoadError : roleTasksLoadError)
+          || 'Checking current task assignment…'),
     },
-  ]), [roleFactValues, roleTasks]);
+  ]), [assessmentContextTasks, assessmentContextTasksFetchKnown, assessmentContextTasksLoadError,
+    role?.role_kind, roleFactValues, roleTasks, roleTasksFetchKnown, roleTasksLoadError]);
 
   // Batch progress is owned by JobStatusContext. This page observes the agent's
   // work but does not expose a second manual processing flow.
@@ -1097,7 +1142,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           }
         }
       }
-      await loadRoleWorkspace();
+      await refreshRoleAndTasks();
       setRefreshTick((value) => value + 1);
       showToast(
         desired.length === 0
@@ -1114,12 +1159,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       if (!handleRoleVersionConflict(error)) {
         showToast(getErrorMessage(error, 'Failed to update assessment tasks.'), 'error');
       }
-      await loadRoleWorkspace();
+      await refreshRoleAndTasks();
       throw error;
     } finally {
       setSavingAssessmentTask(false);
     }
-  }, [canControlRoleAgent, handleRoleVersionConflict, numericRoleId, role, roleTasks, rolesApi, loadRoleWorkspace, showToast]);
+  }, [canControlRoleAgent, handleRoleVersionConflict, numericRoleId, refreshRoleAndTasks,
+    role, roleTasks, rolesApi, showToast]);
 
   /*
    * Job-spec text and linked assessments intentionally have separate owners:
@@ -1194,15 +1240,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     drawerProps: triageDrawerProps,
     handleRowClick: handlePipelineReportClick,
   } = useCandidateTriage({
-    role,
-    roleApplications,
-    roleTasks: assessmentContextTasks,
-    canMutate: canControlRoleAgent,
-    loadRoleWorkspace,
-    patchApplicationRow,
-    showToast,
-    rolesApi,
-    viewCandidateReport,
+    role, roleApplications, roleTasks: assessmentContextTasks,
+    roleTasksFetchKnown: assessmentContextTasksFetchKnown,
+    roleTasksLoadError: assessmentContextTasksLoadError,
+    onRetryRoleTasks: refreshAssessmentTasks, canMutate: canControlRoleAgent,
+    loadRoleWorkspace, patchApplicationRow, showToast, rolesApi, viewCandidateReport,
   });
 
   const {
@@ -1210,16 +1252,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     pauseAgent: handlePauseAgent,
     resumeAgent: handleResumeAgent,
   } = useRoleAgentControls({
-    roleId: numericRoleId,
-    role,
-    agentStatus,
-    canControlAgent: canControlRoleAgent,
-    mutateAgentStatus,
-    setAgentStatus,
-    setRole,
-    loadRoleWorkspace,
-    handleRoleVersionConflict,
-    showToast,
+    roleId: numericRoleId, role, agentStatus, canControlAgent: canControlRoleAgent,
+    mutateAgentStatus, setAgentStatus, setRole, loadRoleWorkspace, handleRoleVersionConflict, showToast,
   });
   const handleResumeLegacyWorkspace = useEffectiveRelatedAgentResume({
     agentStatus, canResumeWorkspace: canControlWorkspaceAgent, onResumeRole: handleResumeAgent, refetchAgentStatus, resumeWorkspace: apiClient.agent.resumeAll, reloadRole: loadRoleWorkspace, setPollingVersion: setSisterPollVersion, showToast });
@@ -1268,7 +1302,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // the role agent owns that operational work.
   const agentRunning = Boolean(roleAgent?.on && !roleAgent?.paused);
   const persistedActivationIntent = role?.assessment_task_provisioning?.activation_intent || null;
-  const persistedActivationStatus = String(persistedActivationIntent?.status || '');
+  const persistedActivationStatus = String(persistedActivationIntent?.status || '').toLowerCase();
   const activationIsPending = ['pending', 'retry_wait'].includes(persistedActivationStatus)
     && !role?.agentic_mode_enabled;
   const activationIsBlocked = persistedActivationStatus === 'blocked'
@@ -1279,65 +1313,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // stays stable across the loading/loaded renders.
   const [turnOffOpen, setTurnOffOpen] = useState(false);
   const [turnOffDiscard, setTurnOffDiscard] = useState(false);
-  // Turn on authorizes the single generated, battle-tested assessment. Keep
-  // the validation progress visible here, but do not turn it into a second
-  // manual setup step.
-  const [activationPreflight, setActivationPreflight] = useState(null);
-  const [activationReview, setActivationReview] = useState(null);
-  const activationReviewOpen = Boolean(activationReview);
-  const activationBattleVerdict = activationReview?.draft?.battle_test?.verdict || null;
-  useEffect(() => {
-    if (!activationReviewOpen) {
-      return undefined;
+  const handleActivationTasksLoaded = useCallback((tasks) => {
+    taskLoadSeqRef.current += 1;
+    setRoleTasks(tasks);
+    setRoleTasksFetchKnown(true);
+    setRoleTasksLoadError('');
+    if (role?.role_kind !== 'sister') {
+      setAssessmentContextTasks(tasks);
+      setAssessmentContextTasksFetchKnown(true);
+      setAssessmentContextTasksLoadError('');
     }
-    // Polling is presentation-only. The persisted backend intent owns task
-    // generation, battle validation, repository approval, readiness, and the
-    // OFF->ON transition even if this dialog/tab disappears.
-    if (
-      !activationReviewOpen
-      || activationBattleVerdict === 'pass'
-      || !Number.isFinite(numericRoleId)
-    ) return undefined;
-    let cancelled = false;
-    const refreshGeneratedAssessment = async () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      try {
-        const [tasksRes, roleRes] = await Promise.all([
-          rolesApi.listTasks(numericRoleId),
-          rolesApi.get(numericRoleId),
-        ]);
-        if (cancelled) return;
-        const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
-        const generatedDraft = nextTasks.find((task) => (
-          task?.is_active === false && task?.generated && task?.needs_review !== false
-        )) || null;
-        setRoleTasks(nextTasks);
-        if (roleRes?.data) setRole(roleRes.data);
-        if (generatedDraft) {
-          setActivationReview((current) => (
-            current ? { ...current, draft: generatedDraft } : current
-          ));
-        }
-      } catch {
-        // Keep the dialog open; the workspace refresh and next poll recover.
-      }
-    };
-    void refreshGeneratedAssessment();
-    const timer = window.setInterval(refreshGeneratedAssessment, 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [
-    activationReviewOpen,
-    activationBattleVerdict,
-    loadRoleWorkspace,
-    numericRoleId,
-    refetchAgentStatus,
-    rolesApi,
-    setAgentStatus,
-    showToast,
-  ]);
+  }, [role?.role_kind]);
+  const {
+    activationPreflight, activationReview, ordinaryActivationAllowed,
+    setActivationPreflight, setActivationReview, activateAgentWithAssessmentChoice,
+    requestAgentActivationWhenReady, handleActivateAgent, confirmAgentActivation,
+  } = useRoleActivationFlow({
+    canControlRoleAgent, handleRoleVersionConflict, numericRoleId,
+    onTasksLoaded: handleActivationTasksLoaded, refetchAgentStatus, role, roleTasks,
+    roleTasksFetchKnown, rolesApi, setRole, showToast, refreshRoleAndTasks,
+  });
 
   if (loading && !role) {
     return (
@@ -1382,109 +1377,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (tabsEl && typeof tabsEl.scrollIntoView === 'function') {
       tabsEl.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
     }
-  };
-
-  const activateAgentWithAssessmentChoice = (monthlyBudgetCents, assessmentAction = null) => {
-    if (!Number.isFinite(numericRoleId)) return;
-    const assessmentFields = assessmentAction === 'skip_assessment'
-      ? { activation_assessment_action: assessmentAction, auto_skip_assessment: true }
-      : assessmentAction
-        ? { activation_assessment_action: assessmentAction }
-        : {};
-    setActivationReview(null);
-    // First activation is not optimistic. The OFF strip remains truthful until
-    // the backend has accepted the autonomy grant and returned authoritative
-    // role state; a rejected PATCH must never flash ON or "starting".
-    rolesApi
-      .update(numericRoleId, versionedRolePayload(role, {
-        agentic_mode_enabled: true,
-        monthly_usd_budget_cents: monthlyBudgetCents,
-        // Turn on executes the policy the recruiter reviewed. It must never
-        // silently broaden a role's existing autonomy grant.
-        ...activationAutonomyPayload(role),
-        ...assessmentFields,
-      }))
-      .then((response) => {
-        if (response?.data) setRole(response.data);
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
-      })
-      .catch((error) => {
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
-        if (!handleRoleVersionConflict(error)) {
-          showToast(getErrorMessage(error, 'Failed to turn on agent mode.'), 'error');
-        }
-      });
-  };
-
-  const requestAgentActivationWhenReady = (monthlyBudgetCents, draft = null) => {
-    if (!Number.isFinite(numericRoleId)) return;
-    setActivationReview({
-      monthlyBudgetCents,
-      draft,
-      activationSubmitting: true,
-      activationRequested: false,
-      activationError: null,
-    });
-    rolesApi.update(numericRoleId, versionedRolePayload(role, {
-      agentic_mode_enabled: true,
-      monthly_usd_budget_cents: monthlyBudgetCents,
-      ...activationAutonomyPayload(role),
-      activation_assessment_action: 'approve_when_ready',
-    }))
-      .then((response) => {
-        if (response?.data) setRole(response.data);
-        setActivationReview((current) => (current ? {
-          ...current,
-          activationSubmitting: false,
-          activationRequested: true,
-          activationError: null,
-        } : current));
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
-      })
-      .catch((error) => {
-        const conflict = roleVersionConflict(error);
-        const detail = conflict?.message || getErrorMessage(error, 'Failed to queue agent activation.');
-        setActivationReview((current) => (current ? {
-          ...current,
-          activationSubmitting: false,
-          activationRequested: false,
-          activationError: detail,
-        } : current));
-        if (!handleRoleVersionConflict(error)) showToast(detail, 'error');
-      });
-  };
-
-  const handleActivateAgent = (monthlyBudgetCents) => {
-    if (!canControlRoleAgent) return;
-    if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
-      showToast('Set a monthly cap greater than $0 before activating.', 'error');
-      return;
-    }
-    setActivationPreflight({ monthlyBudgetCents });
-  };
-
-  const confirmAgentActivation = () => {
-    if (!canControlRoleAgent) return;
-    const monthlyBudgetCents = Number(activationPreflight?.monthlyBudgetCents);
-    if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
-      setActivationPreflight(null);
-      showToast('Set a monthly cap greater than $0 before activating.', 'error');
-      return;
-    }
-    setActivationPreflight(null);
-    if (role?.role_kind === 'sister') return activateAgentWithAssessmentChoice(monthlyBudgetCents, 'skip_assessment');
-    const activeTasks = (roleTasks || []).filter((task) => task?.is_active !== false);
-    if (Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment) || activeTasks.length > 0) {
-      activateAgentWithAssessmentChoice(monthlyBudgetCents);
-      return;
-    }
-    const generatedDraft = (roleTasks || []).find((task) => (
-      task?.is_active === false && task?.generated && task?.needs_review !== false
-    )) || null;
-    requestAgentActivationWhenReady(monthlyBudgetCents, generatedDraft);
   };
 
   // Turn the agent OFF for this role — indefinite, no auto-resume. Opens a
@@ -1598,7 +1490,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               <div className="f"><span className="k">{externalProviderLabel} owner</span><span className="v purple">{role?.ats_owner_role_name || 'Original role'}</span></div>
             ) : (
               (() => {
-                const activeTasks = roleTasks.filter((task) => task?.is_active !== false);
+                const activeTasks = roleTasks.filter((task) => task?.is_active === true);
                 const draftTasks = roleTasks.filter((task) => task?.is_active === false && task?.generated);
                 return (
                   <div className="f">
@@ -1608,9 +1500,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         ? activeTasks.map((task) => task.name).join(' · ')
                         : draftTasks.length
                           ? `${draftTasks[0].name} · draft`
-                          : role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment
+                          : resolvedRoleAutoSkipAssessment(role)
                             ? 'Skipped'
-                            : 'Generated after Turn on'}
+                            : 'Skipped until task assigned'}
                     </span>
                   </div>
                 );
@@ -1689,7 +1581,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </>
         )}
 
-        <RoleViewTabs activeView={activeView} onBeforeNavigate={handleRoleViewNavigate} />
+        <RoleViewTabs
+          activeView={activeView}
+          onBeforeNavigate={handleRoleViewNavigate}
+          scoreOnly={role?.role_kind === 'sister'}
+        />
 
         <PresenceSwap presenceKey={activeView} className="role-view-panel">
           {activeView === 'pipeline' ? (
@@ -1887,7 +1783,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             savingThresholdMode={savingThresholdMode}
             onThresholdModeChange={handleThresholdModeChange}
             roleTasks={roleTasks}
-            allTasks={allTasks}
+            roleTasksFetchKnown={roleTasksFetchKnown}
+            roleTasksLoadError={roleTasksLoadError}
+            onRetryTasks={refreshAssessmentTasks}
+            allTasks={taskCatalogue.items}
+            taskCatalogueLoading={taskCatalogue.loading}
+            taskCatalogueError={taskCatalogue.error}
+            taskCatalogueHasMore={taskCatalogue.hasMore}
+            onTaskCatalogueSearchChange={taskCatalogue.setQuery}
+            onRetryTaskCatalogue={taskCatalogue.retry}
+            onLoadMoreTaskCatalogue={taskCatalogue.loadMore}
             onAssignAssessmentTasks={handleAssignAssessmentTasks}
             savingAssessmentTask={savingAssessmentTask}
             onRoleVersionChange={(version) => {
@@ -2402,58 +2307,79 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <Dialog
           open={Boolean(activationPreflight)}
           onClose={() => setActivationPreflight(null)}
-          title="Turn on this role’s agent?"
-          description="Confirm once and the saved policy keeps running after you close this page."
+          title="Turn on agent?"
+          description="Review what the agent can do without asking you."
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
-              <Button type="button" variant="primary" onClick={confirmAgentActivation} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn on with this policy</Button>
+              {role?.role_kind === 'sister' ? null : (
+                <>
+                  <Button
+                    onClick={() => confirmAgentActivation('skip_assessment')}
+                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                    type="button" variant="secondary" disabled={!canControlRoleAgent}
+                  >Skip assessment &amp; turn on</Button>
+                  <Button
+                    onClick={() => confirmAgentActivation('approve_when_ready')}
+                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                    type="button" variant={ordinaryActivationAllowed ? 'secondary' : 'primary'} disabled={!canControlRoleAgent}
+                  >Generate, validate &amp; approve, then turn on</Button>
+                </>
+              )}
+              {ordinaryActivationAllowed ? (
+                <Button
+                  onClick={() => confirmAgentActivation(null)}
+                  title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                  type="button" variant="primary" disabled={!canControlRoleAgent}
+                >Turn on agent</Button>
+              ) : null}
             </div>
           )}
         >
           <div className="space-y-3 text-sm">
             <div className="mc-agent-settings-card-help">
-              <strong>Effective automation</strong>
+              <strong>Candidate-action safeguards</strong>
               <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
                 <li>
-                  {externalProvider
-                    ? `${externalProviderLabel} remains the intake source; its current publish state is unchanged.`
-                    : 'The native job page opens for applications after activation succeeds.'}
-                </li>
-                <li>Applications that reach this role are parsed, screened, scored, and monitored while the agent is on.</li>
-                <li>
-                  Initial assessments {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'wait for recruiter approval'};
-                  {' '}resends {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'run automatically' : 'wait for recruiter approval'}.
+                  Assessment invitations {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'require your approval'}.
                 </li>
                 <li>
-                  Qualified candidates {resolvedRoleAutomation(role, 'auto_advance') ? 'advance automatically to recruiter handoff' : 'wait for recruiter approval before advancing'}.
+                  Assessment retries {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'send automatically' : 'require your approval'}.
                 </li>
                 <li>
-                  Pre-screen failures {
-                    resolvedDeterministicReject(role)
-                      ? 'reject automatically when provider and safety checks pass'
-                      : 'wait for recruiter approval'
-                  }. Full CV-score and assessment rejections still need approval.
+                  Candidate advancement {resolvedRoleAutomation(role, 'auto_advance') ? 'runs automatically' : 'requires your approval'}.
                 </li>
                 <li>
-                  Assessment stage: {
-                    role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment
+                  Pre-screen failures {resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval'}. Full CV-score and assessment rejections always require approval.
+                </li>
+                <li>
+                  Current assessment policy: {
+                    role?.role_kind === 'sister'
+                      ? 'this related role is score-only, so candidate assessments remain on the original role'
+                      : String(role?.assessment_task_provisioning?.reconfiguration?.status || '').toLowerCase() === 'blocked'
+                        ? 'Turn on confirms the preserved assessment and resumes durable validation'
+                      : role?.auto_skip_assessment
                       ? 'explicitly skipped for this role'
-                      : (roleTasks || []).some((task) => task?.is_active !== false)
-                        ? 'uses the active approved task'
-                        : 'the agent generates, repairs, battle-tests, and approves a role-specific task automatically'
+                      : roleTasksFetchKnown && hasActiveAssessmentTask(roleTasks)
+                        ? 'uses the active approved task already assigned to this role'
+                        : roleTasksFetchKnown
+                          ? 'no active task exists; choose Generate or Skip below'
+                          : 'the current task assignment is unavailable; choose Generate or Skip rather than inferring it'
                   }.
                 </li>
               </ul>
+              {role?.role_kind === 'sister' ? null : (
+                <p style={{ margin: '8px 0 0' }}>
+                  Generate, validate, and approve a role-specific assessment, or explicitly skip the assessment stage. Turn on never guesses between those choices.
+                </p>
+              )}
             </div>
-            <div className="mc-agent-warn" role="status">
+            <div className="mc-agent-settings-card-help" role="status">
               <div>
-                <div className="mc-agent-warn-title">
+                <strong>
                   Monthly AI-usage cap: ${Math.round(Number(activationPreflight?.monthlyBudgetCents || 0) / 100)}
-                </div>
-                <div className="mc-agent-warn-body">
-                  Pause or Turn off stops autonomous processing and AI spend. {intakeLifecycleCopy}
-                </div>
+                </strong>
+                <div>Pausing stops new AI processing and spend until you resume.</div>
               </div>
             </div>
           </div>
@@ -2462,8 +2388,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <Dialog
           open={Boolean(activationReview)}
           onClose={() => setActivationReview(null)}
-          title="Preparing the assessment and turning on"
-          description={activationReview?.activationSubmitting
+          title={activationReview?.terminalStatus === 'succeeded'
+            ? 'Agent turned on'
+            : activationReview?.terminalStatus === 'blocked'
+              ? 'Turn-on needs input'
+              : activationReview?.terminalStatus === 'cancelled'
+                ? 'Turn-on cancelled'
+                : 'Preparing the assessment and turning on'}
+          description={activationReview?.terminalStatus === 'succeeded'
+            ? 'The assessment policy is ready and the Agent is on.'
+            : activationReview?.terminalStatus === 'blocked'
+              ? 'The saved Turn-on request needs input before it can continue.'
+              : activationReview?.terminalStatus === 'cancelled'
+                ? 'The saved Turn-on request was cancelled and the Agent remains off.'
+                : activationReview?.activationSubmitting
             ? 'Saving Turn-on… The agent remains off until the backend confirms this request.'
             : activationReview?.activationRequested
               ? 'Your Turn-on request is saved. The agent will validate the generated task and turn on automatically, even after you close this dialog.'
@@ -2473,16 +2411,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationReview(null)}>Close</Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => activateAgentWithAssessmentChoice(activationReview?.monthlyBudgetCents, 'skip_assessment')}
-                disabled={!canControlRoleAgent || Boolean(activationReview?.activationSubmitting)}
-                title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
-              >
-                Skip assessment &amp; turn on
-              </Button>
-              {activationReview?.activationError ? (
+              {!['succeeded', 'cancelled'].includes(activationReview?.terminalStatus) ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => activateAgentWithAssessmentChoice(activationReview?.monthlyBudgetCents, 'skip_assessment')}
+                  disabled={!canControlRoleAgent || Boolean(activationReview?.activationSubmitting)}
+                  title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                >Skip assessment &amp; turn on</Button>
+              ) : null}
+              {activationReview?.activationError && activationReview?.terminalStatus !== 'cancelled' ? (
                   <Button
                     type="button"
                     variant="primary"
@@ -2500,15 +2438,29 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           )}
         >
           <div className="space-y-3 text-sm">
-            {activationReview?.activationError ? (
+            {activationReview?.terminalStatus === 'succeeded' ? (
+              <div className="mc-agent-settings-card-help" role="status">
+                <strong>Agent turned on</strong>
+                <div>{activationReview.terminalMessage}</div>
+              </div>
+            ) : activationReview?.terminalStatus === 'cancelled' ? (
+              <div className="mc-agent-warn" role="status">
+                <div>
+                  <div className="mc-agent-warn-title">Turn-on request cancelled</div>
+                  <div className="mc-agent-warn-body">{activationReview.terminalMessage}</div>
+                </div>
+              </div>
+            ) : activationReview?.activationError ? (
               <div className="mc-agent-warn" role="alert">
                 <div>
-                  <div className="mc-agent-warn-title">Turn-on request failed</div>
+                  <div className="mc-agent-warn-title">
+                    {activationReview?.terminalStatus === 'blocked' ? 'Turn-on needs input' : 'Turn-on request failed'}
+                  </div>
                   <div className="mc-agent-warn-body">{activationReview.activationError}</div>
                 </div>
               </div>
             ) : null}
-            {activationReview?.draft ? (
+            {activationReview?.terminalStatus ? null : activationReview?.draft ? (
               <>
                 <div>
                   <strong>{activationReview.draft.name}</strong>

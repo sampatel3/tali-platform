@@ -163,11 +163,11 @@ def test_sister_role_chat_controls_are_score_only(kick, db):
 
     assert activation["ok"] is False
     assert activation["reason"] == "score_only_role"
-    assert "score-only" in activation["message"]
+    assert "provider actions remain human-confirmed" in activation["message"]
     assert settings["ok"] is False
     assert settings["reason"] == "score_only_role"
     assert settings["changed"] == []
-    assert "score-only" in settings["message"]
+    assert "provider actions remain human-confirmed" in settings["message"]
     assert role.agentic_mode_enabled is False
     assert role.monthly_usd_budget_cents == 5_000
     assert role.auto_advance is False
@@ -188,7 +188,7 @@ def test_chat_activation_opens_native_requisition(kick, db):
 
     assert res["ok"] is True
     assert role.job_status == JOB_STATUS_OPEN
-    assert role.auto_promote is True
+    assert role.auto_promote is False
     assert role.starred_for_auto_sync is True
     kick.assert_called_once_with(role, activation=True)
 
@@ -271,6 +271,7 @@ def test_chat_turn_on_fresh_requisition_persists_durable_activation(
     assert "No second approval click" in res["message"]
     assert role.agentic_mode_enabled is False
     assert role.job_status == JOB_STATUS_DRAFT
+    assert role.auto_skip_assessment is False
     assert role.assessment_task_provisioning["activation_intent"][
         "requested_by_user_id"
     ] == user.id
@@ -303,6 +304,8 @@ def test_chat_turn_on_persists_activation_without_dispatch_under_workspace_pause
     assert res["reason"] == "workspace_paused"
     assert res["activation_intent"]["status"] == "pending"
     assert role.agentic_mode_enabled is False
+    assert role.auto_skip_assessment is False
+    assert role.job_status == JOB_STATUS_DRAFT
     assert role.assessment_task_provisioning["activation_intent"][
         "requested_by_user_id"
     ] == user.id
@@ -362,7 +365,11 @@ def test_pause_sets_paused_state(kick, db):
     user = _user(db, org)
     role = _role(db, org, agentic=True)
 
-    res = _run(db, role, user, "set_agent_state", {"action": "pause"})
+    with patch(
+        "app.services.agent_control_ats_fence."
+        "require_authorized_agent_control_transaction_fence"
+    ):
+        res = _run(db, role, user, "set_agent_state", {"action": "pause"})
     assert res["ok"] and res["action"] == "paused"
     assert role.agent_paused_at is not None
     assert role.agent_paused_reason == "paused by recruiter"
@@ -377,7 +384,11 @@ def test_chat_pause_reports_workspace_as_effective_scope(kick, db):
     org.agent_workspace_paused_reason = "workspace paused by recruiter"
     db.commit()
 
-    res = _run(db, role, user, "set_agent_state", {"action": "pause"})
+    with patch(
+        "app.services.agent_control_ats_fence."
+        "require_authorized_agent_control_transaction_fence"
+    ):
+        res = _run(db, role, user, "set_agent_state", {"action": "pause"})
 
     assert res["ok"] is True
     assert res["agent"]["paused"] is True
@@ -421,7 +432,7 @@ def test_adjust_agent_settings_rejects_zero_budget(kick, db):
 
 
 @patch.object(_controls, "_kick_cycle")
-def test_chat_cannot_enable_live_assessment_stage_without_task(kick, db):
+def test_chat_preserves_assessment_intent_while_taskless(kick, db):
     org = _org(db)
     user = _user(db, org)
     role = _role(db, org, agentic=True)
@@ -432,9 +443,10 @@ def test_chat_cannot_enable_live_assessment_stage_without_task(kick, db):
         db, role, user, "adjust_agent_settings", {"auto_skip_assessment": False}
     )
 
-    assert res["ok"] is False
-    assert res["reason"] == "assessment_task_required"
-    assert role.auto_skip_assessment is True
+    assert res["ok"] is True
+    assert "auto_skip_assessment" in res["changed"]
+    assert role.auto_skip_assessment is False
+    assert res["agent"]["effective_policy"]["auto_skip_assessment"] is True
     kick.assert_not_called()
 
 

@@ -17,12 +17,14 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
+from ..models.role import Role
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
 from ._decision_side_effects import apply_decision_side_effects
 from .types import ACTOR_RECRUITER, Actor
 
 
 _REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
+_POSITIVE_DECISION_TYPES = ("send_assessment", "advance_to_interview")
 
 
 def _accept_for_processing(
@@ -217,26 +219,74 @@ def run(
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
 
-    # C2: row-level lock on the decision. Two recruiters approving the
-    # same pending decision in the same second would otherwise both pass
-    # the ``status != "pending"`` check and both dispatch the underlying
-    # action — double Workable POST, double pipeline-stage event, double
-    # candidate email. ``with_for_update`` blocks the second request
-    # until the first commits; it then sees ``status='approved'`` and
-    # 409s. SQLite tests ignore the row lock (no NOWAIT support) which
-    # is fine since the race only matters in real production traffic.
-    decision_query = (
-        db.query(AgentDecision)
+    # Read identity without a lock, then take every mutation lock in canonical
+    # application -> role -> decision order. The final decision lock revalidates
+    # both identity and actionability. This serializes the current-policy check
+    # through the candidate action without deadlocking ATS application workers
+    # or assessment-stage reflow.
+    decision_identity = (
+        db.query(AgentDecision.application_id)
         .filter(
             AgentDecision.id == decision_id,
             AgentDecision.organization_id == organization_id,
         )
+        .one_or_none()
     )
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        decision_query = decision_query.with_for_update()
-    decision = decision_query.first()
-    if decision is None:
+    if decision_identity is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(decision_identity.application_id),
+            CandidateApplication.organization_id == organization_id,
+        )
+        .populate_existing()
+        .with_for_update(of=CandidateApplication)
+        .one_or_none()
+    )
+    if app is not None:
+        from ..services.workspace_agent_control import (
+            workspace_agent_control_snapshot,
+        )
+
+        # Serialize provider/billing authority after the application and before
+        # Role, matching app -> Organization -> Role across manual and automatic
+        # candidate actions. This is a lock only; manual approval is still
+        # allowed while autonomous workspace execution is paused.
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=organization_id,
+            lock=True,
+        )
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(app.role_id),
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .populate_existing()
+        .with_for_update(of=Role)
+        .one_or_none()
+        if app is not None
+        else None
+    )
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == organization_id,
+            AgentDecision.application_id == int(decision_identity.application_id),
+        )
+        .populate_existing()
+        .with_for_update(of=AgentDecision)
+        .one_or_none()
+    )
+    if decision is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent_decision {decision_id} changed before approval",
+        )
     # ``reverted_for_feedback`` is a taught-but-not-yet-resolved decision — the
     # corrected row can then be approved/overridden, so it stays actionable
     # alongside ``pending``. ``processing`` is accepted because the async
@@ -247,6 +297,19 @@ def run(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
         )
+    from ..services.decision_auto_execution_guard import (
+        application_action_block_reason,
+    )
+
+    application_block = application_action_block_reason(app)
+    if application_block:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "APPLICATION_NOT_ACTIONABLE",
+                "message": application_block,
+            },
+        )
 
     metadata = {
         "agent_decision_id": int(decision.id),
@@ -256,20 +319,50 @@ def run(
         "prompt_version": decision.prompt_version,
     }
     reason = (note or "").strip() or f"Approved agent recommendation #{decision.id}"
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
-    )
     org = (
         db.query(Organization).filter(Organization.id == organization_id).first()
         if app is not None
         else None
     )
-    role = getattr(app, "role", None) if app is not None else None
+    if decision.decision_type in _POSITIVE_DECISION_TYPES and role is not None:
+        # Assessment-stage settings can change after a card is queued. Reflow
+        # normally replaces the card, but a concurrent approval or failed
+        # replacement must not execute the obsolete stored action. Any
+        # mismatch is stale. A reject, hold, escalation, missing verdict,
+        # or failed recomputation cannot authorize the stored positive action.
+        from ..services.bulk_decision_service._shared import (
+            recompute_persisted_verdict,
+        )
+
+        try:
+            current_type = recompute_persisted_verdict(db, role=role, app=app)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "ASSESSMENT_STAGE_DECISION_REFRESH_REQUIRED",
+                    "message": (
+                        "Taali could not verify this recommendation against "
+                        "current policy. Refresh the Decision Hub and retry."
+                    ),
+                    "stored_decision_type": str(decision.decision_type),
+                    "current_decision_type": None,
+                },
+            ) from exc
+        if current_type != decision.decision_type:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "ASSESSMENT_STAGE_DECISION_STALE",
+                    "message": (
+                        "This recommendation is stale because the role's "
+                        "assessment stage changed. Refresh the Decision Hub "
+                        "and approve the replacement recommendation instead."
+                    ),
+                    "stored_decision_type": str(decision.decision_type),
+                    "current_decision_type": str(current_type),
+                },
+            )
 
     # "Did this approval freshly reject the candidate?" — gates the background
     # Workable disqualify so an already-rejected candidate isn't re-processed.

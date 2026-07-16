@@ -26,6 +26,7 @@ from app.actions import approve_decision
 from app.actions.types import ACTOR_RECRUITER, Actor
 from app.agent_runtime import calibration as calibration_mod
 from app.agent_runtime import outcome_learning
+from app.decision_policy.bootstrap import bootstrap_org
 from app.domains.assessments_runtime.pipeline_service import (
     transition_outcome,
     transition_stage,
@@ -339,6 +340,14 @@ def test_approve_advance_records_interviewed_outcome(db):
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_application(db, org=org, role=role, stage="review")
+    # Approval revalidates positive decisions against the current deterministic
+    # policy. Model a strong, fully-scored candidate on a taskless role so the
+    # live verdict is still the stored direct-advance recommendation.
+    role.auto_reject_threshold_mode = "manual"
+    role.score_threshold = 50
+    app.cv_match_score = 80.0
+    app.pre_screen_score_100 = 80.0
+    bootstrap_org(db, organization_id=int(org.id))
     decision = _pending_decision(
         db, org=org, role=role, application=app, decision_type="advance_to_interview"
     )

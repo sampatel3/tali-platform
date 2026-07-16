@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from sqlalchemy.orm import Session
-
-from datetime import datetime, timedelta, timezone
 
 from ..actions import (
     advance_stage,
@@ -42,6 +41,13 @@ from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
 from ..services.agent_policy_settings import automation_enabled_for_decision
 from ..services.auto_threshold_service import resolve_role_fit_threshold
+from ..services.decision_auto_execution_guard import (
+    auto_execution_application_is_actionable,
+    lock_actionable_auto_execution_decision,
+    lock_auto_execution_application,
+    lock_authorized_auto_execution_role,
+    positive_auto_execution_is_current,
+)
 from ..services.decision_evidence_service import blocked_must_have_requirements
 from ..services.decision_presentation_service import normalize_candidate_summary
 from ..sub_agents.base import public_sub_agent_error
@@ -1708,11 +1714,6 @@ def _auto_execute_decision(
     ``actor=system`` and a ``human_disposition`` that records the
     auto-toggle that drove the call.
 
-    Defense-in-depth for the human-confirm rail (TAA-11 / P1-TALI-03):
-    an irreversible reject must never reach this auto-execute path. The
-    sole caller (``_queue``) already excludes those types, but a future
-    caller could regress that; refuse here so the invariant holds at the
-    side-effect boundary, not just the gate above it.
     """
     if decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES:
         raise ValueError(
@@ -1721,39 +1722,29 @@ def _auto_execute_decision(
             f"(TAA-11 / P1-TALI-03). Leave the decision pending for the "
             f"recruiter to approve."
         )
-    from ..services.role_execution_guard import (
-        assessment_task_is_current,
-        automatic_role_action_block_reason,
-        lock_live_role,
-    )
-
-    live_role = lock_live_role(
+    locked_app = lock_auto_execution_application(
         db,
-        role_id=int(role.id),
-        organization_id=int(role.organization_id),
+        role=role,
+        decision=decision,
     )
-    role_block = automatic_role_action_block_reason(live_role, db=db)
-    auto_toggle = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
-    if (
-        role_block is None
-        and auto_toggle
-        and not automation_enabled_for_decision(live_role, decision_type)
-    ):
-        role_block = f"role.{auto_toggle} is disabled"
-    if role_block:
-        held = dict(decision.evidence or {})
-        held["auto_execute_hold"] = {
-            "status": "role_not_runnable",
-            "detail": role_block,
-        }
-        decision.evidence = held
-        db.add(decision)
+    if locked_app is None:
         return False
-    # ``live_role`` is non-null when no block reason was returned. Use this
-    # populate-existing row for every subsequent side effect; the Role lock
-    # serializes a stale queued action against Turn off / requisition republish.
-    role = live_role
-
+    from ..services.role_execution_guard import assessment_task_is_current
+    role = lock_authorized_auto_execution_role(
+        db,
+        role=role,
+        decision=decision,
+        decision_type=decision_type,
+        auto_toggle=_AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type),
+    )
+    if role is None:
+        return False
+    if (decision := lock_actionable_auto_execution_decision(db, decision=decision)) is None:
+        return False
+    if not auto_execution_application_is_actionable(
+        db, application=locked_app, decision=decision
+    ):
+        return False
     if decision_type == "advance_to_interview":
         prior_assessment = (
             db.query(Assessment)
@@ -1782,6 +1773,14 @@ def _auto_execute_decision(
             decision.evidence = held
             db.add(decision)
             return False
+    if not positive_auto_execution_is_current(
+        db,
+        role=role,
+        application=locked_app,
+        decision=decision,
+        decision_type=decision_type,
+    ):
+        return False
     actor = Actor.system()
     metadata = {
         "agent_decision_id": int(decision.id),
@@ -1874,14 +1873,7 @@ def _auto_execute_decision(
     # Auto resolution must have the same external/audit consequences as a
     # human approval. Previously the local stage changed but Workable stage
     # writeback, the activity note and graph/outcome trail were skipped.
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == int(role.organization_id),
-        )
-        .first()
-    )
+    app = locked_app
     org = (
         db.query(Organization)
         .filter(Organization.id == int(role.organization_id))

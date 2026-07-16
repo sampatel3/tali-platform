@@ -15,6 +15,8 @@ from . import run_history as _run_history
 from .tool_dispatch_common import ToolContext, UNHANDLED
 
 def _role_overview(db: Session, role: Role) -> dict[str, Any]:
+    from ..services.agent_policy_settings import effective_agent_policy
+
     rows = _impact.load_open_candidates(db, role)
     effective = _impact.effective_threshold(db, role)
     above, below = _impact.split_by_threshold(rows, effective)
@@ -93,6 +95,7 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
             "auto_resend_assessment": getattr(role, "auto_resend_assessment", None),
             "auto_advance": getattr(role, "auto_advance", None),
             "auto_skip_assessment": bool(role.auto_skip_assessment),
+            "effective_policy": effective_agent_policy(role),
         },
         "threshold": {
             "effective": effective,

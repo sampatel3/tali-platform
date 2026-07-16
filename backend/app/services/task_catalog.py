@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable
 
+from sqlalchemy import text
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -19,6 +21,19 @@ PERSISTED_TASK_SPEC_KEYS = {
     "repo_structure",
     "evaluation_rubric",
 }
+TASK_CATALOG_SYNC_LOCK_SCOPE = "template_task_catalog_sync"
+
+
+def serialize_task_catalog_sync(db: Session) -> None:
+    """Serialize catalogue discovery+write across PostgreSQL web workers."""
+
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:scope), 0)"),
+        {"scope": TASK_CATALOG_SYNC_LOCK_SCOPE},
+    )
 
 
 def repo_root() -> Path:
@@ -82,27 +97,55 @@ def build_template_task_payload(spec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def sync_template_task_specs(db: Session, specs: Iterable[Dict[str, Any]]) -> Dict[str, int]:
-    from ..models.assessment import Assessment
+def _lock_existing_template(
+    db: Session,
+    *,
+    task_id: int,
+    task_key: str,
+) -> Any | None:
+    """Refresh and lock the exact template before changing catalogue state."""
     from ..models.task import Task
 
+    return (
+        db.query(Task)
+        .filter(
+            Task.id == int(task_id),
+            Task.task_key == task_key,
+            Task.is_template == True,  # noqa: E712
+            Task.organization_id == None,  # noqa: E711
+        )
+        .populate_existing()
+        .with_for_update(of=Task)
+        .one_or_none()
+    )
+
+
+def _template_task_is_referenced(db: Session, *, task_id: int) -> bool:
+    """Re-query every persistent reference while the Task row is locked."""
+    from ..domains.tasks_repository.task_reference_guard import task_reference_kinds
+
+    return bool(task_reference_kinds(db, task_id=int(task_id)))
+
+
+def sync_template_task_specs(db: Session, specs: Iterable[Dict[str, Any]]) -> Dict[str, int]:
+    from ..models.task import Task
+
+    # This must precede discovery: a second worker waits here, then re-queries
+    # after the first worker commits instead of inserting the same non-unique
+    # task_key. Existing duplicate rows are deliberately left untouched.
+    serialize_task_catalog_sync(db)
     existing_templates = {
         task.task_key: task
         for task in db.query(Task).filter(Task.is_template == True, Task.organization_id == None).all()  # noqa: E712,E711
         if task.task_key
     }
-    referenced_task_ids = {
-        int(task_id)
-        for (task_id,) in db.query(Assessment.task_id).filter(Assessment.task_id.isnot(None)).distinct().all()
-        if task_id is not None
-    }
-
     spec_task_keys: set[str] = set()
     stats = {
         "created": 0,
         "updated": 0,
         "deactivated": 0,
         "preserved_referenced": 0,
+        "version_required": 0,
     }
 
     for spec in specs:
@@ -118,22 +161,53 @@ def sync_template_task_specs(db: Session, specs: Iterable[Dict[str, Any]]) -> Di
             stats["created"] += 1
             continue
 
-        has_changes = False
-        for field, value in payload.items():
-            if getattr(existing, field) != value:
-                setattr(existing, field, value)
-                has_changes = True
-        if has_changes:
+        existing = _lock_existing_template(
+            db,
+            task_id=int(existing.id),
+            task_key=str(task_key),
+        )
+        if existing is None:
+            # The discovered row changed identity or disappeared before its
+            # lock. Treat this spec as missing; never overwrite a different
+            # task based on the stale discovery snapshot.
+            db.add(Task(**payload))
+            stats["created"] += 1
+            continue
+
+        changes = {
+            field: value
+            for field, value in payload.items()
+            if getattr(existing, field) != value
+        }
+        if changes and _template_task_is_referenced(
+            db,
+            task_id=int(existing.id),
+        ):
+            stats["version_required"] += 1
+            continue
+        for field, value in changes.items():
+            setattr(existing, field, value)
+        if changes:
             stats["updated"] += 1
 
     for task_key, task in existing_templates.items():
         if task_key in spec_task_keys:
             continue
         if task.is_active:
-            task.is_active = False
-            if task.id in referenced_task_ids:
+            locked_task = _lock_existing_template(
+                db,
+                task_id=int(task.id),
+                task_key=str(task_key),
+            )
+            if locked_task is None or not locked_task.is_active:
+                continue
+            if _template_task_is_referenced(
+                db,
+                task_id=int(locked_task.id),
+            ):
                 stats["preserved_referenced"] += 1
             else:
+                locked_task.is_active = False
                 stats["deactivated"] += 1
 
     db.commit()

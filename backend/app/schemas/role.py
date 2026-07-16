@@ -180,8 +180,9 @@ class RoleUpdate(BaseModel):
     agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
     # Autonomy toggles. New roles inherit their workspace policy; untouched
-    # workspaces default reversible send/resend/advance actions on while
-    # deterministic rejection and assessment skipping remain off.
+    # workspaces default candidate-facing send/resend/advance actions off and
+    # deterministic pre-screen rejection on. ``auto_skip_assessment`` stores
+    # configured intent; taskless roles are effectively skipped at runtime.
     # ``auto_reject`` and ``auto_reject_pre_screen`` can automate only
     # deterministic pre-screen failures; full-score/assessment rejects always
     # require confirmation.

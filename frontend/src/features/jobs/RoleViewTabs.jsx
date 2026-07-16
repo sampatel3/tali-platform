@@ -28,7 +28,7 @@ export function useRoleView() {
   return [activeView, setActiveView];
 }
 
-export const RoleViewTabs = ({ activeView, onBeforeNavigate }) => {
+export const RoleViewTabs = ({ activeView, onBeforeNavigate, scoreOnly = false }) => {
   const location = useLocation();
   const reduced = useReducedMotionSync();
   const layoutId = `role-view-tab-${useId().replace(/:/g, '')}`;
@@ -52,7 +52,7 @@ export const RoleViewTabs = ({ activeView, onBeforeNavigate }) => {
               aria-current={active ? 'page' : undefined}
               onClick={(event) => onBeforeNavigate?.(event, tab.id)}
             >
-              {tab.label}
+              {scoreOnly && tab.id === 'role-fit' ? 'Scoring settings' : tab.label}
               {active ? (
                 <m.span
                   aria-hidden="true"

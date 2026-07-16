@@ -41,18 +41,10 @@ from .workable_actions_service import (
     WorkableWritebackError,
     strict_workable_writes,
 )
+from .ats_job_run_errors import AtsJobRunPersistenceError
+from .decision_requeue import requeue_processing_decision as _requeue_decision
 
 logger = logging.getLogger("taali.workable_op_runner")
-
-
-class AtsJobRunPersistenceError(RuntimeError):
-    """Raised when an ATS operation cannot be durably tracked before publish."""
-
-    def __init__(self, op_type: str):
-        self.op_type = str(op_type or "unknown")
-        super().__init__(
-            f"could not persist BackgroundJobRun for ATS operation {self.op_type!r}"
-        )
 
 
 # Op type constants — also the dispatch keys.
@@ -61,6 +53,10 @@ OP_OVERRIDE_DECISION = "override_decision"
 OP_MOVE_STAGE = "move_stage"
 OP_MANUAL_OUTCOME = "manual_outcome"
 OP_POST_NOTE = "post_note"
+# Autonomous deterministic pre-screen rejection. Unlike the legacy inline
+# worker, this replay-safe state write uses the durable ATS runner so provider
+# I/O never holds application/workspace/role row locks.
+OP_AUTO_REJECT = "auto_reject"
 
 # Override actions whose Workable write is a safely-replayable state change
 # (disqualify / stage move) — gated so a failure re-queues. send_assessment /
@@ -135,23 +131,6 @@ def _route_bullhorn_op(
 # ``surface_op_failure``). The batch handler is self-contained: it commits per
 # decision and never raises, so one bad row can't fail the whole batch.
 # ---------------------------------------------------------------------------
-
-
-def _requeue_decision(db: Session, decision_id: int, organization_id: int, *, note: str) -> None:
-    """Return a processing decision to the Hub queue (status → pending)."""
-    decision = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.id == decision_id,
-            AgentDecision.organization_id == organization_id,
-        )
-        .first()
-    )
-    if decision is None or decision.status != "processing":
-        return
-    decision.status = "pending"
-    decision.resolution_note = (note or "")[:500] or None
-    db.commit()
 
 
 def compensate_override_delivery_loss(
@@ -618,12 +597,19 @@ def _op_post_note(db: Session, organization_id: int, payload: dict) -> dict:
     return {"status": "ok", "application_id": application_id}
 
 
+def _op_auto_reject(db: Session, organization_id: int, payload: dict) -> dict:
+    from .auto_reject_op import execute_auto_reject_op
+
+    return execute_auto_reject_op(db, organization_id, payload)
+
+
 _HANDLERS: dict[str, Callable[[Session, int, dict], dict]] = {
     OP_APPROVE_DECISIONS: _op_approve_decisions,
     OP_OVERRIDE_DECISION: _op_override_decision,
     OP_MOVE_STAGE: _op_move_stage,
     OP_MANUAL_OUTCOME: _op_manual_outcome,
     OP_POST_NOTE: _op_post_note,
+    OP_AUTO_REJECT: _op_auto_reject,
 }
 
 
@@ -666,7 +652,11 @@ def enqueue_workable_op(
     # A free-form note is normally non-replayable. Agent Chat supplies a stable
     # command key, allowing every broker retry to reuse one BackgroundJobRun;
     # duplicate deliveries then collapse at that run's provider mutex/claim.
-    replay_safe = op_type in {OP_MOVE_STAGE, OP_MANUAL_OUTCOME} or (
+    replay_safe = op_type in {
+        OP_MOVE_STAGE,
+        OP_MANUAL_OUTCOME,
+        OP_AUTO_REJECT,
+    } or (
         op_type == OP_POST_NOTE and stable_dispatch_key is not None
     )
     run_counters = dict(counters or {"op_type": op_type})
@@ -804,6 +794,12 @@ def surface_op_failure(
         f"{error.message}"
     )
     try:
+        if op_type == OP_AUTO_REJECT:
+            from .auto_reject_op import surface_auto_reject_failure
+            surface_auto_reject_failure(
+                db, organization_id=organization_id, payload=payload, error=error
+            )
+            return
         if op_type == OP_OVERRIDE_DECISION:
             _requeue_decision(db, int(payload["decision_id"]), int(organization_id), note=note)
             return

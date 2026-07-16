@@ -14,6 +14,7 @@ import pytest
 
 from app.actions import _workable_decision_summary as wds
 from app.actions.types import Actor
+from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import AgentDecision
 from app.models.share_link import ShareLink
 from app.models.user import User
@@ -504,7 +505,8 @@ def test_approve_advance_to_interview_invokes_advance_and_summary(db, monkeypatc
     from app.actions import advance_stage as advance_stage_action
     from app.actions import approve_decision
 
-    org, role, _, app = make_world(db, pre_screen=85.0)
+    org, role, _, app = make_world(db, pre_screen=85.0, cv_match=85.0)
+    bootstrap_org(db, organization_id=int(org.id))
     decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
     user = _make_user(db, org)
     _enable_workable(db, org)
@@ -674,7 +676,8 @@ def test_approve_with_collect_side_effects_defers_inline_work(db, monkeypatch):
     from app.actions import advance_stage as advance_stage_action
     from app.actions import approve_decision
 
-    org, role, _, app = make_world(db, pre_screen=85.0)
+    org, role, _, app = make_world(db, pre_screen=85.0, cv_match=85.0)
+    bootstrap_org(db, organization_id=int(org.id))
     decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
     user = _make_user(db, org)
     _enable_workable(db, org)

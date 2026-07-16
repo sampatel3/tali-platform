@@ -121,6 +121,7 @@ from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
 )
+from ...services.assessment_repository_operations import create_serialized_assessment_branch
 from .role_support import (
     application_list_payload,
     application_detail_payload,
@@ -529,12 +530,9 @@ def _apply_application_source_filter(query, source: str | None):
     return query
 
 
-def _provision_assessment_branch(assessment: Assessment, task: Task) -> None:
+def _provision_assessment_branch(db: Session, assessment: Assessment) -> None:
     repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-    branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-    assessment.assessment_repo_url = branch_ctx.repo_url
-    assessment.assessment_branch = branch_ctx.branch_name
-    assessment.clone_command = branch_ctx.clone_command
+    create_serialized_assessment_branch(db, repo_service, assessment)
 
 
 def _create_application_assessment(
@@ -579,7 +577,7 @@ def _create_application_assessment(
     if void_existing is not None:
         void_existing.superseded_by_assessment_id = assessment.id
 
-    _provision_assessment_branch(assessment, task)
+    _provision_assessment_branch(db, assessment)
     if org:
         dispatch_assessment_invite(
             assessment=assessment,

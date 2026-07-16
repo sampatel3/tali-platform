@@ -109,17 +109,18 @@ def test_unsaved_workspace_uses_concrete_safe_platform_defaults(db):
 
     assert role.agentic_mode_enabled is None or role.agentic_mode_enabled is False
     assert role.monthly_usd_budget_cents == 5_000
-    assert role.auto_send_assessment is True
-    assert role.auto_resend_assessment is True
-    assert role.auto_advance is True
-    assert role.auto_promote is True
-    assert role.auto_reject_pre_screen is False
+    assert role.auto_send_assessment is False
+    assert role.auto_resend_assessment is False
+    assert role.auto_advance is False
+    assert role.auto_promote is False
+    assert role.auto_reject_pre_screen is True
     assert role.auto_skip_assessment is False
     effective = effective_agent_policy(role)
-    assert effective["auto_send_assessment"] is True
-    assert effective["auto_resend_assessment"] is True
-    assert effective["auto_advance"] is True
-    assert effective["auto_reject_pre_screen"] is False
+    assert effective["auto_send_assessment"] is False
+    assert effective["auto_resend_assessment"] is False
+    assert effective["auto_advance"] is False
+    assert effective["auto_reject_pre_screen"] is True
+    assert effective["auto_skip_assessment"] is True
 
 
 def test_legacy_zero_workspace_budget_normalizes_to_activatable_default(db):
@@ -141,12 +142,13 @@ def test_legacy_default_block_resolves_to_same_safe_platform_policy(db):
 
     apply_workspace_agent_defaults(role, org)
 
-    assert role.auto_send_assessment is True
-    assert role.auto_resend_assessment is True
-    assert role.auto_advance is True
-    assert role.auto_promote is True
-    assert role.auto_reject_pre_screen is False
+    assert role.auto_send_assessment is False
+    assert role.auto_resend_assessment is False
+    assert role.auto_advance is False
+    assert role.auto_promote is False
+    assert role.auto_reject_pre_screen is True
     assert role.auto_skip_assessment is False
+    assert effective_agent_policy(role)["auto_skip_assessment"] is True
 
 
 def test_granular_runtime_uses_legacy_fallback_and_concrete_override():
@@ -176,6 +178,42 @@ def test_activation_preserves_concrete_role_choices():
         "auto_resend_assessment": False,
         "auto_advance": False,
         "auto_promote": False,
+    }
+
+
+def test_activation_preserves_nullable_legacy_auto_promote_policy():
+    enabled = Role(organization_id=1, name="Legacy enabled", auto_promote=True)
+    disabled = Role(organization_id=1, name="Legacy disabled", auto_promote=False)
+
+    assert activation_policy_values(enabled) == {
+        "auto_send_assessment": True,
+        "auto_resend_assessment": True,
+        "auto_advance": True,
+        "auto_promote": True,
+    }
+    assert activation_policy_values(disabled) == {
+        "auto_send_assessment": False,
+        "auto_resend_assessment": False,
+        "auto_advance": False,
+        "auto_promote": False,
+    }
+
+
+def test_legacy_aggregate_activation_update_fans_out_uniform_policy():
+    role = Role(
+        organization_id=1,
+        name="Uniform safe policy",
+        auto_promote=False,
+        auto_send_assessment=False,
+        auto_resend_assessment=False,
+        auto_advance=False,
+    )
+
+    assert activation_policy_values(role, {"auto_promote": True}) == {
+        "auto_send_assessment": True,
+        "auto_resend_assessment": True,
+        "auto_advance": True,
+        "auto_promote": True,
     }
 
 
@@ -264,7 +302,10 @@ def _assert_constructor_policy(role: Role) -> None:
     assert role.auto_resend_assessment is True
     assert role.auto_advance is False
     assert role.auto_reject_pre_screen is True
+    # The raw field preserves the workspace preference. Runtime still derives
+    # a taskless role as effectively skipping the unavailable stage.
     assert role.auto_skip_assessment is False
+    assert effective_agent_policy(role)["auto_skip_assessment"] is True
 
 
 def test_workable_sync_applies_defaults_only_when_creating_role(db):
@@ -528,11 +569,12 @@ def test_new_role_api_exposes_platform_policy_for_untouched_workspace(client):
     role = created.json()
 
     assert role["agentic_mode_enabled"] is False
-    assert role["auto_send_assessment"] is True
-    assert role["auto_resend_assessment"] is True
-    assert role["auto_advance"] is True
-    assert role["auto_promote"] is True
-    assert role["auto_reject_pre_screen"] is False
+    assert role["auto_send_assessment"] is False
+    assert role["auto_resend_assessment"] is False
+    assert role["auto_advance"] is False
+    assert role["auto_promote"] is False
+    assert role["auto_reject_pre_screen"] is True
     assert role["auto_skip_assessment"] is False
-    assert role["agent_effective_policy"]["auto_send_assessment"] is True
-    assert role["agent_effective_policy"]["auto_reject_pre_screen"] is False
+    assert role["agent_effective_policy"]["auto_skip_assessment"] is True
+    assert role["agent_effective_policy"]["auto_send_assessment"] is False
+    assert role["agent_effective_policy"]["auto_reject_pre_screen"] is True

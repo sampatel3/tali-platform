@@ -246,7 +246,7 @@ def generate_and_link_task_for_role(
         ) from exc
 
     if create_repo:
-        _provision_repo_best_effort(task)
+        _provision_repo_best_effort(db, task)
     logger.info(
         "generated draft task %s (task_key=%s) for role %s; needs review",
         task.id, task.task_key, role.id,
@@ -315,15 +315,29 @@ def _persist_generated_task(
     return task
 
 
-def _provision_repo_best_effort(task: Task) -> None:
+def _provision_repo_best_effort(db: Session, task: Task) -> None:
     from ..platform.config import settings
     try:
         from .assessment_repository_service import AssessmentRepositoryService
         from .task_repo_service import recreate_task_main_repo
+        from .task_repository_serialization import task_repository_write_mutex
 
-        recreate_task_main_repo(task)
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        repo_service.create_template_repo(task)
+        task_id = int(task.id)
+        with task_repository_write_mutex(db, task_id=task_id):
+            current = (
+                db.query(Task)
+                .filter(Task.id == task_id)
+                .populate_existing()
+                .one_or_none()
+            )
+            if current is None:
+                return
+            recreate_task_main_repo(current)
+            repo_service = AssessmentRepositoryService(
+                settings.GITHUB_ORG,
+                settings.GITHUB_TOKEN,
+            )
+            repo_service.create_template_repo(current)
     except Exception:
         # A generated draft is still useful for review without its repo;
         # the repo can be (re)created when the recruiter activates it.
