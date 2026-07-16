@@ -235,7 +235,7 @@ describe('SettingsPage recruiter surface', () => {
     expect(showToast).toHaveBeenCalledWith('Agent defaults saved.', 'success');
   });
 
-  it('shows the complete reversible platform policy when a workspace has no saved agent defaults', async () => {
+  it('shows the HITL-safe platform policy when a workspace has no saved agent defaults', async () => {
     orgsApi.get.mockResolvedValueOnce({
       data: {
         ...baseOrgData,
@@ -246,13 +246,13 @@ describe('SettingsPage recruiter surface', () => {
     renderSettingsRoute('/settings/agent');
 
     expect(await screen.findByRole('button', { name: 'Auto-send assessments' }))
-      .toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' }))
-      .toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }))
-      .toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
       .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
+      .toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Skip assessment for strong candidates' }))
       .toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('spinbutton', { name: /Default budget/i }))

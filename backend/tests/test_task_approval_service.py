@@ -4,6 +4,7 @@ from unittest.mock import ANY, patch
 import pytest
 
 from app.models.organization import Organization
+from app.models.role import Role
 from app.models.task import Task
 from app.services.task_approval_service import (
     TaskApprovalError,
@@ -48,6 +49,27 @@ def test_approve_task_for_use_sets_active_only_after_repo_verification(db):
     assert task.extra_data["approved_by_user_id"] == 42
     assert task.extra_data["repository_ready"]["repo_url"].endswith("generated.git")
     provision.assert_called_once_with(task, settings_obj=ANY)
+
+
+def test_approving_first_linked_task_restores_role_assessment_stage(db):
+    task = _draft(db)
+    role = Role(
+        organization_id=task.organization_id,
+        name="Task approval role",
+        auto_skip_assessment=True,
+    )
+    role.tasks.append(task)
+    db.add(role)
+    db.flush()
+
+    with patch(
+        "app.services.task_approval_service.provision_and_validate_task_repository",
+        return_value="https://github.com/example/generated.git",
+    ):
+        approve_task_for_use(db, task, user_id=42)
+
+    assert task.is_active is True
+    assert role.auto_skip_assessment is False
 
 
 def test_approve_task_for_use_failure_never_mutates_activation_state(db):

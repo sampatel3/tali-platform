@@ -60,6 +60,7 @@ const RoleAgentSettingsTab = ({
   onRoleConflict,
 }) => {
   const controlsReadOnly = !canControlAgent;
+  const isScoreOnly = role?.role_kind === 'sister';
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
@@ -86,33 +87,30 @@ const RoleAgentSettingsTab = ({
   // agent_effective_policy is the backend-resolved workspace→role view when
   // available; keeping the local fallback makes old cached role payloads safe.
   const autoReject = Boolean(role?.auto_reject);
-  const autoRejectPreScreen = Boolean(role?.auto_reject_pre_screen);
   const autoPromote = Boolean(role?.auto_promote);
-  const autoSkipAssessment = Boolean(role?.auto_skip_assessment);
+  const persistedAutoSkipAssessment = Boolean(role?.auto_skip_assessment);
   const effectivePolicy = role?.agent_effective_policy || {};
   const hasGranularAutomation = [
     role?.auto_send_assessment,
     role?.auto_resend_assessment,
     role?.auto_advance,
   ].some((value) => value != null);
-  // Untouched roles have nullable granular fields and the historical database
-  // default auto_promote=false. First Turn on deliberately materializes the
-  // platform default of all reversible actions ON, so settings must preview
-  // that policy before activation rather than displaying a false opt-out.
+  // Untouched roles have nullable granular fields. Preview those as requiring
+  // recruiter approval; activation materializes the same HITL-safe policy.
   const autoSendAssessment = hasGranularAutomation
     ? Boolean(effectivePolicy.auto_send_assessment ?? role?.auto_send_assessment ?? autoPromote)
-    : true;
+    : false;
   const autoResendAssessment = hasGranularAutomation
     ? Boolean(effectivePolicy.auto_resend_assessment ?? role?.auto_resend_assessment ?? autoPromote)
-    : true;
+    : false;
   const autoAdvance = hasGranularAutomation
     ? Boolean(effectivePolicy.auto_advance ?? role?.auto_advance ?? autoPromote)
-    : true;
-  const deterministicReject = Boolean(
-    effectivePolicy.auto_reject_pre_screen
-    ?? autoRejectPreScreen
-    ?? autoReject
-  ) || autoReject;
+    : false;
+  const configuredPreScreenReject = effectivePolicy.auto_reject_pre_screen
+    ?? role?.auto_reject_pre_screen;
+  const deterministicReject = autoReject || (
+    configuredPreScreenReject == null ? true : Boolean(configuredPreScreenReject)
+  );
   // Provider lifecycle is independent from the Agent settings themselves. A
   // non-live external job can still be configured, but write-backs remain
   // blocked until it is reopened in its owning ATS.
@@ -147,9 +145,13 @@ const RoleAgentSettingsTab = ({
   // changing one checkbox never silently drops another linked task.
   const assignedTasks = Array.isArray(roleTasks) ? roleTasks : [];
   const activeAssignedTasks = assignedTasks.filter((task) => task?.is_active !== false);
-  const generatedDraft = assignedTasks.find((task) => (
-    task?.is_active === false && task?.generated && task?.needs_review !== false
-  )) || null;
+  const hasActiveAssessmentTask = activeAssignedTasks.length > 0;
+  // Without an active task there is no valid assessment stage. This derived
+  // value keeps legacy records truthful while the backend persists the same
+  // invariant on every write.
+  const autoSkipAssessment = hasActiveAssessmentTask
+    ? persistedAutoSkipAssessment
+    : true;
   const assignedTaskIdsFromProps = activeAssignedTasks
     .map((task) => Number(task?.id))
     .filter(Number.isFinite);
@@ -253,11 +255,38 @@ const RoleAgentSettingsTab = ({
             having a second toggle here was a confusing duplicate. This
             tab is purely "configure how the agent runs when it's on." */}
         <section className="mc-agent-settings-intro">
-          <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
+          <div className="mc-kicker">
+            {isScoreOnly ? 'HOW THIS RELATED ROLE SCORES' : 'HOW THE AGENT RUNS THIS ROLE'}
+          </div>
           <p className="mc-agent-settings-intro-help">
-            Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. Configure screening, scoring, assessment flow, autonomy, and budget here. Turn on uses the effective policy shown below without silently changing it.
+            {isScoreOnly
+              ? 'Configure the job-specific criteria and threshold used to re-score the shared candidate pool.'
+              : <>
+                  Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. Candidate actions stay behind recruiter approval unless you explicitly enable them here.
+                </>}
           </p>
         </section>
+
+        {isScoreOnly ? (
+          <section className="mc-agent-settings-card">
+            <div className="mc-agent-settings-card-head">
+              <div>
+                <h2 className="mc-agent-settings-card-title">Related-role <em>scoring</em></h2>
+                <p className="mc-agent-settings-card-help">
+                  This role has its own specification and scores, but it does not send assessments, reject, or advance candidates. Candidate actions remain on the original ATS role.
+                </p>
+              </div>
+            </div>
+            {role?.ats_owner_role_id ? (
+              <a
+                className="btn btn-outline btn-sm"
+                href={`/jobs/${role.ats_owner_role_id}?view=role-fit`}
+              >
+                Open original role settings →
+              </a>
+            ) : null}
+          </section>
+        ) : null}
 
         {controlsReadOnly ? (
           <div className="mc-agent-warn" role="status" title={controlDisabledReason || undefined}>
@@ -313,7 +342,7 @@ const RoleAgentSettingsTab = ({
             entirely when there's no history. */}
         <RecruiterAnswersLog roleId={role?.id} />
 
-        {role?.id ? (
+        {role?.id && !isScoreOnly ? (
           <RoleScreeningQuestions
             roleId={role.id}
             roleVersion={role.version}
@@ -328,10 +357,12 @@ const RoleAgentSettingsTab = ({
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                Screening <em>threshold</em>
+                {isScoreOnly ? <>Scoring <em>threshold</em></> : <>Screening <em>threshold</em></>}
               </h2>
               <p className="mc-agent-settings-card-help">
-                Candidates below this score fail pre-screen. Use Auto-reject pre-screen failures below to reject them automatically; full CV-score and assessment rejections always need your approval.
+                {isScoreOnly
+                  ? 'Use this related-role fit threshold to separate stronger matches. It does not reject candidates or change their ATS stage.'
+                  : 'Candidates below this score fail pre-screen. Auto-reject can handle those deterministic failures; full CV-score and assessment rejections always need your approval.'}
               </p>
             </div>
           </div>
@@ -376,7 +407,7 @@ const RoleAgentSettingsTab = ({
                 step={1}
                 value={thresholdDisplay}
                 onChange={(event) => setThresholdDraft(event.target.value)}
-                aria-label="Screening threshold percent"
+                aria-label={isScoreOnly ? 'Scoring threshold percent' : 'Screening threshold percent'}
                 className="ce-range mc-agent-settings-slider-input"
                 style={{ '--ce-range-val': thresholdDisplay }}
                 disabled={controlsReadOnly}
@@ -422,6 +453,7 @@ const RoleAgentSettingsTab = ({
         {/* Assessment tasks — managed here alongside the behaviour that sends
             them. One selected task is the default; 2+ creates a stable A/B
             rotation without sending the recruiter to another tab. */}
+        {!isScoreOnly ? (
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
@@ -429,7 +461,7 @@ const RoleAgentSettingsTab = ({
                 Assessment <em>tasks</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Choose the assessment sent to qualified candidates. If none is assigned, Turn on creates and validates one automatically.
+                Choose the assessment sent to qualified candidates. Without an active task, candidates skip this stage.
               </p>
             </div>
           </div>
@@ -456,31 +488,12 @@ const RoleAgentSettingsTab = ({
                 ) : null}
               </div>
             ) : (
-              <div className="mc-agent-warn mc-agent-settings-task-warning" role="status">
-                <svg
-                  className="mc-agent-warn-icon"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z M12 9v4 M12 17h.01"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+              <div className="mc-agent-settings-task-summary" role="status">
+                <span className="mc-agent-settings-task-summary-icon" aria-hidden="true">—</span>
                 <div>
-                  <div className="mc-agent-warn-title">
-                    {generatedDraft ? 'Generated assessment awaiting Turn on validation' : 'No assessment task assigned'}
-                  </div>
-                  <div className="mc-agent-warn-body">
-                    {generatedDraft
-                      ? `${generatedDraft.name} is still a draft. Turn on once and the agent will validate and approve it automatically, or explicitly skip the assessment stage.`
-                      : (role?.agentic_mode_enabled
-                        ? 'This running role is skipping the assessment stage. Choose an active task before turning assessment skipping off.'
-                        : 'The agent has nothing to send after screening yet. No manual task setup is required: Turn on will generate and validate a role-specific task automatically, or you can choose a library task or explicitly skip the stage.')}
+                  <div className="mc-agent-settings-rule-title">No assessment task assigned</div>
+                  <div className="mc-agent-settings-card-help">
+                    Candidates will skip the assessment stage until you assign an active task.
                   </div>
                 </div>
               </div>
@@ -550,20 +563,22 @@ const RoleAgentSettingsTab = ({
             </fieldset>
           ) : (
             <p className="mc-agent-settings-card-help mc-agent-settings-task-library-empty">
-              No reusable tasks in the library yet. Turn on will generate and validate one for this role automatically.
+              No reusable tasks are available yet. Create one in Tasks, then return here to assign it.
             </p>
           )}
         </section>
+        ) : null}
 
-        {/* Automatic actions */}
+        {/* Candidate actions that may bypass recruiter approval */}
+        {!isScoreOnly ? (
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                Automatic <em>actions</em>
+                Actions <em>without approval</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Choose what the agent can do without asking you.
+                Keep an action off when a recruiter must approve it first.
               </p>
             </div>
             <span className="mc-kicker is-mute" role="status" aria-live="polite">
@@ -618,19 +633,11 @@ const RoleAgentSettingsTab = ({
             {
               key: 'auto_skip_assessment',
               value: visibleAutonomyValue('auto_skip_assessment', autoSkipAssessment),
-              title: 'Skip assessment for strong candidates',
-              disabled: Boolean(
-                role?.agentic_mode_enabled
-                && autoSkipAssessment
-                && activeAssignedTasks.length === 0
-              ),
-              sub: (
-                role?.agentic_mode_enabled
-                && autoSkipAssessment
-                && activeAssignedTasks.length === 0
-              )
-                ? 'Choose an active assessment task above before turning this off. Until then, qualified candidates bypass the assessment stage.'
-                : 'Let strong candidates bypass assessment. Turn on Auto-advance to move them forward without approval.',
+              title: 'Skip assessment stage',
+              disabled: !hasActiveAssessmentTask,
+              sub: !hasActiveAssessmentTask
+                ? 'Fixed on until an active assessment task is assigned above.'
+                : 'Let qualified candidates bypass the assigned assessment. Advancement still requires approval unless enabled separately.',
             },
             {
               key: 'auto_advance',
@@ -661,12 +668,17 @@ const RoleAgentSettingsTab = ({
             </label>
           ))}
         </section>
+        ) : null}
 
         {/* Save bar */}
         <div className="mc-agent-settings-savebar">
           <span>
-            Automation switches save instantly. Threshold changes apply to this role only —{' '}
-            <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
+            {isScoreOnly
+              ? 'Threshold changes apply to this scoring role only.'
+              : <>
+                  Automatic actions save instantly. Off means recruiter approval is required —{' '}
+                  <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
+                </>}
           </span>
           <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
             {savingRoleConfig ? 'Saving…' : 'Save threshold'}
@@ -791,15 +803,19 @@ const RoleAgentSettingsTab = ({
             are edited above in the Role criteria editor — no separate read-only
             must-have card here, so there's one source of truth. */}
 
-        <div className="mc-agent-settings-side-card">
-          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE BEHAVIOR</div>
-          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
-            Budget, credit, and startup holds recover automatically. A manual pause waits for you to resume it. {agentIntakeLifecycleCopy(role)}
-          </p>
-        </div>
+        {!isScoreOnly ? (
+          <div className="mc-agent-settings-side-card">
+            <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE BEHAVIOR</div>
+            <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
+              Budget, credit, and startup holds recover automatically. A manual pause waits for you to resume it. {agentIntakeLifecycleCopy(role)}
+            </p>
+          </div>
+        ) : null}
 
         <div className="mc-agent-settings-audit-callout">
-          Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.
+          {isScoreOnly
+            ? 'Criteria, threshold, and budget changes apply to this related scoring role only.'
+            : <>Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.</>}
         </div>
       </aside>
     </div>

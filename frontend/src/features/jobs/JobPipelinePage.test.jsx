@@ -222,8 +222,8 @@ describe('JobPipelinePage', () => {
 
   const confirmTurnOnPolicy = async () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByRole('heading', { name: /Turn on this role’s agent/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    expect(await screen.findByRole('heading', { name: /Turn on agent/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
   };
 
   it('paints the job shell before a large candidate roster finishes loading', async () => {
@@ -389,13 +389,13 @@ describe('JobPipelinePage', () => {
     await openAgentSettingsTab();
 
     const send = await screen.findByRole('button', { name: 'Auto-send assessments' });
-    expect(send).toHaveAttribute('aria-pressed', 'true');
+    expect(send).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(send);
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
-      auto_send_assessment: false,
-      auto_resend_assessment: true,
-      auto_advance: true,
+      auto_send_assessment: true,
+      auto_resend_assessment: false,
+      auto_advance: false,
       auto_promote: false,
       expected_version: 7,
     }));
@@ -573,6 +573,11 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByRole('heading', { name: /^Role specification$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
     expect(apiClient.roles.updateJobSpec).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: /^Scoring settings$/i }));
+    expect(await screen.findByRole('heading', { name: /Related-role scoring/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Auto-send assessments' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
   });
 
   it('shows shared candidates while related scoring waits and labels the original pipeline clearly', async () => {
@@ -706,12 +711,12 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByText(/saved policy keeps running after you close this page/i)).toBeInTheDocument();
-    expect(screen.getByText(/native job page opens for applications/i)).toBeInTheDocument();
-    expect(screen.getByText(/Full CV-score and assessment rejections still need approval/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Assessment invitations require your approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Assessment retries send automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/Full CV-score and assessment rejections always require approval/i)).toBeInTheDocument();
     expect(apiClient.roles.update).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
       agentic_mode_enabled: true,
       auto_promote: false,
@@ -725,7 +730,7 @@ describe('JobPipelinePage', () => {
     ['workable', 'Workable', 'WK-900'],
     ['bullhorn', 'Bullhorn', 'BH-900'],
   ])(
-    'keeps %s as intake when previewing agent activation',
+    'keeps the %s provider lifecycle out of the action-safety confirmation',
     async (provider, label, externalJobId) => {
       apiClient.roles.get.mockResolvedValue({
         data: {
@@ -743,10 +748,9 @@ describe('JobPipelinePage', () => {
       renderPipeline();
 
       fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-
-      expect(await screen.findByText(
-        new RegExp(`${label} remains the intake source`, 'i'),
-      )).toBeInTheDocument();
+      expect(await screen.findByText(/Candidate-action safeguards/i)).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(`${label} remains the intake source`, 'i')))
+        .not.toBeInTheDocument();
     },
   );
 
@@ -811,7 +815,7 @@ describe('JobPipelinePage', () => {
     );
   });
 
-  it('keeps an untouched first Turn on fully autonomous instead of sending the DB-default legacy false', async () => {
+  it('keeps an untouched first Turn on HITL-safe', async () => {
     apiClient.roles.get.mockResolvedValue({
       data: {
         ...baseRole,
@@ -830,9 +834,10 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByText(/Initial assessments send automatically; resends run automatically/i)).toBeInTheDocument();
-    expect(screen.getByText(/Qualified candidates advance automatically to recruiter handoff/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Turn on with this policy/i }));
+    expect(await screen.findByText(/Assessment invitations require your approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Candidate advancement requires your approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pre-screen failures reject automatically/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
     const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
@@ -841,24 +846,16 @@ describe('JobPipelinePage', () => {
       monthly_usd_budget_cents: 5000,
       expected_version: 7,
     }));
-    expect(activationPayload).not.toHaveProperty('auto_promote');
-    expect(activationPayload).not.toHaveProperty('auto_send_assessment');
-    expect(activationPayload).not.toHaveProperty('auto_resend_assessment');
-    expect(activationPayload).not.toHaveProperty('auto_advance');
+    expect(activationPayload).toEqual(expect.objectContaining({
+      auto_promote: false,
+      auto_send_assessment: false,
+      auto_resend_assessment: false,
+      auto_advance: false,
+    }));
   });
 
-  it('uses a validated generated assessment from the single Turn on authorization', async () => {
-    apiClient.roles.listTasks.mockResolvedValue({ data: [{
-      id: 707,
-      name: 'Generated debugging exercise',
-      description: 'Repair the supplied service and explain the trade-offs.',
-      scenario: 'Repair the supplied service and explain the trade-offs.',
-      duration_minutes: 45,
-      is_active: false,
-      generated: true,
-      needs_review: true,
-      battle_test: { verdict: 'pass', failed_checks: [] },
-    }] });
+  it('turns on in fixed skip mode when no active assessment is assigned', async () => {
+    apiClient.roles.listTasks.mockResolvedValue({ data: [] });
     renderPipeline();
 
     await confirmTurnOnPolicy();
@@ -868,10 +865,11 @@ describe('JobPipelinePage', () => {
       expect.objectContaining({
         agentic_mode_enabled: true,
         monthly_usd_budget_cents: 5000,
-        activation_assessment_action: 'approve_when_ready',
+        auto_skip_assessment: true,
+        activation_assessment_action: 'skip_assessment',
       }),
     ));
-    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Preparing the assessment/i)).not.toBeInTheDocument();
   });
 
   it('keeps first activation OFF when the authoritative PATCH is pending or rejected', async () => {
@@ -913,7 +911,7 @@ describe('JobPipelinePage', () => {
     expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
   });
 
-  it('can explicitly skip a pending generated assessment in the same Turn on action', async () => {
+  it('ignores an inactive generated draft and turns on in fixed skip mode', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [{
       id: 708,
       name: 'Pending generated exercise',
@@ -927,10 +925,6 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     await confirmTurnOnPolicy();
-    expect(await screen.findByText(/battle test is still pending/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Skip assessment & turn on/i }));
-
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
       101,
       expect.objectContaining({
@@ -939,9 +933,11 @@ describe('JobPipelinePage', () => {
         activation_assessment_action: 'skip_assessment',
       }),
     ));
+    expect(screen.queryByText(/battle test is still pending/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Preparing the assessment/i)).not.toBeInTheDocument();
   });
 
-  it('persists pending activation immediately without relying on later polling', async () => {
+  it('keeps a taskless activation off until the direct skip PATCH succeeds', async () => {
     const pendingDraft = {
       id: 709,
       name: 'Generated systems exercise',
@@ -953,6 +949,15 @@ describe('JobPipelinePage', () => {
       battle_test: null,
     };
     apiClient.roles.listTasks.mockResolvedValue({ data: [pendingDraft] });
+    apiClient.roles.get
+      .mockResolvedValueOnce({ data: baseRole })
+      .mockResolvedValue({
+        data: {
+          ...baseRole,
+          agentic_mode_enabled: true,
+          auto_skip_assessment: true,
+        },
+      });
     let resolveActivation;
     apiClient.roles.update.mockReturnValue(new Promise((resolve) => {
       resolveActivation = resolve;
@@ -960,35 +965,29 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     await confirmTurnOnPolicy();
-    expect(await screen.findByText(/battle test is still pending/i)).toBeInTheDocument();
-
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(
       101,
       expect.objectContaining({
         agentic_mode_enabled: true,
-        activation_assessment_action: 'approve_when_ready',
+        auto_skip_assessment: true,
+        activation_assessment_action: 'skip_assessment',
       }),
     ));
-    expect(screen.getAllByText(/Saving Turn-on…/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Your Turn-on request is saved/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Agent off')).toBeInTheDocument();
 
     await act(async () => {
       resolveActivation({
         data: {
           ...baseRole,
-          agentic_mode_enabled: false,
-          assessment_task_provisioning: {
-            activation_intent: { status: 'pending', last_error: null },
-          },
+          agentic_mode_enabled: true,
+          auto_skip_assessment: true,
         },
       });
     });
-    expect(await screen.findByText(/Your Turn-on request is saved/i)).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /^close$/i }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: /Approve task & turn on/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Agent on')).toBeInTheDocument());
   });
 
-  it('shows a failed durable Turn-on as unsaved and leaves retry available', async () => {
+  it('shows a failed taskless Turn-on as an error and leaves the agent off', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [{
       id: 710,
       name: 'Pending generated exercise',
@@ -1004,11 +1003,10 @@ describe('JobPipelinePage', () => {
 
     await confirmTurnOnPolicy();
 
-    expect(await screen.findByText(/The Turn-on request was not saved/i)).toBeInTheDocument();
-    expect(screen.getByText('Turn-on request failed')).toBeInTheDocument();
-    expect(screen.getByText('Activation authorization could not be persisted.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Retry request/i })).toBeInTheDocument();
-    expect(screen.queryByText(/Your Turn-on request is saved/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'Activation authorization could not be persisted.',
+      'error',
+    ));
     expect(screen.getByText('Agent off')).toBeInTheDocument();
   });
 
@@ -1389,7 +1387,7 @@ Banking transformation experience
     expect(await screen.findByRole('heading', { name: /Role criteria/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Screening threshold/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Automatic actions/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Actions without approval/i })).toBeInTheDocument();
 
     // HANDOFF v2 §4.4 / canvas jobs-detail-spec — the Job spec tab renders
     // the formatted Workable-ingested description + "At a glance" sidebar.

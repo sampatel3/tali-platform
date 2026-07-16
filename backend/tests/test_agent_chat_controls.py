@@ -163,11 +163,11 @@ def test_sister_role_chat_controls_are_score_only(kick, db):
 
     assert activation["ok"] is False
     assert activation["reason"] == "score_only_role"
-    assert "score-only" in activation["message"]
+    assert "provider actions remain human-confirmed" in activation["message"]
     assert settings["ok"] is False
     assert settings["reason"] == "score_only_role"
     assert settings["changed"] == []
-    assert "score-only" in settings["message"]
+    assert "provider actions remain human-confirmed" in settings["message"]
     assert role.agentic_mode_enabled is False
     assert role.monthly_usd_budget_cents == 5_000
     assert role.auto_advance is False
@@ -188,7 +188,7 @@ def test_chat_activation_opens_native_requisition(kick, db):
 
     assert res["ok"] is True
     assert role.job_status == JOB_STATUS_OPEN
-    assert role.auto_promote is True
+    assert role.auto_promote is False
     assert role.starred_for_auto_sync is True
     kick.assert_called_once_with(role, activation=True)
 
@@ -249,7 +249,7 @@ def test_activation_dispatch_failure_preserves_newer_role_revision(kick, db):
 
 @patch("app.tasks.assessment_tasks.generate_assessment_task_for_role.delay")
 @patch.object(_controls, "_kick_cycle")
-def test_chat_turn_on_fresh_requisition_persists_durable_activation(
+def test_chat_turn_on_fresh_requisition_uses_fixed_assessment_skip(
     kick, generation, db
 ):
     org = _org(db)
@@ -266,21 +266,17 @@ def test_chat_turn_on_fresh_requisition_persists_durable_activation(
     res = _run(db, role, user, "set_agent_state", {"action": "activate"})
 
     assert res["ok"] is True
-    assert res["action"] == "activation_queued"
-    assert res["activation_intent"]["status"] == "pending"
-    assert "No second approval click" in res["message"]
-    assert role.agentic_mode_enabled is False
-    assert role.job_status == JOB_STATUS_DRAFT
-    assert role.assessment_task_provisioning["activation_intent"][
-        "requested_by_user_id"
-    ] == user.id
-    generation.assert_called_once_with(role.id, org.id)
-    kick.assert_not_called()
+    assert res["action"] == "activated"
+    assert role.agentic_mode_enabled is True
+    assert role.job_status == JOB_STATUS_OPEN
+    assert role.auto_skip_assessment is True
+    generation.assert_not_called()
+    kick.assert_called_once_with(role, activation=True)
 
 
 @patch("app.tasks.assessment_tasks.generate_assessment_task_for_role.delay")
 @patch.object(_controls, "_kick_cycle")
-def test_chat_turn_on_persists_activation_without_dispatch_under_workspace_pause(
+def test_chat_turn_on_saves_taskless_skip_without_dispatch_under_workspace_pause(
     kick, generation, db
 ):
     org = _org(db)
@@ -301,11 +297,9 @@ def test_chat_turn_on_persists_activation_without_dispatch_under_workspace_pause
     assert res["ok"] is True
     assert res["action"] == "activation_deferred"
     assert res["reason"] == "workspace_paused"
-    assert res["activation_intent"]["status"] == "pending"
-    assert role.agentic_mode_enabled is False
-    assert role.assessment_task_provisioning["activation_intent"][
-        "requested_by_user_id"
-    ] == user.id
+    assert role.agentic_mode_enabled is True
+    assert role.auto_skip_assessment is True
+    assert role.job_status == JOB_STATUS_OPEN
     generation.assert_not_called()
     kick.assert_not_called()
 

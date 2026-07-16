@@ -810,10 +810,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       budgetUsd: String((seedBudgetCents / 100).toFixed(2)),
       threshold: Math.max(0, Math.min(100, seedThreshold)),
       thresholdMode: agentDefaults.threshold_mode === 'auto' ? 'auto' : 'manual',
-      autoSendAssessment: agentDefaults.auto_send_assessment !== false,
-      autoResendAssessment: agentDefaults.auto_resend_assessment !== false,
-      autoAdvance: agentDefaults.auto_advance !== false,
-      autoRejectPreScreen: Boolean(agentDefaults.auto_reject_pre_screen),
+      autoSendAssessment: Boolean(agentDefaults.auto_send_assessment),
+      autoResendAssessment: Boolean(agentDefaults.auto_resend_assessment),
+      autoAdvance: Boolean(agentDefaults.auto_advance),
+      autoRejectPreScreen: agentDefaults.auto_reject_pre_screen !== false,
       autoSkipAssessment: Boolean(agentDefaults.auto_skip_assessment),
     });
     const firefliesConfig = orgData.fireflies_config || {};

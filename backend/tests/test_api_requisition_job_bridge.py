@@ -176,7 +176,7 @@ def test_turning_on_native_requisition_opens_job_without_workable(client):
     assert response.status_code == 200, response.text
     assert response.json()["job_status"] == JOB_STATUS_OPEN
     assert response.json()["workable_job_id"] is None
-    assert response.json()["auto_promote"] is True
+    assert response.json()["auto_promote"] is False
     kick.assert_called_once_with(
         role_id,
         activation=True,
@@ -218,8 +218,8 @@ def test_native_activation_dispatch_failure_restores_draft_contract(client):
     assert restored["job_status"] == JOB_STATUS_DRAFT
     # The role remains safely OFF, while its pre-activation platform policy is
     # preserved for the next Turn-on retry.
-    assert restored["auto_promote"] is True
-    assert restored["agent_effective_policy"]["auto_advance"] is True
+    assert restored["auto_promote"] is False
+    assert restored["agent_effective_policy"]["auto_advance"] is False
     assert restored["starred_for_auto_sync"] is False
     assert restored["agent_bootstrap_status"] == "failed"
 
@@ -258,7 +258,7 @@ def test_production_native_activation_fails_when_public_apply_is_disabled(client
     ] is False
 
 
-def test_production_activation_requires_task_approval_or_explicit_skip(client):
+def test_production_taskless_activation_uses_fixed_skip(client):
     headers, _ = auth_headers(client)
     role_id = _publish(
         client,
@@ -281,28 +281,16 @@ def test_production_activation_requires_task_approval_or_explicit_skip(client):
         ),
         patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as kick,
     ):
-        blocked = client.patch(
-            f"/api/v1/roles/{role_id}",
-            json={
-                "agentic_mode_enabled": True,
-                "monthly_usd_budget_cents": 5000,
-                "expected_version": _role_version(client, headers, role_id),
-            },
-            headers=headers,
-        )
         activated = client.patch(
             f"/api/v1/roles/{role_id}",
             json={
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
-                "auto_skip_assessment": True,
                 "expected_version": _role_version(client, headers, role_id),
             },
             headers=headers,
         )
 
-    assert blocked.status_code == 503
-    assert "assessment_task_approval_required" in blocked.text
     assert activated.status_code == 200, activated.text
     assert activated.json()["agentic_mode_enabled"] is True
     assert activated.json()["auto_skip_assessment"] is True
@@ -468,6 +456,9 @@ def _make_running_generated_requisition(db, *, role: Role) -> Task:
     role.tasks.append(task)
     role.agentic_mode_enabled = True
     role.auto_promote = True
+    role.auto_send_assessment = True
+    role.auto_resend_assessment = True
+    role.auto_advance = True
     role.starred_for_auto_sync = True
     role.monthly_usd_budget_cents = 7500
     role.job_status = JOB_STATUS_OPEN

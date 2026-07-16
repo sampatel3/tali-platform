@@ -107,9 +107,9 @@ class AgentDefaultsAutonomy(BaseModel):
     """Org-default autonomy toggles. Per-role overrides win on the role
     detail Agent settings tab. New roles inherit these defaults."""
 
-    auto_invite_above: bool = True
-    auto_reject_below: bool = False
-    auto_advance_high_score: bool = True
+    auto_invite_above: bool = False
+    auto_reject_below: bool = True
+    auto_advance_high_score: bool = False
     passive_outbound: bool = False
 
 

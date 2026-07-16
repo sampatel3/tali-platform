@@ -819,7 +819,7 @@ def test_reject_unlink_role_task_when_assessment_exists(client):
     assert "already has assessments" in unlink_resp.json()["detail"].lower()
 
 
-def test_live_role_cannot_enable_assessment_stage_without_active_task(client, db):
+def test_role_cannot_enable_assessment_stage_without_active_task(client, db):
     headers, _ = auth_headers(client)
     created = client.post(
         "/api/v1/roles",
@@ -827,7 +827,7 @@ def test_live_role_cannot_enable_assessment_stage_without_active_task(client, db
         headers=headers,
     ).json()
     role = db.query(Role).filter(Role.id == created["id"]).one()
-    role.agentic_mode_enabled = True
+    role.agentic_mode_enabled = False
     role.auto_skip_assessment = True
     db.commit()
 
@@ -858,9 +858,10 @@ def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
         json={"task_id": task["id"], "expected_version": created["version"]},
         headers=headers,
     ).status_code == 200
+    db.expire_all()
     role = db.query(Role).filter(Role.id == created["id"]).one()
-    role.agentic_mode_enabled = True
-    role.auto_skip_assessment = False
+    assert role.auto_skip_assessment is False
+    role.agentic_mode_enabled = False
     db.commit()
 
     response = client.delete(

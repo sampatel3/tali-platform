@@ -213,16 +213,8 @@ def _kick_cycle(role: Role, *, activation: bool = False) -> bool:
 
 
 def _needs_durable_task_activation(role: Role) -> bool:
-    """Whether first activation must provision/approve an assessment task.
-
-    Keep this aligned with the role-page Turn-on control: an explicit assessment
-    skip can use the immediate activation path. A generated draft (or no task
-    yet) belongs to the persisted activation intent. A republish-blocked role
-    also uses that path even when it preserved an active manual task: this Turn
-    on is the required HITL confirmation, and the durable worker records the
-    reconfiguration resolution before switching the role back ON.
-    """
-    if bool(role.agentic_mode_enabled) or bool(role.auto_skip_assessment):
+    """Whether Turn on must complete a blocked task-republish workflow."""
+    if bool(role.agentic_mode_enabled):
         return False
     provisioning = (
         role.assessment_task_provisioning
@@ -230,12 +222,10 @@ def _needs_durable_task_activation(role: Role) -> bool:
         else {}
     )
     reconfiguration = provisioning.get("reconfiguration")
-    if (
+    return bool(
         isinstance(reconfiguration, dict)
         and str(reconfiguration.get("status") or "") == "blocked"
-    ):
-        return True
-    return not any(bool(task.is_active) for task in list(role.tasks or []))
+    )
 
 
 def _queue_durable_activation(
@@ -246,9 +236,9 @@ def _queue_durable_activation(
 ) -> dict[str, Any]:
     """Persist first Turn on, then make only best-effort latency kicks.
 
-    Generation, battle testing, repository verification, readiness and the
-    OFF->ON transition are all recovered by backend sweeps.  The chat request is
-    therefore safe to close immediately after this commit.
+    This path now exists only for a task-republish workflow that already needs
+    durable resolution. Ordinary taskless activation explicitly skips the
+    assessment stage instead.
     """
     from ..services.role_activation_intent import (
         activation_intent_task_ready,
@@ -364,9 +354,9 @@ def set_agent_state(
 ) -> dict[str, Any]:
     """``activate`` (turn on / resume) or ``pause`` the role's agent.
 
-    First activation grants reversible positive autonomy by default, while the
-    irreversible reject rail remains human-confirmed. Production activation and
-    every resume fail closed on runtime/readiness or bootstrap dispatch errors.
+    First activation preserves the HITL-safe action policy. Production
+    activation and every resume fail closed on runtime/readiness or bootstrap
+    dispatch errors.
     """
     act = (action or "").strip().lower()
 
@@ -391,18 +381,18 @@ def set_agent_state(
                 ),
                 "agent": _state(role),
             }
-        # A fresh role without an active assessment uses the exact same durable
-        # one-click path as the role-page button. Do this before synchronous
-        # readiness: task generation/approval is part of that saved command, not
-        # a prerequisite the recruiter must satisfy manually.
         if _needs_durable_task_activation(role):
             return _queue_durable_activation(db, role, user_id=int(user_id))
+        taskless = not any(bool(task.is_active) for task in list(role.tasks or []))
         from ..services.agent_activation_readiness import (
             activation_readiness,
             readiness_message,
         )
 
-        readiness = activation_readiness(role)
+        readiness = activation_readiness(
+            role,
+            auto_skip_assessment=True if taskless else None,
+        )
         if not readiness.get("ready"):
             return {
                 "type": "agent_state",
@@ -430,6 +420,8 @@ def set_agent_state(
             "job_status": role.job_status,
         }
         role.agentic_mode_enabled = True
+        if taskless:
+            role.auto_skip_assessment = True
         resumed = False
         if was_paused:
             from ..agent_runtime import budget_guard
@@ -454,7 +446,7 @@ def set_agent_state(
                     "agent": _state(role),
                 }
         # Preserve concrete action-level choices on activation. A truly legacy
-        # role with no choices gets the historical all-positive-actions default.
+        # role with no choices gets the safe action-level default.
         if not was_enabled:
             policy = activation_policy_values(role)
             role.auto_promote = policy["auto_promote"]
@@ -655,7 +647,6 @@ def adjust_agent_settings(
 
     if (
         auto_skip_assessment is False
-        and bool(role.agentic_mode_enabled)
         and not any(bool(task.is_active) for task in (role.tasks or []))
     ):
         return {
@@ -664,7 +655,7 @@ def adjust_agent_settings(
             "reason": "assessment_task_required",
             "message": (
                 "Choose an active assessment task before turning assessment "
-                "skipping off for this running role."
+                "skipping off for this role."
             ),
             "changed": [],
             "resumed": False,

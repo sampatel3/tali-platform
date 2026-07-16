@@ -52,14 +52,18 @@ def test_enabling_agentic_mode_auto_stars_role(client):
     body = patch_resp.json()
     assert body["agentic_mode_enabled"] is True
     assert body["starred_for_auto_sync"] is True
-    assert body["auto_promote"] is True
+    assert body["auto_promote"] is False
+    assert body["auto_send_assessment"] is False
+    assert body["auto_resend_assessment"] is False
+    assert body["auto_advance"] is False
+    assert body["auto_reject_pre_screen"] is True
+    assert body["auto_skip_assessment"] is True
     assert body["agent_bootstrap_status"] == "starting"
     assert body["agent_bootstrap_started_at"] is not None
 
 
-def test_activation_allows_explicit_positive_action_hitl_opt_out(client):
-    """Turn-on defaults reversible actions to autonomous, but an API caller
-    can explicitly retain HITL in the same atomic activation PATCH."""
+def test_activation_allows_explicit_positive_action_opt_in(client):
+    """A recruiter can still grant positive-action autonomy explicitly."""
     headers, _ = auth_headers(client)
     role = _create_role_via_api(client, headers, name="Explicit HITL Target")
 
@@ -76,13 +80,15 @@ def test_activation_allows_explicit_positive_action_hitl_opt_out(client):
                 "expected_version": role["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
-                "auto_promote": False,
+                "auto_send_assessment": True,
+                "auto_resend_assessment": True,
+                "auto_advance": True,
             },
             headers=headers,
         )
 
     assert response.status_code == 200, response.text
-    assert response.json()["auto_promote"] is False
+    assert response.json()["auto_promote"] is True
 
 
 def test_turn_on_can_atomically_skip_assessment(client):
@@ -143,7 +149,7 @@ def _link_generated_draft(role_id: int, *, verdict: str):
         db.close()
 
 
-def test_turn_on_auto_approves_validated_generated_task_in_same_patch(client):
+def test_turn_on_explicitly_approves_validated_generated_task_in_same_patch(client):
     headers, _ = auth_headers(client)
     role = _create_role_via_api(client, headers, name="Inline Approval Target")
     task_id = _link_generated_draft(role["id"], verdict="pass")
@@ -175,6 +181,7 @@ def test_turn_on_auto_approves_validated_generated_task_in_same_patch(client):
                 "expected_version": role["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
+                "activation_assessment_action": "approve_generated_task",
             },
             headers=headers,
         )
@@ -250,10 +257,9 @@ def test_activation_dispatch_failure_is_fail_closed(client):
     fetched = client.get(f"/api/v1/roles/{role['id']}", headers=headers)
     assert fetched.status_code == 200
     assert fetched.json()["agentic_mode_enabled"] is False
-    # Fail-closed restores the pre-activation policy snapshot. New roles carry
-    # reversible automation ON by default even while runtime power remains OFF.
-    assert fetched.json()["auto_promote"] is True
-    assert fetched.json()["agent_effective_policy"]["auto_send_assessment"] is True
+    # Fail-closed restores the pre-activation HITL-safe policy snapshot.
+    assert fetched.json()["auto_promote"] is False
+    assert fetched.json()["agent_effective_policy"]["auto_send_assessment"] is False
     assert fetched.json()["starred_for_auto_sync"] is False
     assert fetched.json()["agent_bootstrap_status"] == "failed"
     assert "dispatch failed" in fetched.json()["agent_bootstrap_error"]
