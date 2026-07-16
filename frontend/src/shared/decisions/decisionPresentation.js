@@ -30,9 +30,11 @@ export const ruleChipText = (decision) => {
   const source = explanation.source === 'policy' ? 'policy' : 'agent';
 
   // Agent judgment: the confidence IS the chip (deterministic rules never carry
-  // model confidence).
+  // model confidence). Guard null before coercing — Number(null) is 0, which
+  // would render a fabricated "Confidence 0%" for decisions with no confidence.
   if (source !== 'policy') {
-    const confidence = Number(decision?.confidence);
+    if (decision?.confidence == null) return null;
+    const confidence = Number(decision.confidence);
     return Number.isFinite(confidence) ? `Confidence ${Math.round(confidence * 100)}%` : null;
   }
 
@@ -46,9 +48,12 @@ export const ruleChipText = (decision) => {
     || rule.includes('role_fit_score')
     || rule.includes('pre_screen_auto_reject_eligible')
   );
+  // Legacy explanations can carry a score rule with null score/threshold —
+  // Number(null) is 0, which would fabricate a "0 < 0" comparison. Missing
+  // audit data degrades to no chip instead.
   if (scoreDecisive
-    && Number.isFinite(Number(scoreCtx.role_fit_score))
-    && Number.isFinite(Number(scoreCtx.threshold))) {
+    && scoreCtx.role_fit_score != null && Number.isFinite(Number(scoreCtx.role_fit_score))
+    && scoreCtx.threshold != null && Number.isFinite(Number(scoreCtx.threshold))) {
     const score = formatScore(scoreCtx.role_fit_score);
     const threshold = formatScore(scoreCtx.threshold);
     return scoreCtx.threshold_passed ? `${score} ≥ ${threshold}` : `${score} < ${threshold}`;
