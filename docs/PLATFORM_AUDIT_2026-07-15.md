@@ -3,7 +3,7 @@
 - **Audit period:** 2026-07-15–2026-07-16
 - **Repository:** `sampatel3/tali-platform`
 - **Integrated baseline:** `8f7b47e96d236d694997f97460a55712a0d4d7c4` (merged PR #1042, after PRs #1040 and #1034) plus the final `codex/platform-audit-remediation` branch
-- **Release status:** **not released and not deployed**
+- **Release status:** **published as draft PR [#1043](https://github.com/sampatel3/tali-platform/pull/1043); not released and not deployed**
 
 ## Executive verdict
 
@@ -18,8 +18,8 @@ work, lost work, excess round trips, unnecessary provider calls, unbounded
 reads, and misleading feature states rather than deleting useful capability.
 
 This is not yet a release claim. The remediation has been reconciled through
-current `main` at merged PR #1042 and is prepared for a draft PR; it has not been
-reviewed, approved, or deployed. The complete default non-production suites,
+current `main` at merged PR #1042 and published as draft PR #1043; it has not
+been reviewed, approved, or deployed. The complete default non-production suites,
 separate retained-PostgreSQL contracts, and measured coverage are green
 locally. Supported-runtime CI, a production-shaped migration rehearsal, and
 review approval remain release-candidate gates. External configuration,
@@ -84,8 +84,7 @@ The audit began at `0e562f2f` (`Redesign agent prompts and unblock task setup
 (#1026)`, 2026-07-15), moved onto `codex/platform-audit-remediation`, and was
 reconciled through current `main` at `8f7b47e9` / merged PR #1042, after the
 related-role integration in PR #1040 and decision-presentation integration in
-PR #1034. The branch is
-prepared for draft-PR publication and remains undeployed.
+PR #1034. The branch is published as draft PR #1043 and remains undeployed.
 
 The authoritative final backend run used the exact locked Python 3.11.9
 environment with all 157 hashed development pins; frontend verification used
@@ -420,8 +419,8 @@ presented as release evidence.
   implementation bodies at that snapshot. It is not presented as a maintained
   repository gate; the reproducible import-reachability and architecture gates
   provide the durable enforcement described below;
-- the reachability scanner currently reports 739 modules, 29 explicit runtime
-  roots, 734 reachable modules, and zero candidates. Roots are `app.main`,
+- the reachability scanner currently reports 740 modules, 29 explicit runtime
+  roots, 735 reachable modules, and zero candidates. Roots are `app.main`,
   `app.tasks`, `app.models`, 18 exact approved CLI modules, and 8 exact
   compatibility/policy roots; arbitrary
   `__main__` guards and prefix lookalikes cannot self-declare liveness. It
@@ -486,7 +485,7 @@ Do not sum these figures; several sets overlap.
 | Developer API reference | 1/1 passed |
 | Backend file-size ratchet | Passed: route/service modules ≤500 lines, every other `app` module ≤1000, and 43 exact legacy baselines; two bypass regressions passed |
 | One-off duplicate implementation scan | Zero AST/hash duplicates at the integration snapshot; not a maintained gate |
-| Dead-code reachability graph | 739 modules / 29 explicit roots / 734 reachable / zero candidates; 15 focused scanner regressions and fail-on-candidates gate passed |
+| Dead-code reachability graph | 740 modules / 29 explicit roots / 735 reachable / zero candidates; 15 focused scanner regressions and fail-on-candidates gate passed |
 | Backend architecture gates | 19/19 passed across route ownership, assembled collisions/authentication, admin-call AST checks, ingress inventories, and agent/action parity |
 | Frontend architecture + motion | Passed |
 | Frontend UI token/component policy | Passed with zero violations |
@@ -554,9 +553,9 @@ threads plus both #852 threads). PR #1041's current P2 is also fixed in this
 audit but remains actionable on its source branch. Merged PRs #1034 and #1042
 have three additional current P2 threads, all fixed in this reconciliation
 without changing their source-thread status. Across all eight PRs listed below,
-that is 20 unresolved threads: 15 current and 5 outdated. Publishing this
-audit's own draft PR would make 27 open PRs: 12 drafts and 15 non-drafts; that
-mechanical change does not alter the snapshot below.
+that is 20 unresolved threads: 15 current and 5 outdated. Publishing draft PR
+#1043 made 27 open PRs: 12 drafts and 15 non-drafts; that mechanical change does
+not alter the pre-publication thread snapshot below.
 
 | PR | Unresolved threads and current assessment |
 |---|---|
@@ -639,9 +638,10 @@ claim is made because legacy migration 015 requires a live connection.
 
 ### Required release sequence
 
-1. Review the reconciled branch against current `main`, confirm zero deleted
-   paths and a clean tree, push it, and open or refresh the draft PR. A pushed
-   draft is reviewable but is not an approved release artifact.
+1. Review draft PR [#1043](https://github.com/sampatel3/tali-platform/pull/1043)
+   against current `main` and retain the strict zero-deletion and clean-tree
+   guarantees. The pushed draft is reviewable but is not an approved release
+   artifact.
 2. Run the complete backend CI contract on Python 3.11.9: validate and install
    the hashed requirements lock, dependency integrity/audit; compile `alembic`,
    `app`, `scripts`, and `tests`; Ruff E9/F; sole-head, all-module file-size,
