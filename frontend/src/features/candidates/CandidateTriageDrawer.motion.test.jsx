@@ -170,7 +170,7 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
   });
 
-  it('warns that rejecting a linked candidate rejects every related role', () => {
+  it('names every linked role when warning about a shared-application reject', () => {
     render(
       <MotionSystemProvider>
         <CandidateTriageDrawer
@@ -179,12 +179,35 @@ describe('CandidateTriageDrawer shared motion', () => {
           roleTasks={[]}
           atsProvider="workable"
           isRelatedRole
+          roleFamily={{
+            owner: { id: 31, name: 'Data Platform Lead' },
+            related: [{ id: 47, name: 'AI Engineer' }],
+          }}
         />
       </MotionSystemProvider>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
     expect(screen.getByRole('alert')).toHaveTextContent(/Reject everywhere/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /shared Workable application across all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)/i,
+    );
+  });
+
+  it('keeps the generic linked-role warning when family metadata is absent', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+          hasRelatedRoles
+        />
+      </MotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
     expect(screen.getByRole('alert')).toHaveTextContent(
       /original role and every related role/i,
     );

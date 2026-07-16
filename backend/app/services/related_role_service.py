@@ -29,6 +29,7 @@ from ..tasks.sister_role_tasks import score_sister_role
 from .ats_role_lifecycle import ats_job_lifecycle
 from .requisition_chat_capture import compute_completeness
 from .related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
+from .related_role_receipts import created_role_family
 from .role_brief_service import create_brief, materialize_brief_to_role
 from .role_criteria_service import sync_derived_criteria
 from .sister_role_service import ensure_sister_evaluations
@@ -155,7 +156,7 @@ def preview_related_role(
         ),
         "message": (
             f"The related role will share {counts['total']} candidates with "
-            f"{source.name}; {counts['with_cv']} can be scored now. It will have "
+            f"{source.name} #{source.id}; {counts['with_cv']} can be scored now. It will have "
             "its own Taali funnel and scoring Agent. The ATS application remains "
             f"shared in {provider_label}, so rejection applies to every linked role."
         ),
@@ -281,14 +282,15 @@ def create_related_role_draft(
         {
             "role": "assistant",
             "content": (
-                f"I've copied **{source.name}** into a new related-role draft, "
+                f"I've copied **{source.name} #{source.id}** into a new related-role draft, "
                 f"{copied_note}, and populated every structured field I could "
                 "read from it. Tell me what should change for this version. "
                 "You can describe only the differences; I'll save those into the "
                 "brief and ask only about details the source does not answer. When "
                 "you're ready, review the shared candidate count and use **Create "
                 "and score candidates** to create the new scoring "
-                f"role. Candidate stages and actions will stay coupled to the original {provider_label} job."
+                f"role. Candidate stages and actions will stay coupled to "
+                f"**{source.name} #{source.id}**, the original {provider_label} job."
             ),
             "attachments": [],
             "suggested_replies": [],
@@ -357,7 +359,7 @@ def create_related_role(
     related = Role(
         organization_id=int(organization_id),
         name=clean_name,
-        description=f"Coupled scoring view of {source.name}",
+        description=f"Coupled scoring view of {source.name} #{source.id}",
         source="sister",
         role_kind=ROLE_KIND_SISTER,
         ats_owner_role_id=source.id,
@@ -459,20 +461,23 @@ def related_role_created_payload(
     owner = getattr(related, "ats_owner_role", None)
     source_ats_provider = ats_job_lifecycle(owner).provider
     provider_label = "Bullhorn" if source_ats_provider == "bullhorn" else "Workable"
+    role_family, family_labels = created_role_family(related, owner)
     return {
         "type": "related_role_created",
         "created": True,
         "role_id": int(related.id),
         "role_name": related.name,
         "source_role_id": int(related.ats_owner_role_id),
+        "source_role_name": owner.name,
         "source_ats_provider": source_ats_provider,
+        "role_family": role_family,
         "evaluation_counts": dict(evaluation_counts),
         "frontend_url": f"/jobs/{related.id}",
         "message": (
-            f"Created {related.name} and queued its shared candidate roster for scoring. "
+            f"Created {related.name} #{related.id} and queued its shared candidate roster for scoring. "
             "It now has its own Taali funnel, scoring Agent, and budget. "
-            f"The {provider_label} application remains shared: rejecting in any linked role "
-            "rejects the candidate across the original and all related roles."
+            f"The {provider_label} application remains shared across all linked roles: "
+            f"{family_labels}. Rejecting in any linked role rejects the candidate across all linked roles."
         ),
     }
 

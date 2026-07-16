@@ -541,15 +541,21 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByText('Full ATS')).toBeInTheDocument();
   });
 
-  it('shows a coupled sister role with separate sister and original fit scores', async () => {
+  it('renders a related role in the ordinary job shell with an exact original-role control', async () => {
     apiClient.roles.get.mockResolvedValue({
       data: {
         ...baseRole,
         role_kind: 'sister',
         source: 'sister',
         ats_owner_role_id: 77,
-        ats_owner_role_name: 'AI Engineer · Workable',
+        ats_owner_role_name: 'AI Engineer',
+        ats_provider: 'workable',
+        role_family: {
+          owner: { id: 77, name: 'AI Engineer' },
+          related: [{ id: 101, name: 'AI Native Engineer' }],
+        },
         effective_workable_job_id: 'AI-ENG',
+        job_spec_text: 'Build production AI systems with reliable Python services, evaluation tooling, and model observability.',
       },
     });
     apiClient.roles.listApplications.mockResolvedValue({
@@ -558,20 +564,27 @@ describe('JobPipelinePage', () => {
 
     renderPipeline();
 
-    expect(await screen.findByText('Related · Workable')).toBeInTheDocument();
-    expect(screen.getByText('AI Engineer · Workable', { selector: 'strong' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /Original fit/i })).toBeInTheDocument();
+    await screen.findByRole('note');
+    expect(screen.getAllByText('Workable').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Related · Workable')).not.toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Shared Workable candidate pool with AI Engineer #77 (original). Rejecting applies to AI Engineer #77, AI Native Engineer #101; progression remains role-specific.',
+    );
+    expect(screen.queryByRole('columnheader', { name: /Original fit/i })).not.toBeInTheDocument();
     const row = screen.getByText('Sam Patel').closest('tr');
     expect(within(row).getByText('91')).toBeInTheDocument();
-    expect(within(row).getByText('72')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Open original role/i })).toBeInTheDocument();
+    expect(within(row).queryByText('72')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open original role AI Engineer #77' }))
+      .toHaveAttribute('data-motion-role-origin');
+    expect(screen.getByRole('button', { name: /Ask agent/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Related role · independent/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Not published/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Process \d+ candidate/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Edit job spec$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Edit job spec$/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
     expect(await screen.findByRole('heading', { name: /^Role specification$/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Edit$/i })).toBeInTheDocument();
     expect(apiClient.roles.updateJobSpec).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('link', { name: /^Scoring settings$/i }));
@@ -580,7 +593,53 @@ describe('JobPipelinePage', () => {
     expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
   });
 
-  it('shows shared candidates while related scoring waits and labels the original pipeline clearly', async () => {
+  it('edits a related role job spec through the ordinary versioned editor', async () => {
+    const originalSpec = 'Build production AI systems with reliable Python services, evaluation tooling, and model observability.';
+    const updatedSpec = `${originalSpec} Own distributed tracing and safe model rollout practices.`;
+    const relatedRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'AI Engineer',
+      ats_provider: 'workable',
+      role_family: {
+        owner: { id: 77, name: 'AI Engineer' },
+        related: [{ id: 101, name: 'AI Native Engineer' }],
+      },
+      job_spec_text: originalSpec,
+    };
+    apiClient.roles.get.mockResolvedValue({ data: relatedRole });
+    apiClient.roles.updateJobSpec.mockResolvedValue({
+      data: {
+        applied: true,
+        role: { ...relatedRole, version: 8, job_spec_text: updatedSpec },
+        diff: { added: [], removed: [], criteria_count: 0 },
+        would_rescreen: { count: 2, est_cost_usd: 0.1 },
+      },
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit job spec$/i }));
+    fireEvent.change(await screen.findByLabelText('Job description'), {
+      target: { value: updatedSpec },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save job spec/i }));
+
+    await waitFor(() => {
+      expect(apiClient.roles.updateJobSpec).toHaveBeenCalledWith(101, {
+        expected_version: 7,
+        job_spec_text: updatedSpec,
+        name: 'AI Native Engineer',
+      });
+    });
+    expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('updated criteria affect 2 existing candidates'),
+      'success',
+    );
+  });
+
+  it('keeps the ordinary KPIs and funnel while related scoring waits in the background', async () => {
     apiClient.roles.get.mockResolvedValue({
       data: {
         ...baseRole,
@@ -588,6 +647,11 @@ describe('JobPipelinePage', () => {
         source: 'sister',
         ats_owner_role_id: 77,
         ats_owner_role_name: 'AI Engineer',
+        ats_provider: 'workable',
+        role_family: {
+          owner: { id: 77, name: 'AI Engineer' },
+          related: [{ id: 101, name: 'AI Native Engineer' }],
+        },
         effective_workable_job_id: 'AI-ENG',
         stage_counts: { applied: 119, review: 172, invited: 8, advanced: 8, rejected: 498 },
       },
@@ -615,16 +679,16 @@ describe('JobPipelinePage', () => {
 
     renderPipeline();
 
-    expect(await screen.findByText(/Related-role scoring is waiting · 0%/i)).toBeInTheDocument();
-    expect(screen.getByText(/workspace Agent is paused/i)).toBeInTheDocument();
-    expect(screen.getByText(/0 of 800 scoreable candidates/i)).toBeInTheDocument();
-    expect(screen.getByText(/Related-role Taali pipeline · independent stages/i)).toBeInTheDocument();
+    expect(await screen.findByRole('note')).toHaveTextContent('AI Engineer #77');
     expect(screen.getByRole('button', { name: /turn on/i })).toBeInTheDocument();
-    expect(screen.getByText('Shared candidates')).toBeInTheDocument();
-    expect(screen.getByText('806')).toBeInTheDocument();
-    expect(screen.getByText('Awaiting score')).toBeInTheDocument();
-    expect(screen.getByText('Waiting…')).toBeInTheDocument();
-    expect(screen.queryByText('AGENT OFF')).not.toBeInTheDocument();
+    expect(screen.getByText('In pipeline')).toBeInTheDocument();
+    expect(screen.getByText('New CVs')).toBeInTheDocument();
+    expect(screen.getByText('Below threshold')).toBeInTheDocument();
+    expect(screen.getByText('Role budget · MTD')).toBeInTheDocument();
+    expect(screen.getAllByText('Rejected').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Shared candidates')).not.toBeInTheDocument();
+    expect(screen.queryByText('Awaiting score')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Related-role Taali pipeline/i)).not.toBeInTheDocument();
   });
 
   it('opens related-role creation directly from the job header', async () => {
@@ -1097,6 +1161,51 @@ describe('JobPipelinePage', () => {
     expect(within(reviewCard).getByRole('button', { name: /^Approve$/i })).toBeInTheDocument();
     expect(within(reviewCard).getByRole('button', { name: /^Override$/i })).toBeInTheDocument();
     expect(within(reviewCard).queryByText(longReasoning)).not.toBeInTheDocument();
+  });
+
+  it('names every linked role before approving a reject recommendation', async () => {
+    const roleFamily = {
+      owner: { id: 77, name: 'AI Engineer' },
+      related: [
+        { id: 101, name: 'AI Native Engineer' },
+        { id: 109, name: 'ML Platform Engineer' },
+      ],
+    };
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_provider: 'workable',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        role_family: roleFamily,
+      },
+    });
+    apiClient.agent.listDecisions.mockResolvedValue({
+      data: [{
+        id: 502,
+        application_id: 2,
+        decision_type: 'reject',
+        recommendation: 'Do not proceed',
+        role_family: roleFamily,
+      }],
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Reject across linked roles?' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(
+      /AI Engineer #77, AI Native Engineer #101, ML Platform Engineer #109/,
+    ))
+      .toBeInTheDocument();
+    expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject across all linked roles' }));
+    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(502));
   });
 
   it('never invents an agent recommendation from the score when no decision is queued', async () => {

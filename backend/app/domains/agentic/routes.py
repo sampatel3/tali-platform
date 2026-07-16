@@ -38,7 +38,7 @@ from ...domains.assessments_runtime.job_authorization import (
     has_job_permission_for_role,
     require_job_permission,
 )
-from ...domains.assessments_runtime.role_support import is_resolved
+from ...domains.assessments_runtime.role_support import is_resolved, role_family_response, roles_with_families
 from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
@@ -74,6 +74,7 @@ from ...models.role import Role
 from ...models.user import User
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
+from ...schemas.role import RoleFamilyResponse
 from ._activity_feed import (
     AgentActivityPayload,
     build_activity_feed,
@@ -158,9 +159,8 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
-    # When the candidate applied to this role — application-level Workable
-    # created_at, falling back to the candidate-level copy (legacy rows), then
-    # to the local application created_at. Freshness signal on decision cards.
+    role_family: Optional[RoleFamilyResponse] = None
+    # Workable date, legacy candidate copy, then local candidate-freshness date.
     applied_at: Optional[datetime] = None
     # The candidate's headline Tali score, 0–100. Resolved by preferring the
     # score the agent stamped on this decision's evidence (frozen at decision
@@ -486,6 +486,7 @@ def _decision_to_payload(
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
+        role_family=role_family_response(role) if role else None,
         applied_at=(
             (getattr(application, "workable_created_at", None) if application else None)
             # Candidate-level copy only for Workable rows — a manual application
@@ -671,6 +672,7 @@ def list_agent_decisions(
         )
     query = query.limit(limit)
     rows = query.all()
+    family_roles = roles_with_families(db, [role.id for _, _, role in rows if role], organization_id=int(current_user.organization_id))
 
     # A2: compute staleness per row. Only meaningful for ``pending``
     # rows (resolved decisions are frozen snapshots per A6); for
@@ -728,6 +730,7 @@ def list_agent_decisions(
 
     payloads: list[AgentDecisionPayload] = []
     for decision, candidate, role in rows:
+        role = family_roles.get(int(role.id), role) if role else None
         app = apps_by_id.get(int(decision.application_id))
         is_stale = False
         reasons: list[str] = []

@@ -27,6 +27,7 @@ import {
   CandidateAvatar,
   WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { formatRoleFamilyReferences } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 import { formatStatusLabel } from './candidatesUiUtils';
 
@@ -118,6 +119,7 @@ export function CandidateTriageDrawer({
   roleId = null,
   isRelatedRole = false,
   hasRelatedRoles = false,
+  roleFamily = null,
   roleTasks = [],
   mode = 'inline',
   activityLabel = '',
@@ -181,6 +183,7 @@ export function CandidateTriageDrawer({
   const resolvedAtsProvider = atsProvider
     || applicationAtsProvider;
   const providerLabel = resolvedAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable';
+  const linkedRoleReferences = formatRoleFamilyReferences(roleFamily);
   const sourceLabel = applicationAtsProvider
     ? `Imported from ${applicationAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable'}`
     : 'Added in Taali';
@@ -614,8 +617,17 @@ export function CandidateTriageDrawer({
             <div className="ctc-reject-warning" role="alert">
               {isRelatedRole || hasRelatedRoles ? (
                 <>
-                  <strong>Reject everywhere —</strong> this is one shared {providerLabel} application.
-                  Rejecting here disqualifies the candidate in the original role and every related role.
+                  {linkedRoleReferences ? (
+                    <>
+                      <strong>Reject everywhere —</strong> rejecting here affects the shared {providerLabel}{' '}
+                      application across all linked roles: {linkedRoleReferences}.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Reject everywhere —</strong> this is one shared {providerLabel} application.
+                      Rejecting here disqualifies the candidate in the original role and every related role.
+                    </>
+                  )}
                   {isPostHandoverAtsStage ? (
                     <> They are currently in <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}.</>
                   ) : null}

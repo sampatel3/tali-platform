@@ -177,6 +177,20 @@ class RoleVersionCommand(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class RoleReference(BaseModel):
+    """The stable, human-readable identity used anywhere roles are linked."""
+
+    id: int
+    name: str
+
+
+class RoleFamilyResponse(BaseModel):
+    """One ATS-owned candidate pool and its independently scored role views."""
+
+    owner: RoleReference
+    related: list[RoleReference] = Field(default_factory=list)
+
+
 class RoleResponse(BaseModel):
     id: int
     version: int = 1
@@ -190,6 +204,9 @@ class RoleResponse(BaseModel):
     # shared ATS application roster and all Workable write-backs.
     ats_owner_role_id: Optional[int] = None
     ats_owner_role_name: Optional[str] = None
+    # Additive contract: serializers populate this for every role while the
+    # default keeps direct schema construction by older internal callers valid.
+    role_family: Optional[RoleFamilyResponse] = None
     effective_workable_job_id: Optional[str] = None
     sister_role_count: int = 0
     # Provider-neutral external job contract. New clients should use these

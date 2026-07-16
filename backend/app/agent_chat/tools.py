@@ -1231,7 +1231,7 @@ def _decision_fingerprint(snapshot: dict[str, Any]) -> str:
         "decision_id",
         "application_id",
         "decision_type",
-        "recommendation",
+        "recommendation", "role_family",
         "status",
         "created_at",
         "is_stale",

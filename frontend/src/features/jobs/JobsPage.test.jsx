@@ -6,6 +6,8 @@ import { MemoryRouter } from 'react-router-dom';
 vi.mock('../../shared/api', () => ({
   roles: {
     list: vi.fn(),
+    star: vi.fn(),
+    unstar: vi.fn(),
     create: vi.fn(),
     uploadJobSpec: vi.fn(),
     addTask: vi.fn(),
@@ -526,7 +528,7 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelectorAll('.job-agent-pill.is-on')).toHaveLength(0);
   });
 
-  it('orders active roles alphabetically instead of using the API activity order', async () => {
+  it('preserves the deterministic server name order instead of re-sorting each snapshot', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
         {
@@ -563,7 +565,8 @@ describe('JobsPage Workable sync states', () => {
     await screen.findByText('Zulu Engineer');
     expect(
       Array.from(document.querySelectorAll('.job-card .role-name'), (node) => node.textContent),
-    ).toEqual(['alpha Engineer', 'Middle Engineer', 'Zulu Engineer']);
+    ).toEqual(['Zulu Engineer', 'alpha Engineer', 'Middle Engineer']);
+    expect(apiClient.roles.list).toHaveBeenCalledWith(expect.objectContaining({ sort_by: 'name' }));
     expect(screen.queryByText('Aardvark Archived')).not.toBeInTheDocument();
   });
 
@@ -669,6 +672,12 @@ describe('JobsPage Workable sync states', () => {
           name: 'Inactive Sister Role',
           source: 'manual',
           role_kind: 'sister',
+          ats_owner_role_id: 302,
+          ats_owner_role_name: 'Original Data Role',
+          role_family: {
+            owner: { id: 302, name: 'Original Data Role' },
+            related: [{ id: 106, name: 'Inactive Sister Role' }],
+          },
           workable_job_state: null,
           workable_job_live: false,
         },
@@ -702,6 +711,8 @@ describe('JobsPage Workable sync states', () => {
     expect(unknownStateCard).not.toHaveClass('not-live');
     expect(inactiveSisterCard).toHaveClass('not-live');
     expect(inactiveSisterCard).toHaveClass('is-compact');
+    expect(within(inactiveSisterCard).getByText('Shared pool · Original: Original Data Role #302'))
+      .toBeInTheDocument();
     expect(publishedCard).toHaveClass('agent-on');
     expect(pausedPublishedCard).not.toHaveClass('agent-on');
     expect(publishedCard).toHaveStyle({ opacity: '1' });
@@ -849,9 +860,76 @@ describe('JobsPage Workable sync states', () => {
 
     const roleCard = (await screen.findByText('Bullhorn Related Role')).closest('.job-card');
     expect(within(roleCard).getByText('Related · Bullhorn')).toBeInTheDocument();
-    expect(within(roleCard).getByText(/Coupled to Original Bullhorn Role in Bullhorn/i))
+    expect(within(roleCard).getByText('Shared candidate pool'))
+      .toBeInTheDocument();
+    expect(within(roleCard).getByText('Original: Original Bullhorn Role #302'))
       .toBeInTheDocument();
     expect(within(roleCard).queryByText(/in Workable/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps an original and its related full cards together with exact role references', async () => {
+    const roleFamily = {
+      owner: { id: 501, name: 'Data Engineer' },
+      related: [{ id: 503, name: 'Alternative Data Engineer' }],
+    };
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        { ...baseRoles[0], id: 501, name: 'Data Engineer', sister_role_count: 1, role_family: roleFamily },
+        { ...baseRoles[0], id: 502, name: 'Middle Standalone Role' },
+        {
+          ...baseRoles[0],
+          id: 503,
+          name: 'Alternative Data Engineer',
+          role_kind: 'sister',
+          source: 'sister',
+          ats_owner_role_id: 501,
+          ats_owner_role_name: 'Data Engineer',
+          role_family: roleFamily,
+        },
+      ],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    await screen.findByText('Data Engineer');
+    expect(
+      Array.from(document.querySelectorAll('.job-card .role-name'), (node) => node.textContent),
+    ).toEqual(['Data Engineer', 'Alternative Data Engineer', 'Middle Standalone Role']);
+
+    const originalCard = screen.getByText('Data Engineer', { selector: '.role-name' }).closest('.job-card');
+    const relatedCard = screen.getByText('Alternative Data Engineer', { selector: '.role-name' }).closest('.job-card');
+    const familyGroup = originalCard.closest('.job-family-group');
+    expect(familyGroup).toContainElement(relatedCard);
+    expect(familyGroup).not.toContainElement(
+      screen.getByText('Middle Standalone Role', { selector: '.role-name' }).closest('.job-card'),
+    );
+    expect(within(familyGroup).getByText('Data Engineer #501 · Alternative Data Engineer #503'))
+      .toBeInTheDocument();
+    expect(within(originalCard).getByText('Related: Alternative Data Engineer #503')).toBeInTheDocument();
+    expect(within(relatedCard).getByText('Original: Data Engineer #501')).toBeInTheDocument();
+    expect(originalCard).toHaveAttribute('data-role-family', '501');
+    expect(relatedCard).toHaveAttribute('data-role-family', '501');
+  });
+
+  it('never renders a dangling relationship from incomplete family metadata', async () => {
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        id: 601,
+        name: 'Incomplete Family Owner',
+        sister_role_count: 1,
+        role_family: {
+          owner: { id: 601, name: 'Incomplete Family Owner' },
+          related: [{ id: 602, name: null }],
+        },
+      }],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const card = (await screen.findByText('Incomplete Family Owner')).closest('.job-card');
+    expect(within(card).getByText('Linked role details unavailable')).toBeInTheDocument();
+    expect(within(card).queryByText(/^Related:\s*$/)).not.toBeInTheDocument();
   });
 
   it('uses native job_status for Live and Draft filters', async () => {
@@ -910,10 +988,48 @@ describe('JobsPage Workable sync states', () => {
 
     // First page paints from the limited fetch...
     await screen.findByText('Role 200');
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, limit: 24 });
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name', limit: 24 });
     // ...then the background unlimited fetch lands and the tail role appears.
     expect(await screen.findByText('Tail Role Zeta')).toBeInTheDocument();
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true });
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name' });
+  });
+
+  it('preserves a star mutation when the delayed full list lands', async () => {
+    let resolveFullList;
+    const firstPage = Array.from({ length: 24 }, (_, index) => ({
+      ...baseRoles[0],
+      id: 700 + index,
+      name: `Native Role ${700 + index}`,
+      source: 'manual',
+      job_status: 'open',
+      is_published: false,
+      starred_for_auto_sync: false,
+    }));
+    apiClient.roles.list.mockImplementation((params) => (
+      params?.limit
+        ? Promise.resolve({ data: firstPage })
+        : new Promise((resolve) => { resolveFullList = resolve; })
+    ));
+    apiClient.roles.star.mockResolvedValue({
+      data: { ...firstPage[0], starred_for_auto_sync: true },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const firstCard = (await screen.findByText('Native Role 700')).closest('.job-card');
+    const star = within(firstCard).getByRole('button', {
+      name: 'Star role to enable auto-sync and real-time scoring',
+    });
+    fireEvent.click(star);
+    await waitFor(() => expect(star).toHaveAttribute('aria-pressed', 'true'));
+
+    await act(async () => {
+      resolveFullList({ data: firstPage });
+    });
+
+    expect(within(screen.getByText('Native Role 700').closest('.job-card'))
+      .getByRole('button', { name: 'Unstar role (stop auto-sync)' }))
+      .toHaveAttribute('aria-pressed', 'true');
   });
 
   it('does not background-fetch when the first page is not full', async () => {
@@ -925,8 +1041,8 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     await screen.findByText('Backend Engineer');
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, limit: 24 });
-    expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true });
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name', limit: 24 });
+    expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name' });
   });
 });
 

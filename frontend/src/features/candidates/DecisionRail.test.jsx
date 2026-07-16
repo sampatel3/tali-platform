@@ -126,6 +126,10 @@ describe('DecisionRail reject consequence copy', () => {
     status: 'pending',
     decision_type: 'reject',
     confidence: 0.8,
+    role_family: {
+      owner: { id: 31, name: 'AI Engineer' },
+      related: [{ id: 135, name: 'AI Platform Engineer' }],
+    },
   };
 
   it('shows the consequence note under the primary reject button', () => {
@@ -141,8 +145,8 @@ describe('DecisionRail reject consequence copy', () => {
       />,
     );
     const reject = screen.getByRole('button', { name: /Reject/i });
-    expect(reject).toHaveAttribute('title', expect.stringMatching(/Disqualifies them in Workable/i));
-    expect(screen.getByText(/Disqualifies them in Workable\./i)).toBeInTheDocument();
+    expect(reject).toHaveAttribute('title', expect.stringMatching(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i));
+    expect(screen.getByText(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i)).toBeInTheDocument();
   });
 
   it('does not show the consequence note for a non-reject decision', () => {
@@ -157,7 +161,7 @@ describe('DecisionRail reject consequence copy', () => {
         onApprove={vi.fn()}
       />,
     );
-    expect(screen.queryByText(/Disqualifies them in Workable/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Rejects the shared ATS application/i)).not.toBeInTheDocument();
   });
 
   it('lets the stale warning take precedence over the reject note in the button title', () => {
@@ -175,7 +179,7 @@ describe('DecisionRail reject consequence copy', () => {
     const reject = screen.getByRole('button', { name: /Reject/i });
     expect(reject).toHaveAttribute('title', expect.stringMatching(/Inputs changed since this was decided/i));
     // The visible consequence note still renders under the button.
-    expect(screen.getByText(/Disqualifies them in Workable/i)).toBeInTheDocument();
+    expect(screen.getByText(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i)).toBeInTheDocument();
   });
 });
 

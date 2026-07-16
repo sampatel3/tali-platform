@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm.attributes import NO_VALUE
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload, with_loader_criteria
 
 from ...candidate_search.self_score import (
     self_score_decision,
@@ -16,7 +16,13 @@ from ...candidate_search.self_score import (
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
-from ...schemas.role import ApplicationResponse, RoleCriterionResponse, RoleResponse
+from ...schemas.role import (
+    ApplicationResponse,
+    RoleCriterionResponse,
+    RoleFamilyResponse,
+    RoleReference,
+    RoleResponse,
+)
 from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.evaluation_result_service import normalize_stored_application_decision
 from ...services.interview_support_service import (
@@ -251,6 +257,133 @@ def _loaded_relationship_items(entity: Any, relationship_name: str) -> list[Any]
     return list(loaded or [])
 
 
+_ROLE_REFERENCE_COLUMNS = (
+    Role.id,
+    Role.organization_id,
+    Role.name,
+    Role.role_kind,
+    Role.ats_owner_role_id,
+    Role.deleted_at,
+)
+
+
+def role_family_load_options(*, organization_id: int | None = None):
+    """Load a complete family without hydrating every sibling's full job spec.
+
+    The owner remains fully loaded because related-role responses use its ATS
+    lifecycle fields. Sibling rows contribute only stable identity and linkage
+    fields. When the request organization is known, the loader criterion also
+    prevents a malformed cross-tenant self-reference from entering the graph.
+    """
+    options = (
+        joinedload(Role.ats_owner_role)
+        .selectinload(Role.sister_roles)
+        .load_only(*_ROLE_REFERENCE_COLUMNS),
+        selectinload(Role.sister_roles).load_only(*_ROLE_REFERENCE_COLUMNS),
+    )
+    if organization_id is None:
+        return options
+    return (
+        *options,
+        with_loader_criteria(
+            Role,
+            Role.organization_id == int(organization_id),
+            include_aliases=True,
+        ),
+    )
+
+
+def roles_with_families(
+    db: Session,
+    role_ids: list[int],
+    *,
+    organization_id: int,
+) -> dict[int, Role]:
+    """Batch-load named role families for an already authorized set of IDs."""
+    ids = sorted({int(role_id) for role_id in role_ids})
+    if not ids:
+        return {}
+    roles = (
+        db.query(Role)
+        .options(*role_family_load_options(organization_id=organization_id))
+        .filter(
+            Role.id.in_(ids),
+            Role.organization_id == int(organization_id),
+        )
+        .all()
+    )
+    return {int(role.id): role for role in roles}
+
+
+def role_family_response(role: Role) -> RoleFamilyResponse:
+    """Return the complete named role family for a standard or related role.
+
+    List/detail queries eager-load both relationship directions. The guarded
+    lazy-load fallback keeps single-role mutation responses complete too,
+    without requiring every caller of ``role_to_response`` to duplicate the
+    loader graph.
+    """
+    role_kind = str(getattr(role, "role_kind", None) or "standard")
+    organization_id = getattr(role, "organization_id", None)
+
+    def same_organization(item: Any) -> bool:
+        if organization_id is None:
+            return True
+        return getattr(item, "organization_id", None) == organization_id
+
+    candidate_owner = (
+        getattr(role, "ats_owner_role", None) if role_kind == "sister" else role
+    )
+    owner = (
+        candidate_owner
+        if candidate_owner is not None
+        and same_organization(candidate_owner)
+        and getattr(candidate_owner, "deleted_at", None) is None
+        else role
+    )
+
+    related = _loaded_relationship_items(owner, "sister_roles")
+    if related is None:
+        try:
+            related = list(getattr(owner, "sister_roles", None) or [])
+        except Exception:
+            related = []
+
+    # A detached related-role row may know its owner without having the
+    # owner's collection available. It must still identify itself as a family
+    # member rather than returning a misleading empty related list.
+    if role_kind == "sister" and all(
+        int(getattr(item, "id", 0) or 0) != int(role.id) for item in related
+    ):
+        related.append(role)
+
+    unique_related: dict[int, Role] = {}
+    for item in related:
+        item_id = int(getattr(item, "id", 0) or 0)
+        if not item_id or item_id == int(owner.id):
+            continue
+        if not same_organization(item):
+            continue
+        if getattr(item, "deleted_at", None) is not None:
+            continue
+        unique_related[item_id] = item
+
+    ordered_related = sorted(
+        unique_related.values(),
+        key=lambda item: (
+            str(getattr(item, "name", "") or "").casefold(),
+            int(getattr(item, "id", 0) or 0),
+        ),
+    )
+    return RoleFamilyResponse(
+        owner=RoleReference(id=int(owner.id), name=str(owner.name)),
+        related=[
+            RoleReference(id=int(item.id), name=str(item.name))
+            for item in ordered_related
+        ],
+    )
+
+
 def role_to_response(
     role: Role,
     *,
@@ -312,10 +445,17 @@ def role_to_response(
 
     role_kind = str(getattr(role, "role_kind", None) or "standard")
     ats_owner = getattr(role, "ats_owner_role", None) if role_kind == "sister" else None
+    if ats_owner is not None and (
+        getattr(ats_owner, "organization_id", None)
+        != getattr(role, "organization_id", None)
+        or getattr(ats_owner, "deleted_at", None) is not None
+    ):
+        ats_owner = None
     operational_role = ats_owner or role
     ats_lifecycle = ats_job_lifecycle(operational_role)
     loaded_sisters = _loaded_relationship_items(role, "sister_roles")
     sister_role_count = len(loaded_sisters or [])
+    role_family = role_family_response(role)
     return RoleResponse(
         id=role.id,
         version=int(getattr(role, "version", 1) or 1),
@@ -327,6 +467,7 @@ def role_to_response(
         role_kind=role_kind,
         ats_owner_role_id=getattr(role, "ats_owner_role_id", None),
         ats_owner_role_name=getattr(ats_owner, "name", None),
+        role_family=role_family,
         effective_workable_job_id=getattr(operational_role, "workable_job_id", None),
         sister_role_count=sister_role_count,
         ats_provider=ats_lifecycle.provider,

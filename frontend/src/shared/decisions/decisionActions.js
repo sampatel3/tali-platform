@@ -178,4 +178,62 @@ export const isRejectDecisionType = (decisionType) =>
 // actions/reject_application.py); any candidate-facing message is the ATS's own
 // disqualify workflow, so we don't claim one on Taali's behalf.
 export const REJECT_CONSEQUENCE_COPY =
-  'Rejects the shared ATS application across the original and every related role.';
+  'Rejects this candidate\'s ATS application. If this role shares a candidate pool, the rejection also applies to the original and every related role.';
+
+const normaliseRoleReference = (reference, relationship) => {
+  const name = String(reference?.name || '').trim();
+  const id = String(reference?.id ?? '').trim().replace(/^#/, '');
+  if (!name || !id) return null;
+  return {
+    key: id,
+    label: `${name} #${id} (${relationship})`,
+  };
+};
+
+const joinRoleReferences = (labels) => {
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, and ${labels.at(-1)}`;
+};
+
+/**
+ * Format a complete linked-role family without ever dropping a role name or
+ * reference. Incomplete metadata deliberately returns null so callers keep a
+ * conditional, ATS-safe warning instead of presenting a partial family as
+ * though it were exhaustive (or claiming every standalone role is linked).
+ */
+export const formatRoleFamilyReferences = (roleFamily) => {
+  const owner = normaliseRoleReference(roleFamily?.owner, 'original');
+  const relatedInput = Array.isArray(roleFamily?.related) ? roleFamily.related : [];
+  const related = relatedInput.map((role) => normaliseRoleReference(role, 'related'));
+  if (!owner || related.length === 0 || related.some((role) => role == null)) return null;
+
+  const seen = new Set([owner.key]);
+  const roles = [owner];
+  related.forEach((role) => {
+    if (seen.has(role.key)) return;
+    seen.add(role.key);
+    roles.push(role);
+  });
+  if (roles.length < 2) return null;
+  return joinRoleReferences(roles.map((role) => role.label));
+};
+
+export const buildRejectConsequenceCopy = (roleFamily) => {
+  const linkedRoles = formatRoleFamilyReferences(roleFamily);
+  return linkedRoles
+    ? `Rejects the shared ATS application across all linked roles: ${linkedRoles}.`
+    : REJECT_CONSEQUENCE_COPY;
+};
+
+/** Resolve the reject modal copy at click-time while preserving its undo note. */
+export const withRoleAwareRejectCopy = (alternative, roleFamily) => {
+  if (alternative?.action !== 'reject') return alternative;
+  const undoCopy = /cannot be undone from this screen/i.test(alternative?.body || '')
+    ? ' Cannot be undone from this screen.'
+    : '';
+  return {
+    ...alternative,
+    body: `${buildRejectConsequenceCopy(roleFamily)}${undoCopy}`,
+  };
+};

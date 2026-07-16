@@ -72,6 +72,7 @@ from ...services.role_concurrency import (
     bump_role_version,
     role_query_for_update,
 )
+from ...services import related_role_spec_lifecycle
 from ...services.sister_role_service import pipeline_counts_for_role, related_role_pipeline_counts_bulk
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_DISABLED,
@@ -86,7 +87,8 @@ from ...services.role_change_audit import (
     serialize_role_change_event,
 )
 from ...platform.request_context import get_request_id
-from .role_support import get_role, role_to_response
+from .role_catalogue_order import load_role_catalogue_page, order_roles_by_family_name
+from .role_support import get_role, role_family_load_options, role_to_response
 from .job_authorization import JobPermission, require_job_permission
 from .pipeline_service import role_pipeline_counts, role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
@@ -328,15 +330,11 @@ def _maybe_autogenerate_assessment_task(role) -> None:
 @router.get("/roles")
 def list_roles(
     include_pipeline_stats: bool = Query(default=False),
+    sort_by: str = Query(default="activity", pattern="^(activity|name)$"),
     limit: int | None = Query(default=None, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Ordering: starred roles always on top (active auto-sync roles need
-    # to surface first), then by the most recently updated — which for
-    # Workable-sourced roles tracks the last sync that touched the row.
-    # ``created_at`` is the final tie-breaker so newly-created roles win
-    # over older roles that have never been updated.
     roles_query = (
         db.query(Role)
         # selectinload tasks for the per-role task count. Criteria are NOT
@@ -346,28 +344,31 @@ def list_roles(
         # applying cleanly to roles rather than to a tasks cartesian product.
         .options(
             selectinload(Role.tasks),
-            joinedload(Role.ats_owner_role),
-            selectinload(Role.sister_roles),
+            *role_family_load_options(
+                organization_id=int(current_user.organization_id)
+            ),
         )
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
         )
-        .order_by(
+    )
+    if sort_by == "name":
+        roles_query = order_roles_by_family_name(roles_query)
+    else:
+        roles_query = roles_query.order_by(
             Role.starred_for_auto_sync.desc(),
             Role.updated_at.desc().nullslast(),
             Role.created_at.desc(),
         )
-    )
     # Progressive load: the Jobs hub fetches a first page (``limit``) to paint
     # the active / most-recent roles instantly, then re-fetches the full list
-    # in the background. The sort above front-loads starred + recently-synced
-    # roles, so page one is the set a recruiter actually works. ``limit`` also
-    # scopes every per-role aggregate below to the page (fewer role_ids → the
-    # candidate_applications scans shrink), so the first paint is cheap too.
-    if limit is not None:
-        roles_query = roles_query.limit(limit)
-    roles = roles_query.all()
+    # in the background. With the default order, page one front-loads starred +
+    # recently-synced roles; ``sort_by=name`` instead keeps the catalogue A-Z.
+    # ``limit`` also scopes every per-role aggregate below to the page (fewer
+    # role_ids → the candidate_applications scans shrink), so first paint is
+    # cheap in either order.
+    roles = load_role_catalogue_page(roles_query, sort_by=sort_by, limit=limit)
     if not roles:
         return []
 
@@ -559,9 +560,13 @@ def get_role_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Role).options(joinedload(Role.ats_owner_role))
+    query = db.query(Role).options(
+        *role_family_load_options(
+            organization_id=int(current_user.organization_id)
+        )
+    )
     if not shell:
-        query = query.options(joinedload(Role.tasks), selectinload(Role.sister_roles))
+        query = query.options(joinedload(Role.tasks))
     role = (
         query
         .filter(
@@ -2093,9 +2098,9 @@ def update_role_job_spec(
 ):
     """Atomically save the recruiter-authored role spec and assessment tasks.
 
-    The text is applied through the same deterministic criteria derivation used
-    by the role agent. This reports the candidate re-screen scope and cost but
-    deliberately does not start paid scoring work.
+    The text uses the same deterministic criteria derivation as the role agent.
+    Standard roles report re-screen scope without starting paid work; related
+    roles reset and queue their alternate-score evaluations after commit.
     """
     require_job_permission(
         db,
@@ -2130,11 +2135,7 @@ def update_role_job_spec(
     )
     audit_before = capture_role_change_snapshot(role)
     audit_from_version = int(role.version or 1)
-    if str(getattr(role, "role_kind", "") or "") == "sister":
-        raise HTTPException(
-            status_code=409,
-            detail="Sister roles are score-only views. Edit the original ATS role's job spec.",
-        )
+    is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
 
     tasks: list[Task] | None = None
     if data.task_ids is not None:
@@ -2188,7 +2189,12 @@ def update_role_job_spec(
     from ...agent_chat.constraints import update_job_spec as apply_job_spec
 
     try:
-        result = apply_job_spec(db, role, job_spec_text=data.job_spec_text)
+        result = apply_job_spec(
+            db,
+            role,
+            job_spec_text=data.job_spec_text,
+            provision_assessment_task=not is_sister,
+        )
         if not result.get("applied"):
             # The helper has already rolled back if criteria derivation failed.
             raise HTTPException(
@@ -2207,6 +2213,8 @@ def update_role_job_spec(
             role.job_spec_manually_edited_at = datetime.now(timezone.utc)
         role.interview_focus = None
         role.interview_focus_generated_at = None
+        if is_sister:
+            result["would_rescreen"] = related_role_spec_lifecycle.reset_related_role_spec_evaluations(db, role)
         audit_to_version = bump_role_version(role)
         add_role_change_event(
             db,
@@ -2233,12 +2241,15 @@ def update_role_job_spec(
 
     # Regeneration is asynchronous and best-effort. The recruiter-authored spec
     # is already durable even if the worker/broker is temporarily unavailable.
-    try:
-        on_role_jd_attached(role)
-    except Exception:  # pragma: no cover - persistence must remain successful
-        logger.exception(
-            "Failed to dispatch interview-focus generation for role_id=%s", role.id
-        )
+    if is_sister:
+        related_role_spec_lifecycle.dispatch_related_role_spec_scoring(role)
+    else:
+        try:
+            on_role_jd_attached(role)
+        except Exception:  # pragma: no cover - persistence must remain successful
+            logger.exception(
+                "Failed to dispatch interview-focus generation for role_id=%s", role.id
+            )
 
     return {
         "applied": True,
@@ -2335,9 +2346,7 @@ def upload_role_job_spec(
     try:
         sync_derived_criteria(db, role)
         if is_sister:
-            from ...services.sister_role_service import ensure_sister_evaluations
-
-            ensure_sister_evaluations(db, role, reset_existing=True)
+            related_role_spec_lifecycle.reset_related_role_spec_evaluations(db, role)
         else:
             mark_role_scores_stale(db, role.id)
             _request_autogenerate_assessment_task(
@@ -2367,17 +2376,7 @@ def upload_role_job_spec(
     # request returns immediately; the worker writes interview_focus +
     # pack templates back onto the role row when Claude responds.
     if is_sister:
-        from ...tasks.sister_role_tasks import score_sister_role
-
-        try:
-            score_sister_role.apply_async(args=[role.id], queue="scoring")
-        except Exception as exc:  # Beat recovers the committed pending rows.
-            logger.error(
-                "Related-role spec scoring kick unavailable role_id=%s "
-                "error_code=queue_unavailable error_type=%s",
-                role.id,
-                type(exc).__name__,
-            )
+        related_role_spec_lifecycle.dispatch_related_role_spec_scoring(role)
     else:
         on_role_jd_attached(role)
         _maybe_autogenerate_assessment_task(role)

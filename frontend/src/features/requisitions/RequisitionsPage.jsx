@@ -188,6 +188,24 @@ export const isRelatedRoleBrief = (brief) => (
   brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
 );
 
+export const requisitionRoleReference = (name, id, fallback = 'Role') => {
+  const roleName = String(name || '').trim();
+  const roleId = id == null ? '' : String(id).trim();
+  if (roleName && roleId) {
+    const suffix = `#${roleId}`;
+    return roleName.endsWith(` ${suffix}`) ? roleName : `${roleName} ${suffix}`;
+  }
+  return fallback;
+};
+
+export const requisitionSourceRoleReference = (brief, fallback = 'the original role') => (
+  requisitionRoleReference(
+    brief?.source_role?.name || brief?.source_role_name,
+    brief?.source_role?.role_id || brief?.source_role_id,
+    fallback,
+  )
+);
+
 // The list and detail endpoints normally carry the same persisted title, but
 // related-role drafts also have a durable source name. Use one display contract
 // everywhere so a partial/stale detail payload can never leave the main header
@@ -195,8 +213,8 @@ export const isRelatedRoleBrief = (brief) => (
 export const requisitionDisplayTitle = (brief) => {
   const title = String(brief?.title || '').trim();
   if (title) return title;
-  const sourceName = String(brief?.source_role?.name || brief?.source_role_name || '').trim();
-  if (isRelatedRoleBrief(brief) && sourceName) return `${sourceName} · Related`;
+  const sourceReference = requisitionSourceRoleReference(brief, '');
+  if (isRelatedRoleBrief(brief) && sourceReference) return `${sourceReference} · Related`;
   return 'Untitled job';
 };
 
@@ -351,6 +369,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const messages = useMemo(() => (Array.isArray(brief?.messages) ? brief.messages : []), [brief]);
   const relatedRoleDraft = isRelatedRoleBrief(brief);
   const relatedRolePreview = brief?.related_role_preview || null;
+  const sourceRoleReference = requisitionSourceRoleReference(brief, 'the original role');
+  const relatedRoleReference = requisitionRoleReference(
+    brief?.job?.name || brief?.title,
+    brief?.job?.role_id,
+    'the related role',
+  );
 
   const handleVersionConflict = useCallback(async (err) => {
     if (selectedId == null) return false;
@@ -1191,7 +1215,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <span className="rq-side-meta">
                       <span className={`rq-dot ${isPublishedRequisition(b.status) ? 'is-published' : 'is-open'}`} />
                       {isRelatedRoleBrief(b)
-                        ? (isRequisitionBriefReadOnly(b) ? 'Related role created' : 'Related role draft')
+                        ? `${isRequisitionBriefReadOnly(b) ? 'Related role' : 'Related draft'} · ${requisitionSourceRoleReference(b)}`
                         : requisitionStatusLabel(b.status)}
                       {b.completeness != null ? ` · ${b.completeness}%` : ''}
                     </span>
@@ -1259,20 +1283,21 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   {relatedRoleDraft ? (
                     <div className="rq-related-card">
                       <div className="rq-related-source">
-                        <span className="rq-related-flag"><GitFork size={14} /> Related to</span>
+                        <span className="rq-related-flag"><GitFork size={14} /> Related to {sourceRoleReference}</span>
                         <button
                           type="button"
                           className="rq-related-source-link"
                           onClick={() => onNavigate?.('job-pipeline', { roleId: brief.source_role?.role_id || brief.source_role_id })}
+                          aria-label={`Open original role: ${sourceRoleReference}`}
                         >
-                          {brief.source_role?.name || `Job #${brief.source_role_id}`}
+                          {sourceRoleReference}
                         </button>
                         {brief.source_role?.ats_provider ? (
                           <span className="rq-related-provider">{atsProviderLabel(brief.source_role.ats_provider)}</span>
                         ) : null}
                       </div>
                       {!applied && relatedRolePreview ? (
-                        <div className="rq-related-metrics" aria-label="Related role scoring preview">
+                        <div className="rq-related-metrics" aria-label={`Related role scoring preview for ${relatedRoleReference}`}>
                           <span><strong>{relatedRolePreview.candidates_total ?? 0}</strong> shared candidates</span>
                           <span><strong>{relatedRolePreview.candidates_with_cv ?? 0}</strong> ready to score</span>
                           <span><strong>${Number(relatedRolePreview.estimated_cost_usd || 0).toFixed(2)}</strong> estimated</span>
@@ -1280,8 +1305,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       ) : null}
                       <p className="rq-related-hint">
                         {applied
-                          ? 'This Taali scoring role remains coupled to the original ATS job for candidate stages and actions.'
-                          : 'Edit the cloned specification in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to the original ATS job.'}
+                          ? `${relatedRoleReference} remains coupled to ${sourceRoleReference}, the original ATS job, for candidate stages and actions.`
+                          : `Edit the cloned specification for ${relatedRoleReference} in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to ${sourceRoleReference}, the original ATS job.`}
                       </p>
                       <div className="rq-published-actions">
                         {applied && brief.job?.role_id ? (
@@ -1290,7 +1315,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                             className="rq-btn-sm is-primary"
                             onClick={() => onNavigate?.('job-pipeline', { roleId: brief.job.role_id })}
                           >
-                            <Rocket size={13} /> Open related role
+                            <Rocket size={13} /> Open {relatedRoleReference}
                           </button>
                         ) : (
                           <button
@@ -1491,7 +1516,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
               {applied ? (
                 <div className="rq-applied-note" role="note">
                   {relatedRoleDraft
-                    ? 'This related-role draft has been created and is now read-only.'
+                    ? `${relatedRoleReference} has been created from ${sourceRoleReference} and is now read-only.`
                     : 'This job brief has been applied to a live role, so it is now read-only.'}
                 </div>
               ) : null}
@@ -1510,7 +1535,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   {applied ? (
                     <div className="rq-applied-note" role="note">
                       {relatedRoleDraft
-                        ? 'This related-role conversation is archived. Continue work in the created role.'
+                        ? `This related-role conversation is archived. Continue work in ${relatedRoleReference}.`
                         : 'This intake conversation is archived. Continue changes in the live job.'}
                     </div>
                   ) : (
@@ -1575,7 +1600,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       onSubmit={onComposerSubmit}
                       onPaste={onPaste}
                       placeholder={relatedRoleDraft
-                        ? 'Tell the agent what changes from the original role…'
+                        ? `Tell the agent what changes from ${sourceRoleReference}…`
                         : 'Tell the agent about the role, or answer its question…'}
                       busy={turnInFlight}
                     />

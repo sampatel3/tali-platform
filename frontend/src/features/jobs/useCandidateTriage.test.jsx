@@ -64,6 +64,34 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     });
   });
 
+  it('forwards the complete role family to the HITL drawer', () => {
+    const roleFamily = {
+      owner: { id: 31, name: 'Data Platform Lead' },
+      related: [{ id: 47, name: 'AI Engineer' }],
+    };
+    const { result } = renderHook(() => useCandidateTriage({
+      role: {
+        id: 47,
+        role_kind: 'sister',
+        sister_role_count: 1,
+        role_family: roleFamily,
+      },
+      roleApplications: [],
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast: vi.fn(),
+      rolesApi: {},
+      viewCandidateReport: vi.fn(),
+    }));
+
+    expect(result.current.drawerProps).toEqual(expect.objectContaining({
+      isRelatedRole: true,
+      hasRelatedRoles: true,
+      roleFamily,
+    }));
+  });
+
   it('posts the selected Taali intent rather than Bullhorn free text', async () => {
     const application = { id: 41, source: 'bullhorn' };
     const rolesApi = {

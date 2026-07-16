@@ -160,6 +160,34 @@ def _compact_result(value: Any) -> dict[str, Any]:
     return out
 
 
+def _role_family_snapshot(
+    db: Session,
+    role: Role,
+    *,
+    organization_id: int,
+) -> dict[str, Any]:
+    """Return the complete named family inside the authorized organization."""
+    # Keep the heavier role response helpers out of Agent Chat module startup.
+    # The scoped loader prevents a malformed cross-tenant owner/sibling link
+    # from entering the confirmation payload.
+    from ..domains.assessments_runtime.role_support import (
+        role_family_response,
+        roles_with_families,
+    )
+
+    loaded_role = roles_with_families(
+        db,
+        [int(role.id)],
+        organization_id=int(organization_id),
+    ).get(int(role.id))
+    if loaded_role is None:  # Defensive: _ensure_context already authorized it.
+        return {
+            "owner": {"id": int(role.id), "name": str(role.name)},
+            "related": [],
+        }
+    return _model_dict(role_family_response(loaded_role))
+
+
 def _staleness(
     db: Session,
     decision: AgentDecision,
@@ -193,6 +221,7 @@ def _pending_decision_row(
     candidate: Candidate | None,
     *,
     cache: decision_staleness.StalenessCache,
+    role_family: dict[str, Any],
 ) -> dict[str, Any]:
     """The single live projection shared by list and confirmation preview."""
     decision_type = str(decision.decision_type)
@@ -202,6 +231,7 @@ def _pending_decision_row(
         "candidate_name": getattr(candidate, "full_name", None) or "Unnamed candidate",
         "decision_type": decision_type,
         "recommendation": str(decision.recommendation),
+        "role_family": role_family,
         "reasoning": str(decision.reasoning or ""),
         "confidence": float(decision.confidence) if decision.confidence is not None else None,
         "created_at": _iso(decision.created_at),
@@ -228,6 +258,7 @@ def get_pending_decision(
     decision_id: int,
 ) -> dict[str, Any]:
     """Return the list's exact row; explicit snoozes remain previewable."""
+    org_id = _ensure_context(role, user)
     decision = _scoped_decision(db, role, user, decision_id)
     _require_pending(decision, operation="previewed")
     subject = (
@@ -253,6 +284,11 @@ def get_pending_decision(
         application,
         candidate,
         cache=decision_staleness.StalenessCache(),
+        role_family=_role_family_snapshot(
+            db,
+            role,
+            organization_id=org_id,
+        ),
     )
 
 
@@ -296,9 +332,16 @@ def list_pending_decisions(
         .all()
     )
     cache = decision_staleness.StalenessCache()
+    role_family = _role_family_snapshot(db, role, organization_id=org_id)
     decisions = [
         _pending_decision_row(
-            db, role, decision, application, candidate, cache=cache
+            db,
+            role,
+            decision,
+            application,
+            candidate,
+            cache=cache,
+            role_family=role_family,
         )
         for decision, application, candidate in rows
     ]

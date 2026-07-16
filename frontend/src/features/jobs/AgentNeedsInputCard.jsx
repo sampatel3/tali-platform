@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowUpRight, CheckCircle2, MessageSquareWarning, UserX, X } from 'lucide-react';
 
 import api from '../../shared/api/httpClient';
+import { buildRejectConsequenceCopy } from '../../shared/decisions/decisionActions';
 import { Button } from '../../shared/ui/TaaliPrimitives';
 
 const STATUS_OPEN = 'open';
@@ -196,6 +197,10 @@ export default function AgentNeedsInputCard({ roleId }) {
               {CV_GAP_REJECT_KINDS.has(row.kind) ? (
                 confirmingRejectId === row.id ? (
                   <>
+                    <div className="agent-needs-input-reject-warning" role="alert">
+                      {buildRejectConsequenceCopy(row.role_family)} This action applies to every
+                      candidate in this CV-gap cohort.
+                    </div>
                     <button
                       type="button"
                       className="agent-needs-input-reject confirm"

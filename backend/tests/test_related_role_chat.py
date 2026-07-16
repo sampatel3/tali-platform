@@ -131,6 +131,7 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     assert preview["type"] == "related_role_preview"
     assert preview["candidates_total"] == 1
     assert preview["needs_confirmation"] is True
+    assert f"{source.name} #{source.id}" in preview["message"]
     _agent_tool_row(db, conversation, preview)
 
     blocked = dispatch_agent_tool(
@@ -143,6 +144,16 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     )
     assert blocked["type"] == "confirmation_required"
     assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+    existing = Role(
+        organization_id=org.id,
+        name="AI Engineer · Existing",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=source.id,
+    )
+    db.add(existing)
+    db.commit()
 
     db.add(
         AgentConversationMessage(
@@ -171,6 +182,16 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
 
     assert created["type"] == "related_role_created"
     assert created["source_role_id"] == source.id
+    assert created["source_role_name"] == source.name
+    assert created["role_family"] == {
+        "owner": {"id": source.id, "name": source.name},
+        "related": [
+            {"id": existing.id, "name": existing.name},
+            {"id": created["role_id"], "name": args["name"]},
+        ],
+    }
+    assert f"{existing.name} #{existing.id}" in created["message"]
+    assert "across all linked roles" in created["message"]
     assert created["evaluation_counts"] == {"total": 1, "pending": 1, "unscorable": 0}
     copied_membership = (
         db.query(JobHiringTeam)
@@ -261,6 +282,7 @@ def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
             "create_related_role", args, db=db, user=user, conversation=conversation
         )
     assert created["type"] == "related_role_created"
+    assert created["source_role_name"] == source.name
     assert created["frontend_url"].startswith("/jobs/")
     related_id = int(created["role_id"])
     assert (

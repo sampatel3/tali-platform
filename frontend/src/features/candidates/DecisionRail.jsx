@@ -23,7 +23,13 @@ import '../../styles/09-standing-report.css';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { AgentLoop, Reveal } from '../../shared/motion';
 import { ScoreProvenance } from './ScoreProvenance';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from '../../shared/decisions/decisionActions';
+import {
+  buildRejectConsequenceCopy,
+  DECISION_ACTIONS,
+  DEFAULT_ACTIONS,
+  isRejectDecisionType,
+  withRoleAwareRejectCopy,
+} from '../../shared/decisions/decisionActions';
 import { ruleChipText } from '../../shared/decisions/decisionPresentation';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 
@@ -106,7 +112,10 @@ export const DecisionRail = ({
   // primary button (the copy previously lived only in the alt-reject modal). The
   // stale/old-engine warning still takes precedence in the tooltip.
   const isRejectDecision = isActionable && isRejectDecisionType(decision.decision_type);
-  const primaryButtonTitle = primaryTitle ?? (isRejectDecision ? REJECT_CONSEQUENCE_COPY : undefined);
+  const rejectConsequenceCopy = buildRejectConsequenceCopy(decision?.role_family);
+  const alternatives = (spec?.alternatives || [])
+    .map((alternative) => withRoleAwareRejectCopy(alternative, decision?.role_family));
+  const primaryButtonTitle = primaryTitle ?? (isRejectDecision ? rejectConsequenceCopy : undefined);
   const decisionSource = decision?.decision_explanation?.source === 'policy' ? 'policy' : 'agent';
   // The rule chip (score / must-have / confidence) rides the kicker; the full
   // explanation lives in the report body, so the rail carries no prose.
@@ -206,7 +215,7 @@ export const DecisionRail = ({
               <PrimaryIcon size={16} strokeWidth={2.2} aria-hidden="true" /> {spec.primaryLabel}
             </AgentLoop>
             {isRejectDecision ? (
-              <div className="dr-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
+              <div className="dr-rec-conf">{rejectConsequenceCopy}</div>
             ) : null}
             <div className="dr-rec-kl">
               <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> {decisionSource === 'policy' ? 'Policy' : 'Agent'}
@@ -246,7 +255,7 @@ export const DecisionRail = ({
           ) : null}
 
           <div className="dr-actions">
-            {(spec.alternatives || []).map((alt) => {
+            {alternatives.map((alt) => {
               const AltIcon = alt.icon || X;
               return (
                 <button

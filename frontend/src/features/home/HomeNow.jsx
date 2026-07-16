@@ -39,7 +39,12 @@ import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
 import { RecentDecisions } from './RecentDecisions';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
+import {
+  DECISION_ACTIONS,
+  DEFAULT_ACTIONS,
+  formatRoleFamilyReferences,
+  isRejectDecisionType,
+} from '../../shared/decisions/decisionActions';
 import { MotionLoop, MotionStagger, PresenceSwap, Reveal } from '../../shared/motion';
 
 
@@ -1103,8 +1108,24 @@ export const HomeNow = ({
         name: d.candidate_name || `#${d.id}`,
         stage: d.candidate_workable_stage || 'a live interview stage',
       }));
+    const linkedRejectFamilies = [...new Set(
+      visiblePending
+        .filter((decision) => isRejectDecisionType(decision.decision_type))
+        .map((decision) => formatRoleFamilyReferences(decision.role_family))
+        .filter(Boolean),
+    )];
     setBulkStages({});
-    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles, postHandoverRejects });
+    setBulkConfirm({
+      count,
+      typeLabel,
+      roleScope,
+      sample,
+      more,
+      ids,
+      advanceRoles,
+      postHandoverRejects,
+      linkedRejectFamilies,
+    });
   };
 
   const runBulkApprove = async () => {
@@ -1444,6 +1465,15 @@ export const HomeNow = ({
             </div>
 
             <div className="rq-modal-body">
+              {(bulkConfirm.linkedRejectFamilies || []).length > 0 ? (
+                <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--amber-soft)', color: 'var(--ink-2)', fontSize: 'var(--fs-body)', fontWeight: 500, lineHeight: 1.5 }}>
+                  <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>
+                    <strong>Shared-pool rejection —</strong> approving this batch rejects the ATS application across all linked roles:{' '}
+                    {bulkConfirm.linkedRejectFamilies.join(' · ')}.
+                  </span>
+                </div>
+              ) : null}
               {(bulkConfirm.postHandoverRejects || []).length > 0 ? (
                 <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: 'var(--fs-body)', fontWeight: 500, lineHeight: 1.5 }}>
                   <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />

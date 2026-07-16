@@ -23,11 +23,16 @@ from ..domains.assessments_runtime.job_authorization import (
     JobPermission,
     require_job_permission,
 )
+from ..domains.assessments_runtime.role_support import (
+    role_family_response,
+    roles_with_families,
+)
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
 from ..platform.database import get_db
+from ..schemas.role import RoleFamilyResponse
 
 logger = logging.getLogger("taali.agent_runtime.needs_input_routes")
 
@@ -107,6 +112,7 @@ class NeedsInputView(BaseModel):
     id: int
     role_id: int
     role_name: str | None = None
+    role_family: RoleFamilyResponse | None = None
     # Revision of the shared job configuration when this card was rendered.
     # A setting answer must echo it so an old card cannot overwrite a newer
     # edit made in another browser session.
@@ -142,6 +148,9 @@ class NeedsInputView(BaseModel):
             id=int(row.id),
             role_id=int(row.role_id),
             role_name=row.role.name if row.role is not None else None,
+            role_family=(
+                role_family_response(row.role) if row.role is not None else None
+            ),
             role_version=int(row.role.version or 1),
             kind=row.kind,
             prompt=row.prompt,
@@ -203,6 +212,14 @@ def list_needs_input(
         )
     rows = (
         q.order_by(AgentNeedsInput.created_at.desc()).limit(limit).all()
+    )
+    # Populate complete, org-scoped family references in one batch so every
+    # destructive CV-gap shortcut can name the full blast radius without an
+    # N+1 relationship walk.
+    roles_with_families(
+        db,
+        [int(row.role_id) for row in rows],
+        organization_id=int(user.organization_id),
     )
     return [NeedsInputView.from_row(r) for r in rows]
 

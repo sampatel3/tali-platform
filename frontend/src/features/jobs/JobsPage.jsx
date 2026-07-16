@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Globe,
   Inbox,
+  Link2,
   Pause,
   RefreshCw,
   Sparkles,
@@ -79,10 +80,6 @@ const StageCount = ({ value }) => <MotionNumber value={value} format={formatCoun
 
 const LIVE_EXTERNAL_STATES = new Set(['published', 'open', 'accepting candidates', 'accepting_candidates']);
 const NON_LIVE_EXTERNAL_STATES = new Set(['draft', 'archived', 'closed', 'filled', 'cancelled', 'inactive']);
-const ROLE_NAME_COLLATOR = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: 'base',
-});
 const roleCardFadeVariants = Object.freeze({
   hidden: fadeVariants.hidden,
   visible: ({ index = 0, stagger = false } = {}) => ({
@@ -139,13 +136,116 @@ const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role
 const roleJobStatus = (role) => String(role?.job_status || '').trim().toLowerCase();
 const hasNativeLifecycle = (role) => Object.prototype.hasOwnProperty.call(JOB_STATUS_META, roleJobStatus(role));
 
-const compareRolesAlphabetically = (left, right) => {
-  const nameComparison = ROLE_NAME_COLLATOR.compare(
-    String(left?.name || 'Untitled role'),
-    String(right?.name || 'Untitled role'),
-  );
-  if (nameComparison !== 0) return nameComparison;
-  return Number(left?.id || 0) - Number(right?.id || 0);
+const roleReferenceLabel = (reference) => {
+  const name = String(reference?.name || '').trim();
+  const id = Number(reference?.id || 0);
+  if (name && id) return `${name} #${id}`;
+  return null;
+};
+
+// Build one stable catalogue sequence while keeping related roles next to the
+// original whose candidate application they share. The API supplies complete
+// role-family references, while the relationship fields remain as a fallback
+// for older cached/mock payloads.
+export const buildRoleFamilyCatalogue = (roles = []) => {
+  const rolesById = new Map(roles.map((role) => [Number(role?.id), role]));
+  const groups = new Map();
+
+  roles.forEach((role, sourceIndex) => {
+    const payloadOwner = role?.role_family?.owner;
+    const ownerId = Number(
+      payloadOwner?.id
+      || (role?.role_kind === 'sister' ? role?.ats_owner_role_id : role?.id)
+      || role?.id,
+    );
+    const key = ownerId ? `family-${ownerId}` : `role-${role?.id ?? sourceIndex}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        ownerId,
+        firstIndex: sourceIndex,
+        visibleRoles: [],
+        references: new Map(),
+        declaredRelatedCount: 0,
+      });
+    }
+    const group = groups.get(key);
+    group.visibleRoles.push(role);
+    group.declaredRelatedCount = Math.max(
+      group.declaredRelatedCount,
+      Number(role?.sister_role_count || 0),
+    );
+
+    const loadedOwner = rolesById.get(ownerId);
+    const ownerReference = payloadOwner
+      || (loadedOwner ? { id: loadedOwner.id, name: loadedOwner.name } : null)
+      || (role?.ats_owner_role_id ? {
+        id: role.ats_owner_role_id,
+        name: role.ats_owner_role_name,
+      } : null)
+      || { id: role?.id, name: role?.name };
+    if (ownerReference?.id) group.references.set(Number(ownerReference.id), ownerReference);
+
+    (role?.role_family?.related || []).forEach((reference) => {
+      if (reference?.id) group.references.set(Number(reference.id), reference);
+    });
+    if (role?.id) group.references.set(Number(role.id), { id: role.id, name: role.name });
+  });
+
+  // A sister can carry the relationship even when an older owner payload does
+  // not. Merge those visible cards into the owner's group before ordering.
+  roles.forEach((role) => {
+    if (role?.role_kind !== 'sister' || !role?.ats_owner_role_id) return;
+    const ownerKey = `family-${Number(role.ats_owner_role_id)}`;
+    const sisterKey = [...groups.entries()].find(([, group]) => (
+      group.visibleRoles.some((item) => Number(item?.id) === Number(role.id))
+    ))?.[0];
+    if (!sisterKey || sisterKey === ownerKey || !groups.has(ownerKey)) return;
+    const ownerGroup = groups.get(ownerKey);
+    const sisterGroup = groups.get(sisterKey);
+    sisterGroup.visibleRoles.forEach((item) => {
+      if (!ownerGroup.visibleRoles.some((existing) => Number(existing?.id) === Number(item?.id))) {
+        ownerGroup.visibleRoles.push(item);
+      }
+    });
+    sisterGroup.references.forEach((reference, id) => ownerGroup.references.set(id, reference));
+    ownerGroup.firstIndex = Math.min(ownerGroup.firstIndex, sisterGroup.firstIndex);
+    groups.delete(sisterKey);
+  });
+
+  const orderedRoles = [];
+  const orderedGroups = [];
+  const familyByRoleId = new Map();
+  [...groups.values()]
+    .sort((left, right) => left.firstIndex - right.firstIndex)
+    .forEach((group) => {
+      const owner = group.references.get(group.ownerId)
+        || { id: group.ownerId, name: rolesById.get(group.ownerId)?.name };
+      const related = [...group.references.values()]
+        .filter((reference) => Number(reference?.id) !== group.ownerId);
+      const isLinked = related.length > 0
+        || group.declaredRelatedCount > 0
+        || group.visibleRoles.some((role) => role?.role_kind === 'sister');
+      const context = { owner, related, isLinked };
+      // The server owns the complete name/family ordering for both fetch
+      // phases. Preserve its sequence byte-for-byte so the background response
+      // can only append groups, never reshuffle already-painted cards.
+      const visible = [...group.visibleRoles];
+      const startIndex = orderedRoles.length;
+      visible.forEach((role) => {
+        orderedRoles.push(role);
+        familyByRoleId.set(Number(role?.id), context);
+      });
+      orderedGroups.push({
+        key: group.key,
+        ownerId: group.ownerId,
+        visibleRoles: visible,
+        context,
+        startIndex,
+      });
+    });
+
+  return { roles: orderedRoles, groups: orderedGroups, familyByRoleId };
 };
 
 const inactiveRoleStatus = (role) => {
@@ -385,10 +485,19 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const [gridStaggerDone, setGridStaggerDone] = useState(false);
   const gridRevealArmedRef = useRef(false);
   const gridRevealTimerRef = useRef(null);
+  const loadGenerationRef = useRef(0);
+  // A delayed full-list response must not overwrite an optimistic star change
+  // made while phase two was in flight. The epoch lets that response merge
+  // only the locally mutable field without freezing any server-owned data.
+  const roleMutationEpochRef = useRef(0);
+  const locallyMutatedRoleIdsRef = useRef(new Set());
 
   const loadJobsHub = useCallback(async () => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
     if (isShowcase) {
       const { JOBS_SHOWCASE, JOBS_SHOWCASE_ORG } = await import('../demo/productWalkthroughModels');
+      if (generation !== loadGenerationRef.current) return;
       setRoles(JOBS_SHOWCASE);
       setOrgData(JOBS_SHOWCASE_ORG);
       // Mirror the Home showcase org budget ($18 / $50) so the demo surfaces match.
@@ -404,15 +513,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     setLoading(true);
     setError('');
     try {
-      // Phase 1 — paint fast. Fetch only the first page of roles (the active /
-      // recently-synced head) alongside the org. The shared org-status store
+      // Phase 1 — paint fast. Fetch the first alphabetical page alongside the
+      // org. The shared org-status store
       // loads the KPI/header payload in parallel. On a large org the
       // full /roles pass aggregates over tens of thousands of applications and
       // serialises ~100 roles; scoping to a page makes first paint cheap.
       const [rolesRes, orgRes] = await Promise.all([
-        rolesApi.list({ include_pipeline_stats: true, limit: JOBS_FIRST_PAGE }),
+        rolesApi.list({ include_pipeline_stats: true, sort_by: 'name', limit: JOBS_FIRST_PAGE }),
         orgApi.get(),
       ]);
+      if (generation !== loadGenerationRef.current) return;
       const firstRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
       const nextOrgData = orgRes?.data || null;
       // Render the hub immediately from the first page + org. The
@@ -429,25 +539,51 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       // page stable as the rest append.
       if (firstRoles.length >= JOBS_FIRST_PAGE) {
         setRolesPartial(true);
+        const phaseMutationEpoch = roleMutationEpochRef.current;
         rolesApi
-          .list({ include_pipeline_stats: true })
+          .list({ include_pipeline_stats: true, sort_by: 'name' })
           .then((fullRes) => {
+            if (generation !== loadGenerationRef.current) return;
             const allRoles = Array.isArray(fullRes?.data) ? fullRes.data : null;
-            if (allRoles && allRoles.length) setRoles(allRoles);
+            if (allRoles && allRoles.length) {
+              setRoles((current) => {
+                if (roleMutationEpochRef.current === phaseMutationEpoch) return allRoles;
+                const currentById = new Map(
+                  current.map((item) => [Number(item?.id), item]),
+                );
+                return allRoles.map((serverRole) => {
+                  const localRole = currentById.get(Number(serverRole?.id));
+                  if (!localRole
+                    || !locallyMutatedRoleIdsRef.current.has(Number(serverRole?.id))) {
+                    return serverRole;
+                  }
+                  return {
+                    ...serverRole,
+                    starred_for_auto_sync: localRole.starred_for_auto_sync,
+                  };
+                });
+              });
+            }
           })
           .catch(() => { /* keep the first page if the full fetch fails */ })
-          .finally(() => setRolesPartial(false));
+          .finally(() => {
+            if (generation === loadGenerationRef.current) {
+              setRolesPartial(false);
+              locallyMutatedRoleIdsRef.current.clear();
+            }
+          });
       } else {
         setRolesPartial(false);
       }
     } catch {
+      if (generation !== loadGenerationRef.current) return;
       setRoles([]);
       setRolesPartial(false);
       setOrgData(null);
       setOrgKpis(null);
       setError('Failed to load jobs.');
     } finally {
-      setLoading(false);
+      if (generation === loadGenerationRef.current) setLoading(false);
     }
   }, [isShowcase, orgApi, rolesApi]);
 
@@ -640,23 +776,33 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       .filter((role) => clientFilter === 'all' || role?.client_id === clientFilter)
   ), [roles, sourceFilter, clientFilter]);
 
-  // Keep the working set stable and predictable. The API deliberately returns
-  // starred/recent roles first for a fast first page, but that makes cards jump
-  // around after syncs. Active roles are always A-Z in the catalogue; closed,
-  // draft, filled, and archived roles live in a separate collapsed group.
+  // The API returns a deterministic A-Z sequence for both the first page and
+  // the background completion. Preserve that server order instead of sorting
+  // two differently-sized client snapshots, which previously made cards jump.
+  const filteredRoleCatalogue = useMemo(
+    () => buildRoleFamilyCatalogue(filtered),
+    [filtered],
+  );
+
   const { activeRoles, inactiveRoles } = useMemo(() => {
     const nextActive = [];
     const nextInactive = [];
-    filtered.forEach((role) => {
+    filteredRoleCatalogue.roles.forEach((role) => {
       (isRoleDimmed(role) ? nextInactive : nextActive).push(role);
     });
-    nextActive.sort(compareRolesAlphabetically);
-    nextInactive.sort(compareRolesAlphabetically);
     return { activeRoles: nextActive, inactiveRoles: nextInactive };
-  }, [filtered]);
+  }, [filteredRoleCatalogue]);
+
+  // Related roles remain ordinary full-size cards, but sit together in one
+  // visual family and explicitly name every role/reference in the shared pool.
+  const activeRoleCatalogue = useMemo(
+    () => buildRoleFamilyCatalogue(activeRoles),
+    [activeRoles],
+  );
+  const catalogueActiveRoles = activeRoleCatalogue.roles;
 
   useEffect(() => {
-    if (gridStaggerDone || loading || error || activeRoles.length === 0) return;
+    if (gridStaggerDone || loading || error || catalogueActiveRoles.length === 0) return;
     if (reduced) {
       setGridStaggerDone(true);
       return;
@@ -664,7 +810,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     if (gridRevealArmedRef.current) return;
 
     gridRevealArmedRef.current = true;
-    const lastStaggeredIndex = Math.min(activeRoles.length, 8) - 1;
+    const lastStaggeredIndex = Math.min(catalogueActiveRoles.length, 8) - 1;
     const revealWindowMs = Math.ceil((
       cappedStaggerDelay(lastStaggeredIndex, 'dense')
       + MOTION_DURATION.reveal
@@ -673,7 +819,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       gridRevealTimerRef.current = null;
       setGridStaggerDone(true);
     }, revealWindowMs);
-  }, [activeRoles.length, error, gridStaggerDone, loading, reduced]);
+  }, [catalogueActiveRoles.length, error, gridStaggerDone, loading, reduced]);
 
   useEffect(() => () => {
     if (gridRevealTimerRef.current !== null) {
@@ -697,6 +843,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
 
   const handleToggleStar = useCallback(async (role) => {
     if (!role || isShowcase) return;
+    roleMutationEpochRef.current += 1;
+    locallyMutatedRoleIdsRef.current.add(Number(role.id));
     const isStarred = Boolean(role.starred_for_auto_sync);
     // Optimistic flip — reverted on error.
     setRoles((current) => current.map((item) => (
@@ -1070,9 +1218,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <div className="jobs-role-group-heading">
                 <div>
                   <h2 id="jobs-active-heading">Active roles</h2>
-                  <p>Stable alphabetical order</p>
+                  <p>Stable name order · linked roles stay together</p>
                 </div>
-                <span>{activeRoles.length} role{activeRoles.length === 1 ? '' : 's'} · A–Z</span>
+                <span>{activeRoles.length} role{activeRoles.length === 1 ? '' : 's'}</span>
               </div>
               {activeRoles.length > 0 ? (
                 <div
@@ -1081,8 +1229,24 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   style={{ position: 'relative' }}
                 >
                   <AnimatePresence initial={false} mode={reduced ? 'sync' : 'popLayout'}>
-                    {activeRoles.map((role, roleIndex) => {
+                    {activeRoleCatalogue.groups.map((familyGroup) => {
+                      const roleCards = familyGroup.visibleRoles.map((role, memberIndex) => {
+                  const roleIndex = familyGroup.startIndex + memberIndex;
                   const stageCounts = role?.stage_counts || {};
+                  const familyContext = familyGroup.context;
+                  const isRoleFamily = Boolean(familyContext?.isLinked);
+                  const isOriginalRole = Number(role?.id) === Number(familyContext?.owner?.id);
+                  const relatedLabels = (familyContext?.related || [])
+                    .map(roleReferenceLabel)
+                    .filter(Boolean);
+                  const ownerLabel = roleReferenceLabel(familyContext?.owner);
+                  const familyRelationship = isOriginalRole
+                    ? (relatedLabels.length > 0
+                      ? `Related: ${relatedLabels.join(', ')}`
+                      : 'Linked role details unavailable')
+                    : (ownerLabel
+                      ? `Original: ${ownerLabel}`
+                      : 'Linked role details unavailable');
                   const roleProvider = roleAtsProvider(role);
                   const roleProviderLabel = atsProviderLabel(roleProvider);
                   const workableRole = roleProvider === 'workable';
@@ -1122,7 +1286,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   return (
                     <m.div
                       key={role.id}
-                      layout={reduced || activeRoles.length > 40 ? false : 'position'}
+                      layout={reduced || catalogueActiveRoles.length > 40 ? false : 'position'}
                       custom={{ index: roleIndex, stagger: !gridStaggerDone }}
                       variants={reduced ? reducedRoleCardFadeVariants : roleCardFadeVariants}
                       initial={reduced ? false : 'hidden'}
@@ -1133,6 +1297,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       }}
                       data-motion-index={roleIndex}
                       className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''}`}
+                      data-role-family={isRoleFamily ? familyContext.owner?.id : undefined}
                       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                       role="button"
                       tabIndex={0}
@@ -1222,12 +1387,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           </div>
                           <div className="role-meta">
                             {[
-                              role?.role_kind === 'sister' && role?.ats_owner_role_name
-                                ? `Coupled to ${role.ats_owner_role_name} in ${roleProviderLabel}`
-                                : null,
-                              role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
-                                ? `${role.sister_role_count} related role${role.sister_role_count === 1 ? '' : 's'}`
-                                : null,
                               roleDept || null,
                               roleLoc || null,
                               lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
@@ -1280,6 +1439,19 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         )}
                       </div>
 
+                      {isRoleFamily ? (
+                        <div
+                          className="job-family-context"
+                          aria-label={`Shared candidate pool. ${familyRelationship}`}
+                        >
+                          <span className="job-family-context-label">
+                            <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
+                            Shared candidate pool
+                          </span>
+                          <span className="job-family-context-roles">{familyRelationship}</span>
+                        </div>
+                      ) : null}
+
                       <div className="job-stats">
                         {STAGES.map((stage) => {
                           const value = stage.key === 'invited'
@@ -1314,6 +1486,36 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       </div>
                     </m.div>
                   );
+                      });
+
+                      if (!familyGroup.context.isLinked) return roleCards[0] || null;
+                      const familyLabels = [
+                        familyGroup.context.owner,
+                        ...(familyGroup.context.related || []),
+                      ].map(roleReferenceLabel).filter(Boolean);
+                      const headingId = `job-family-${familyGroup.ownerId}`;
+                      return (
+                        <m.section
+                          key={familyGroup.key}
+                          layout={reduced ? false : 'position'}
+                          className="job-family-group"
+                          data-role-family={familyGroup.ownerId || undefined}
+                          aria-labelledby={headingId}
+                        >
+                          <header className="job-family-heading">
+                            <span id={headingId} className="job-family-heading-title">
+                              <Link2 size={14} strokeWidth={2.2} aria-hidden="true" />
+                              Shared candidate pool
+                            </span>
+                            <span className="job-family-heading-roles">
+                              {familyLabels.length > 1
+                                ? familyLabels.join(' · ')
+                                : 'Linked role details unavailable'}
+                            </span>
+                          </header>
+                          <div className="job-family-grid">{roleCards}</div>
+                        </m.section>
+                      );
                     })}
                   </AnimatePresence>
                 </div>
@@ -1355,6 +1557,20 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 >
                   <div className="jobs-inactive-grid">
                     {inactiveRoles.map((role) => {
+                      const familyContext = filteredRoleCatalogue.familyByRoleId.get(Number(role?.id));
+                      const isRoleFamily = Boolean(familyContext?.isLinked);
+                      const isOriginalRole = Number(role?.id) === Number(familyContext?.owner?.id);
+                      const relatedLabels = (familyContext?.related || [])
+                        .map(roleReferenceLabel)
+                        .filter(Boolean);
+                      const ownerLabel = roleReferenceLabel(familyContext?.owner);
+                      const familyRelationship = isOriginalRole
+                        ? (relatedLabels.length > 0
+                          ? `Related: ${relatedLabels.join(', ')}`
+                          : 'Linked role details unavailable')
+                        : (ownerLabel
+                          ? `Original: ${ownerLabel}`
+                          : 'Linked role details unavailable');
                       const roleProvider = roleAtsProvider(role);
                       const workableRole = roleProvider === 'workable';
                       const agentEnabled = Boolean(role?.agentic_mode_enabled);
@@ -1382,6 +1598,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           key={role.id}
                           layout={reduced ? false : 'position'}
                           className={`job-card is-compact not-live ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''}`}
+                          data-role-family={isRoleFamily ? familyContext.owner?.id : undefined}
                           onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                           role="button"
                           tabIndex={0}
@@ -1399,6 +1616,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                               <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
                               <span className={`job-status-badge is-${statusMeta.tone}`}>{statusMeta.label}</span>
                             </div>
+                            {isRoleFamily ? (
+                              <div className="job-card-compact-family">
+                                <Link2 size={11} strokeWidth={2.2} aria-hidden="true" />
+                                <span>Shared pool · {familyRelationship}</span>
+                              </div>
+                            ) : null}
                             <div className="role-meta">{compactMeta}</div>
                           </div>
                           <div className="job-card-compact-tail">

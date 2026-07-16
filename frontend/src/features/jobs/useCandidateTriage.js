@@ -378,6 +378,7 @@ export function useCandidateTriage({
     roleId: role?.id ?? null,
     isRelatedRole: role?.role_kind === 'sister',
     hasRelatedRoles: Number(role?.sister_role_count || 0) > 0,
+    roleFamily: role?.role_family ?? null,
     roleTasks,
     mode: 'inline',
     stageBusy,
@@ -396,6 +397,9 @@ export function useCandidateTriage({
   }), [
     triageApplication,
     role?.id,
+    role?.role_kind,
+    role?.sister_role_count,
+    role?.role_family,
     roleTasks,
     stageBusy,
     assessmentBusy,

@@ -2,6 +2,7 @@
 message, capture/apply, multimodal assembly, and a monkeypatched chat turn."""
 import io
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from app.llm.structured import StructuredResult
 from app.models import Organization, Role
@@ -28,11 +29,26 @@ from app.services.requisition_chat_service import (
 from app.services.requisition_intake_agent import (
     WeightedPriority,
 )
+from app.services.requisition_chat_grounding import _source_role_reference
 from app.services.requisition_template_service import (
     DEFAULT_REQUISITION_TEMPLATE,
     resolve_template,
 )
 from app.services.role_brief_service import create_brief, update_brief_fields
+
+
+def test_related_draft_reference_never_leaks_a_cross_org_role_name():
+    brief = SimpleNamespace(
+        organization_id=1,
+        source_role_id=99,
+        source_role=SimpleNamespace(
+            id=99,
+            organization_id=2,
+            name="Private Foreign Role",
+        ),
+    )
+
+    assert _source_role_reference(brief) == "the original ATS role"
 
 
 def test_record_answer_extracts_number_from_natural_language_chip(db):
@@ -910,9 +926,8 @@ def test_related_role_full_replacement_changes_only_draft_and_canonical_spec(
     assert result.value.assistant_reply.startswith(
         "I've replaced the role content in this related-role draft."
     )
-    assert "original ATS role and shared candidate pool are unchanged" in (
-        result.value.assistant_reply
-    )
+    assert f"Original Java Engineer #{source.id}" in result.value.assistant_reply
+    assert "shared candidate pool are unchanged" in result.value.assistant_reply
 
 
 def test_related_role_requirement_refinement_uses_semantic_operations(db, monkeypatch):
