@@ -5,12 +5,22 @@ import {
   isRelatedRoleBrief,
   isPublishedRequisition,
   isRequisitionBriefReadOnly,
+  isSupportedRequisitionAttachment,
+  REQUISITION_ATTACHMENT_ACCEPT,
+  REQUISITION_ATTACHMENT_MAX_BYTES,
   reloadRequisitionAfterRoleConflict,
   requisitionAtsBridgeModel,
   requisitionAtsProvider,
+  requisitionDisplayTitle,
+  requisitionGapLabels,
+  requisitionHeaderStatusLabel,
+  requisitionPublishBlockedMessage,
   requisitionRoleConflictMessage,
   requisitionStatusLabel,
+  validateRequisitionAttachments,
 } from './RequisitionsPage';
+
+const attachment = (name, type, size = 100) => ({ name, type, size });
 
 describe('requisition lifecycle labels', () => {
   it('maps backend submitted/applied states to recruiter-facing lifecycle language', () => {
@@ -39,6 +49,22 @@ describe('requisition lifecycle labels', () => {
     expect(isRelatedRoleBrief({ brief_kind: 'related_role', status: 'draft' })).toBe(true);
     expect(isRelatedRoleBrief({ source_role_id: 42, status: 'applied' })).toBe(true);
     expect(isRelatedRoleBrief({ brief_kind: 'standard', status: 'draft' })).toBe(false);
+  });
+
+  it('keeps related-role titles and the compact header status present', () => {
+    const relatedDraft = {
+      brief_kind: 'related_role',
+      source_role_id: 42,
+      source_role: { name: 'AI Engineer' },
+      title: '   ',
+      status: 'draft',
+    };
+
+    expect(requisitionDisplayTitle(relatedDraft)).toBe('AI Engineer · Related');
+    expect(requisitionHeaderStatusLabel(relatedDraft)).toBe('Related draft');
+    expect(requisitionHeaderStatusLabel({ ...relatedDraft, status: 'applied' })).toBe('Related role');
+    expect(requisitionDisplayTitle({ title: 'Platform AI Engineer' })).toBe('Platform AI Engineer');
+    expect(requisitionDisplayTitle({ title: '   ' })).toBe('Untitled job');
   });
 
   it('reloads the authoritative requisition after a stale linked write', async () => {
@@ -134,5 +160,75 @@ describe('requisition ATS bridge', () => {
     const unlinked = requisitionAtsBridgeModel(provider, null);
     expect(unlinked.linked).toBe(false);
     expect(unlinked.copyLabel).toBe(`Optional: copy for ${label}`);
+  });
+});
+
+describe('requisition attachment guardrails', () => {
+  it('offers DOCX and exact supported image formats without broad image/*', () => {
+    expect(REQUISITION_ATTACHMENT_ACCEPT).toContain('.docx');
+    expect(REQUISITION_ATTACHMENT_ACCEPT).toContain('.webp');
+    expect(REQUISITION_ATTACHMENT_ACCEPT).not.toContain('image/*');
+
+    expect(isSupportedRequisitionAttachment(attachment(
+      'job-spec.docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ))).toBe(true);
+    expect(isSupportedRequisitionAttachment(attachment('role.webp', 'image/webp'))).toBe(true);
+    expect(isSupportedRequisitionAttachment(attachment('role.svg', 'image/svg+xml'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('role.heic', 'image/heic'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('renamed.pdf', 'image/heic'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('renamed.jpg', 'application/pdf'))).toBe(false);
+    expect(isSupportedRequisitionAttachment(attachment('unknown.pdf', 'application/octet-stream'))).toBe(true);
+    expect(isSupportedRequisitionAttachment(attachment('transcript.srt', 'application/x-subrip'))).toBe(true);
+  });
+
+  it('matches the backend six-file and 15 MB per-file limits', () => {
+    const existing = Array.from({ length: 5 }, (_, index) => attachment(`note-${index}.txt`, 'text/plain'));
+    const tooMany = validateRequisitionAttachments(existing, [
+      attachment('six.txt', 'text/plain'),
+      attachment('seven.txt', 'text/plain'),
+    ]);
+    expect(tooMany.files).toEqual([]);
+    expect(tooMany.error).toContain('up to 6 files');
+
+    const oversized = validateRequisitionAttachments([], [
+      attachment('large.pdf', 'application/pdf', REQUISITION_ATTACHMENT_MAX_BYTES + 1),
+    ]);
+    expect(oversized.files).toEqual([]);
+    expect(oversized.error).toContain('large.pdf');
+    expect(oversized.error).toContain('15 MB');
+  });
+
+  it('rejects unsupported selections and preserves a valid selection as-is', () => {
+    const svg = attachment('diagram.svg', 'image/svg+xml');
+    expect(validateRequisitionAttachments([], [svg]).error).toContain('isn\'t supported');
+
+    const files = [
+      attachment('spec.pdf', 'application/pdf'),
+      attachment('notes.md', 'text/markdown'),
+    ];
+    expect(validateRequisitionAttachments([], files)).toEqual({ files, error: '' });
+  });
+});
+
+describe('requisition publish blockers', () => {
+  const gaps = [
+    { key: 'responsibilities', label: 'Key responsibilities' },
+    { key: 'success_profile', label: 'Success profile' },
+    { key: 'success_profile', label: 'Success profile' },
+  ];
+
+  it('uses exact, de-duplicated field labels with a key fallback', () => {
+    expect(requisitionGapLabels(gaps)).toEqual(['Key responsibilities', 'Success profile']);
+    expect(requisitionGapLabels([{ key: 'target_start_date' }])).toEqual(['Target Start Date']);
+  });
+
+  it('uses the correct action language for normal and related roles', () => {
+    expect(requisitionPublishBlockedMessage(gaps)).toBe(
+      'Complete the required Brief fields before you can publish this job: Key responsibilities, Success profile.',
+    );
+    expect(requisitionPublishBlockedMessage(gaps, { relatedRole: true })).toBe(
+      'Complete the required Brief fields before you can create and score candidates: Key responsibilities, Success profile.',
+    );
   });
 });

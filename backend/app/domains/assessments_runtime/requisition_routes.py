@@ -24,6 +24,7 @@ from ...models.user import User
 from ...platform.database import get_db
 from ...services.requisition_chat_service import (
     ChatAttachment,
+    compute_completeness,
     draft_responsibilities,
     next_gap_prompt,
     record_answer,
@@ -31,6 +32,7 @@ from ...services.requisition_chat_service import (
 )
 from ...services.requisition_intake_agent import run_intake_extraction
 from ...services.requisition_template_service import resolve_template
+from ...services.related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
 from ...services.role_brief_service import (
     submit_brief,
     update_brief_fields,
@@ -41,6 +43,7 @@ from .requisition_route_support import (
     AnswerRequisition,
     CreateRequisition,
     IntakeInput,
+    apply_manual_spec_state as _apply_manual_spec_state,
     apply_provider_changes_at_commit as _apply_provider_changes_at_commit,
     authorize_brief_mutation as _authorize_brief_mutation,
     clone_brief_for_provider_call as _clone_brief_for_provider_call,
@@ -144,6 +147,10 @@ async def chat_requisition(
     )
     baseline = _clone_brief_for_provider_call(brief)
     working_brief = _clone_brief_for_provider_call(brief)
+    # Authorized compatibility recovery for related-role drafts created before
+    # the cloned JD was persisted as chat source. Any resulting fields are part
+    # of the normal provider delta and are re-authorized under lock at commit.
+    source_pre_hydrated = hydrate_related_role_draft_from_saved_spec(working_brief)
 
     message = message or ""
     files = files or []
@@ -178,6 +185,7 @@ async def chat_requisition(
         message=message,
         attachments=attachments,
         template=template,
+        source_pre_hydrated=source_pre_hydrated,
     )
     if not result.ok:
         db.rollback()
@@ -307,6 +315,10 @@ def run_requisition_intake(
         raise HTTPException(
             status_code=502, detail="The intake assistant hit a problem. Please try again."
         )
+    org = _org(db, current_user.organization_id)
+    working_brief.completeness = compute_completeness(
+        working_brief, resolve_template(org)
+    )
     brief = _apply_provider_changes_at_commit(
         db,
         baseline=baseline,
@@ -317,7 +329,7 @@ def run_requisition_intake(
     )
     db.commit()
     db.refresh(brief)
-    return _serialize_brief(brief, _org(db, current_user.organization_id))
+    return _serialize_brief(brief, org)
 
 
 @router.post("/requisitions/{brief_id}/draft-responsibilities")
@@ -345,7 +357,12 @@ def draft_requisition_responsibilities(
     )
     baseline = _clone_brief_for_provider_call(brief)
     working_brief = _clone_brief_for_provider_call(brief)
-    result = draft_responsibilities(db, working_brief)
+    org = _org(db, current_user.organization_id)
+    result = draft_responsibilities(
+        db,
+        working_brief,
+        template=resolve_template(org),
+    )
     if not result.ok:
         db.rollback()
         logger.error("Responsibilities draft failed: %s", result.error_reason)
@@ -363,7 +380,7 @@ def draft_requisition_responsibilities(
     )
     db.commit()
     db.refresh(brief)
-    return _serialize_brief(brief, _org(db, current_user.organization_id))
+    return _serialize_brief(brief, org)
 
 
 @router.patch("/requisitions/{brief_id}")
@@ -396,19 +413,9 @@ def update_requisition(
         expected_version=expected_version,
     )
     brief = authorization.brief
-    # ``jd_override`` is the recruiter's hand-edited Job spec. It isn't a column —
-    # merge it into agent_state (preserving other keys like ``open_questions``);
-    # an empty string / null clears it. Pull it out so it doesn't flow through
-    # update_brief_fields as a column.
-    if "jd_override" in data:
-        raw = data.pop("jd_override")
-        override = (raw or "").strip() if isinstance(raw, str) else raw
-        state = dict(brief.agent_state or {})
-        if override:
-            state["jd_override"] = override
-        else:
-            state.pop("jd_override", None)
-        brief.agent_state = state
+    org = _org(db, current_user.organization_id)
+    template = resolve_template(org)
+    _apply_manual_spec_state(brief, data, template)
     # A client_id can only point at a client in the caller's org (no cross-org
     # assignment). ``None`` clears the link.
     if data.get("client_id") is not None:
@@ -423,6 +430,7 @@ def update_requisition(
         if client is None:
             raise HTTPException(status_code=404, detail="Client not found")
     update_brief_fields(db, brief, **data)
+    brief.completeness = compute_completeness(brief, template)
     _finalize_brief_mutation(
         db,
         authorization=authorization,
@@ -431,7 +439,7 @@ def update_requisition(
     )
     db.commit()
     db.refresh(brief)
-    return _serialize_brief(brief, _org(db, current_user.organization_id))
+    return _serialize_brief(brief, org)
 
 
 @router.post("/requisitions/{brief_id}/submit")

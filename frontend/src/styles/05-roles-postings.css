@@ -10,6 +10,165 @@
   box-shadow: 0 0 0 1px var(--purple-2), var(--shadow-md);
 }
 
+/* Jobs catalogue grouping. Active roles keep the full working card and a
+   stable A-Z order; terminal/draft roles move into a quieter disclosure so
+   the page opens focused on current hiring work. */
+.jobs-active-section {
+  min-width: 0;
+}
+
+.jobs-role-group-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 2px 2px 11px;
+}
+
+.jobs-role-group-heading h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-body-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.jobs-role-group-heading p,
+.jobs-role-group-heading > span {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  color: var(--mute);
+}
+
+.jobs-role-group-heading > span {
+  white-space: nowrap;
+}
+
+.jobs-active-empty {
+  min-height: 86px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--bg-2) 70%, transparent);
+  font-size: var(--fs-body);
+  color: var(--mute);
+}
+
+.jobs-inactive-section {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--bg-3) 58%, var(--bg-2));
+}
+
+.jobs-inactive-toggle {
+  width: 100%;
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.jobs-inactive-toggle:hover {
+  background: color-mix(in oklab, var(--ink) 3%, transparent);
+}
+
+.jobs-inactive-toggle:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--purple) 58%, transparent);
+  outline-offset: -3px;
+}
+
+.jobs-inactive-icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-2);
+  color: var(--mute);
+}
+
+.jobs-inactive-toggle-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.jobs-inactive-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-body-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+}
+
+.jobs-inactive-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-caption);
+  color: var(--mute);
+}
+
+.jobs-inactive-count {
+  min-width: 28px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  font-weight: 600;
+  color: var(--mute);
+}
+
+.jobs-inactive-action {
+  min-width: 30px;
+  font-size: var(--fs-caption);
+  color: var(--mute);
+  text-align: right;
+}
+
+.jobs-inactive-chevron {
+  flex: 0 0 auto;
+  color: var(--mute);
+  transition: transform 0.16s ease;
+}
+
+.jobs-inactive-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.jobs-inactive-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+}
+
 /* Agent status pill on the role card — the unified ON / PAUSED / OFF state. */
 .job-agent-pill {
   display: inline-flex;
@@ -70,13 +229,111 @@
   border: 1px solid var(--line);
 }
 
-/* Filled / closed / draft ATS postings are not actively recruiting, so they
-   stay de-emphasised through hover and focus but remain fully clickable. Agent
-   ON / PAUSED / OFF is independent and is communicated by its own pill. */
+/* Non-active postings keep the established grey lifecycle treatment inside
+   the compact disclosure, while remaining fully clickable. */
 .job-card.not-live {
   opacity: 0.55;
   filter: grayscale(0.3);
   box-shadow: none;
+}
+
+/* Compact terminal-role cards intentionally omit the six-stage funnel and
+   action footer. The muted surface preserves the established grey lifecycle
+   language without making the title hard to read. */
+.job-card.is-compact {
+  min-height: 104px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 13px;
+  background: color-mix(in oklab, var(--bg-2) 84%, var(--bg-3));
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.job-card.is-compact.not-live {
+  opacity: 0.78;
+  filter: grayscale(0.18);
+}
+
+.job-card.is-compact:hover {
+  opacity: 0.94;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.job-card-compact-copy {
+  min-width: 0;
+}
+
+.job-card-compact-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.job-card.is-compact .role-name {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-body-lg);
+  color: var(--ink-2);
+}
+
+.job-card-compact-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--mute);
+}
+
+.job-card.is-compact .role-meta {
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-caption);
+  color: var(--mute);
+}
+
+.job-card-compact-tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--mute);
+}
+
+.job-card-compact-tail .job-agent-pill {
+  height: 20px;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: var(--fs-eyebrow);
+}
+
+.job-card-compact-pipeline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-card-compact-tail .job-foot-open {
+  margin-left: auto;
+}
+
+@media (max-width: 1180px) {
+  .jobs-inactive-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 700px) {
+  .jobs-inactive-grid { grid-template-columns: minmax(0, 1fr); }
+  .jobs-inactive-action { display: none; }
+  .jobs-role-group-heading { align-items: flex-start; }
 }
 
 .job-star.is-locked {

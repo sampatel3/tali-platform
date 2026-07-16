@@ -47,6 +47,15 @@ const isEmptyValue = (v) => (
   || (Array.isArray(v) && v.length === 0)
 );
 
+// A list editor has both committed chips (`draft`) and the text still sitting in
+// its add-item input. Saving should never discard that pending text merely
+// because the recruiter clicked Save instead of pressing Enter / + first.
+export const listDraftWithPendingItem = (draft, pending) => {
+  const items = Array.isArray(draft) ? [...draft] : [];
+  const value = String(pending ?? '').trim();
+  return value ? [...items, value] : items;
+};
+
 // Render a non-editing value as readable text / chips.
 function ValueDisplay({ field, value }) {
   if (isEmptyValue(value)) return <span className="rq-field-value is-empty">—</span>;
@@ -159,13 +168,19 @@ function FieldEditor({ field, value, onCancel, onSave, saving }) {
       setDraft([...items, v]);
       setChipInput('');
     };
+    const commitList = () => onSave(normalizeDraft(
+      field,
+      listDraftWithPendingItem(items, chipInput),
+      structKeys,
+      value,
+    ));
     return (
       <div className="rq-edit">
         <div className="rq-chips">
           {items.map((it, i) => (
             <span key={i} className="rq-chip">
               {it}
-              <button type="button" className="rq-chip-x" aria-label="Remove" onClick={() => setDraft(items.filter((_, j) => j !== i))}>
+              <button type="button" className="rq-chip-x" aria-label={`Remove ${it}`} onClick={() => setDraft(items.filter((_, j) => j !== i))}>
                 <X size={11} />
               </button>
             </span>
@@ -176,12 +191,13 @@ function FieldEditor({ field, value, onCancel, onSave, saving }) {
             autoFocus
             value={chipInput}
             placeholder="Add an item, press Enter"
+            aria-label={`Add ${field.label} item`}
             onChange={(e) => setChipInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addChip(); } }}
           />
-          <button type="button" className="rq-btn-sm is-ghost" onClick={addChip}><Plus size={13} /></button>
+          <button type="button" className="rq-btn-sm is-ghost" aria-label="Add item" onClick={addChip}><Plus size={13} /></button>
         </div>
-        <EditActions onCancel={onCancel} onSave={commit} saving={saving} />
+        <EditActions onCancel={onCancel} onSave={commitList} saving={saving} />
       </div>
     );
   }
@@ -357,8 +373,8 @@ export function LiveBrief({ template, brief, onSave, savingKey, readOnly = false
     const custom = isCustomKey(field.key);
     // Column fields PATCH under their real column name (e.g. target_start_date
     // → target_start); custom fields PATCH under their template key.
-    await onSave(custom ? field.key : columnFor(field.key), value, custom);
-    setEditingKey(null);
+    const saved = await onSave(custom ? field.key : columnFor(field.key), value, custom);
+    if (saved !== false) setEditingKey(null);
   };
 
   return (
