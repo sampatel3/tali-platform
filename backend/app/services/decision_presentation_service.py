@@ -161,6 +161,9 @@ def build_decision_explanation(decision: Any, application: Any | None) -> dict[s
     score_text = _display_number(score)
     threshold_text = _display_number(threshold)
     factors: list[dict[str, Any]] = []
+    # True factor count before the 5-row display cap — chips derived from
+    # ``factors`` must still count all blockers ("7 must-haves missing").
+    factors_total = 0
     context: str | None = None
 
     if source == "policy" and fired_rule == "must_have_blocked":
@@ -174,6 +177,7 @@ def build_decision_explanation(decision: Any, application: Any | None) -> dict[s
         )
         factors = rows[:5]
         count = len(rows)
+        factors_total = count
         statuses = {_clean(row.get("status")).lower() for row in rows}
         if statuses and statuses <= {"missing", "not_met", "not met", "failed", "fail", "no"}:
             state = "marked missing"
@@ -251,6 +255,7 @@ def build_decision_explanation(decision: Any, application: Any | None) -> dict[s
         "summary": summary,
         "context": context,
         "factors": factors,
+        "factors_total": factors_total,
         "rule": fired_rule,
         "score_context": {
             "role_fit_score": score,

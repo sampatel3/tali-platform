@@ -97,6 +97,12 @@ const CONTROL_DECISION = {
     { label: 'AWS depth', score: 84 },
     { label: 'Verification habit', score: 90 },
   ],
+  // The redesigned recommendation kicker reads its source label + confidence chip
+  // from decision_explanation — give the glimpse the same shape production sends.
+  decision_explanation: {
+    source: 'agent',
+    summary: 'Advance recommended — distributed-systems depth and a proven verification habit clear the bar with room to spare.',
+  },
 };
 
 // ── ARTIFACT FRAME — light browser-chrome card the real components sit in. ──

@@ -24,6 +24,7 @@ import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { AgentLoop, Reveal } from '../../shared/motion';
 import { ScoreProvenance } from './ScoreProvenance';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from '../../shared/decisions/decisionActions';
+import { ruleChipText } from '../../shared/decisions/decisionPresentation';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 
 const fmt = (v) => (v == null || Number.isNaN(Number(v)) ? '—' : Math.round(Number(v)));
@@ -106,10 +107,10 @@ export const DecisionRail = ({
   // stale/old-engine warning still takes precedence in the tooltip.
   const isRejectDecision = isActionable && isRejectDecisionType(decision.decision_type);
   const primaryButtonTitle = primaryTitle ?? (isRejectDecision ? REJECT_CONSEQUENCE_COPY : undefined);
-  const confPct = decision?.confidence != null && !Number.isNaN(Number(decision.confidence))
-    ? Math.round(Number(decision.confidence) * 100)
-    : null;
   const decisionSource = decision?.decision_explanation?.source === 'policy' ? 'policy' : 'agent';
+  // The rule chip (score / must-have / confidence) rides the kicker; the full
+  // explanation lives in the report body, so the rail carries no prose.
+  const railChip = ruleChipText(decision);
   const outcome = resolvedOutcomeLabel(application);
   const isScored = application?.cv_match_score != null;
   const postHandover = isPostHandoverWorkableStage(application?.workable_stage);
@@ -208,8 +209,8 @@ export const DecisionRail = ({
               <div className="dr-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
             ) : null}
             <div className="dr-rec-kl">
-              <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> {decisionSource === 'policy' ? 'Policy recommends' : 'Agent recommends'}
-              {decisionSource === 'agent' && confPct != null ? ` · Confidence ${confPct}%` : ''}
+              <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> {decisionSource === 'policy' ? 'Policy' : 'Agent'}
+              {railChip ? <span className="dr-rec-chip">{railChip}</span> : null}
             </div>
           </div>
 

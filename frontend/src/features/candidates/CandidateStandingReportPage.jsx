@@ -54,6 +54,7 @@ const EvaluatePanel = React.lazy(() =>
   import('./CandidateAssessmentDetailPanels').then((m) => ({ default: m.EvaluatePanel })));
 import { AssessmentScorecard, readGradedRubricDimensions } from './AssessmentScorecard';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
+import { CandidateSummaryFallback } from './CandidateSummaryFallback';
 import { CvDocumentViewer } from './CvDocumentViewer';
 import { CvMatchReview } from './CvMatchReview';
 import { PrepQuestionCard } from './PrepQuestionCard';
@@ -1291,20 +1292,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ) : null}
 
               {/* (1) Why this verdict — recruiters with a live decision see the
-                  reasoning + deterministic trace; clients, the demo, and the
-                  un-decided tail fall back to the holistic summary so there's
-                  always a "why". The score ring, recommendation, flags and the
-                  demoted scores now live in the DecisionRail (left). */}
+                  report-density narrative (verdict + causal reason + summary);
+                  the decision explanation is recruiter-only, so it never renders
+                  on client/share views. The score ring, recommendation, flags and
+                  the demoted scores now live in the DecisionRail (left). */}
               {!isClientView && agentDecision ? (
                 <VerdictDetail decision={agentDecision} />
-              ) : reportModel?.recruiterSummaryText ? (
-                <section className="mc-why" aria-label="Candidate summary">
-                  <div className="mc-kicker">CANDIDATE SUMMARY</div>
-                  <p className="mc-why-reason">
-                    {normaliseDecisionText(reportModel.recruiterSummaryText)}
-                  </p>
-                </section>
               ) : null}
+
+              <CandidateSummaryFallback
+                agentDecision={agentDecision}
+                isClientView={isClientView}
+                recruiterSummaryText={reportModel?.recruiterSummaryText}
+              />
 
               {/* (1b) Flags — claims & signals the agent couldn't corroborate
                   (cv_match_details.claims_to_verify + score_summary.integrity),

@@ -2,7 +2,7 @@
 
 - **Audit period:** 2026-07-15–2026-07-16
 - **Repository:** `sampatel3/tali-platform`
-- **Integrated baseline:** `1beb3d4adae9165af63044124a3e2419a200926c` (merged PR #1040) plus the final `codex/platform-audit-remediation` branch
+- **Integrated baseline:** `95c44c9224cbbbbec1cd648f52850c8dc5aa9d82` (merged PR #1034, after PR #1040) plus the final `codex/platform-audit-remediation` branch
 - **Release status:** **not released and not deployed**
 
 ## Executive verdict
@@ -18,7 +18,7 @@ work, lost work, excess round trips, unnecessary provider calls, unbounded
 reads, and misleading feature states rather than deleting useful capability.
 
 This is not yet a release claim. The remediation has been reconciled through
-current `main` at PR #1040 and is prepared for a draft PR; it has not been
+current `main` at merged PR #1034 and is prepared for a draft PR; it has not been
 reviewed, approved, or deployed. The complete default non-production suites,
 separate retained-PostgreSQL contracts, and measured coverage are green
 locally. Supported-runtime CI, a production-shaped migration rehearsal, and
@@ -79,7 +79,8 @@ remain mandatory.
 
 The audit began at `0e562f2f` (`Redesign agent prompts and unblock task setup
 (#1026)`, 2026-07-15), moved onto `codex/platform-audit-remediation`, and was
-reconciled through current `main` at `1beb3d4a` / PR #1040. The branch is
+reconciled through current `main` at `95c44c92` / merged PR #1034, after the
+related-role integration in PR #1040. The branch is
 prepared for draft-PR publication and remains undeployed.
 
 Local verification used Python 3.12.3 and Node 24.7, while CI now pins the
@@ -148,8 +149,8 @@ Vitals run was performed.
 | Other upload paths read bodies before enforcing bounds. | Avoidable memory, parser, storage, and database work. | Document uploads read at most 5 MiB plus one byte before storage/extraction; prospect CSV reads at most 10 MiB plus one byte before decoding/parsing and retains the 500-row cap. | **Fixed locally; repository scan found only bounded direct reads.** |
 | Client-intake list/detail responses exposed more state than each consumer needed. | Larger payloads and leakage of internal hydration/source metadata. | The paged six-key list summary omits agent state; detail retains needed behavior while redacting internal source keys. Load-more preserves complete access. | **Fixed locally and privacy-tested.** |
 | Candidate upload UI advertised legacy `.doc` while the actual parser supported PDF/DOCX. | Users could select a file that could never work. | Picker and drag/drop now agree on PDF/DOCX and reject unsupported input with a visible error. | **Fixed locally; compatibility component and test retained.** |
-| Requisition chat/page growth was being handled inside oversized modules. | Higher change risk and repeated merge conflicts. | Attachment, grounding, capture-support, source, and upload responsibilities were extracted behind import-compatible re-exports. Service is 500 lines, capture 472, prompt 298, route 474, attachment service 300, and capture support 209; the page is 1,185 lines after reconciling PR #1040, below its 1,201 cap. | **Improved locally; size/architecture gates pass.** |
-| Related-role drafts could show a blank/stale header and cramped relationship card. | Sidebar and main panel could disagree or hide context. | PR #1040's title/status fallback and responsive header behavior were preserved in the modular architecture; grounded chat, related-role hydration, intent-aware specification updates, Jobs catalogue, and release safeguards from PRs #1027–#1040 were reconciled. | **Fixed locally; focused and full frontend suites pass.** |
+| Requisition chat/page growth was being handled inside oversized modules. | Higher change risk and repeated merge conflicts. | Attachment, grounding, capture-support, source, and upload responsibilities were extracted behind import-compatible re-exports. Service is 500 lines, capture 472, prompt 298, route 474, attachment service 300, and capture support 209; the page remains 1,185 lines after PR #1040 and is unchanged through PR #1034, below its 1,201 cap. | **Improved locally; size/architecture gates pass.** |
+| Related-role drafts could show a blank/stale header and cramped relationship card. | Sidebar and main panel could disagree or hide context. | PR #1040's title/status fallback and responsive header behavior were preserved in the modular architecture; grounded chat, related-role hydration, intent-aware specification updates, Jobs catalogue, and release safeguards from PRs #1027–#1040 were reconciled before the later PR #1034 decision-presentation integration. | **Fixed locally; focused and full frontend suites pass.** |
 
 ### Authentication, authorization, security, and error disclosure
 
@@ -231,6 +232,13 @@ Current frontend changes include:
   errors, plus consistent PDF/DOCX candidate picker and drop behavior;
 - related-role title/status fallback and a responsive relationship header that
   preserves the extracted page architecture;
+- concise decision reasons and candidate summaries that retain true factor
+  totals, display the fired rule's actual comparison operator, preserve policy
+  rationale on approved/overridden read-only cards, and expose unknown factors
+  as accessible “unverified” state rather than falsely marking them missing;
+- a 24-line candidate-summary fallback extraction that preserves behavior while
+  keeping `CandidateStandingReportPage` exactly at its unchanged 2,262-line
+  architecture ratchet;
 - scoped semantic graph/design tokens rather than hard-coded canvas colors;
 - assessment timer and hook-order corrections;
 - legal/privacy pages, developer API tests, marketing/showcase route tests, and
@@ -238,7 +246,7 @@ Current frontend changes include:
 
 The machine UI guard reports zero unresolved token or component-policy
 violations. Frontend architecture and motion-system gates pass. The final
-149-file/1,050-test gated run is warning-free: React scheduling warnings fell
+151-file/1,081-test gated run is warning-free: React scheduling warnings fell
 from 58 to zero, Router future-flag warnings from 30 to zero, and Motion
 diagnostics from two to zero. No console suppression was added, and CI now
 rejects those warning classes so the clean signal cannot silently regress.
@@ -470,11 +478,11 @@ Do not sum these figures; several sets overlap.
 | Frontend architecture + motion | Passed |
 | Frontend UI token/component policy | Passed with zero violations |
 | Frontend ESLint + TypeScript contract | Passed |
-| Full frontend gated Vitest | 149 files / 1,050 tests passed in 24.94 seconds; zero warning diagnostics (58 React scheduling, 30 Router, and 2 Motion diagnostics reduced to zero). CI preserves Vitest failures and independently fails on those warning classes. |
-| Frontend production build + bundle budget | 3,407 modules built in 1.31 seconds; 209 files, 5,723,777 bytes raw (5.4586 MiB), 2,644,047 bytes gzip level 9 (2.5216 MiB), and 6,361,088 allocated bytes (6.0664 MiB). Raw/gzip kB: main JS 73.23/20.05, CSS 231.54/40.19, graph 434.15/137.53, charts 412.99/106.66, Requisitions 45.63/13.15, Client Intake 12.64/4.28. |
+| Full frontend gated Vitest | 151 files / 1,081 tests passed in 34.30 seconds (34.70 seconds wall); zero warning diagnostics (58 React scheduling, 30 Router, and 2 Motion diagnostics reduced to zero). CI preserves Vitest failures and independently fails on those warning classes. |
+| Frontend production build + bundle budget | 3,409 modules built in 1.91 seconds (2.13 seconds wall); 209 files, 5,730,804 bytes raw (5.4653 MiB), 2,651,255 bytes gzip level 9 (2.5284 MiB), and 6,369,280 allocated bytes (6.0742 MiB). Raw/gzip bytes: main JS 73,238/19,957, CSS 231,546/39,670, graph 434,159/135,770, charts 412,998/105,280, Requisitions 45,633/13,057, Client Intake 12,641/4,298, and Candidate Standing Report 80,699/23,008. |
 | Frontend dependency audit | 0 vulnerabilities |
-| Complete default non-production backend pytest selection | 5,930 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 266.56-second branch-tip run. PostgreSQL behavior is covered separately below. |
-| Backend coverage | 75.982910% combined line-and-branch coverage: 56,592/71,296 lines (79.376122%) and 13,832/21,388 branches (64.671779%). The enforced combined floor remains 74%; ignored coverage data was preserved outside the worktree after measurement and was not committed. |
+| Complete default non-production backend pytest selection | 5,931 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 399.57-second final-integration-tree run. PostgreSQL behavior is covered separately below. |
+| Backend coverage | 75.983428% combined line-and-branch coverage (70,426/92,686 covered units): 56,594/71,298 lines (79.376701%) and 13,832/21,388 branches (64.671779%). The enforced combined floor remains 74%; the ignored originals were left intact and copies were preserved outside the worktree after measurement, with neither committed. |
 | Backend dependency integrity/audit | Both exact locks passed integrity/parity; runtime import and `pip-audit` verification found zero known vulnerabilities |
 | Static/syntax/diff checks | Full backend `compileall` and Ruff scopes passed; both workflow YAML files, all 34 tracked shell scripts, and 12 action pins passed their checks; tracked and staged diff checks were clean |
 | PostgreSQL migration/invariants | Fresh `000→179`, existing `178→179`, and `179→178→179` passed on retained PostgreSQL 16.14; raw autogenerate parity was zero twice, schema invariants passed, and orphan preflight failed before writes with revision/data unchanged |
@@ -483,8 +491,8 @@ Do not sum these figures; several sets overlap.
 
 ### Insufficient-test and governance gaps
 
-1. The final backend run measured 75.982910% combined line-and-branch coverage:
-   79.376122% line coverage and 64.671779% branch coverage. The combined ratchet
+1. The final backend run measured 75.983428% combined line-and-branch coverage:
+   79.376701% line coverage and 64.671779% branch coverage. The combined ratchet
    enforces 74%, up from 35%. Aggregate coverage is not sufficient assurance for
    every payment, authorization, provider-failure, worker, and hiring-decision
    branch; raise it incrementally with risk-focused tests without deleting hard
@@ -525,25 +533,32 @@ Do not sum these figures; several sets overlap.
 
 ## Outstanding Codex/GitHub review work
 
-The pre-publication 2026-07-16 snapshot contained 26 open PRs: 11 drafts and 15
-non-drafts. Thread-level inspection found 17 unresolved review threads: 12 on
-current diffs and 5 outdated. Ten remain actionable (5 P1 and 5 P2); seven are
-fixed or superseded but still unresolved (all five outdated threads plus both
-#852 threads). Publishing this audit's own draft PR will add one open PR to the
-then-current total; that mechanical change does not alter the snapshot below.
+The pre-publication 2026-07-16 snapshot contained 25 open PRs: 11 drafts and 14
+non-drafts. Those open PRs contain 16 unresolved review threads: 11 on current
+diffs and 5 outdated. Nine remain actionable (5 P1 and 4 P2); seven are fixed or
+superseded but still unresolved (all five outdated threads plus both #852
+threads). Merged PR #1034 has two additional current P2 threads, both fixed in
+this reconciliation without changing their source-thread status. Across all
+six PRs listed below, that is 18 unresolved threads: 13 current and 5 outdated.
+Publishing this audit's own draft PR would make 26 open PRs: 12 drafts and 14
+non-drafts; that mechanical change does not alter the snapshot below.
 
 | PR | Unresolved threads and current assessment |
 |---|---|
-| [#1034](https://github.com/sampatel3/tali-platform/pull/1034) | 1 current P2: blocked-must-have undercount on that branch. |
+| [#1034](https://github.com/sampatel3/tali-platform/pull/1034) | Merged; 2 current P2 threads: the fired-rule max/min operator direction and omitted policy rationale on approved/overridden read-only cards. Both are fixed and regression-tested in this reconciliation; the source threads remain unresolved pending branch-specific review authority. |
 | [#876](https://github.com/sampatel3/tali-platform/pull/876) | 2 current: reject-sweep validation P1 and sweep-offer reuse P2. |
 | [#855](https://github.com/sampatel3/tali-platform/pull/855) | 1 current P2: spec-derived criteria drag gating. |
 | [#852](https://github.com/sampatel3/tali-platform/pull/852) | 2 unresolved but superseded: current intent-aware rehydration/rescreen behavior covers specification edits, and this tree has no tracked `node_modules` symlink. |
 | [#638](https://github.com/sampatel3/tali-platform/pull/638) | 5 total: 3 current P1, 1 current P2, and 1 outdated workflow/vendor-drift thread. |
 | [#557](https://github.com/sampatel3/tali-platform/pull/557) | 6 total: 1 current P1, 1 current P2, and 4 outdated migration/cutover threads. |
 
-The current audit/main applicability check found no review-thread path
-intersection and no unresolved thread exposing an unfixed current-tree path.
-That does not resolve feedback on the affected PR branches. Do not bulk-comment,
+Four open-PR threads reference three paths also modified here, but their
+branch-only features are absent or superseded: PR #876's pending-reject sweep
+does not exist in this tree, PR #855's `CriteriaEditor` has no drag
+implementation, and PR #852's specification-edit behavior is superseded. No
+reviewed thread exposes an unfixed current-tree behavior. The two merged-#1034
+threads intersect current files and are fixed locally here. That does not
+resolve feedback on the affected PR branches. Do not bulk-comment,
 resolve, or merge those threads without branch-specific review authority. For
 each branch, assign an owner and update it, extract a still-needed small change,
 or close it explicitly as superseded with replacement evidence. This audit's
@@ -580,15 +595,17 @@ less useful.
 
 ### Local verification results
 
-Complete default non-production backend suite: **5,930 passed, 8 skipped, 16
+Complete default non-production backend suite: **5,931 passed, 8 skipped, 16
 live production-smoke tests deselected, zero failures, and zero warnings** in
-one uninterrupted branch-tip run (266.56 seconds). Live production smoke was
-not run from this unreviewed tree.
+one uninterrupted final-integration-tree run (399.57 seconds). Live production
+smoke was not run from this unreviewed tree.
 
-Backend coverage: **75.982910% combined line-and-branch** — 56,592/71,296 lines
-(79.376122%) and 13,832/21,388 branches (64.671779%). The enforced combined
-floor remains **74%** (raised from 35%) and passed. Ignored coverage data was
-preserved outside the worktree after measurement and was not committed.
+Backend coverage: **75.983428% combined line-and-branch** — 70,426/92,686
+covered units, comprising 56,594/71,298 lines
+(79.376701%) and 13,832/21,388 branches (64.671779%). The enforced combined
+floor remains **74%** (raised from 35%) and passed. The ignored originals were
+left intact and copies were preserved outside the worktree after measurement;
+neither was committed.
 
 PostgreSQL/database-release evidence: **78 passed, 4 skipped** on retained
 PostgreSQL 16.14. Fresh `000→179`, existing `178→179`, and `179→178→179`
