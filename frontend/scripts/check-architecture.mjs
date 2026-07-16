@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const projectRoot = path.resolve(process.cwd());
 const srcRoot = path.join(projectRoot, 'src');
-const appShellPath = path.join(srcRoot, 'App.jsx');
+const appShellPath = path.join(srcRoot, 'AppShell.jsx');
 const featureRoot = path.join(srcRoot, 'features');
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx']);
@@ -11,31 +11,25 @@ const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx']);
 // dodge the cap by renaming its body to `…PageContent.jsx` behind a one-line
 // `…Page.jsx` re-export (which is exactly how CandidatesDirectory grew).
 const PAGE_FILE_PATTERN = /Page(Content)?\.(js|jsx|ts|tsx)$/;
-// Hard cap on `*Page.jsx` line counts. The v3 Mission Control redesign
-// pushed several pages well past the original 500-line gate because the
-// canvas hero / dimension grids / evidence cards live inline. The cap
-// here accommodates the redesign reality (RecruiterSettingsPage +
-// CandidateStandingReportPage still sit in the 2k–2.5k range). The gate's
-// job is to catch *new* bloat past the post-redesign baseline.
-//
-// History: nudged 2625→2650 for the agent-settings save/toggle race fixes
-// in JobPipelinePage; 2650→2660 for the post-#278 baseline (global
-// interview anchor / dynamic threshold UX); then bumped 2660→2700 when
-// PRs #538 + #541 (archived-Workable-job handling) both edited
-// JobPipelinePage off the same parent and landed it at 2691 — the bump
-// instead of a split left main CI red. JobPipelinePage has now been split
-// (the job-spec parser/formatter → jobSpecFormatting.jsx and the Agent
-// settings tab → RoleAgentSettingsTab.jsx), dropping it to ~1.7k, so the
-// cap is restored to 2660 to keep the gate meaningful. Bumped 2660→2680
-// after #734 (integrity-aware scoring) + #737 grew CandidateStandingReportPage
-// to ~2679 inline, then 2680→2685 for the #741 cv_match schema shim
-// (criterion_* → requirement backfill, fixing the ErrorBoundary crash on the
-// newer requirement-row field names) — the same bump-now-split-later as
-// #538/#541 above. CandidateStandingReportPage has now been split (the CV
-// document viewer → CvDocumentViewer.jsx, the CV-match readout →
-// CvMatchReview.jsx, and the interview-prep card → PrepQuestionCard.jsx),
-// dropping it to ~1.9k, so the cap is restored to 2660.
-const MAX_PAGE_LINES = 2660;
+// New pages and the eventual split children of legacy pages must stay small.
+// Existing oversized pages are frozen at an exact baseline below. Requiring
+// the baseline to be lowered whenever a file shrinks makes this a ratchet:
+// a later change cannot quietly spend the lines that a refactor removed.
+const MAX_NEW_PAGE_LINES = 500;
+const APP_SHELL_BASELINE = 1173;
+const OVERSIZED_PAGE_BASELINES = new Map([
+  ['src/features/assessment_runtime/AssessmentPageContent.jsx', 1152],
+  ['src/features/candidates/CandidateStandingReportPage.jsx', 2263],
+  ['src/features/clientintake/ClientIntakePage.jsx', 630],
+  ['src/features/dashboard/DashboardPageContent.jsx', 650],
+  ['src/features/dev/ButtonShowcasePage.jsx', 685],
+  ['src/features/home/HomePage.jsx', 786],
+  ['src/features/jobs/JobPipelinePage.jsx', 2666],
+  ['src/features/jobs/JobsPage.jsx', 1260],
+  ['src/features/requisitions/RequisitionsPage.jsx', 1281],
+  ['src/features/settings/RecruiterSettingsPage.jsx', 2496],
+  ['src/features/settings/RequisitionTemplatePage.jsx', 537],
+]);
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/g,
   /import\s*\(\s*['"][^'"]*lib\/api(?:\.js)?['"]\s*\)/g,
@@ -71,31 +65,57 @@ walk(srcRoot);
 if (fs.existsSync(appShellPath)) {
   const appContent = fs.readFileSync(appShellPath, 'utf8');
   const appLines = appContent.split('\n').length;
-  if (appLines > 500) {
-    violations.push(`App shell too large: src/App.jsx has ${appLines} lines (max 500).`);
+  if (appLines !== APP_SHELL_BASELINE) {
+    const direction = appLines > APP_SHELL_BASELINE ? 'grew' : 'shrunk';
+    violations.push(
+      `App shell ${direction}: src/AppShell.jsx has ${appLines} lines ` +
+      `(ratchet baseline ${APP_SHELL_BASELINE}). Split growth; lower the baseline after shrinkage.`
+    );
   }
-  if (appContent.includes('location.hash') || appContent.includes('window.location.hash')) {
-    violations.push('Hash-route compatibility fallback detected in src/App.jsx.');
+  // Anchors and preserving a hash in a post-login `next` URL are legitimate.
+  // These patterns identify an actual second hash-based router.
+  if (
+    appContent.includes('<HashRouter')
+    || appContent.includes("addEventListener('hashchange'")
+    || appContent.includes('addEventListener("hashchange"')
+  ) {
+    violations.push('Hash-route compatibility router detected in src/AppShell.jsx.');
   }
 }
 
 if (fs.existsSync(featureRoot)) {
-  const featureEntries = fs.readdirSync(featureRoot, { withFileTypes: true });
-  for (const entry of featureEntries) {
-    if (!entry.isDirectory()) continue;
-    const featureDir = path.join(featureRoot, entry.name);
-    const files = fs.readdirSync(featureDir, { withFileTypes: true });
+  const checkPages = (directory) => {
+    const files = fs.readdirSync(directory, { withFileTypes: true });
     for (const file of files) {
-      if (!file.isFile()) continue;
-      if (!PAGE_FILE_PATTERN.test(file.name)) continue;
-      const fullPath = path.join(featureDir, file.name);
+      const fullPath = path.join(directory, file.name);
+      if (file.isDirectory()) {
+        checkPages(fullPath);
+        continue;
+      }
+      if (!file.isFile() || !PAGE_FILE_PATTERN.test(file.name)) continue;
       const lines = fs.readFileSync(fullPath, 'utf8').split('\n').length;
-      if (lines > MAX_PAGE_LINES) {
+      const relativePath = path.relative(projectRoot, fullPath);
+      const baseline = OVERSIZED_PAGE_BASELINES.get(relativePath);
+      if (baseline !== undefined && lines !== baseline) {
+        const direction = lines > baseline ? 'grew' : 'shrunk';
         violations.push(
-          `Feature page too large: ${path.relative(projectRoot, fullPath)} has ${lines} lines (max ${MAX_PAGE_LINES}).`
+          `Legacy page ${direction}: ${relativePath} has ${lines} lines ` +
+          `(ratchet baseline ${baseline}). Split growth; lower the baseline after shrinkage.`
+        );
+      } else if (baseline === undefined && lines > MAX_NEW_PAGE_LINES) {
+        violations.push(
+          `Feature page too large: ${relativePath} has ${lines} lines ` +
+          `(max ${MAX_NEW_PAGE_LINES}; add no new oversized-page baselines).`
         );
       }
     }
+  };
+  checkPages(featureRoot);
+}
+
+for (const [relativePath] of OVERSIZED_PAGE_BASELINES) {
+  if (!fs.existsSync(path.join(projectRoot, relativePath))) {
+    violations.push(`Stale oversized-page baseline for missing file: ${relativePath}.`);
   }
 }
 
