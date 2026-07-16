@@ -4,9 +4,10 @@
 
 ---
 
-## What’s Implemented and Deployed
+## Implementation and release status
 
-The core platform is implemented and deployable end-to-end. Active execution
+The core platform is implemented and deployable end-to-end. The audit branch is
+locally verified but has not been deployed. Active execution
 priorities belong in the repository's issue/PR workflow; `RALPH_TASK.md` is a
 historical record of the completed Jobs-first redesign, not a current backlog.
 
@@ -45,16 +46,26 @@ historical record of the completed Jobs-first redesign, not a current backlog.
   waits for PostgreSQL, applies `alembic upgrade head`, then starts uvicorn.
   PostgreSQL and Redis are Railway add-ons; repository deployment wrappers select
   and validate web plus the general and scoring workers.
+- **Dependency locks:** CI installs the 157-pin/3,237-hash development-inclusive
+  `requirements-lock.txt` (input digest
+  `4b686ff622e8415dc009908a9e7318b0f359303eb9e21b1d233e7c341ff05c09`).
+  Production validates and installs only the 125-pin/2,959-hash
+  `requirements-runtime-lock.txt` (input digest
+  `64f9f4dd6b03651f423123b28f2549f51b10e147f8e9f6858789a954c61ddfef`)
+  into `/opt/venv` with `--require-hashes --no-deps` before import and audit
+  checks. This keeps test tooling out of runtime without removing capability.
 - **Frontend:** Vercel; build from `frontend/` with `npm run build`; `VITE_API_URL` points to backend.
 - **Docs:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Vercel + Railway only), [docs/ENV_SETUP.md](docs/ENV_SETUP.md).
 
-**Live (current):**
-- **Frontend:** https://www.taali.ai — `VITE_API_URL` in Vercel points to the Railway
-  backend. `VITE_PUBLIC_API_BASE_URL` optionally controls the full separately
-  advertised developer API base (including `/public/v1`).
-- **Backend:** Railway web plus distinct general and scoring workers; public
-  health endpoints are linked from the deployment guide.
-- **Release:** Deploy the backend and frontend from the same clean `main` commit
+**Production endpoints and release contract:**
+- **Frontend:** https://www.taali.ai rendered cleanly in the final read-only
+  1280px desktop check: one H1 and one main landmark after load, no horizontal
+  overflow, and no console warnings or errors. No audit assets were deployed.
+- **Backend:** the legacy `https://api.taali.ai/health` navigation did not
+  complete during the final check, so production backend readiness and worker
+  topology were not verified. Use the deployment guide's redacted and
+  authenticated health gates rather than inferring health from local tests.
+- **Release:** deploy backend and frontend from the same clean `main` commit
   with `./scripts/deploy_production.sh`; do not bypass its coordinated migration,
   worker, readiness, capability, and Vercel gates with direct provider commands.
 
@@ -76,6 +87,9 @@ taali-platform/
 │   ├── alembic/             # Migrations
 │   ├── Procfile
 │   ├── railway.json
+│   ├── requirements-lock.txt          # development-inclusive hashed lock
+│   ├── requirements-runtime-lock.txt  # production-only hashed lock
+│   ├── runtime.txt                    # exact Python runtime contract
 │   └── requirements.txt
 ├── frontend/                # Vite + React
 │   ├── src/
@@ -96,10 +110,10 @@ taali-platform/
 
 ---
 
-## Quick start (deployed setup)
+## Quick start (production setup)
 
 1. **Backend + two workers (Railway)**
-   - New project; add PostgreSQL and Redis, plus web, general-worker, and scoring-worker services from `backend/`.
+   - New project; add PostgreSQL and Redis, plus web, general-worker, and scoring-worker services from the repository root. The coordinated wrapper supplies each service's root-safe build and start contract.
    - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, independently generated high-entropy `SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, and `ADMIN_SECRET` values, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `RESEND_API_KEY`, real GitHub credentials, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
    - Merge through `main`, fetch it locally, and run `./scripts/deploy_production.sh` from that exact clean commit. The release guard refuses dirty, stale, and feature-branch worktrees, verifies the migration head, chat design system, provider identities, exact linked projects, and required services, then attests Railway and Vercel to the kickoff SHA even if `main` advances mid-rollout. Before changing variables and again immediately before migration, it verifies that every production revision is present and reachable in that release's Alembic graph. The Railway phase pins and validates the agent/ATS policy on all three services, runs the locked production migration bootstrap, deploys general `celery` + Beat, deploys scoring-only without Beat, deploys web from the repository root, then polls `/ready` and the authenticated capability gate.
    - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final gate validates web, both queue canaries, and live Anthropic/E2B/Resend/GitHub capability for the default assessment path.
@@ -133,7 +147,7 @@ taali-platform/
 - **Candidate detail actions:** Additional one-off recruiter exports/actions can still be added, but they are not part of the autonomous requisition funnel.
 - **Workable stage mapping:** Candidate import, scoring, invite delivery, and the configured assessment-stage/note handoff are automatic for linked agent roles. Configure the organization's interview-stage target once to allow autonomous Workable advancement; without it, the local pipeline advances and the external move remains a safe human handoff.
 - **Stripe webhooks:** `checkout.session.completed` is the sole credit-grant event. Additional events may be handled for observability, but payment-intent events must never grant credits independently.
-- **Frontend test quality:** the audited 142-file/1,008-test suite is warning-free; CI rejects React scheduling, router-future, Motion reduced-preference, and generic warning regressions instead of suppressing them.
+- **Frontend test quality:** the audited 149-file/1,050-test suite is warning-free; CI rejects React scheduling, router-future, Motion reduced-preference, and generic warning regressions instead of suppressing them.
 - **Monitoring:** Structured JSON logs and readiness checks are built in. External error tracking, independent uptime checks, and managed database backups remain recommended production operations.
 
 ---
@@ -142,11 +156,11 @@ taali-platform/
 
 | Layer      | Technology |
 |-----------|------------|
-| Backend   | FastAPI, Python 3.11+, PostgreSQL 16, SQLAlchemy 2, Alembic, Redis, Celery, JWT |
+| Backend   | FastAPI, Python 3.11.9, PostgreSQL 16, SQLAlchemy 2, Alembic, Redis, Celery, JWT |
 | Frontend  | Vite 8, React 18, Tailwind CSS, Monaco Editor, react-router-dom routing |
 | Execution | E2B Code Interpreter SDK |
-| AI        | Anthropic Claude (pinned Haiku 4.5 snapshot by default; explicit snapshot overrides only) |
-| ATS       | Workable (OAuth + webhooks) |
+| AI        | Anthropic Claude (pinned snapshots; ordinary requisition chat uses the configured chat/Haiku path, while current-role/spec/document-sensitive work uses the configured primary model) |
+| ATS       | Workable (OAuth + scheduled/manual sync; inbound webhook reserved/501) |
 | Payments  | Stripe (Checkout, usage) |
 | Email     | Resend |
 | Hosting   | Backend: Railway; Frontend: Vercel |

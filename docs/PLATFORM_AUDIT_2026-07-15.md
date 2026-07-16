@@ -1,8 +1,8 @@
 # Taali platform audit and remediation report
 
-- **Audit date:** 2026-07-15
+- **Audit period:** 2026-07-15–2026-07-16
 - **Repository:** `sampatel3/tali-platform`
-- **Audited revision:** `0e562f2f44b0608de17490fc2c580c68645a3287` plus the current local remediation worktree
+- **Integrated baseline:** `1beb3d4adae9165af63044124a3e2419a200926c` (merged PR #1040) plus the final `codex/platform-audit-remediation` branch
 - **Release status:** **not released and not deployed**
 
 ## Executive verdict
@@ -17,12 +17,12 @@ preserve or improve the result delivered to the user: they remove duplicate
 work, lost work, excess round trips, unnecessary provider calls, unbounded
 reads, and misleading feature states rather than deleting useful capability.
 
-This is not yet a release claim. The remediation is packaged on the local
-`codex/platform-audit-remediation` branch in seven dependency-ordered commits,
-but it has not been pushed, reviewed, or deployed. The complete default non-production suites,
-separate PostgreSQL contracts, and measured coverage are green locally;
-supported-runtime CI, a production-shaped migration rehearsal, and a
-reviewable PR state remain release-candidate gates. External configuration,
+This is not yet a release claim. The remediation has been reconciled through
+current `main` at PR #1040 and is prepared for a draft PR; it has not been
+reviewed, approved, or deployed. The complete default non-production suites,
+separate retained-PostgreSQL contracts, and measured coverage are green
+locally. Supported-runtime CI, a production-shaped migration rehearsal, and
+review approval remain release-candidate gates. External configuration,
 controlled deployment, and post-deploy smoke are later production-release
 validation. Product/legal
 decisions and evidence-volume questions are also kept separate from code
@@ -69,15 +69,18 @@ The review covered backend application and worker paths, migrations, frontend
 routes and feature modules, CI and deployment scripts, environment contracts,
 tests, architecture ratchets, product/deployment/audit documentation, and the
 open GitHub pull-request queue. The initial frozen snapshot included 22 paths
-that had been removed. The final integration preserves every one as a bounded
-compatibility artifact, so the branch has zero deleted paths versus its current
-base. That breadth is one reason the supported-runtime and reviewable-PR
-release gates remain mandatory.
+that had been removed; the final integration preserves every one as a bounded
+compatibility artifact. When upstream work later removed two Sister Role dialog
+paths that remained in the original audit branch, those were restored unchanged
+as well. The branch has zero deleted paths versus both current `main` and the
+original audit branch; no tracked/source file was deleted to improve a metric.
+That breadth is one reason the supported-runtime and reviewable-PR release gates
+remain mandatory.
 
-The audited base was detached at `0e562f2f` (`Redesign agent prompts and unblock
-task setup (#1026)`, 2026-07-15). The remediation now lives on local branch
-`codex/platform-audit-remediation`; there is no pull request and no push has
-been made.
+The audit began at `0e562f2f` (`Redesign agent prompts and unblock task setup
+(#1026)`, 2026-07-15), moved onto `codex/platform-audit-remediation`, and was
+reconciled through current `main` at `1beb3d4a` / PR #1040. The branch is
+prepared for draft-PR publication and remains undeployed.
 
 Local verification used Python 3.12.3 and Node 24.7, while CI now pins the
 supported runtime contract to Python 3.11.9 and Node 22.23.1. The backend
@@ -98,14 +101,16 @@ route/SEO/UI tests, build and bundle policy, frontend architecture checks, and
 the in-app browser. Router tests cover `/`, `/demo`, `/showcase/jobs`,
 `/developers`, `/blog`, the article, legal pages, lead/thanks routes, and the
 404; the production build emitted the expected assets and its SPA-fallback
-contract passed. Desktop and 390×844 mobile browser checks found one H1 on each
-reviewed page, no horizontal overflow, working mobile navigation, and no
-browser-console errors. The deployed frontend/backend were also inspected and
-are still on the older release: production advertises the retired
-`api.taali.ai` endpoint, exposes the older detailed health contract, and reports
-degraded readiness because worker/scoring heartbeats are missing. Nothing was
-deployed by this audit. No physical-device, assistive-technology/screen-reader,
-automated accessibility, or field/Core Web Vitals run was performed.
+contract passed. Desktop and 390×844 local mobile browser checks found one H1
+on each reviewed page, no horizontal overflow, working mobile navigation, and
+no browser-console errors. The final read-only production homepage check at
+1280px also found one H1 and one main landmark after load, no horizontal
+overflow, and no console warnings/errors. Production mobile was not freshly
+repeated. Navigation to the legacy `api.taali.ai/health` endpoint did not
+complete, so backend readiness and queue heartbeats were not verified. Nothing
+was deployed by this audit. No physical-device,
+assistive-technology/screen-reader, automated accessibility, or field/Core Web
+Vitals run was performed.
 
 ## Remediation ledger: bugs and non-functioning behavior
 
@@ -131,6 +136,20 @@ automated accessibility, or field/Core Web Vitals run was performed.
 | Copy/paste overlap could hard-cap by default and tokenization skipped non-Latin text. | False-positive or language-dependent harm. | Detection is always recorded but defaults to a neutral recruiter flag; the legacy cap is opt-in through `FRAUD_COPY_PASTE_ACTION=cap`. Tokenization is Unicode letter/number aware. | **Fixed locally.** |
 | Full-score engines applied different integrity handling and prompt-cache layouts. | Inconsistent score behavior and unnecessary model input cost. | Both engines apply the bounded timeline/unverified-claim layer. Both holistic calls use the same one-hour ephemeral cache layout for stable role context. | **Fixed locally and focused-request-tested.** |
 | A new score request could trigger redundant standing work. | Repeated provider cost and queue pressure. | Event-driven enqueue, activation bootstrap, a bounded five-minute backlog sweep, duplicate-job guards, credit/budget gates, and a 50-item per-tick auto-score cap drain work steadily without buying extra agent reasoning cycles. | **Fixed locally.** |
+
+### Requisition chat, uploads, and related roles
+
+| Finding | Impact | Local remediation | Status |
+|---|---|---|---|
+| Ordinary requisition turns escalated to the primary/Sonnet model on every second turn. | Higher latency and model spend without a corresponding quality need. | Normal turns remain on the configured chat/Haiku path; escalation is limited to related-role, current-spec, or document-sensitive intent. | **Fixed locally; routing regression expects Haiku, Haiku, then primary model only for the sensitive turn.** |
+| A newly uploaded source could appear in both user and system content. | Duplicate input tokens and ambiguous prompt ownership. | The originating turn carries the source once in user content; later turns hydrate the durable source once in system context. | **Fixed locally and occurrence-tested.** |
+| Corrupt or unreadable attachment-only turns still constructed a provider request. | Paid no-op calls and inconsistent failure behavior. | They now return the same deterministic safe transcript/reply without constructing or invoking a provider; usable text or a readable attachment still calls normally. | **Fixed locally and tested.** |
+| Recruiter and public intake uploads relied on incomplete client checks. | MIME spoofing, oversized reads, inconsistent errors, and wasted extraction/provider work. | Both server routes share an exact extension allowlist, maximum six files and 15 MiB each, MIME/extension coherence, bounded reads, and JPEG/PNG/GIF/WebP signature checks. Both UIs share the same picker/drop policy and surface safe 413/415/422 messages. | **Fixed locally and route/UI-tested.** |
+| Other upload paths read bodies before enforcing bounds. | Avoidable memory, parser, storage, and database work. | Document uploads read at most 5 MiB plus one byte before storage/extraction; prospect CSV reads at most 10 MiB plus one byte before decoding/parsing and retains the 500-row cap. | **Fixed locally; repository scan found only bounded direct reads.** |
+| Client-intake list/detail responses exposed more state than each consumer needed. | Larger payloads and leakage of internal hydration/source metadata. | The paged six-key list summary omits agent state; detail retains needed behavior while redacting internal source keys. Load-more preserves complete access. | **Fixed locally and privacy-tested.** |
+| Candidate upload UI advertised legacy `.doc` while the actual parser supported PDF/DOCX. | Users could select a file that could never work. | Picker and drag/drop now agree on PDF/DOCX and reject unsupported input with a visible error. | **Fixed locally; compatibility component and test retained.** |
+| Requisition chat/page growth was being handled inside oversized modules. | Higher change risk and repeated merge conflicts. | Attachment, grounding, capture-support, source, and upload responsibilities were extracted behind import-compatible re-exports. Service is 500 lines, capture 472, prompt 298, route 474, attachment service 300, and capture support 209; the page is 1,185 lines after reconciling PR #1040, below its 1,201 cap. | **Improved locally; size/architecture gates pass.** |
+| Related-role drafts could show a blank/stale header and cramped relationship card. | Sidebar and main panel could disagree or hide context. | PR #1040's title/status fallback and responsive header behavior were preserved in the modular architecture; grounded chat, related-role hydration, intent-aware specification updates, Jobs catalogue, and release safeguards from PRs #1027–#1040 were reconciled. | **Fixed locally; focused and full frontend suites pass.** |
 
 ### Authentication, authorization, security, and error disclosure
 
@@ -206,7 +225,12 @@ Current frontend changes include:
 - hidden-tab polling suppression for agent chat and pool rescore;
 - route/module lazy loading and manual vendor chunks for React, charts, Monaco,
   icons, and graph rendering;
-- bundle budgets for raw and gzip JS/CSS plus the application entry;
+- bundle budgets for raw and gzip JS/CSS plus the actual `main-*` application
+  entry, while retaining `index-*` compatibility for older builds;
+- shared recruiter/public requisition attachment validation and safe upload
+  errors, plus consistent PDF/DOCX candidate picker and drop behavior;
+- related-role title/status fallback and a responsive relationship header that
+  preserves the extracted page architecture;
 - scoped semantic graph/design tokens rather than hard-coded canvas colors;
 - assessment timer and hook-order corrections;
 - legal/privacy pages, developer API tests, marketing/showcase route tests, and
@@ -214,10 +238,10 @@ Current frontend changes include:
 
 The machine UI guard reports zero unresolved token or component-policy
 violations. Frontend architecture and motion-system gates pass. The final
-127-file/873-test gated run is warning-free: React scheduling warnings fell from 58
-to zero, Router future-flag warnings from 30 to zero, and Motion diagnostics
-from two to zero. No console suppression was added, and CI now rejects those
-warning classes so the clean signal cannot silently regress.
+149-file/1,050-test gated run is warning-free: React scheduling warnings fell
+from 58 to zero, Router future-flag warnings from 30 to zero, and Motion
+diagnostics from two to zero. No console suppression was added, and CI now
+rejects those warning classes so the clean signal cannot silently regress.
 
 ### Frontend optimization assessment
 
@@ -253,27 +277,30 @@ browser pass cannot prove that production received the new assets and services.
 | Base analytics | Historical assessment rows are no longer hydrated for Python aggregation; one SQL aggregate computes totals, rates, score buckets, dimensions, duration, and weekly completion. | **Fixed locally; parity regression passed.** |
 | Large route ownership | Process logic moved into a 279-line domain route and dedicated dispatch service; collection/analytics/query responsibilities were also extracted. Exact file-size ratchets prevent re-growth. | **Improved locally.** |
 | Architecture enforcement | AST gates detect all supported decorator and imperative route-registration forms, require real admin-guard calls, flatten the assembled FastAPI route table (including lazy included routers), and compare actual authentication/agent-action calls. Exact fail-closed inventories cover public/token ingress and one intentional generated-user-route collision; comments, strings, filename changes, mounts, and include prefixes cannot bypass the checks. | **Fixed locally; 19 architecture-gate tests passed.** |
-| Remaining file bloat | Forty-two backend files remain on exact legacy baselines. The gate enforces 500 physical lines for route/service modules and 1,000 for every other `app` module; it rejects growth above every exact baseline, so moving or renaming an oversized file cannot evade policy. This is maintainability debt, not an excuse for a risky blind rewrite in an already large patch. | **Non-release refactor debt; ratchet and bypass regressions pass.** |
+| Remaining file bloat | Forty-three backend files remain on exact legacy baselines. The gate enforces 500 physical lines for route/service modules and 1,000 for every other `app` module; it rejects growth above every exact baseline, so moving or renaming an oversized file cannot evade policy. This is maintainability debt, not an excuse for a risky blind rewrite in an already large patch. | **Non-release refactor debt; ratchet and bypass regressions pass.** |
 | Worker placement | Paid/long-running scoring, processing, delivery, recovery, and reconciliation are off request/web-process lifetime. | **Fixed locally.** |
 | Database connection | Runtime web/workers use only Railway's private `DATABASE_URL`; `DATABASE_PUBLIC_URL` is deploy-tool-only for migrations outside Railway. | **Fixed locally; 25 database/deployment contract tests passed earlier in this audit.** |
-| Fresh database and PostgreSQL semantics | A canonical `000_initial_schema` reconstructs the pre-Alembic base so a genuinely empty PostgreSQL database can traverse the full chain. The supported wrapper rejects unversioned partial schemas, takes a bounded advisory lock, applies every revision, and validates model/invariant parity. Migration 176 restores database-side `now()` defaults for `candidate_applications.pipeline_stage_updated_at` and `application_outcome_updated_at`, a PostgreSQL-only defect that SQLite masked. Runtime contracts also exercise real JSONB/JSON-array search, event idempotency-key uniqueness, update-immutable audit triggers (DELETE remains intentionally available for cascade cleanup), advisory-lock serialization/release, and disjoint `FOR UPDATE SKIP LOCKED` claims. | **Fixed locally; 17/17 bootstrap, immutability, and runtime tests passed on disposable PostgreSQL 16 through sole head 176.** |
+| Fresh database and PostgreSQL semantics | A canonical `000_initial_schema` reconstructs the pre-Alembic base so a genuinely empty PostgreSQL database can traverse the full chain. The supported wrapper rejects unversioned partial schemas, takes a bounded advisory lock, applies every revision, and validates model/invariant parity. Migration 176 historically restored application timestamp defaults; 177 persists chat-turn role versions, 178 adds CV-score dispatch approval, and 179 restores required user-boolean nullability plus the role-intent self-reference metadata. Runtime contracts also exercise real JSONB/JSON-array search, event idempotency-key uniqueness, immutable audit updates, advisory-lock serialization/release, and disjoint `FOR UPDATE SKIP LOCKED` claims. | **Fixed locally; fresh `000→179`, existing `178→179`, `179→178→179`, zero-op autogenerate checks, and orphan fail-before-write behavior passed on retained PostgreSQL 16.14.** |
 | Test isolation | Backend tests select shared in-memory SQLite before app import, avoid disk `test.db`, and have a dedicated real-Postgres CI contract. The only `sqlite:///./test.db` occurrences now assert production rejection behavior. | **Fixed locally.** |
 
 The backend size gate now covers every Python module under `app`: route/service
 modules have a strict 500-line ceiling, all other modules have a 1,000-line
-ceiling, and 42 oversized legacy files have exact ratcheted baselines. Baselines
+ceiling, and 43 oversized legacy files have exact ratcheted baselines. Baselines
 were lowered when files shrank, including the process-dispatch extraction;
 renaming or moving a hotspot cannot create a blanket exemption. Synthetic
 regressions prove that an oversized renamed module and an imperative
 `add_api_route` route cannot evade the gate.
 
-The online canonical migration path is the supported contract and a disposable
-PostgreSQL 16 database completed `000→176`. Migration 176 also generated valid
-offline PostgreSQL SQL for the incremental `175→176` step. This report does
-not claim that the entire historical chain supports Alembic's offline/mock
-connection mode: legacy migration 015 still assumes a live connection. That
-offline limitation does not invalidate the successfully exercised online path,
-but it must not be misstated as a full-chain offline-SQL result.
+The online canonical migration path is the supported contract. Retained
+PostgreSQL 16.14 databases completed fresh `000→179`, existing `178→179`, and
+`179→178→179`; raw `alembic check` twice reported zero new operations. Migration
+179 restored `users.is_active`/`users.is_superuser` non-nullability and the
+`role_intents.superseded_id` self-reference. An orphan preflight exited before
+writes, left the database at 178, and preserved row counts. Migration 176's
+historical incremental `175→176` offline SQL result remains valid, but this
+report does not claim that the entire historical chain supports Alembic's
+offline/mock connection mode because legacy migration 015 assumes a live
+connection.
 
 ## Cost optimization assessment
 
@@ -288,6 +315,8 @@ depth, or recovery guarantees.
 | Duplicate provider delivery | Durable receipts, leases, stable idempotency keys, exact-payload recovery, and ambiguous-terminal state. | Prevents paying twice while making uncertain outcomes visible instead of guessing. |
 | Repeated dormant fitted-policy searches | A versioned deterministic fingerprint covers ordered training inputs/configuration. Equivalent current candidates are reused before grid or agentic search; per-organization serialization and bounded pending output prevent duplicate fitting work. | The same fitted result is retained for identical evidence, while changed evidence/configuration still produces a fresh candidate. Reuse does not activate or auto-promote the dormant model. |
 | Holistic input tokens | Stable role context is cached on both Sonnet calls. | Dynamic candidate evidence remains uncached and current; the complete recruiter report is retained. |
+| Requisition model routing | Ordinary chat remains on the configured chat/Haiku model; only current-role/spec/document-sensitive intent escalates to the primary model. | Keeps normal conversational quality and preserves stronger reasoning where evidence-sensitive updates require it, without paying primary-model cost every second turn. |
+| Requisition source tokens and corrupt uploads | A newly uploaded source is included once, then hydrated once as durable context on later turns; unreadable attachment-only turns return deterministically before provider construction. | Preserves all usable evidence while removing duplicated tokens and paid no-op calls. |
 | Retired Haiku aliases | Fallback resolution tries the configured current model before historical aliases. | Avoids a guaranteed retired-model failure and retry while retaining compatibility fallbacks and the same successful model result. |
 | CV parsing | Anthropic Message Batches remain used for latency-tolerant parsing. | Keeps discounted asynchronous execution where interactivity is unnecessary; interactive recruiter scoring uses recoverable per-app fan-out. |
 | Analytics/list payloads | SQL aggregation, projections, bounded pages, and `load_only` that excludes `cv_text` from adverse-impact aggregation. | Returns the same aggregate/list meaning without hydrating heavy bodies. |
@@ -370,13 +399,14 @@ presented as release evidence.
   implementation bodies at that snapshot. It is not presented as a maintained
   repository gate; the reproducible import-reachability and architecture gates
   provide the durable enforcement described below;
-- the reachability scanner currently reports 670 modules, 21 explicit runtime
-  roots, 665 reachable modules, and zero candidates. Roots are only `app.main`,
-  `app.tasks`, `app.models`, and 18 exact approved CLI modules; arbitrary
+- the reachability scanner currently reports 739 modules, 29 explicit runtime
+  roots, 734 reachable modules, and zero candidates. Roots are `app.main`,
+  `app.tasks`, `app.models`, 18 exact approved CLI modules, and 8 exact
+  compatibility/policy roots; arbitrary
   `__main__` guards and prefix lookalikes cannot self-declare liveness. It
   models parent packages, ignores imports reachable only through
   `TYPE_CHECKING`, `if False`, or a non-approved main-guard body, reports a
-  non-empty unreachable `__init__.py`, and ignores an empty one. Ten focused
+  non-empty unreachable `__init__.py`, and ignores an empty one. Fifteen focused
   scanner regressions cover relative imports, dead cycles, self-importing
   packages, CLI success/failure, lookalikes, type/dead imports, and package
   initializers;
@@ -393,9 +423,10 @@ presented as release evidence.
   built-route gates remain represented in frontend CI;
 - CI reproducibility/cost controls pin Ubuntu 24.04, Python 3.11.9, Node
   22.23.1, every third-party action to a full commit SHA, and PostgreSQL 16.14
-  to an image digest. A generated hash-locked backend dependency graph is
-  validated against both input requirement files and installed with
-  `--require-hashes`; concurrency cancels superseded branch/PR runs, and a
+  to an image digest. Independently generated development-inclusive and
+  runtime-only hash locks are validated against their inputs; CI installs the
+  former, while production installs the latter with `--require-hashes
+  --no-deps` into `/opt/venv`. Concurrency cancels superseded branch/PR runs, and a
   conservative path classifier skips unaffected backend/frontend jobs while
   unknown paths run both.
 
@@ -406,10 +437,14 @@ The exact workflow supply-chain pins are
 `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`.
 PostgreSQL is
 `postgres:16.14@sha256:17e67d7b9890c99b055ba1e0d5c5be4ec27c9d3a72bda32db24a5e5d8a85af0c`.
-The lock records input digest
-`4b686ff622e8415dc009908a9e7318b0f359303eb9e21b1d233e7c341ff05c09`;
-the verifier recomputes it from production and development requirement inputs
-before either backend job installs the fully hashed graph.
+The 157-pin/3,237-hash development-inclusive lock records input digest
+`4b686ff622e8415dc009908a9e7318b0f359303eb9e21b1d233e7c341ff05c09`.
+The 125-pin/2,959-hash production runtime lock records input digest
+`64f9f4dd6b03651f423123b28f2549f51b10e147f8e9f6858789a954c61ddfef`.
+Both verifiers recompute their own inputs before installation; runtime import,
+integrity, and vulnerability-audit checks passed. All 34 tracked shell scripts
+passed `bash -n`, both workflow YAML files parsed, and all 12 third-party action
+references were pinned to full SHAs.
 
 ### Targeted verification evidence available now
 
@@ -424,50 +459,48 @@ Do not sum these figures; several sets overlap.
 | Agent-v2 focused set | 18/18 passed |
 | Limiter/apply/EEO focused set | 70/70 passed before canonical client-IP integration; the later canonical-IP integration set passed 65/65 |
 | Health/impact/snapshot set | 35 passed |
-| Database/deployment contract set | Latest combined startup/Railway set passed 42/42 |
+| Database/release contract set | 59 release/workflow/lock tests passed; combined database/release evidence passed 78 with 4 fixture-only skips |
 | SEO/static-route set | 46 passed |
 | Stripe replay/non-grant | 2/2 passed |
 | Developer API reference | 1/1 passed |
-| Backend file-size ratchet | Passed: route/service modules ≤500 lines, every other `app` module ≤1000, and 42 exact legacy baselines; two bypass regressions passed |
+| Backend file-size ratchet | Passed: route/service modules ≤500 lines, every other `app` module ≤1000, and 43 exact legacy baselines; two bypass regressions passed |
 | One-off duplicate implementation scan | Zero AST/hash duplicates at the integration snapshot; not a maintained gate |
-| Dead-code reachability graph | 670 modules / 21 explicit roots / 665 reachable / zero candidates; 10 focused scanner regressions and fail-on-candidates gate passed |
+| Dead-code reachability graph | 739 modules / 29 explicit roots / 734 reachable / zero candidates; 15 focused scanner regressions and fail-on-candidates gate passed |
 | Backend architecture gates | 19/19 passed across route ownership, assembled collisions/authentication, admin-call AST checks, ingress inventories, and agent/action parity |
 | Frontend architecture + motion | Passed |
 | Frontend UI token/component policy | Passed with zero violations |
 | Frontend ESLint + TypeScript contract | Passed |
-| Full frontend gated Vitest | 127 files / 873 tests passed in 20.10 seconds; zero warning diagnostics (58 React scheduling, 30 Router, and 2 Motion diagnostics reduced to zero). CI now preserves Vitest failures and independently fails on those warning classes. |
-| Frontend production build + bundle budget | Passed; largest vendor chunk was the graph bundle at 434.15 kB |
+| Full frontend gated Vitest | 149 files / 1,050 tests passed in 24.94 seconds; zero warning diagnostics (58 React scheduling, 30 Router, and 2 Motion diagnostics reduced to zero). CI preserves Vitest failures and independently fails on those warning classes. |
+| Frontend production build + bundle budget | 3,407 modules built in 1.31 seconds; 209 files, 5,723,777 bytes raw (5.4586 MiB), 2,644,047 bytes gzip level 9 (2.5216 MiB), and 6,361,088 allocated bytes (6.0664 MiB). Raw/gzip kB: main JS 73.23/20.05, CSS 231.54/40.19, graph 434.15/137.53, charts 412.99/106.66, Requisitions 45.63/13.15, Client Intake 12.64/4.28. |
 | Frontend dependency audit | 0 vulnerabilities |
-| Complete default non-production backend pytest selection | 5,574 passed / 8 PostgreSQL-only skipped / 16 live production-smoke tests deselected; zero failed in one uninterrupted 302.40-second branch-tip run. PostgreSQL behavior is covered separately below. |
-| Backend coverage | 75.06% combined line-and-branch coverage: 53,061/67,611 lines (78.48%) and 12,961/20,346 branches (63.70%). `.coveragerc` combined ratchet raised from 35% to 74% and revalidated; the XML and raw data were emitted only as ephemeral local artifacts and removed from the worktree. |
-| Backend dependency integrity/audit | `pip check` passed; `pip-audit` found zero known vulnerabilities in the hash-locked graph |
-| Static/syntax/diff checks | Full backend `compileall` and Ruff scopes passed; both workflow YAML files and all 31 embedded shell blocks parsed; tracked-diff and untracked-text whitespace/EOF checks passed |
-| PostgreSQL bootstrap/runtime/immutability | 17/17 passed on PostgreSQL 16; online `000→176`, five search indexes, event idempotency-key uniqueness, two update-immutable triggers (DELETE intentionally allowed), timestamp defaults, timeout enum, malformed/partial/lock-timeout failure paths, JSONB search, advisory locking, and `SKIP LOCKED` claims |
-| Migration 176 offline increment | `175→176` PostgreSQL SQL generation and sole-head checks passed; no full historical offline-chain claim is made |
+| Complete default non-production backend pytest selection | 5,930 passed / 8 skipped / 16 live production-smoke tests deselected; zero failures and zero warnings in one uninterrupted 266.56-second branch-tip run. PostgreSQL behavior is covered separately below. |
+| Backend coverage | 75.982910% combined line-and-branch coverage: 56,592/71,296 lines (79.376122%) and 13,832/21,388 branches (64.671779%). The enforced combined floor remains 74%; ignored coverage data was preserved outside the worktree after measurement and was not committed. |
+| Backend dependency integrity/audit | Both exact locks passed integrity/parity; runtime import and `pip-audit` verification found zero known vulnerabilities |
+| Static/syntax/diff checks | Full backend `compileall` and Ruff scopes passed; both workflow YAML files, all 34 tracked shell scripts, and 12 action pins passed their checks; tracked and staged diff checks were clean |
+| PostgreSQL migration/invariants | Fresh `000→179`, existing `178→179`, and `179→178→179` passed on retained PostgreSQL 16.14; raw autogenerate parity was zero twice, schema invariants passed, and orphan preflight failed before writes with revision/data unchanged |
+| Database/release evidence | 78 passed / 4 skipped. Skipped fixtures require creating and dropping databases; equivalent migration/invariant/fail-closed paths were exercised manually on retained databases, with no database or container deleted. |
 | CI/lock contracts | Hash-lock validation, exact runtime/action/image pins, concurrency, path-scope, production-target, and warning-gate workflow tests passed |
 
 ### Insufficient-test and governance gaps
 
-1. The final backend run measured 75.06% combined line-and-branch coverage:
-   78.48% line coverage and 63.70% branch coverage. The combined ratchet now
+1. The final backend run measured 75.982910% combined line-and-branch coverage:
+   79.376122% line coverage and 64.671779% branch coverage. The combined ratchet
    enforces 74%, up from 35%. Aggregate coverage is not sufficient assurance for
    every payment, authorization, provider-failure, worker, and hiring-decision
    branch; raise it incrementally with risk-focused tests without deleting hard
    branches or marking them `no cover` merely to improve the number.
-2. The application contains 223 `pragma: no cover` annotations (221 at the
-   audited HEAD); 201 sit on broad exception handlers. The two net-new
-   annotations protect closed internal discriminators, while three newly added
-   testable failure branches had their exclusions removed and gained direct
-   regressions. Burn down the legacy exception exclusions behind fault-injection
-   tests; the measured percentages exclude those clauses and must not be read as
-   proof that every defensive branch was exercised.
+2. The application currently contains 221 `pragma: no cover` annotations; the
+   majority sit on broad exception handlers. Burn down the legacy exception
+   exclusions behind fault-injection tests; the measured percentages exclude
+   those clauses and must not be read as proof that every defensive branch was
+   exercised.
 3. The normal backend suite intentionally uses isolated in-memory SQLite, while
    PostgreSQL-only modules require `TEST_POSTGRES_URL`. CI provisions
-   PostgreSQL, and this worktree's 17 focused PostgreSQL 16 bootstrap,
-   immutability, JSONB, advisory-lock, and `SKIP LOCKED` contracts are green
-   through sole head 176. A recent production-shaped snapshot rehearsal remains
-   the data-upgrade release gate; the already-completed empty-database run
-   should not be described as outstanding.
+   PostgreSQL. This worktree's retained-PostgreSQL 16.14 migration, invariant,
+   JSONB, advisory-lock, and `SKIP LOCKED` contracts are green through sole head
+   `179_restore_schema_metadata_invariants`. A recent production-shaped
+   snapshot rehearsal remains the data-upgrade release gate; the
+   already-completed empty-database run should not be described as outstanding.
 4. Frontend Vitest, ESLint, TypeScript, production build, bundle budget, and
    local built-route/browser checks are green. They must be repeated in CI and
    the route/provider matrix repeated after deployment; local success is not a
@@ -480,7 +513,7 @@ Do not sum these figures; several sets overlap.
    The prior production deep dive found very low meaningful-candidate volume;
    calibration, adverse-impact, and predictive-validity claims require governed
    real outcomes.
-7. The dead-code gate proves reachability from 21 exact reviewed roots, not
+7. The dead-code gate proves reachability from 29 exact reviewed roots, not
    symbol-level usage. Dynamic imports remain the principal blind spot, and a
    zero module-candidate result is not proof that every retained function/class
    is live. Scanner-root or AST-policy changes require review; arbitrary main
@@ -492,78 +525,30 @@ Do not sum these figures; several sets overlap.
 
 ## Outstanding Codex/GitHub review work
 
-GitHub was inspected on 2026-07-15. There are 25 open pull requests: 11 drafts
-and 14 non-drafts. Sixteen currently report merge conflicts and nine report
-mergeable. None has requested reviewers or a GitHub review decision. That does
-not mean they are approved; it means review ownership is absent.
+The pre-publication 2026-07-16 snapshot contained 26 open PRs: 11 drafts and 15
+non-drafts. Thread-level inspection found 17 unresolved review threads: 12 on
+current diffs and 5 outdated. Ten remain actionable (5 P1 and 5 P2); seven are
+fixed or superseded but still unresolved (all five outdated threads plus both
+#852 threads). Publishing this audit's own draft PR will add one open PR to the
+then-current total; that mechanical change does not alter the snapshot below.
 
-The two newest Codex PRs are:
-
-| PR | State | Review evidence |
-|---|---|---|
-| [#1023 Add multi-user job collaboration controls](https://github.com/sampatel3/tali-platform/pull/1023) | Draft, conflicting | Zero reviews and zero review threads returned; no requested reviewer. |
-| [#1021 Make sourcing and post-evaluation flow agent-driven](https://github.com/sampatel3/tali-platform/pull/1021) | Draft, conflicting | Zero reviews and zero review threads returned; no requested reviewer. |
-
-Thread-level review inspection also found **16 unresolved historical review
-threads**: PR #876 has 2, #855 has 1, #852 has 2, #638 has 5, and #557 has 6.
-Five are attached to outdated diffs and eleven are active (six P1, five P2).
-Current HEAD is associated with merged PR #1026, not an open PR. Open PR #1023
-contains that commit as an ancestor but is 13 commits ahead and has no review
-threads; every branch with unresolved feedback has diverged from this worktree.
-Those comments therefore cannot safely be folded into this remediation branch
-or resolved on GitHub without branch-specific review authority.
-
-| PR | Active unresolved feedback |
+| PR | Unresolved threads and current assessment |
 |---|---|
-| [#876](https://github.com/sampatel3/tali-platform/pull/876) | Validate reject-sweep state before approval (P1); reuse the sweep offer when chat enables auto-reject (P2) |
-| [#855](https://github.com/sampatel3/tali-platform/pull/855) | Gate dragging for spec-derived criteria (P2) |
-| [#852](https://github.com/sampatel3/tali-platform/pull/852) | Recompute scoring inputs after specification edits (P1); remove the branch's local `node_modules` symlink (P2) |
-| [#638](https://github.com/sampatel3/tali-platform/pull/638) | Four active workflow/vendor-drift security findings: private-token isolation, checkout credentials, PR-script isolation (all P1), and untracked-file safety (P2) |
-| [#557](https://github.com/sampatel3/tali-platform/pull/557) | Keep target workers stopped through cutover (P1); restore PostgreSQL before first web boot (P2) |
+| [#1034](https://github.com/sampatel3/tali-platform/pull/1034) | 1 current P2: blocked-must-have undercount on that branch. |
+| [#876](https://github.com/sampatel3/tali-platform/pull/876) | 2 current: reject-sweep validation P1 and sweep-offer reuse P2. |
+| [#855](https://github.com/sampatel3/tali-platform/pull/855) | 1 current P2: spec-derived criteria drag gating. |
+| [#852](https://github.com/sampatel3/tali-platform/pull/852) | 2 unresolved but superseded: current intent-aware rehydration/rescreen behavior covers specification edits, and this tree has no tracked `node_modules` symlink. |
+| [#638](https://github.com/sampatel3/tali-platform/pull/638) | 5 total: 3 current P1, 1 current P2, and 1 outdated workflow/vendor-drift thread. |
+| [#557](https://github.com/sampatel3/tali-platform/pull/557) | 6 total: 1 current P1, 1 current P2, and 4 outdated migration/cutover threads. |
 
-Current-tree applicability was checked separately. The #876 sweep-offer flow
-and #855 drag implementation are not present here; the current criteria editor
-has no drag behavior. The #852 spec-edit contract now re-derives criteria and
-quotes an explicit, recruiter-authorized rescreen rather than silently spending,
-and `frontend/node_modules` is a normal ignored directory rather than the
-branch's tracked symlink. The #638 drift-gate workflow/script and #557 region
-migration plan are absent from this tree. None of the 11 active comments exposes
-an unfixed current-tree path, but their own PR branches still require the listed
-changes or explicit closure as superseded.
-
-The remaining queue is old enough and overlaps enough with the current product
-that it should be triaged explicitly, not bulk-merged:
-
-- **Conflicting:** [#876](https://github.com/sampatel3/tali-platform/pull/876),
-  [#852](https://github.com/sampatel3/tali-platform/pull/852),
-  [#788](https://github.com/sampatel3/tali-platform/pull/788),
-  [#735](https://github.com/sampatel3/tali-platform/pull/735),
-  [#604](https://github.com/sampatel3/tali-platform/pull/604),
-  [#553](https://github.com/sampatel3/tali-platform/pull/553),
-  [#532](https://github.com/sampatel3/tali-platform/pull/532),
-  [#502](https://github.com/sampatel3/tali-platform/pull/502),
-  [#437](https://github.com/sampatel3/tali-platform/pull/437),
-  [#401](https://github.com/sampatel3/tali-platform/pull/401),
-  [#381](https://github.com/sampatel3/tali-platform/pull/381),
-  [#377](https://github.com/sampatel3/tali-platform/pull/377),
-  [#347](https://github.com/sampatel3/tali-platform/pull/347), and
-  [#339](https://github.com/sampatel3/tali-platform/pull/339), plus #1023/#1021.
-- **Currently mergeable, still unreviewed/unowned:**
-  [#855](https://github.com/sampatel3/tali-platform/pull/855),
-  [#784](https://github.com/sampatel3/tali-platform/pull/784),
-  [#744](https://github.com/sampatel3/tali-platform/pull/744),
-  [#638](https://github.com/sampatel3/tali-platform/pull/638),
-  [#557](https://github.com/sampatel3/tali-platform/pull/557),
-  [#432](https://github.com/sampatel3/tali-platform/pull/432),
-  [#430](https://github.com/sampatel3/tali-platform/pull/430),
-  [#400](https://github.com/sampatel3/tali-platform/pull/400), and
-  [#382](https://github.com/sampatel3/tali-platform/pull/382).
-
-For each PR, compare its intent with the current main/tree, then choose one of:
-assign reviewer and update; extract a still-needed small change; or close as
-superseded with a link to the replacement. “Mergeable” is only GitHub's
-conflict calculation, not a quality or relevance verdict. The local audit tree
-is not attached to any PR and must not be treated as review-complete.
+The current audit/main applicability check found no review-thread path
+intersection and no unresolved thread exposing an unfixed current-tree path.
+That does not resolve feedback on the affected PR branches. Do not bulk-comment,
+resolve, or merge those threads without branch-specific review authority. For
+each branch, assign an owner and update it, extract a still-needed small change,
+or close it explicitly as superseded with replacement evidence. This audit's
+draft PR must likewise not be treated as reviewed or approved merely because it
+is mergeable or has no comments.
 
 ## Honest residual risk register
 
@@ -573,7 +558,7 @@ less useful.
 
 | Priority | Residual | Why it remains | Required next decision/action |
 |---|---|---|---|
-| P0 / deployment | **The deployed site is still old and operationally degraded:** it advertises the retired API origin, exposes the older detailed health contract, and reports missing worker/scoring heartbeats. | Local remediation cannot change or validate the running Railway/Vercel release. A degraded production check cannot be overridden by a green local worktree. | Treat production as not release-ready: complete the release-candidate gates, deploy through the controlled path, then require redacted health/readiness and both queue canaries before declaring recovery. |
+| P0 / deployment | **Production backend readiness remains unverified:** the final legacy API-health navigation did not complete, while only the public homepage rendering basics were observed. | Local remediation cannot prove the running Railway/Vercel release, worker topology, or queue heartbeats, and no deployment was authorized. | Complete the release-candidate gates and controlled rollout, then require `/health`, redacted `/ready`, authenticated `/admin/health`, and both queue canaries before declaring production healthy. |
 | P1 / cost and capability | **Fitted-policy shadow/promotion is dormant while the nightly fitter is scheduled.** Equivalent ordered inputs now reuse the current fingerprinted candidate before expensive search, per-organization work is serialized, and pending output is bounded. Changed evidence can still consume DB/CPU to fit a candidate, but the production engine never loads it and no scheduler opens, records, or concludes durable shadow runs. | Fitted output is currently only a fail-closed safety input to governed rule retunes. Automatically wiring the bookkeeping would still lack durable per-decision shadow identity, realised-outcome linkage, and operator activation; compute deduplication is not feature activation. | Measure the remaining scheduled fit's cost and safety value. Keep it only if that value is justified; otherwise disable the dormant fit schedule without weakening the live rule retuner. Before learned-policy activation, implement the durable shadow lifecycle, bias/outcome gates, observability, and explicit operator promotion. |
 | Medium / scaffold | **`GRAPH_OUTCOME_PRIOR_ENABLED` is not a functional feature.** Bounded shadow math exists, but the fetch returns `None` and configuration rejects enablement. | Outcome-learned graph signals can reproduce historical bias; a numeric nudge without evidence and governance would make matching less trustworthy. | Keep it unavailable in product/configuration. Activate only after graph retrieval is durable, the shadow distribution and predictive value are reviewed, the autoresearch bias gate passes, and rollback/monitoring exist. |
 | Medium / security migration | **Legacy integration credentials may still use the unversioned/plaintext read fallback.** | The fallback prevents breaking existing Workable/Fireflies rows during rollout; new encrypted writes alone do not transform old data. | Inventory existing rows, re-encrypt or rotate them with the production integration key, verify previous-key rollback, and remove plaintext reads only after telemetry proves the migration complete. |
@@ -587,46 +572,40 @@ less useful.
 | Medium / policy | **F3 protected-characteristic handling:** conversational guidance is stronger than the deterministic reject path. | Free-text CV/ATS context can contain protected/proxy information. | Establish a code-level non-use/redaction invariant, legal review, and shadow/adverse-impact evidence before stronger automation. |
 | Medium / policy | **F4 automated-decision notice/explanation/appeal:** internal provenance exists but candidate-facing process is incomplete. | This is product/legal workflow, not a safe backend-only guess. | For opted-in auto-disqualify orgs, design candidate notice, job-relevant explanation, human review/appeal, and jurisdiction policy. |
 | Medium / evidence | Adverse-impact monitor can be enabled with insufficient voluntary data. | Code cannot manufacture lawful representative data. | Define voluntary-data process, owner, alert response, retention, and minimum sample policy before enabling. |
-| Medium / maintainability | 42 backend oversized legacy files, the frontend `AppShell`, and 11 oversized frontend pages remain ratcheted. Backend policy is strict at 500 lines for route/service modules and 1,000 for all others. | Large-scale mechanical splitting inside an already broad behavioral remediation would increase merge and regression risk. | Burn down incrementally behind exact parity tests; lower baselines whenever files shrink and do not add new exemptions. |
-| Low / test quality | The frontend warning backlog is closed and the combined backend floor is 74%, but backend branch coverage is still 63.70%. | Aggregate coverage can hide weak failure-path coverage even with a green suite. | Raise branch coverage incrementally around payment, authorization, provider failure, worker recovery, and hiring-decision risk; do not delete hard branches or exclude them merely to improve the number. |
+| Medium / maintainability | 43 backend oversized legacy files, the frontend `AppShell`, and 11 oversized frontend pages remain ratcheted. Backend policy is strict at 500 lines for route/service modules and 1,000 for all others. | Large-scale mechanical splitting inside an already broad behavioral remediation would increase merge and regression risk. | Burn down incrementally behind exact parity tests; lower baselines whenever files shrink and do not add new exemptions. |
+| Low / test quality | The frontend warning backlog is closed and the combined backend floor is 74%, but backend branch coverage is still 64.671779%. | Aggregate coverage can hide weak failure-path coverage even with a green suite. | Raise branch coverage incrementally around payment, authorization, provider failure, worker recovery, and hiring-decision risk; do not delete hard branches or exclude them merely to improve the number. |
 | Product validation | Assessment/scoring instrument has limited real-outcome evidence. | Unit tests prove software behavior, not hiring validity or candidate experience. | Resume governed volume, monitor funnel and outcome calibration, validate predictive/fairness claims, and keep irreversible AI reject recommendations human-confirmed by default. |
 
 ## Release and production status
 
 ### Local verification results
 
-Complete default non-production backend suite: **5,574 passed, 8
-PostgreSQL-only skipped, 16 live production-smoke tests deselected, zero
-failed** in one uninterrupted branch-tip run (302.40 seconds). The skipped PostgreSQL
-semantics were exercised by the separate 17/17 PostgreSQL 16 contract run
-below; live production smoke was not run from this unreviewed tree.
+Complete default non-production backend suite: **5,930 passed, 8 skipped, 16
+live production-smoke tests deselected, zero failures, and zero warnings** in
+one uninterrupted branch-tip run (266.56 seconds). Live production smoke was
+not run from this unreviewed tree.
 
-Backend coverage: **75.06% combined line-and-branch** — 53,061/67,611 lines
-(78.48%) and 12,961/20,346 branches (63.70%). The enforced combined floor is
-now **74%** (raised from 35%) and passed; the XML report was an ephemeral local
-artifact rather than a committed review artifact, and both it and the raw
-coverage data were removed from the worktree after measurement.
+Backend coverage: **75.982910% combined line-and-branch** — 56,592/71,296 lines
+(79.376122%) and 13,832/21,388 branches (64.671779%). The enforced combined
+floor remains **74%** (raised from 35%) and passed. Ignored coverage data was
+preserved outside the worktree after measurement and was not committed.
 
-Fresh PostgreSQL migration result: **17/17 bootstrap, immutability, and runtime
-tests passed on PostgreSQL 16.** A disposable empty database traversed
-`000_initial_schema` through `176_restore_application_timestamp_defaults`; all
-five migration-160 search indexes, the event idempotency-key uniqueness
-constraint, both migration-143/169 update-immutable triggers (DELETE
-intentionally allowed for cascade cleanup), the restored application timestamp
-defaults, timeout enum value, and `VARCHAR(255)` revision capacity were present. Partial and lock-timeout
-databases received no migration DDL, the advisory lock was released, and real
-PostgreSQL semantics passed for JSONB/JSON-array candidate search, rejected
-audit-event updates, advisory-lock serialization, and disjoint `SKIP LOCKED`
-claims.
-Incremental `175→176` offline SQL generation passed; the full historical
-offline chain was not claimed because legacy migration 015 requires a live
-connection.
+PostgreSQL/database-release evidence: **78 passed, 4 skipped** on retained
+PostgreSQL 16.14. Fresh `000→179`, existing `178→179`, and `179→178→179`
+passed; raw autogenerate parity reported zero operations twice. Required user
+boolean nullability and the role-intent self-reference were present. An orphan
+preflight failed before writes, left the database at 178, and preserved row
+counts. The four skipped fixture cases require create/drop-database authority;
+equivalent paths were manually exercised on retained databases instead. No
+test database or container was deleted. Migration 176's historical incremental
+`175→176` offline SQL result remains valid; no full historical offline-chain
+claim is made because legacy migration 015 requires a live connection.
 
 ### Required release sequence
 
-1. Review the seven local commits, confirm the branch is clean, push it, and
-   open a draft PR. The former detached working snapshot is now preserved, but
-   the unpushed branch is not an approved release artifact.
+1. Review the reconciled branch against current `main`, confirm zero deleted
+   paths and a clean tree, push it, and open or refresh the draft PR. A pushed
+   draft is reviewable but is not an approved release artifact.
 2. Run the complete backend CI contract on Python 3.11.9: validate and install
    the hashed requirements lock, dependency integrity/audit; compile `alembic`,
    `app`, `scripts`, and `tests`; Ruff E9/F; sole-head, all-module file-size,
@@ -651,8 +630,8 @@ connection.
    migration, authentication, provider, PDF/file, worker, queue, and rollback
    smoke. Keep `GRAPH_OUTCOME_PRIOR_ENABLED=false`; record whether the dormant
    nightly fitted-policy job's measured safety value justifies its compute cost.
-8. Apply migrations and deploy only through
-   `scripts/railway/deploy_production.sh`. Runtime services must use private
+8. Apply migrations and deploy only through the repository-root entrypoint
+   `./scripts/deploy_production.sh`. Runtime services must use private
    `DATABASE_URL`; the wrapper may use `DATABASE_PUBLIC_URL` only for the
    external migration step.
 9. Require public `/health`, redacted `/ready`, and authenticated
@@ -672,7 +651,7 @@ connection.
 
 ## Final release classification
 
-- **Code remediation:** substantial and locally complete for the safely actionable findings listed as fixed.
+- **Code remediation:** substantial and locally complete for the safely actionable findings listed as fixed, with zero source-path deletions.
 - **Integrated release candidate:** **not yet**; blocked by supported-runtime CI, production-shaped migration rehearsal, dependency staging, and a reviewed PR.
 - **Production release validation:** **not attempted**; it begins only after an approved release candidate, external configuration, and controlled deployment, then requires the post-deploy health/queue/provider/website smoke matrix.
 - **Production:** **not changed by this audit**.
