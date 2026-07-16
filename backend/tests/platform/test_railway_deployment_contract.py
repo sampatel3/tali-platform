@@ -65,6 +65,9 @@ def test_worker_wrapper_enforces_split_queue_and_single_beat_topology():
     assert "TALI_WORKER_QUEUES=scoring" in script
     assert "TALI_WORKER_BEAT=false" in script
     assert script.count("deploy_worker_service") == 3  # definition + two calls
+    assert "railway up ./backend" in script
+    assert "--path-as-root" in script
+    assert 'cd "$BACKEND_DIR"' not in script
 
 
 def test_web_wrapper_checks_workers_and_polls_readiness():
@@ -74,6 +77,9 @@ def test_web_wrapper_checks_workers_and_polls_readiness():
     assert "railway_wait_for_new_successful_deployment" in script
     assert "railway_wait_for_readiness" in script
     assert "railway_validate_default_agent_capabilities" in script
+    assert "railway up ./backend" in script
+    assert "--path-as-root" in script
+    assert 'cd "$BACKEND_DIR"' not in script
 
 
 def test_status_wrapper_validates_agent_and_ats_contract_everywhere():

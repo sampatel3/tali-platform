@@ -81,8 +81,9 @@ deploy_worker_service() {
   railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
   echo "Deploying '$service' (queues=$queues, beat=$beat) from $BACKEND_DIR ..."
   (
-    cd "$BACKEND_DIR"
-    railway up \
+    cd "$ROOT_DIR"
+    railway up ./backend \
+      --path-as-root \
       --service "$service" \
       --environment "$ENV_NAME" \
       --detach
