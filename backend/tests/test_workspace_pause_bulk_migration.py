@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
@@ -190,11 +191,11 @@ def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
         audit = connection.execute(sa.select(role_change_events)).mappings().one()
         workspace_audit = connection.execute(
             sa.select(workspace_control_events)
-        ).mappings().one()
+        ).first()
 
     assert org["agent_workspace_paused_at"] is None
     assert org["agent_workspace_paused_reason"] is None
-    assert org["agent_workspace_control_version"] == 5
+    assert org["agent_workspace_control_version"] == 4
     assert migrated[0]["agent_paused_at"] is not None
     assert migrated[0]["agent_paused_reason"] == "paused by workspace control"
     assert migrated[0]["version"] == 4
@@ -209,23 +210,21 @@ def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
     assert audit["from_version"] == 3
     assert audit["to_version"] == 4
     assert audit["changes"]["agent_paused_reason"]["after"] == "paused by workspace control"
-    assert audit["changes"]["workspace_pause_provenance"] == {
-        "paused_at": paused_at.replace(tzinfo=None).isoformat(),
-        "reason": "workspace paused by recruiter",
-        "actor_user_id": 7,
-        "actor_name": "Sam Patel",
+    assert audit["changes"] == {
+        "agent_paused_at": {
+            "before": None,
+            "after": paused_at.replace(tzinfo=None).isoformat(),
+        },
+        "agent_paused_reason": {
+            "before": None,
+            "after": "paused by workspace control",
+        },
     }
-    assert "Original provenance" in audit["reason"]
-    assert workspace_audit["organization_id"] == 1
-    assert workspace_audit["actor_user_id"] == 7
-    assert workspace_audit["actor_name"] == "Sam Patel"
-    assert workspace_audit["action"] == "paused"
-    assert workspace_audit["from_version"] == 4
-    assert workspace_audit["to_version"] == 5
-    assert "workspace paused by recruiter" in workspace_audit["reason"]
+    assert audit["reason"] == "workspace pause migrated to role bulk control"
+    assert workspace_audit is None
 
 
-def test_overlay_provenance_survives_when_no_role_is_eligible(monkeypatch):
+def test_overlay_clears_without_fabricating_events_when_no_role_is_eligible(monkeypatch):
     engine = sa.create_engine("sqlite://")
     organizations, roles, role_events, workspace_events = _migration_tables(engine)
     paused_at = datetime(2026, 7, 16, 10, tzinfo=timezone.utc)
@@ -263,81 +262,43 @@ def test_overlay_provenance_survives_when_no_role_is_eligible(monkeypatch):
         organization = connection.execute(
             sa.select(organizations)
         ).mappings().one()
-        workspace_audit = connection.execute(
-            sa.select(workspace_events)
-        ).mappings().one()
+        workspace_audit = connection.execute(sa.select(workspace_events)).first()
         role = connection.execute(sa.select(roles)).mappings().one()
         assert connection.execute(sa.select(role_events)).first() is None
 
     assert organization["agent_workspace_paused_at"] is None
-    assert organization["agent_workspace_control_version"] == 9
+    assert organization["agent_workspace_control_version"] == 8
     assert role["agent_paused_at"] is None
     assert role["version"] == 2
-    assert workspace_audit["actor_user_id"] == 19
-    assert workspace_audit["actor_name"] == "Operations Owner"
-    assert "incident hold" in workspace_audit["reason"]
-    assert paused_at.replace(tzinfo=None).isoformat() in workspace_audit["reason"]
+    assert workspace_audit is None
 
 
-def test_concurrent_independent_role_pause_is_never_overwritten(monkeypatch):
-    engine = sa.create_engine("sqlite://")
-    organizations, roles, role_events, _workspace_events = _migration_tables(engine)
-    paused_at = datetime(2026, 7, 16, 11, tzinfo=timezone.utc)
-    with engine.begin() as connection:
-        connection.execute(
-            organizations.insert(),
-            {
-                "id": 3,
-                "agent_workspace_paused_at": paused_at,
-                "agent_workspace_paused_reason": "workspace hold",
-                "agent_workspace_paused_by_user_id": 23,
-                "agent_workspace_paused_by_name": "Workspace Owner",
-                "agent_workspace_control_version": 11,
-            },
-        )
-        connection.execute(
-            roles.insert(),
-            {
-                "id": 30,
-                "organization_id": 3,
-                "agentic_mode_enabled": True,
-                "agent_paused_at": None,
-                "agent_paused_reason": None,
-                "version": 3,
-            },
-        )
-        raced = False
+def test_published_workspace_pause_and_merge_migrations_are_immutable():
+    workspace_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "175_convert_workspace_pause_to_role_pauses.py"
+    )
+    merge_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "180_merge_related_role_workflow.py"
+    )
+    workspace_merge_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "181_merge_workspace_bulk_role_pause.py"
+    )
 
-        def pause_before_migration_update(
-            _connection,
-            cursor,
-            statement,
-            _parameters,
-            _context,
-            _executemany,
-        ):
-            nonlocal raced
-            if not raced and statement.lstrip().upper().startswith("UPDATE ROLES SET"):
-                raced = True
-                cursor.execute(
-                    "UPDATE roles SET agent_paused_at = "
-                    "'2026-07-16 11:05:00', "
-                    "agent_paused_reason = 'paused independently', "
-                    "version = version + 1 WHERE id = 30"
-                )
-
-        sa.event.listen(engine, "before_cursor_execute", pause_before_migration_update)
-        migration = _load_migration()
-        monkeypatch.setattr(
-            migration,
-            "op",
-            Operations(MigrationContext.configure(connection)),
-        )
-        migration.upgrade()
-
-        role = connection.execute(sa.select(roles)).mappings().one()
-        assert connection.execute(sa.select(role_events)).first() is None
-
-    assert raced is True
-    assert role["agent_paused_reason"] == "paused independently"
-    assert role["version"] == 4
+    assert hashlib.sha256(workspace_path.read_bytes()).hexdigest() == (
+        "2e0857870616c651e3f905759bd4002a92a85b352d5fa9c2a08468d439e5d58a"
+    )
+    assert hashlib.sha256(merge_path.read_bytes()).hexdigest() == (
+        "806d9aa4b4d613ee62a363787142bdb61d54450d50812e7ef8359c3e82dda140"
+    )
+    assert hashlib.sha256(workspace_merge_path.read_bytes()).hexdigest() == (
+        "1e8909e35f4f06fb544f5c4f2e8eac093bf99103c2dab42fdde5de400ae0bc14"
+    )

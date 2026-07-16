@@ -23,17 +23,46 @@ export function useWorkspaceAgentControl({
     busyRef.current = true;
     setAction(actionName);
     try {
-      await mutation();
-      await refetchOrgStatus({ force: true });
+      let response;
+      try {
+        response = await mutation();
+      } catch (error) {
+        try {
+          await refetchOrgStatus({ force: true });
+        } catch {
+          // Keep the original mutation failure: reconciliation is best-effort
+          // and must never swallow a collaborator conflict or provider error.
+        }
+        showToast?.(
+          Number(error?.response?.status) === 409
+            ? workspaceControlConflictMessage(error)
+            : 'Could not update the workspace agent — try again.',
+          'error',
+        );
+        return;
+      }
+
+      let statusRefreshed = true;
+      try {
+        const refreshedStatus = await refetchOrgStatus({ force: true });
+        statusRefreshed = refreshedStatus != null;
+      } catch {
+        statusRefreshed = false;
+      }
       void Promise.all([loadDecisions(), loadRoles()]);
-    } catch (error) {
-      await refetchOrgStatus({ force: true });
-      showToast?.(
-        Number(error?.response?.status) === 409
-          ? workspaceControlConflictMessage(error)
-          : 'Could not update the workspace agent — try again.',
-        'error',
-      );
+      const affected = Math.max(0, Number(response?.data?.affected) || 0);
+      const skipped = Math.max(0, Number(response?.data?.skipped) || 0);
+      if (skipped > 0) {
+        showToast?.(
+          `${affected} role${affected === 1 ? '' : 's'} resumed; ${skipped} need${skipped === 1 ? 's' : ''} attention. Review role budgets and status, then retry.`,
+          'warning',
+        );
+      } else if (!statusRefreshed) {
+        showToast?.(
+          'The workspace change was saved, but the latest status could not be refreshed yet.',
+          'info',
+        );
+      }
     } finally {
       busyRef.current = false;
       setAction(null);

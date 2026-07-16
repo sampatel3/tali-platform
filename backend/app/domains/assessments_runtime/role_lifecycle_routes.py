@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -9,6 +10,8 @@ from ...deps import get_current_user
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
+from ...models.role import Role
+from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
@@ -179,8 +182,41 @@ def delete_role(
         raise HTTPException(
             status_code=400, detail="Cannot delete role with assessments"
         )
+    related_child = (
+        db.query(Role.id)
+        .filter(
+            Role.organization_id == current_user.organization_id,
+            Role.ats_owner_role_id == role.id,
+        )
+        .first()
+    )
+    if related_child:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot permanently delete an original role with related roles; "
+                "their scoring history must be retained"
+            ),
+        )
+    has_related_history = (
+        db.query(SisterRoleEvaluation.id)
+        .filter(
+            SisterRoleEvaluation.organization_id == current_user.organization_id,
+            SisterRoleEvaluation.role_id == role.id,
+        )
+        .first()
+        is not None
+    )
     audit_before = capture_role_change_snapshot(role)
     audit_from_version = int(role.version or 1)
+    if has_related_history:
+        # A related role can look "empty" because its candidates remain owned
+        # by the original ATS role. Preserve the role identity and every score/
+        # history row while removing it from active product surfaces.
+        role.deleted_at = datetime.now(timezone.utc)
+        role.agentic_mode_enabled = False
+        role.agent_paused_at = None
+        role.agent_paused_reason = None
     audit_to_version = bump_role_version(role)
     add_role_change_event(
         db,
@@ -190,12 +226,17 @@ def delete_role(
         actor_user_id=int(current_user.id),
         from_version=audit_from_version,
         to_version=audit_to_version,
-        reason="role deleted",
+        reason=(
+            "role archived to preserve related-role scoring history"
+            if has_related_history
+            else "role deleted"
+        ),
         request_id=get_request_id(),
         allow_empty_changes=True,
     )
     try:
-        db.delete(role)
+        if not has_related_history:
+            db.delete(role)
         db.commit()
     except Exception:
         db.rollback()

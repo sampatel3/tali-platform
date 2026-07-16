@@ -1,87 +1,97 @@
 # Agent control model
 
-Taali has two independent control layers:
+Taali stores agent control on each role. A role can be off, paused, or enabled
+and ready to run. The Home and Jobs global controls are workspace-owner-only
+bulk operations over those role controls; they are not a separate workspace
+execution overlay.
 
-1. **Workspace control** is an emergency/operational hold across every role in
-   the workspace. Only a workspace owner can change it.
-2. **Role control** is the desired state of one role. It can be off, locally
-   paused, or ready to run.
+The API retains workspace-named endpoints and a shared control version for
+compatibility and concurrency. Those names do not mean that a current bulk
+Pause creates a hidden organization-wide hold.
 
-The workspace control is an overlay. It never bulk-edits role controls. This
-distinction is what makes a workspace resume safe: it removes only the
-workspace hold and reveals each role's saved state.
+## Role states
 
-## Effective state
+| Role state | Runs autonomously | Changed by bulk Pause | Considered by bulk Resume |
+| --- | --- | --- | --- |
+| Off | No | No | No |
+| Enabled and running | Yes | Paused | No |
+| Enabled and already paused | No | No | Yes |
 
-| Saved role state | Workspace running | Workspace paused |
-| --- | --- | --- |
-| Off | Off | Off |
-| On, locally paused | Role paused | Held by workspace; remains role-paused after resume |
-| On, locally runnable | Running | Held by workspace; resumes automatically after resume |
-
-Precedence is therefore `off > workspace hold > local role hold > running`.
-The API returns both the effective state and the saved role state so the UI can
-explain what will happen next instead of flattening the two controls together.
+An existing role pause can be recruiter-authored or produced by a runtime
+safety guard. Bulk Pause leaves its timestamp, reason, actor, version, and
+history unchanged. This preserves the distinction between a pause created by
+the bulk action and a hold that was already protecting the role.
 
 ## Commands
 
-### Pause workspace
+### Pause running agents
 
 - Requires workspace-owner permission.
-- Records actor, timestamp, reason, request ID, and a new workspace control
-  version in append-only audit history.
-- Stops autonomous admission for all enabled roles without changing their
-  local pause flags, review queues, or configured budgets.
-- A repeated pause is idempotent and retains the original actor and timestamp.
+- Pauses each enabled, currently unpaused role in one serialized bulk action.
+- Leaves disabled roles and already-paused roles untouched. It does not erase
+  or relabel individual, budget, readiness, bootstrap, or system holds.
+- Keeps pending review decisions and configured role budgets intact because it
+  soft-pauses the role rather than turning agent mode off.
+- Records the bulk actor and action, and records a role change for every role
+  whose state changed.
+- Does not create a workspace execution overlay. Each affected role can be
+  resumed independently from its role page.
 
-### Resume workspace
+### Resume eligible paused agents
 
 - Requires workspace-owner permission.
-- Clears only the workspace overlay and records a new audited version.
-- Dispatches only roles that are enabled, locally runnable, ready, and under
-  budget.
-- Never clears a manual, budget, readiness, or system pause on a role.
+- Explicitly attempts to resume every enabled, paused role, regardless of
+  whether that pause came from an earlier bulk action, an individual action,
+  or a safety guard.
+- Clears a role's pause only when its monthly budget and complete runtime
+  readiness checks are healthy. Ineligible roles remain paused and are
+  reported as skipped so the UI can direct the owner to the role that needs
+  attention.
+- Attempts an immediate agent cycle for each role it successfully unpauses.
+  A dispatch failure is reported for attention rather than silently presented
+  as a fully successful bulk resume.
+- Leaves agent-off roles off.
 
-### Pause role while the workspace is paused
+Bulk Resume is therefore a deliberate request to resume eligible role agents,
+not the removal of a temporary workspace layer. Owners who want to preserve a
+particular manual pause should resume only the intended roles individually.
 
-- Saves a local role hold beneath the overlay.
-- The role remains paused when the workspace resumes.
+## Multi-user concurrency and audit
 
-### Resume or turn on a role while the workspace is paused
+Global bulk commands carry the shared control version the user viewed. The
+organization row and target role rows are locked in a consistent order while
+the command is applied. A stale command that would conflict with a newer bulk
+action is rejected with `409 Conflict` and the latest action context; a safe
+same-target retry can remain idempotent.
 
-- Saves the user's desired local state.
-- Does not dispatch work while the workspace overlay remains active.
-- The UI says that the role will resume after the workspace is resumed.
-
-## Multi-user concurrency
-
-Workspace and role controls have separate monotonic versions. Mutations carry
-the version the user viewed. A stale command that would change current state is
-rejected with `409 Conflict` and the latest actor/state, while same-target
-retries are idempotent. This prevents one browser from silently overwriting a
-newer decision made in another browser.
-
-The workspace row is locked for each workspace transition. Autonomous work is
-fenced at task admission and again before paid or externally visible actions.
-Queued work also carries the workspace control version so a task dispatched
-before a pause cannot begin after the control changes.
+Each changed role receives its own monotonic version and append-only role
+change event. A real bulk transition also advances the shared control version
+and appends a workspace-level bulk-action event. A Resume attempt for which
+every role fails the safety checks does not claim a state transition or replace
+the latest successful actor.
 
 ## UI language
 
-- Global surfaces say **Workspace agent paused** and identify who paused it
-  and when.
-- Global actions say **Pause workspace** and **Resume workspace**.
-- A role held only by the workspace is shown as **On · held** and explains
-  that it will resume automatically.
-- A locally paused role under the workspace hold shows its saved pause actor,
-  reason, and time and explains that it will remain paused afterward.
-- Non-owners can see the state and attribution but are told that workspace
-  controls are owner-only.
+- Global actions say **Pause running agents** and **Resume eligible paused
+  agents**.
+- Aggregate status reports how many roles are running and how many are paused;
+  it does not present current bulk pauses as a workspace overlay.
+- A partial Resume reports both the resumed and skipped counts and points the
+  owner to budget/readiness status.
+- Non-owners can see aggregate agent state, but the bulk buttons explain that
+  only workspace owners can use them.
 
 ## Intake and in-flight work
 
-A workspace pause blocks new autonomous scoring, assessments, auto-rejection,
-agent tools, paid parsing, and Taali-native applications. Provider-hosted ATS
-intake remains controlled by that provider, but Taali does not start paid
-processing while paused. An already-started irreversible provider request
-cannot be recalled; the runtime stops at the next control boundary.
+A role pause blocks new autonomous work for that role at the normal admission
+and side-effect boundaries, including agent cycles and guarded paid actions.
+It does not remove pending decisions or change provider-owned ATS intake.
+Already-started irreversible provider requests cannot be recalled; execution
+stops at the next applicable role-control boundary.
+
+## Legacy overlay compatibility
+
+Older releases could persist an organization-wide pause. Compatibility readers
+remain temporarily so rolling deployments fail safely, and the database
+migration converts a pre-existing legacy hold into role pauses. New global
+Pause and Resume commands must not create or depend on that legacy overlay.

@@ -34,7 +34,7 @@ def related_ats_transition_capability(
         db,
         current_user=current_user,
         role_id=role_id,
-        permission=JobPermission.VIEW,
+        permission=JobPermission.EDIT_ROLE,
         lock_for_update=False,
     )
     if (

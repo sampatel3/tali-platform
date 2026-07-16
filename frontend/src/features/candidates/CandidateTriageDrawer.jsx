@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
 import '../../styles/08-candidate-detail.css';
@@ -13,6 +13,7 @@ import {
 } from '../../shared/motion';
 import { CandidateAuditTimeline } from './CandidateAuditTimeline';
 import { AssessmentInviteChip } from './CandidateStatusChips';
+import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 import { ScoreProvenance } from './ScoreProvenance';
 
 const _fmtTrackTs = (ts) => {
@@ -119,6 +120,7 @@ export function CandidateTriageDrawer({
   isRelatedRole = false,
   hasRelatedRoles = false,
   roleTasks = [],
+  canMutate = true,
   mode = 'inline',
   activityLabel = '',
   loadingActivity = false,
@@ -160,6 +162,7 @@ export function CandidateTriageDrawer({
   // ``REJECT_VALUE``. One picker, one confirm button.
   const [selectedMoveAction, setSelectedMoveAction] = useState('');
   const [showDetails, setShowDetails] = useState(false);
+  const [retakeOpen, setRetakeOpen] = useState(false);
   const containerRef = useRef(null);
   const relatedRoleAssessmentNoteId = useId();
 
@@ -185,7 +188,8 @@ export function CandidateTriageDrawer({
   const sourceLabel = applicationAtsProvider
     ? `Imported from ${applicationAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable'}`
     : 'Added in Taali';
-  const canAct = application?.application_outcome === 'open';
+  const applicationOpen = application?.application_outcome === 'open';
+  const canAct = canMutate && applicationOpen;
   const hasAtsLink = resolvedAtsProvider === 'workable'
     ? hasWorkableLink
     : resolvedAtsProvider === 'bullhorn'
@@ -252,6 +256,7 @@ export function CandidateTriageDrawer({
     setActiveTab('move');
     setSelectedMoveAction('');
     setShowDetails(false);
+    setRetakeOpen(false);
     if (isRelatedRole) {
       // Related roles are score-only projections of the owner's application.
       // Never preselect an inherited owner task as though it could be sent
@@ -294,6 +299,28 @@ export function CandidateTriageDrawer({
     });
   }, [applicationId]);
 
+  useEffect(() => {
+    if (!applicationId || !onClose || retakeOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [applicationId, onClose, retakeOpen]);
+
+  const closeRetake = useCallback(() => {
+    if (!assessmentBusy) setRetakeOpen(false);
+  }, [assessmentBusy]);
+
+  const confirmRetake = useCallback(async ({ taskId, reason }) => {
+    const sent = await onSendAssessment?.(application, taskId, {
+      voidReason: reason,
+    });
+    if (sent !== false) setRetakeOpen(false);
+  }, [application, onSendAssessment]);
+
   if (!application) return null;
 
   const reportHref = candidateReportHref(application, roleId);
@@ -307,6 +334,10 @@ export function CandidateTriageDrawer({
     // Keep the UI guard even though the owning hook also rejects this action:
     // inherited tasks must never mutate the canonical owner's application.
     if (isRelatedRole || !canAct || !selectedTaskId || assessmentBusy) return;
+    if (assessmentId) {
+      setRetakeOpen(true);
+      return;
+    }
     onSendAssessment?.(application, selectedTaskId);
   };
 
@@ -337,8 +368,9 @@ export function CandidateTriageDrawer({
   })();
 
   return (
-    <div ref={containerRef} className={`candidate-triage candidate-triage-${mode} ctc`}>
-      {onClose ? (
+    <>
+      <div ref={containerRef} className={`candidate-triage candidate-triage-${mode} ctc`}>
+        {onClose ? (
         <button
           type="button"
           className="taali-icon-btn taali-icon-btn-ghost taali-icon-btn-sm ctc-close"
@@ -386,6 +418,13 @@ export function CandidateTriageDrawer({
         </button>
       </div>
 
+      {!canMutate ? (
+        <div className="ctc-agent-note" role="note">
+          Candidate actions are read-only. Ask a workspace owner, hiring manager,
+          or recruiter assigned to this role to make changes.
+        </div>
+      ) : null}
+
       <MotionDisclosure open={showDetails} id="candidate-triage-details">
         <div className="ctc-details">
           <div className="ctc-scores">
@@ -416,7 +455,7 @@ export function CandidateTriageDrawer({
         </div>
       </MotionDisclosure>
 
-      {!canAct ? (
+      {!applicationOpen ? (
         <div className="ctc-closed-banner">
           <span>
             Application <strong>{application?.application_outcome || 'closed'}</strong>
@@ -692,7 +731,17 @@ export function CandidateTriageDrawer({
         <span className="ctc-grow" />
         <span>Esc closes</span>
       </div>
-    </div>
+      </div>
+      <RetakeAssessmentDialog
+        open={retakeOpen}
+        application={application}
+        roleTasks={roleTasks}
+        loading={assessmentBusy}
+        defaultTaskId={selectedTaskId === 'auto' ? '' : selectedTaskId}
+        onClose={closeRetake}
+        onConfirm={confirmRetake}
+      />
+    </>
   );
 }
 

@@ -10,6 +10,7 @@ from .interview_feedback import INTERVIEW_RECOMMENDATIONS, InterviewFeedback
 from .role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role, role_tasks
 from .role_change_event import RoleChangeEvent
 from .workspace_agent_control_event import WorkspaceAgentControlEvent
+from .workspace_pause_migration_audit import WorkspacePauseMigrationAudit
 from .sister_role_evaluation import SisterRoleEvaluation
 from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
 from .client import (
@@ -233,7 +234,6 @@ from .outreach_campaign import (
     OutreachCampaign,
     OutreachMessage,
 )
-
 __all__ = [
     "User",
     "Organization",

@@ -149,7 +149,11 @@ from .application_process_support import (
     _matches_stage_filter as _matches_stage_filter,
     _process_dry_run as _process_dry_run,
 )
+from .application_mutation_authorization import (
+    require_application_job_permission as _require_application_job_permission,
+)
 from .ats_move_dispatch import queue_application_ats_move
+from .related_role_actions import require_application_edit_action
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
@@ -159,27 +163,6 @@ logger = logging.getLogger("taali.applications")
 # queue (see pipeline_service.PIPELINE_STAGES).
 PIPELINE_STAGE_VALUES = {"sourced", "applied", "invited", "in_assessment", "review"}
 APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
-
-
-def _require_application_job_permission(
-    db: Session,
-    *,
-    current_user: User,
-    application_id: int,
-    permission: JobPermission,
-    lock_for_update: bool = True,
-) -> CandidateApplication:
-    """Load an application and enforce its live job-team policy under Role lock."""
-
-    app = get_application(application_id, current_user.organization_id, db)
-    require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=int(app.role_id),
-        permission=permission,
-        lock_for_update=lock_for_update,
-    )
-    return app
 
 
 def _application_is_workable_linked(app: CandidateApplication) -> bool:
@@ -2247,11 +2230,11 @@ def update_application_outcome(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = _require_application_job_permission(
+    app = require_application_edit_action(
         db,
         current_user=current_user,
         application_id=application_id,
-        permission=JobPermission.EDIT_ROLE,
+        acting_role_id=data.acting_role_id,
     )
     ats_writeback_job_run_id = None
     try:
@@ -2341,6 +2324,11 @@ def update_application_outcome(
             actor_type="recruiter",
             actor_id=current_user.id,
             reason=data.reason or "Recruiter outcome update",
+            metadata=(
+                {"acting_role_id": int(data.acting_role_id)}
+                if data.acting_role_id is not None
+                else None
+            ),
             idempotency_key=data.idempotency_key,
             expected_version=data.expected_version,
         )
@@ -2465,19 +2453,12 @@ def move_application_in_active_ats(
     current_user: User = Depends(get_current_user),
 ):
     """Hand a candidate back through the workspace's connected ATS provider."""
-    app = _require_application_job_permission(
+    app = require_application_edit_action(
         db,
         current_user=current_user,
         application_id=application_id,
-        permission=JobPermission.EDIT_ROLE,
+        acting_role_id=data.acting_role_id,
     )
-    if data.acting_role_id is not None:
-        from .related_role_actions import require_related_role_application_action
-
-        require_related_role_application_action(
-            db, current_user=current_user,
-            related_role_id=data.acting_role_id, application=app,
-        )
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)
@@ -2539,19 +2520,12 @@ def move_application_in_workable(
     list reflects reality (post-handover candidates leave the active
     ``review`` bucket).
     """
-    app = _require_application_job_permission(
+    app = require_application_edit_action(
         db,
         current_user=current_user,
         application_id=application_id,
-        permission=JobPermission.EDIT_ROLE,
+        acting_role_id=data.acting_role_id,
     )
-    if data.acting_role_id is not None:
-        from .related_role_actions import require_related_role_application_action
-
-        require_related_role_application_action(
-            db, current_user=current_user,
-            related_role_id=data.acting_role_id, application=app,
-        )
     if not app.workable_candidate_id:
         raise HTTPException(
             status_code=400,

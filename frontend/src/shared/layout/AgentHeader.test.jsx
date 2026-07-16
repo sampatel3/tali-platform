@@ -530,6 +530,50 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(agent.pendingBreakdown).toEqual({ total: 176, decisions: 175, questions: 1 });
   });
 
+  it('prefers a live run over older historical activity', () => {
+    const agent = buildAgentPropFromStatus({
+      enabled: true,
+      current_run: { id: 91, tools_called: [] },
+      last_activity: { summary: 'Scored Maya Chen', relative_time: '8m ago' },
+    });
+
+    expect(agent.tick).toBe('Cycle running…');
+    expect(agent.inFlight).toBe(true);
+  });
+
+  it('uses the caller fallback only when there is no run or activity', () => {
+    const agent = buildAgentPropFromStatus(
+      { enabled: true, current_run: null, last_activity: null },
+      { fallbackTick: 'Watching 3 open roles.' },
+    );
+
+    expect(agent.tick).toBe('Watching 3 open roles.');
+  });
+
+  it('keeps historical activity visible when no run is active', () => {
+    const agent = buildAgentPropFromStatus({
+      enabled: true,
+      last_activity: { summary: 'Scored Maya Chen', relative_time: '8m ago' },
+    });
+
+    expect(agent.tick).toBe('Scored Maya Chen · 8m ago');
+  });
+
+  it('describes an all-local-pause aggregate without inventing one workspace owner', () => {
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: false,
+      active_role_count: 0,
+      paused_role_count: 2,
+      local_paused_role_count: 2,
+      paused_reason: 'paused by recruiter',
+    }, { isEnabled: true, controlScope: 'workspace' });
+
+    render(<AgentHeader title="Jobs" agent={agent} onResumeAgent={() => {}} />);
+
+    expect(screen.getByText('2 roles paused individually')).toBeInTheDocument();
+    expect(screen.queryByText(/Workspace pause owner not recorded/i)).not.toBeInTheDocument();
+  });
+
   it('keeps Auto-paused wording for a budget-triggered pause', () => {
     render(
       <AgentHeader
@@ -743,6 +787,52 @@ describe('AgentHeader — Pause/Resume panel', () => {
       );
       expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^pause$/i })).not.toBeInTheDocument();
+    });
+
+    it('keeps legacy workspace-overlay recovery visible when both bulk counts are zero', () => {
+      const onResume = vi.fn();
+      const agent = buildAgentPropFromStatus({
+        workspace_paused: true,
+        workspace_control_version: 9,
+        workspace_paused_reason: 'legacy workspace hold',
+        active_role_count: 0,
+        paused_role_count: 0,
+        local_paused_role_count: 0,
+      }, { isEnabled: false, controlScope: 'workspace' });
+
+      render(
+        <AgentHeader
+          title="Jobs"
+          agent={agent}
+          onResumeAgent={onResume}
+          pauseAllCount={0}
+          resumeAllCount={0}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+      expect(onResume).toHaveBeenCalledOnce();
+      expect(screen.queryByRole('button', { name: 'Pause workspace' })).not.toBeInTheDocument();
+    });
+
+    it('keeps ordinary zero-count bulk controls hidden without a workspace overlay', () => {
+      render(
+        <AgentHeader
+          title="Jobs"
+          agent={{
+            ...runningAgent,
+            controlScope: 'workspace',
+            workspacePaused: false,
+          }}
+          onPauseAgent={() => {}}
+          onResumeAgent={() => {}}
+          pauseAllCount={0}
+          resumeAllCount={0}
+        />,
+      );
+
+      expect(screen.queryByRole('button', { name: 'Pause workspace' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
     });
 
     it('acknowledges a bulk pause immediately and locks both controls', () => {

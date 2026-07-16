@@ -64,7 +64,7 @@ class SisterRoleEvaluation(Base):
         nullable=False, index=True,
     )
     role_id = Column(
-        Integer, ForeignKey("roles.id", ondelete="CASCADE"),
+        Integer, ForeignKey("roles.id", ondelete="RESTRICT"),
         nullable=False, index=True,
     )
     source_application_id = Column(

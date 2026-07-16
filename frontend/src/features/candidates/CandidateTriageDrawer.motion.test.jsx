@@ -187,6 +187,105 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(onSendAssessment).toHaveBeenCalledWith(application, '5');
   });
 
+  it('opens the retake dialog for an existing assessment and submits its reason', async () => {
+    const onSendAssessment = vi.fn().mockResolvedValue(true);
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{ ...application, valid_assessment_id: 912 }}
+          roleId={9}
+          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          onSendAssessment={onSendAssessment}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    fireEvent.click(screen.getByRole('button', { name: 'Send retake' }));
+
+    expect(screen.getByRole('dialog', { name: 'Retake assessment' })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Reason (optional)' }), {
+      target: { value: 'Candidate lost connectivity' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm retake' }));
+
+    await waitFor(() => {
+      expect(onSendAssessment).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 41, valid_assessment_id: 912 }),
+        '5',
+        { voidReason: 'Candidate lost connectivity' },
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Retake assessment' })).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps a failed retake open and cancel never sends another request', async () => {
+    const onSendAssessment = vi.fn().mockResolvedValue(false);
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{ ...application, valid_assessment_id: 913 }}
+          roleId={9}
+          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          onSendAssessment={onSendAssessment}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    fireEvent.click(screen.getByRole('button', { name: 'Send retake' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm retake' }));
+
+    await waitFor(() => expect(onSendAssessment).toHaveBeenCalledOnce());
+    expect(screen.getByRole('dialog', { name: 'Retake assessment' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Retake assessment' })).not.toBeInTheDocument();
+    });
+    expect(onSendAssessment).toHaveBeenCalledOnce();
+  });
+
+  it('closes the candidate drawer on Escape and removes the listener on unmount', () => {
+    const onClose = vi.fn();
+    const { unmount } = render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[]}
+          onClose={onClose}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+    unmount();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('renders an open application as read-only without falsely calling it closed', () => {
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[{ id: 5, name: 'Backend take-home' }]}
+          canMutate={false}
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    expect(screen.getByRole('note')).toHaveTextContent(/Candidate actions are read-only/i);
+    expect(screen.queryByText(/Application open.*No further actions/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Reject Closes the application$/i })).toBeDisabled();
+  });
+
   it('shows Bullhorn remote labels but submits the selected Taali intent', async () => {
     const onMoveToAtsStage = vi.fn();
     const bullhornApplication = {

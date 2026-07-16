@@ -21,6 +21,7 @@ from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, create_engine, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.pool import NullPool
 
 
@@ -32,6 +33,9 @@ ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
 POSTGRES_ADVISORY_LOCK_ID = 0x54414C494D494752
 DEFAULT_LOCK_TIMEOUT_SECONDS = 300.0
 LOCK_POLL_INTERVAL_SECONDS = 0.25
+PUBLISHED_WORKSPACE_PAUSE_REVISION = "175_workspace_bulk_role_pause"
+WORKSPACE_PAUSE_PREDECESSOR_REVISION = "174_related_role_workflow"
+SUPPORTED_DATABASE_DIALECTS = frozenset({"postgresql", "sqlite"})
 
 POSTGRES_REQUIRED_INDEXES = frozenset(
     {
@@ -46,6 +50,13 @@ POSTGRES_REQUIRED_TRIGGERS = frozenset(
     {
         "trg_candidate_application_events_no_update",
         "role_change_events_append_only",
+        "workspace_pause_migration_audits_append_only",
+    }
+)
+POSTGRES_REQUIRED_RESTRICT_FOREIGN_KEYS = frozenset(
+    {
+        "roles_ats_owner_role_id_fkey",
+        "sister_role_evaluations_role_id_fkey",
     }
 )
 POSTGRES_REQUIRED_ASSESSMENT_STATUSES = frozenset(
@@ -90,6 +101,15 @@ def _database_url(config: Config) -> str:
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql://", 1)
     return url
+
+
+def _require_supported_database_dialect(connection: Connection) -> None:
+    dialect = str(connection.dialect.name)
+    if dialect not in SUPPORTED_DATABASE_DIALECTS:
+        raise MigrationSafetyError(
+            "Refusing to migrate an unsupported database dialect "
+            f"({dialect!r}); supported dialects are PostgreSQL and SQLite."
+        )
 
 
 def _schema_objects(connection: Connection) -> set[str]:
@@ -375,6 +395,69 @@ def _validate_postgres_invariants(
             + "."
         )
 
+    workspace_action_check = connection.execute(
+        text(
+            """
+            SELECT pg_get_constraintdef(constraint_row.oid)
+            FROM pg_constraint AS constraint_row
+            JOIN pg_class AS relation
+              ON relation.oid = constraint_row.conrelid
+            JOIN pg_namespace AS namespace
+              ON namespace.oid = relation.relnamespace
+            WHERE namespace.nspname = current_schema()
+              AND relation.relname = 'workspace_agent_control_events'
+              AND constraint_row.conname = 'ck_workspace_agent_control_events_action'
+              AND constraint_row.contype = 'c'
+            """
+        )
+    ).scalar_one_or_none()
+    if not workspace_action_check or "migrated" not in str(workspace_action_check):
+        raise MigrationValidationError(
+            "workspace_agent_control_events action constraint does not allow "
+            "the migration compatibility event."
+        )
+
+    current_schema = _current_schema(connection)
+    postgres_inspector = inspect(connection)
+    restrict_foreign_keys: set[str] = set()
+    for table_name, column_name, referred_table, expected_name in (
+        (
+            "roles",
+            "ats_owner_role_id",
+            "roles",
+            "roles_ats_owner_role_id_fkey",
+        ),
+        (
+            "sister_role_evaluations",
+            "role_id",
+            "roles",
+            "sister_role_evaluations_role_id_fkey",
+        ),
+    ):
+        for foreign_key in postgres_inspector.get_foreign_keys(
+            table_name,
+            schema=current_schema,
+        ):
+            options = foreign_key.get("options") or {}
+            if (
+                foreign_key.get("name") == expected_name
+                and foreign_key.get("constrained_columns") == [column_name]
+                and foreign_key.get("referred_table") == referred_table
+                and foreign_key.get("referred_columns") == ["id"]
+                and str(options.get("ondelete") or "").upper() == "RESTRICT"
+            ):
+                restrict_foreign_keys.add(expected_name)
+                break
+    missing_restrict_foreign_keys = sorted(
+        POSTGRES_REQUIRED_RESTRICT_FOREIGN_KEYS - restrict_foreign_keys
+    )
+    if missing_restrict_foreign_keys:
+        raise MigrationValidationError(
+            "Related-role history foreign keys are not delete-restricting: "
+            + ", ".join(missing_restrict_foreign_keys)
+            + "."
+        )
+
     assessment_statuses = {
         str(label)
         for label in connection.execute(
@@ -398,7 +481,6 @@ def _validate_postgres_invariants(
             "assessmentstatus is missing values: " + ", ".join(missing_statuses) + "."
         )
 
-    current_schema = _current_schema(connection)
     version_columns = {
         str(column["name"]): column
         for column in inspect(connection).get_columns(
@@ -437,6 +519,60 @@ def _validate_database(
         _validate_postgres_invariants(connection, script)
 
 
+def _applied_revisions(
+    connection: Connection, script: ScriptDirectory
+) -> set[str]:
+    """Return every revision reachable from the database's current heads."""
+
+    migration_options = {}
+    current_schema = _current_schema(connection)
+    if current_schema is not None:
+        migration_options["version_table_schema"] = current_schema
+    current_heads = MigrationContext.configure(
+        connection, opts=migration_options
+    ).get_current_heads()
+    applied: set[str] = set()
+    for head in current_heads:
+        applied.update(
+            revision.revision
+            for revision in script.iterate_revisions(head, "base")
+        )
+    return applied
+
+
+def _set_postgres_migration_lock_timeout(connection: Connection) -> None:
+    """Bound DDL/data lock waits for every versioned PostgreSQL upgrade."""
+
+    if connection.dialect.name != "postgresql":
+        return
+    timeout_ms = max(1, int(_lock_timeout_seconds() * 1000))
+    connection.execute(
+        text("SELECT set_config('lock_timeout', :timeout, true)"),
+        {"timeout": f"{timeout_ms}ms"},
+    )
+
+
+def _lock_workspace_pause_conversion_tables(connection: Connection) -> None:
+    """Fence immutable migration 175 from concurrent application writers.
+
+    PostgreSQL ``EXCLUSIVE`` still permits ordinary reads (``ACCESS SHARE``),
+    but blocks both row-locking readers and writers. Taking the organization
+    table first matches the runtime organization -> role lock order.
+    """
+
+    if connection.dialect.name != "postgresql":
+        return
+    _set_postgres_migration_lock_timeout(connection)
+    try:
+        connection.execute(text("LOCK TABLE organizations IN EXCLUSIVE MODE"))
+        connection.execute(text("LOCK TABLE roles IN EXCLUSIVE MODE"))
+    except DBAPIError as exc:
+        raise MigrationSafetyError(
+            "Timed out waiting to fence application writes for the published "
+            "workspace-pause conversion."
+        ) from exc
+
+
 def migrate_database(database_url: str | None = None) -> str:
     """Safely migrate one database and return its preflight classification."""
     config = _alembic_config()
@@ -447,14 +583,62 @@ def migrate_database(database_url: str | None = None) -> str:
     engine = create_engine(url, poolclass=NullPool)
     try:
         with _migration_lock(engine) as lock_connection:
+            _require_supported_database_dialect(lock_connection)
             classification = _preflight_database(lock_connection, script)
             _log(f"Preflight passed ({classification} schema).")
             current_schema = _current_schema(lock_connection)
             if current_schema is not None:
                 config.attributes["version_table_schema"] = current_schema
-            with _alembic_database_url(url):
-                command.upgrade(config, "head")
-                _validate_database(lock_connection, script)
+            # Preflight reads open a transaction. End it before handing this
+            # same advisory-locked connection to Alembic.
+            if lock_connection.in_transaction():
+                lock_connection.rollback()
+            config.attributes["connection"] = lock_connection
+            try:
+                with _alembic_database_url(url):
+                    needs_workspace_pause_conversion = (
+                        classification == "versioned"
+                        and PUBLISHED_WORKSPACE_PAUSE_REVISION
+                        not in _applied_revisions(lock_connection, script)
+                    )
+                    if lock_connection.in_transaction():
+                        lock_connection.rollback()
+
+                    if needs_workspace_pause_conversion:
+                        # Stop immediately before immutable 175. This safely
+                        # crosses migration 160's autocommit block, then lets
+                        # the conversion and every later revision share the
+                        # write-fencing transaction below.
+                        command.upgrade(
+                            config, WORKSPACE_PAUSE_PREDECESSOR_REVISION
+                        )
+                        if lock_connection.in_transaction():
+                            lock_connection.commit()
+
+                    if classification == "empty":
+                        # Fresh bootstrap includes migration 160's PostgreSQL
+                        # autocommit block and therefore cannot be one outer
+                        # transaction. It still uses the advisory-locked
+                        # connection and is fully validated before success.
+                        command.upgrade(config, "head")
+                        _validate_database(lock_connection, script)
+                        if lock_connection.in_transaction():
+                            lock_connection.rollback()
+                    else:
+                        with lock_connection.begin():
+                            _set_postgres_migration_lock_timeout(lock_connection)
+                            if needs_workspace_pause_conversion:
+                                _log(
+                                    "Fencing workspace and role writes for "
+                                    "published migration 175."
+                                )
+                                _lock_workspace_pause_conversion_tables(
+                                    lock_connection
+                                )
+                            command.upgrade(config, "head")
+                            _validate_database(lock_connection, script)
+            finally:
+                config.attributes.pop("connection", None)
             _log("Migration and schema invariant validation passed.")
             return classification
     finally:

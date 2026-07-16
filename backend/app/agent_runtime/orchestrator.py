@@ -29,6 +29,7 @@ from ..services.manual_agent_run_dispatch import (
     intent_application_id,
     with_dispatch_metadata,
 )
+from ..services.manual_run_application_scope import resolve_manual_run_application
 from ..services.provider_usage_admission import (
     release_provider_usage,
     reserve_provider_usage,
@@ -46,7 +47,6 @@ from .tool_registry import (
 
 
 logger = logging.getLogger("taali.agent_runtime")
-
 
 # The governed tool surface has 26 tools. Bumping rounds up gives the agent enough
 # headroom to chain a cohort search → compare → decision sequence. Each round
@@ -546,7 +546,7 @@ def run_cycle(
     cycle_role_version = int(getattr(role, "version", 1) or 1)
 
     def _control_state_abort_reason(*, lock: bool = False) -> str | None:
-        """Re-read, and optionally lock, the shared control-state boundary."""
+        """Re-read shared execution authority at each provider/tool fence."""
 
         # Workspace control is the outer execution authority and therefore the
         # first lock.  A Pause that commits before this fence is observed; one
@@ -583,6 +583,22 @@ def run_cycle(
             return "agent_paused_during_cycle"
         if int(getattr(current_role, "version", 1) or 1) != cycle_role_version:
             return "role_configuration_changed_during_cycle"
+        # A focused manual run is authorized for exactly one live roster row.
+        # Event cycles are intentionally cohort-capable after their triggering
+        # application closes, so only the recruiter-requested manual focus is
+        # a revocable cycle-level scope here.
+        if (
+            trigger == "manual"
+            and application_id is not None
+            and resolve_manual_run_application(
+                db,
+                role=current_role,
+                organization_id=int(role.organization_id),
+                application_id=int(application_id),
+            )
+            is None
+        ):
+            return "application_unavailable_during_cycle"
         return None
 
     trigger_context = (

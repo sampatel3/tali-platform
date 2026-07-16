@@ -250,16 +250,6 @@ def resume_all_agents(
         Role.deleted_at.is_(None),
         Role.agentic_mode_enabled.is_(True),
     ).count()
-    if roles or had_legacy_overlay:
-        advance_workspace_control(
-            db,
-            organization=organization,
-            actor_user_id=int(current_user.id),
-            actor_name=str(current_user.full_name or current_user.email),
-            action="resumed",
-            reason="workspace resumed by recruiter",
-            request_id=get_request_id(),
-        )
     resumed_roles: list[tuple[Role, int]] = []
     skipped = 0
     for role in roles:
@@ -281,7 +271,19 @@ def resume_all_agents(
             request_id=get_request_id(),
         )
         resumed_roles.append((role, role_to_version))
-    if roles or had_legacy_overlay:
+    if resumed_roles or had_legacy_overlay:
+        # Record only a real state transition. An all-skipped attempt leaves
+        # the concurrency token and latest actor untouched so the same viewed
+        # version can be retried after budget/readiness recovers.
+        advance_workspace_control(
+            db,
+            organization=organization,
+            actor_user_id=int(current_user.id),
+            actor_name=str(current_user.full_name or current_user.email),
+            action="resumed",
+            reason="workspace resumed by recruiter",
+            request_id=get_request_id(),
+        )
         db.commit()
 
     dispatch_failed = 0

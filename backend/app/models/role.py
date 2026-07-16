@@ -60,7 +60,7 @@ class Role(Base):
     )
     ats_owner_role_id = Column(
         Integer,
-        ForeignKey("roles.id", ondelete="CASCADE"),
+        ForeignKey("roles.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
     )
@@ -269,7 +269,10 @@ class Role(Base):
         "Role",
         foreign_keys=[ats_owner_role_id],
         back_populates="ats_owner_role",
-        cascade="all, delete-orphan",
+        # Never let the ORM null an already-loaded child's owner FK before a
+        # parent delete. The database RESTRICT constraint must remain the sole
+        # authority even when this collection is present in the identity map.
+        passive_deletes="all",
     )
     assessments = relationship("Assessment", back_populates="role")
     criteria = relationship(

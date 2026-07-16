@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { Link2 } from 'lucide-react';
 
 import { formatCount } from '../../shared/metrics';
@@ -6,6 +6,17 @@ import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { getErrorMessage } from '../candidates/candidatesUiUtils';
 
 const ACTIVE_SCORING_STATES = new Set(['running', 'waiting', 'retrying']);
+
+const unwrapAgentStatusResult = (result) => {
+  if (result == null) return null;
+  if (
+    typeof result === 'object'
+    && Object.prototype.hasOwnProperty.call(result, 'data')
+  ) {
+    return result.data ?? null;
+  }
+  return result;
+};
 
 export const isRelatedRoleScoringActive = (status) => (
   ACTIVE_SCORING_STATES.has(String(status?.status || '').toLowerCase())
@@ -48,31 +59,123 @@ export const useRelatedRoleScoringPolling = (
 
 export const useEffectiveRelatedAgentResume = ({
   agentStatus,
+  canResumeWorkspace = false,
   onResumeRole,
   refetchAgentStatus,
   resumeWorkspace,
   reloadRole,
   setPollingVersion,
   showToast,
-}) => useCallback(async () => {
-  if (!agentStatus?.workspace_paused) return onResumeRole();
-  try {
-    const refreshed = await refetchAgentStatus?.();
-    const version = Number(
-      refreshed?.workspace_control_version
-      ?? refreshed?.data?.workspace_control_version
-      ?? agentStatus?.workspace_control_version,
-    );
-    if (!Number.isFinite(version)) throw new Error('Workspace control state is still loading. Try again.');
-    await resumeWorkspace(version);
-    showToast('Workspace Agent resumed. Related-role scoring will continue automatically.', 'success');
-    await refetchAgentStatus?.();
-    setPollingVersion((value) => value + 1);
-    void reloadRole();
-  } catch (error) {
-    showToast(getErrorMessage(error, 'Only a workspace owner can resume the workspace Agent.'), 'error');
-  }
-}, [agentStatus, onResumeRole, refetchAgentStatus, reloadRole, resumeWorkspace, setPollingVersion, showToast]);
+}) => {
+  const busyRef = useRef(false);
+  return useCallback(async () => {
+    // Ordinary role pauses remain a role-scoped action. The owner-only bulk
+    // endpoint below is retained solely for clearing a legacy workspace hold.
+    if (!agentStatus?.workspace_paused) return onResumeRole?.();
+    if (!canResumeWorkspace) {
+      showToast?.('Only a workspace owner can resume eligible paused agents.', 'error');
+      return false;
+    }
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    try {
+      let refreshedBefore = null;
+      try {
+        const result = await refetchAgentStatus?.();
+        refreshedBefore = unwrapAgentStatusResult(result);
+      } catch {
+        // The viewed version remains concurrency-safe: a stale command is
+        // rejected server-side rather than overwriting a newer bulk action.
+      }
+
+      // Another owner may already have cleared the legacy overlay. Do not turn
+      // a stale recovery click into a new bulk resume of role-authored holds.
+      if (refreshedBefore && refreshedBefore.workspace_paused === false) {
+        showToast?.('The legacy workspace hold was already cleared. Related-role status is refreshing.', 'info');
+        setPollingVersion?.((value) => value + 1);
+        try {
+          const reload = reloadRole?.();
+          if (reload?.catch) void reload.catch(() => {});
+        } catch {
+          // Best-effort presentation refresh; the fresh status already won.
+        }
+        return true;
+      }
+
+      const version = Number(
+        refreshedBefore?.workspace_control_version
+        ?? agentStatus?.workspace_control_version,
+      );
+      if (!Number.isFinite(version)) {
+        showToast?.('Workspace control state is still loading. Try again.', 'error');
+        return false;
+      }
+
+      let response;
+      try {
+        response = await resumeWorkspace(version);
+      } catch (error) {
+        showToast?.(
+          getErrorMessage(
+            error,
+            'Could not clear the legacy workspace hold or resume eligible paused agents.',
+          ),
+          'error',
+        );
+        return false;
+      }
+
+      let statusRefreshed = false;
+      try {
+        const result = await refetchAgentStatus?.();
+        statusRefreshed = unwrapAgentStatusResult(result) != null;
+      } catch {
+        statusRefreshed = false;
+      }
+      setPollingVersion?.((value) => value + 1);
+      try {
+        const reload = reloadRole?.();
+        if (reload?.catch) void reload.catch(() => {});
+      } catch {
+        // The mutation succeeded; a presentation refresh must not report it as
+        // a failed resume or suppress the next scoring poll.
+      }
+
+      const affected = Math.max(0, Number(response?.data?.affected) || 0);
+      const skipped = Math.max(0, Number(response?.data?.skipped) || 0);
+      if (skipped > 0) {
+        showToast?.(
+          `${affected} role${affected === 1 ? '' : 's'} resumed; ${skipped} need${skipped === 1 ? 's' : ''} attention. Review role budgets and status, then retry.`,
+          'warning',
+        );
+      } else if (!statusRefreshed) {
+        showToast?.(
+          'The legacy workspace hold was cleared, but related-role status could not be refreshed yet.',
+          'info',
+        );
+      } else {
+        showToast?.(
+          affected > 0
+            ? `Legacy workspace hold cleared. ${affected} eligible paused role agent${affected === 1 ? '' : 's'} resumed.`
+            : 'Legacy workspace hold cleared. No eligible paused role agents needed resuming.',
+          'success',
+        );
+      }
+      return response;
+    } finally {
+      busyRef.current = false;
+    }
+  }, [
+    agentStatus,
+    canResumeWorkspace,
+    onResumeRole,
+    refetchAgentStatus,
+    reloadRole,
+    resumeWorkspace,
+    setPollingVersion,
+    showToast,
+  ]);
+};
 
 export const relatedRoleScoringActionLabel = (status) => {
   const progress = Number(status?.progress_percent || 0);
@@ -97,7 +200,7 @@ export const shouldRefreshRelatedRoleWorkspace = (previousStatus, currentStatus)
 const waitCopy = (reason) => {
   switch (reason) {
     case 'workspace_paused':
-      return 'The workspace Agent is paused. Resume it to continue scoring automatically.';
+      return 'A legacy workspace-wide agent hold is blocking scoring. A workspace owner can clear it with Resume eligible paused agents.';
     case 'agent_off':
       return 'This related role’s Agent is off. Turn it on to continue scoring automatically.';
     case 'agent_paused':
@@ -212,6 +315,7 @@ export const RelatedRoleContextBanner = ({
   providerLabel,
   status,
   agentStatus,
+  canResumeWorkspace = false,
   onResumeWorkspace,
   onOpenOriginal,
 }) => {
@@ -237,8 +341,14 @@ export const RelatedRoleContextBanner = ({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {agentStatus?.workspace_paused ? (
-          <button type="button" className="btn btn-primary btn-sm" onClick={onResumeWorkspace}>
-            Resume workspace Agent
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={onResumeWorkspace}
+            disabled={!canResumeWorkspace}
+            title={!canResumeWorkspace ? 'Only workspace owners can resume eligible paused agents.' : undefined}
+          >
+            Resume eligible paused agents
           </button>
         ) : null}
         <button type="button" className="btn btn-outline btn-sm" onClick={onOpenOriginal}>

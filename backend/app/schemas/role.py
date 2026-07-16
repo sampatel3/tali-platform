@@ -662,6 +662,10 @@ class ApplicationOutcomeUpdate(BaseModel):
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
+    # Related roles share the owning ATS application. Supplying the acting role
+    # authorizes the explicit global outcome against that related roster and
+    # preserves the source-role boundary for ordinary callers.
+    acting_role_id: Optional[int] = Field(default=None, ge=1)
 
 
 class ApplicationEventResponse(BaseModel):

@@ -301,6 +301,7 @@ export const Select = ({
   bare = false,
   inline = false,
   triggerClassName = '',
+  title,
   'aria-label': ariaLabel,
 }) => {
   const options = React.Children.toArray(children)
@@ -323,6 +324,7 @@ export const Select = ({
       disabled={disabled}
       placeholder={placeholder}
       ariaLabel={ariaLabel}
+      title={title}
       onChange={(next) => {
         if (typeof onChange === 'function') onChange({ target: { value: next } });
       }}
@@ -526,6 +528,7 @@ export const SingleSelect = ({
   renderValue,
   triggerClassName = '',
   shellClassName = '',
+  title,
 }) => {
   const controlId = useId();
   const rootRef = useRef(null);
@@ -646,6 +649,7 @@ export const SingleSelect = ({
         aria-expanded={open}
         aria-label={ariaLabel}
         aria-controls={`taali-singleselect-listbox-${controlId}`}
+        title={title}
         onClick={() => { if (!disabled) setOpen((current) => !current); }}
         onKeyDown={(event) => {
           if (disabled) return;

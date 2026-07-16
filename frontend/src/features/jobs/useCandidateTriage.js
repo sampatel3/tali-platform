@@ -112,6 +112,7 @@ export function useCandidateTriage({
   role,
   roleApplications,
   roleTasks,
+  canMutate = true,
   loadRoleWorkspace,
   // Patch a single application row after a mutation instead of reloading the
   // whole workspace. Falls back to loadRoleWorkspace when not provided.
@@ -185,7 +186,7 @@ export function useCandidateTriage({
   }, [patchApplicationRow, loadRoleWorkspace]);
 
   const handleMoveStage = useCallback(async (application, nextStage) => {
-    if (!application?.id || !nextStage) return;
+    if (!application?.id || !nextStage || !canMutate) return;
     setStageBusy(true);
     try {
       if (role?.role_kind === 'sister' && rolesApi.updateRelatedApplicationStage) {
@@ -204,45 +205,71 @@ export function useCandidateTriage({
     } finally {
       setStageBusy(false);
     }
-  }, [role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [canMutate, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
-  const handleSendAssessment = useCallback(async (application, taskId) => {
-    if (!application?.id || !taskId) return;
+  const handleSendAssessment = useCallback(async (application, taskId, options = {}) => {
+    if (!application?.id || !taskId || !canMutate) return false;
     if (role?.role_kind === 'sister') {
       showToast(
         'Related roles are score-only. Send assessments from the original role; no invite was sent.',
         'info',
       );
-      return;
+      return false;
     }
+    const activeAssessmentId = application?.score_summary?.assessment_id
+      || application?.valid_assessment_id
+      || null;
     setAssessmentBusy(true);
     try {
       // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
       // the arm (50/50, stable per candidate); otherwise force the picked task.
       const isAuto = String(taskId) === 'auto';
-      await rolesApi.createAssessment(
-        application.id,
-        isAuto ? {} : { task_id: Number(taskId) },
-      );
+      if (activeAssessmentId) {
+        if (isAuto) {
+          showToast('Choose the task for this retake.', 'error');
+          return false;
+        }
+        const voidReason = String(options?.voidReason || '').trim();
+        await rolesApi.retakeAssessment(application.id, {
+          task_id: Number(taskId),
+          ...(voidReason ? { void_reason: voidReason } : {}),
+        });
+      } else {
+        await rolesApi.createAssessment(
+          application.id,
+          isAuto ? {} : { task_id: Number(taskId) },
+        );
+      }
       showToast(
-        isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.',
+        activeAssessmentId
+          ? 'Assessment retake sent.'
+          : (isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.'),
         'success',
       );
       await refreshRow(application.id);
+      return true;
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to send invite.'), 'error');
+      showToast(
+        getErrorMessage(
+          error,
+          activeAssessmentId ? 'Failed to send retake.' : 'Failed to send invite.',
+        ),
+        'error',
+      );
+      return false;
     } finally {
       setAssessmentBusy(false);
     }
-  }, [role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [canMutate, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleReject = useCallback(async (application) => {
-    if (!application?.id) return;
+    if (!application?.id || !canMutate) return;
     setRejectBusy(true);
     try {
       const outcomeResponse = await rolesApi.updateApplicationOutcome(application.id, {
         application_outcome: 'rejected',
         reason: 'Recruiter reject from role view',
+        ...(role?.role_kind === 'sister' ? { acting_role_id: role.id } : {}),
       });
       setTriageApplicationId(null);
       // Patch the one row: it flips application_outcome → 'rejected' and the
@@ -285,10 +312,10 @@ export function useCandidateTriage({
     } finally {
       setRejectBusy(false);
     }
-  }, [atsProvider, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, canMutate, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleMoveToAtsStage = useCallback(async (application, targetStage, targetLabel = null) => {
-    if (!application?.id || !targetStage) return;
+    if (!application?.id || !targetStage || !canMutate) return;
     setAtsMoveBusy(true);
     const providerLabel = atsProviderLabel(atsProvider);
     try {
@@ -373,7 +400,7 @@ export function useCandidateTriage({
     } finally {
       setAtsMoveBusy(false);
     }
-  }, [atsProvider, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, canMutate, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   // Plain click on a candidate row opens the drawer in-place. Modifier-
   // click (cmd/ctrl/shift/alt) and middle-click keep the anchor's
@@ -406,6 +433,7 @@ export function useCandidateTriage({
     isRelatedRole: role?.role_kind === 'sister',
     hasRelatedRoles: Number(role?.sister_role_count || 0) > 0,
     roleTasks,
+    canMutate,
     mode: 'inline',
     stageBusy,
     assessmentBusy,
@@ -426,6 +454,7 @@ export function useCandidateTriage({
     role?.role_kind,
     role?.sister_role_count,
     roleTasks,
+    canMutate,
     stageBusy,
     assessmentBusy,
     rejectBusy,

@@ -10,6 +10,16 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .celery_app import celery_app
+from .related_role_scoring_authority import (
+    _RelatedAttemptRevoked,
+    _RelatedAuthorityRevoked,
+    _RelatedInputsChanged,
+    _RelatedRoleAdmittedClient,
+    _RelatedRoleAdmittedMessages as _RelatedRoleAdmittedMessages,
+    _RelatedRosterRevoked,
+    _lock_matching_related_scoring_attempt,
+    _require_live_related_scoring_scope,
+)
 
 logger = logging.getLogger("taali.tasks.sister_roles")
 
@@ -42,6 +52,18 @@ def _at_or_before(value: datetime, cutoff: datetime) -> bool:
     if value.tzinfo is None and cutoff.tzinfo is not None:
         cutoff = cutoff.replace(tzinfo=None)
     return value <= cutoff
+
+
+def _same_timestamp(left: datetime | None, right: datetime | None) -> bool:
+    """Compare SQLite-naive and PostgreSQL-aware lease timestamps."""
+
+    if left is None or right is None:
+        return left is right
+    if left.tzinfo is not None:
+        left = left.astimezone(timezone.utc).replace(tzinfo=None)
+    if right.tzinfo is not None:
+        right = right.astimezone(timezone.utc).replace(tzinfo=None)
+    return left == right
 
 
 def _safe_code(value: object, *, fallback: str) -> str:
@@ -88,6 +110,21 @@ def _set_terminal_error(evaluation, *, error_code: str) -> None:
     evaluation.scored_at = _now()
     evaluation.last_error_code = safe_code
     evaluation.error_message = safe_code
+
+
+def _set_excluded(evaluation, *, error_code: str, message: str) -> None:
+    from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
+
+    evaluation.status = SISTER_EVAL_EXCLUDED
+    evaluation.error_message = str(message)[:500]
+    evaluation.last_error_code = _safe_code(
+        error_code,
+        fallback="source_application_outside_owner_roster",
+    )
+    evaluation.next_attempt_at = None
+    evaluation.dispatch_attempted_at = None
+    evaluation.started_at = None
+    evaluation.scored_at = _now()
 
 
 def _is_deterministic_failure(error_code: str) -> bool:
@@ -152,6 +189,7 @@ def dispatch_sister_evaluation(
     evaluation.status = SISTER_EVAL_PENDING
     evaluation.queued_at = now
     evaluation.dispatch_attempted_at = now
+    expected_dispatch_attempted_at = now
     evaluation.next_attempt_at = None
     evaluation.started_at = None
     evaluation.last_error_code = None
@@ -168,14 +206,34 @@ def dispatch_sister_evaluation(
             error_type,
         )
         db.rollback()
-        current = db.get(SisterRoleEvaluation, int(evaluation_id))
-        if current is not None and current.status == SISTER_EVAL_PENDING:
-            _set_retry(
-                current,
-                error_code=f"queue_unavailable_{error_type}",
-                delay=_FAST_RETRY_DELAYS[0],
+        current = (
+            db.query(SisterRoleEvaluation)
+            .filter(SisterRoleEvaluation.id == int(evaluation_id))
+            .with_for_update(of=SisterRoleEvaluation)
+            .populate_existing()
+            .one_or_none()
+        )
+        current_status = str(current.status) if current is not None else "missing"
+        if (
+            current is None
+            or current.status != SISTER_EVAL_PENDING
+            or not _same_timestamp(
+                current.dispatch_attempted_at,
+                expected_dispatch_attempted_at,
             )
-            db.commit()
+        ):
+            db.rollback()
+            return {
+                "status": "skipped",
+                "evaluation_id": int(evaluation_id),
+                "current_status": current_status,
+            }
+        _set_retry(
+            current,
+            error_code=f"queue_unavailable_{error_type}",
+            delay=_FAST_RETRY_DELAYS[0],
+        )
+        db.commit()
         return {
             "status": SISTER_EVAL_RETRY_WAIT,
             "evaluation_id": int(evaluation_id),
@@ -235,13 +293,11 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
         ):
             from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
 
-            evaluation.status = SISTER_EVAL_EXCLUDED
-            evaluation.error_message = "Source application left the owner roster"
-            evaluation.last_error_code = RELATED_ROSTER_EXCLUSION_CODE
-            evaluation.next_attempt_at = None
-            evaluation.dispatch_attempted_at = None
-            evaluation.started_at = None
-            evaluation.scored_at = _now()
+            _set_excluded(
+                evaluation,
+                error_code=RELATED_ROSTER_EXCLUSION_CODE,
+                message="Source application left the owner roster",
+            )
             db.commit()
             return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
         # This is deliberately immediately before the paid-call claim. Pause,
@@ -263,15 +319,11 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
         if source_application_is_globally_closed(application):
             from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
 
-            evaluation.status = SISTER_EVAL_EXCLUDED
-            evaluation.error_message = (
-                "Shared ATS application is disqualified or closed"
+            _set_excluded(
+                evaluation,
+                error_code="shared_application_closed",
+                message="Shared ATS application is disqualified or closed",
             )
-            evaluation.last_error_code = "shared_application_closed"
-            evaluation.next_attempt_at = None
-            evaluation.dispatch_attempted_at = None
-            evaluation.started_at = None
-            evaluation.scored_at = _now()
             db.commit()
             return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
         cv_text = application_cv_text(application) if application is not None else ""
@@ -291,34 +343,121 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
             db.commit()
             return {"status": SISTER_EVAL_UNSCORABLE, "evaluation_id": evaluation_id}
 
+        expected_organization_id = int(evaluation.organization_id)
+        expected_role_id = int(role.id)
+        expected_application_id = int(application.id)
+        expected_spec_fingerprint = text_fingerprint(job_spec)
+        expected_cv_fingerprint = text_fingerprint(cv_text)
         evaluation.status = SISTER_EVAL_RUNNING
         evaluation.started_at = _now()
+        expected_started_at = evaluation.started_at
         evaluation.next_attempt_at = None
         evaluation.attempts = int(evaluation.attempts or 0) + 1
-        evaluation.spec_fingerprint = text_fingerprint(job_spec)
-        evaluation.cv_fingerprint = text_fingerprint(cv_text)
+        evaluation.spec_fingerprint = expected_spec_fingerprint
+        evaluation.cv_fingerprint = expected_cv_fingerprint
         db.commit()
 
+        def lock_recovery_attempt():
+            return _lock_matching_related_scoring_attempt(
+                db,
+                evaluation_id=int(evaluation_id),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                application_id=expected_application_id,
+                expected_spec_fingerprint=expected_spec_fingerprint,
+                expected_cv_fingerprint=expected_cv_fingerprint,
+                expected_started_at=expected_started_at,
+            )
+
+        def stale_attempt_result(current_status: str) -> dict:
+            # Release the row lock without changing a reset/newer attempt.
+            db.rollback()
+            return {
+                "status": "skipped",
+                "evaluation_id": evaluation_id,
+                "current_status": current_status,
+            }
+
         try:
-            client = get_metered_client(organization_id=int(evaluation.organization_id))
+            (
+                evaluation,
+                role,
+                application,
+                cv_text,
+                job_spec,
+            ) = _require_live_related_scoring_scope(
+                db,
+                evaluation_id=int(evaluation_id),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                application_id=expected_application_id,
+                expected_spec_fingerprint=expected_spec_fingerprint,
+                expected_cv_fingerprint=expected_cv_fingerprint,
+                expected_started_at=expected_started_at,
+                phase="full_score.client_and_context",
+            )
+            client = _RelatedRoleAdmittedClient(
+                inner=get_metered_client(
+                    organization_id=expected_organization_id,
+                ),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                evaluation_id=int(evaluation_id),
+            )
             context = (
                 format_workable_context(application.candidate, application) or None
             )
+
+            def authorize_scoring_phase(phase: str) -> None:
+                client.require_unrevoked_admission(phase=phase)
+                _require_live_related_scoring_scope(
+                    db,
+                    evaluation_id=int(evaluation_id),
+                    organization_id=expected_organization_id,
+                    role_id=expected_role_id,
+                    application_id=expected_application_id,
+                    expected_spec_fingerprint=expected_spec_fingerprint,
+                    expected_cv_fingerprint=expected_cv_fingerprint,
+                    expected_started_at=expected_started_at,
+                    phase=phase,
+                )
+                # Authorization is a read fence, not a transaction that should
+                # sit idle during paid network latency. The final persistence
+                # fence below deliberately keeps its row lock through commit.
+                db.rollback()
+
+            # This check also covers the full-result cache path, which makes no
+            # provider call and therefore never invokes the callback below.
+            authorize_scoring_phase("full_score.cache_or_provider")
             output = run_holistic_match(
                 cv_text,
                 job_spec,
                 client=client,
                 metering_context={
-                    "organization_id": int(evaluation.organization_id),
+                    "organization_id": expected_organization_id,
                     # Every related role owns an independent Agent and budget.
                     # The canonical application is shared, but this score/spend
                     # belongs to the role whose specification produced it.
-                    "role_id": int(role.id),
+                    "role_id": expected_role_id,
                     # Stable across retries so metering/caches can deduplicate a
                     # worker death after provider success but before row ack.
-                    "entity_id": f"sister_evaluation:{evaluation.id}",
+                    "entity_id": f"sister_evaluation:{evaluation_id}",
                 },
                 workable_context=context,
+                before_provider_call=authorize_scoring_phase,
+            )
+            client.require_unrevoked_admission(phase="full_score.persist")
+            evaluation, _, _, _, _ = _require_live_related_scoring_scope(
+                db,
+                evaluation_id=int(evaluation_id),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                application_id=expected_application_id,
+                expected_spec_fingerprint=expected_spec_fingerprint,
+                expected_cv_fingerprint=expected_cv_fingerprint,
+                expected_started_at=expected_started_at,
+                phase="full_score.persist",
+                lock_for_update=True,
             )
             scoring_status = getattr(
                 output.scoring_status, "value", str(output.scoring_status)
@@ -353,6 +492,74 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 "score": evaluation.role_fit_score,
                 "error_code": evaluation.last_error_code,
             }
+        except _RelatedRosterRevoked as exc:
+            logger.info(
+                "Related-role scoring scope revoked evaluation_id=%s phase=%s code=%s",
+                evaluation_id,
+                exc.phase,
+                exc.code,
+            )
+            db.rollback()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_excluded(
+                evaluation,
+                error_code=exc.code,
+                message=exc.message,
+            )
+            db.commit()
+            return {
+                "status": "excluded",
+                "evaluation_id": evaluation_id,
+                "error_code": exc.code,
+            }
+        except _RelatedAuthorityRevoked as exc:
+            logger.info(
+                "Related-role scoring authority revoked evaluation_id=%s phase=%s",
+                evaluation_id,
+                exc.phase,
+            )
+            db.rollback()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_retry(
+                evaluation,
+                error_code="authority_blocked",
+                delay=_AUTHORITY_RECHECK_AFTER,
+            )
+            db.commit()
+            return {
+                "status": "authority_blocked",
+                "evaluation_id": evaluation_id,
+                "error_code": "authority_blocked",
+            }
+        except _RelatedInputsChanged as exc:
+            logger.info(
+                "Related-role scoring inputs changed evaluation_id=%s phase=%s",
+                evaluation_id,
+                exc.phase,
+            )
+            db.rollback()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_retry(
+                evaluation,
+                error_code="scoring_inputs_changed",
+                delay=_FAST_RETRY_DELAYS[0],
+            )
+            db.commit()
+            return {
+                "status": "retry_wait",
+                "evaluation_id": evaluation_id,
+                "error_code": "scoring_inputs_changed",
+            }
+        except _RelatedAttemptRevoked:
+            db.rollback()
+            _evaluation, current_status = lock_recovery_attempt()
+            return stale_attempt_result(current_status)
         except Exception as exc:  # noqa: BLE001 - all transient failures persist
             error_type = type(exc).__name__
             logger.error(
@@ -361,13 +568,14 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 error_type,
             )
             db.rollback()
-            evaluation = db.get(SisterRoleEvaluation, int(evaluation_id))
-            if evaluation is not None and evaluation.status != SISTER_EVAL_DONE:
-                _set_retry(
-                    evaluation,
-                    error_code=f"provider_exception_{error_type}",
-                )
-                db.commit()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_retry(
+                evaluation,
+                error_code=f"provider_exception_{error_type}",
+            )
+            db.commit()
             return {
                 "status": "retry_wait",
                 "evaluation_id": evaluation_id,
@@ -515,8 +723,7 @@ def score_sister_role(
         )
         if focused_application_id is not None:
             evaluation_query = evaluation_query.filter(
-                SisterRoleEvaluation.source_application_id
-                == focused_application_id
+                SisterRoleEvaluation.source_application_id == focused_application_id
             )
         evaluations = evaluation_query.order_by(SisterRoleEvaluation.id.asc()).all()
         # Turn on/Resume revokes an authority hold, but it does not revoke a

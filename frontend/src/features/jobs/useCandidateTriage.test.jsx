@@ -95,6 +95,177 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     );
   });
 
+  it('creates the first assessment with the selected task', async () => {
+    const application = { id: 51, application_outcome: 'open', score_summary: {} };
+    const rolesApi = {
+      createAssessment: vi.fn().mockResolvedValue({ data: {} }),
+      retakeAssessment: vi.fn(),
+    };
+    const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 9, role_kind: 'standard' },
+      roleApplications: [application],
+      roleTasks: [{ id: 5, name: 'Backend take-home' }],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow,
+      showToast: vi.fn(),
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    let sent;
+    await act(async () => {
+      sent = await result.current.drawerProps.onSendAssessment(application, '5');
+    });
+
+    expect(sent).toBe(true);
+    expect(rolesApi.createAssessment).toHaveBeenCalledWith(51, { task_id: 5 });
+    expect(rolesApi.retakeAssessment).not.toHaveBeenCalled();
+    expect(patchApplicationRow).toHaveBeenCalledWith(51);
+  });
+
+  it('uses the retake endpoint and preserves an optional replacement reason', async () => {
+    const application = {
+      id: 52,
+      application_outcome: 'open',
+      valid_assessment_id: 901,
+      score_summary: {},
+    };
+    const rolesApi = {
+      createAssessment: vi.fn(),
+      retakeAssessment: vi.fn().mockResolvedValue({ data: {} }),
+    };
+    const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 9, role_kind: 'standard' },
+      roleApplications: [application],
+      roleTasks: [{ id: 6, name: 'Systems exercise' }],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow,
+      showToast: vi.fn(),
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    let sent;
+    await act(async () => {
+      sent = await result.current.drawerProps.onSendAssessment(
+        application,
+        '6',
+        { voidReason: 'Candidate lost connectivity' },
+      );
+    });
+
+    expect(sent).toBe(true);
+    expect(rolesApi.retakeAssessment).toHaveBeenCalledWith(52, {
+      task_id: 6,
+      void_reason: 'Candidate lost connectivity',
+    });
+    expect(rolesApi.createAssessment).not.toHaveBeenCalled();
+    expect(patchApplicationRow).toHaveBeenCalledWith(52);
+  });
+
+  it('returns false and leaves reconciliation untouched when a retake fails', async () => {
+    const application = {
+      id: 53,
+      application_outcome: 'open',
+      score_summary: { assessment_id: 902 },
+    };
+    const conflict = new Error('already replaced');
+    conflict.response = { status: 409, data: { detail: 'Assessment changed; refresh and retry.' } };
+    const rolesApi = {
+      createAssessment: vi.fn(),
+      retakeAssessment: vi.fn().mockRejectedValue(conflict),
+    };
+    const patchApplicationRow = vi.fn();
+    const showToast = vi.fn();
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 9, role_kind: 'standard' },
+      roleApplications: [application],
+      roleTasks: [{ id: 6, name: 'Systems exercise' }],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow,
+      showToast,
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    let sent;
+    await act(async () => {
+      sent = await result.current.drawerProps.onSendAssessment(application, '6');
+    });
+
+    expect(sent).toBe(false);
+    expect(rolesApi.createAssessment).not.toHaveBeenCalled();
+    expect(patchApplicationRow).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenLastCalledWith(
+      'Assessment changed; refresh and retry.',
+      'error',
+    );
+  });
+
+  it('fails closed for every candidate mutation while capability is unavailable', async () => {
+    const application = { id: 54, application_outcome: 'open' };
+    const rolesApi = {
+      createAssessment: vi.fn(),
+      updateApplicationOutcome: vi.fn(),
+      updateApplicationStage: vi.fn(),
+      moveApplicationToAtsStage: vi.fn(),
+    };
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 9, role_kind: 'standard' },
+      roleApplications: [application],
+      roleTasks: [{ id: 5, name: 'Backend take-home' }],
+      canMutate: false,
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast: vi.fn(),
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    await act(async () => {
+      await result.current.drawerProps.onSendAssessment(application, '5');
+      await result.current.drawerProps.onReject(application);
+      await result.current.drawerProps.onMoveStage(application, 'review');
+      await result.current.drawerProps.onMoveToAtsStage(application, 'advanced');
+    });
+
+    expect(rolesApi.createAssessment).not.toHaveBeenCalled();
+    expect(rolesApi.updateApplicationOutcome).not.toHaveBeenCalled();
+    expect(rolesApi.updateApplicationStage).not.toHaveBeenCalled();
+    expect(rolesApi.moveApplicationToAtsStage).not.toHaveBeenCalled();
+  });
+
+  it('attributes a shared-application rejection to the acting related role', async () => {
+    const application = { id: 55, source: 'manual', application_outcome: 'open' };
+    const rolesApi = {
+      updateApplicationOutcome: vi.fn().mockResolvedValue({
+        data: { ...application, application_outcome: 'rejected' },
+      }),
+    };
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 17, role_kind: 'sister' },
+      roleApplications: [application],
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn().mockResolvedValue(undefined),
+      showToast: vi.fn(),
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    await act(async () => {
+      await result.current.drawerProps.onReject(application);
+    });
+
+    expect(rolesApi.updateApplicationOutcome).toHaveBeenCalledWith(55, {
+      application_outcome: 'rejected',
+      reason: 'Recruiter reject from role view',
+      acting_role_id: 17,
+    });
+  });
+
   it('posts the selected Taali intent rather than Bullhorn free text', async () => {
     const application = { id: 41, source: 'bullhorn' };
     const rolesApi = {

@@ -6,9 +6,14 @@ import { Route, Routes } from 'react-router-dom';
 import TestMemoryRouter from '../../test/TestMemoryRouter';
 
 const showToast = vi.fn();
+const authState = vi.hoisted(() => ({ user: { role: 'owner' } }));
 
 vi.mock('../../context/ToastContext', () => ({
   useToast: () => ({ showToast }),
+}));
+
+vi.mock('../../context/AuthContext', () => ({
+  useAuth: () => authState,
 }));
 
 // Some role-page descendants (notably AgentNeedsInputCard) import the
@@ -42,6 +47,9 @@ vi.mock('../../shared/api', () => ({
     batchPreScreenStatus: vi.fn(),
     update: vi.fn(),
     updateJobSpec: vi.fn(),
+    setJobStatus: vi.fn(),
+    setClient: vi.fn(),
+    processRole: vi.fn(),
     regenerateInterviewFocus: vi.fn(),
     fetchCvs: vi.fn(),
     batchPreScreen: vi.fn(),
@@ -85,6 +93,7 @@ vi.mock('../../shared/api', () => ({
     discardPending: vi.fn().mockResolvedValue({ data: null }),
     pause: vi.fn().mockResolvedValue({ data: null }),
     resume: vi.fn().mockResolvedValue({ data: null }),
+    resumeAll: vi.fn().mockResolvedValue({ data: null }),
     runNow: vi.fn().mockResolvedValue({ data: null }),
   },
 }));
@@ -99,6 +108,12 @@ vi.mock('../requisitions/api', () => ({
   },
 }));
 
+vi.mock('../clients/api', () => ({
+  clientApi: {
+    list: vi.fn(),
+  },
+}));
+
 // CRUD behavior has its own focused test. Keep this large pipeline suite from
 // scheduling a second independent settings fetch on every Agent settings case.
 vi.mock('./RoleScreeningQuestions', () => ({
@@ -107,6 +122,7 @@ vi.mock('./RoleScreeningQuestions', () => ({
 
 import * as apiClient from '../../shared/api';
 import { clearCache, readCache } from '../../shared/api/resourceCache';
+import { clientApi } from '../clients/api';
 import { requisitionApi } from '../requisitions/api';
 import { JobPipelinePage } from './JobPipelinePage';
 
@@ -165,6 +181,11 @@ const baseApplications = [
   },
 ];
 
+const sourcedApplication = {
+  ...baseApplications[0],
+  pipeline_stage: 'sourced',
+};
+
 const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
   onNavigate,
   ...render(
@@ -181,6 +202,7 @@ const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
 describe('JobPipelinePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.user = { role: 'owner' };
     clearCache();
     apiClient.roles.listApplicationsPage = undefined;
     apiClient.roles.get.mockResolvedValue({ data: baseRole });
@@ -194,6 +216,9 @@ describe('JobPipelinePage', () => {
         would_rescreen: { count: 0, est_cost_usd: 0 },
       },
     });
+    apiClient.roles.setJobStatus.mockResolvedValue({ data: baseRole });
+    apiClient.roles.setClient.mockResolvedValue({ data: baseRole });
+    apiClient.roles.processRole.mockResolvedValue({ data: { status: 'queued' } });
     apiClient.roles.listTasks.mockResolvedValue({ data: [] });
     apiClient.roles.listApplications.mockResolvedValue({ data: baseApplications });
     apiClient.roles.batchScoreStatus.mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0 } });
@@ -208,6 +233,7 @@ describe('JobPipelinePage', () => {
     apiClient.agent.listDecisions.mockResolvedValue({ data: [] });
     apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: true } });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
+    clientApi.list.mockResolvedValue([]);
     requisitionApi.createRelated.mockResolvedValue({ id: 44 });
   });
 
@@ -706,7 +732,7 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     expect(await screen.findByText(/Related-role scoring is waiting · 0%/i)).toBeInTheDocument();
-    expect(screen.getByText(/workspace Agent is paused/i)).toBeInTheDocument();
+    expect(screen.getByText(/legacy workspace-wide agent hold is blocking scoring/i)).toBeInTheDocument();
     expect(screen.getByText(/0 of 800 scoreable candidates/i)).toBeInTheDocument();
     expect(screen.getByText(/Related-role Taali pipeline · independent stages/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /turn on/i })).toBeInTheDocument();
@@ -716,6 +742,42 @@ describe('JobPipelinePage', () => {
     expect(screen.getByText('Waiting…')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Waiting 0%' })).toBeDisabled();
     expect(screen.queryByText('AGENT OFF')).not.toBeInTheDocument();
+  });
+
+  it('shows legacy workspace recovery read-only to non-owner related-role viewers', async () => {
+    authState.user = { role: 'member' };
+    const sisterRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'AI Engineer',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.get.mockResolvedValue({ data: sisterRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        can_control_agent: true,
+        enabled: true,
+        paused: true,
+        pause_scope: 'workspace',
+        workspace_paused: true,
+        workspace_control_version: 12,
+      },
+    });
+
+    renderPipeline();
+
+    const resume = await screen.findByRole('button', {
+      name: 'Resume eligible paused agents',
+    });
+    expect(resume).toBeDisabled();
+    expect(resume).toHaveAttribute(
+      'title',
+      'Only workspace owners can resume eligible paused agents.',
+    );
+    fireEvent.click(resume);
+    expect(apiClient.agent.resumeAll).not.toHaveBeenCalled();
   });
 
   it('opens related-role creation directly from the job header', async () => {
@@ -1699,6 +1761,269 @@ Banking transformation experience
     fireEvent.click(screen.getByRole('button', { name: 'Configure agent' }));
     expect(await screen.findByText('Agent settings are read-only')).toBeInTheDocument();
     expect(screen.getByText(/recruiters assigned to this role/i)).toBeInTheDocument();
+  });
+
+  it('keeps sourced outreach read-only for an interviewer without role control', async () => {
+    authState.user = { role: 'interviewer' };
+    apiClient.roles.listApplications.mockResolvedValue({ data: [sourcedApplication] });
+    apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: false } });
+
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('tab', { name: /^Sourced/i }));
+    expect(await screen.findByText('Sam Patel')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', {
+      name: 'Select all visible sourced candidates',
+    })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Select Sam Patel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Reach out/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Reach out to .* sourced candidate/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('keeps sourced outreach original-role-owned on an editable related role', async () => {
+    const sisterRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'Original role',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.get.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.listApplications.mockResolvedValue({ data: [sourcedApplication] });
+    apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: true } });
+
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('tab', { name: /^Sourced/i }));
+    expect(await screen.findByText('Sam Patel')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', {
+      name: 'Select all visible sourced candidates',
+    })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Select Sam Patel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Reach out/i })).not.toBeInTheDocument();
+  });
+
+  it('allows authorized sourced outreach and clears it when role control is revoked', async () => {
+    apiClient.roles.listApplications.mockResolvedValue({ data: [sourcedApplication] });
+    apiClient.agent.status
+      .mockResolvedValueOnce({ data: { can_control_agent: true } })
+      .mockResolvedValueOnce({ data: { can_control_agent: false } })
+      .mockResolvedValue({ data: { can_control_agent: true } });
+
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('tab', { name: /^Sourced/i }));
+    const candidateSelection = await screen.findByRole('checkbox', { name: 'Select Sam Patel' });
+    expect(candidateSelection).not.toBeChecked();
+    fireEvent.click(candidateSelection);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reach out (1)' }));
+    expect(await screen.findByRole('heading', { name: 'Reach out to 1 sourced candidate' }))
+      .toBeInTheDocument();
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('heading', { name: 'Reach out to 1 sourced candidate' }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Select Sam Patel' })).not.toBeInTheDocument();
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(3));
+    expect(await screen.findByRole('checkbox', { name: 'Select Sam Patel' })).not.toBeChecked();
+    expect(screen.queryByRole('button', { name: /^Reach out/i })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['loading', /Checking your role permissions/i],
+    ['error', /permissions could not be loaded/i],
+    ['read-only', /Only workspace owners, hiring managers/i],
+  ])(
+    'fails closed for pipeline mutations while role capability is %s',
+    async (capabilityState, disabledReason) => {
+      const governedRole = {
+        ...baseRole,
+        job_spec_text: 'A complete governed role specification.',
+        job_status: 'open',
+        client_id: 501,
+        client_name: 'Platform',
+      };
+      apiClient.roles.getShell.mockResolvedValue({ data: governedRole });
+      apiClient.roles.get.mockResolvedValue({ data: governedRole });
+      clientApi.list.mockResolvedValue([
+        { id: 501, name: 'Platform' },
+        { id: 502, name: 'Research' },
+      ]);
+      if (capabilityState === 'loading') {
+        apiClient.agent.status.mockReturnValue(new Promise(() => {}));
+      } else if (capabilityState === 'error') {
+        apiClient.agent.status.mockRejectedValue(new Error('permission lookup failed'));
+      } else {
+        apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: false } });
+      }
+
+      renderPipeline();
+
+      const process = await screen.findByRole('button', { name: /^Process candidates$/i });
+      const createRelated = screen.getByRole('button', { name: /^Create related role$/i });
+      expect(process).toBeDisabled();
+      expect(process).toHaveAttribute('title', expect.stringMatching(disabledReason));
+      expect(createRelated).toBeDisabled();
+      expect(createRelated).toHaveAttribute('title', expect.stringMatching(disabledReason));
+      expect(screen.queryByRole('button', { name: /^Edit job spec$/i })).not.toBeInTheDocument();
+
+      const candidateRow = (await screen.findByText('Sam Patel')).closest('tr');
+      fireEvent.click(candidateRow);
+      expect(await screen.findByRole('note')).toHaveTextContent(/Candidate actions are read-only/i);
+      expect(screen.getByRole('button', {
+        name: /^Reject Closes the application$/i,
+      })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: /Close candidate drawer/i }));
+
+      fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
+      expect(await screen.findByRole('heading', { name: /^Role specification$/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
+
+      const filledStatus = screen.getByRole('button', { name: 'Filled (by us)' });
+      const clientSelect = screen.getByRole('button', { name: 'Assign hiring department' });
+      expect(filledStatus).toBeDisabled();
+      expect(filledStatus).toHaveAttribute('title', expect.stringMatching(disabledReason));
+      expect(clientSelect).toBeDisabled();
+      expect(clientSelect).toHaveAttribute('title', expect.stringMatching(disabledReason));
+
+      fireEvent.click(filledStatus);
+      fireEvent.click(clientSelect);
+      expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
+      expect(apiClient.roles.setClient).not.toHaveBeenCalled();
+      expect(apiClient.roles.processRole).not.toHaveBeenCalled();
+      expect(requisitionApi.createRelated).not.toHaveBeenCalled();
+      expect(apiClient.roles.updateApplicationOutcome).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['loading', 'error', 'read-only'])(
+    'keeps related-role re-scoring disabled while capability is %s',
+    async (capabilityState) => {
+      const sisterRole = {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'Original role',
+      };
+      apiClient.roles.getShell.mockResolvedValue({ data: sisterRole });
+      apiClient.roles.get.mockResolvedValue({ data: sisterRole });
+      if (capabilityState === 'loading') {
+        apiClient.agent.status.mockReturnValue(new Promise(() => {}));
+      } else if (capabilityState === 'error') {
+        apiClient.agent.status.mockRejectedValue(new Error('permission lookup failed'));
+      } else {
+        apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: false } });
+      }
+
+      renderPipeline();
+
+      const rescore = await screen.findByRole('button', { name: /^Re-score roster$/i });
+      expect(rescore).toBeDisabled();
+      fireEvent.click(rescore);
+      expect(apiClient.roles.rescoreSister).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps pipeline mutations available to an authorized recruiter', async () => {
+    const governedRole = {
+      ...baseRole,
+      job_spec_text: 'A complete governed role specification.',
+      job_status: 'open',
+      client_id: 501,
+      client_name: 'Platform',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: governedRole });
+    apiClient.roles.get.mockResolvedValue({ data: governedRole });
+    apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: true } });
+    clientApi.list.mockResolvedValue([
+      { id: 501, name: 'Platform' },
+      { id: 502, name: 'Research' },
+    ]);
+
+    renderPipeline();
+
+    expect(await screen.findByRole('button', { name: /^Process candidates$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Create related role$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Edit job spec$/i })).toBeEnabled();
+
+    const candidateRow = (await screen.findByText('Sam Patel')).closest('tr');
+    fireEvent.click(candidateRow);
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: /^Reject Closes the application$/i,
+    })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /Close candidate drawer/i }));
+
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
+    expect(await screen.findByRole('button', { name: /^Edit$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Filled (by us)' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Assign hiring department' })).toBeEnabled();
+  });
+
+  it('uses original-role tasks as related candidate context without replacing sister tasks', async () => {
+    const sisterRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'Original role',
+    };
+    const sisterTasks = [{ id: 701, name: 'Sister scoring-only task', is_active: true }];
+    const originalTasks = [{ id: 702, name: 'Original assessment task', is_active: true }];
+    apiClient.roles.getShell.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.get.mockResolvedValue({ data: sisterRole });
+    apiClient.roles.listTasks.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 77 ? originalTasks : sisterTasks,
+    }));
+
+    renderPipeline();
+
+    await waitFor(() => {
+      expect(readCache('role-workspace:101')?.data).toEqual(expect.objectContaining({
+        roleTasks: sisterTasks,
+        assessmentContextTasks: originalTasks,
+      }));
+    });
+    expect(apiClient.roles.listTasks).toHaveBeenCalledWith(101);
+    expect(apiClient.roles.listTasks).toHaveBeenCalledWith(77);
+    expect(screen.getByRole('button', { name: /^Re-score roster$/i })).toBeEnabled();
+
+    fireEvent.click((await screen.findByText('Sam Patel')).closest('tr'));
+    fireEvent.click(screen.getByRole('tab', { name: /^Send assessment$/i }));
+    expect(await screen.findByText('Original assessment task')).toBeInTheDocument();
+    expect(screen.queryByText('Sister scoring-only task')).not.toBeInTheDocument();
+  });
+
+  it('uses an original role\'s own tasks for candidate assessment context', async () => {
+    const ownTasks = [{ id: 703, name: 'Role assessment task', is_active: true }];
+    apiClient.roles.listTasks.mockResolvedValue({ data: ownTasks });
+
+    renderPipeline();
+
+    await waitFor(() => {
+      expect(readCache('role-workspace:101')?.data).toEqual(expect.objectContaining({
+        roleTasks: ownTasks,
+        assessmentContextTasks: ownTasks,
+      }));
+    });
+    expect(apiClient.roles.listTasks).toHaveBeenCalledTimes(1);
+    expect(apiClient.roles.listTasks).toHaveBeenCalledWith(101);
+
+    fireEvent.click((await screen.findByText('Sam Patel')).closest('tr'));
+    fireEvent.click(screen.getByRole('tab', { name: /^Send assessment$/i }));
+    expect(await screen.findByRole('button', {
+      name: /^Role assessment task/i,
+    })).toBeInTheDocument();
   });
 
   it('keeps a budget-blocked 200 Resume no-op visibly paused and explains it', async () => {

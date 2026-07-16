@@ -60,8 +60,22 @@ const RoleAgentSettingsTab = ({
   onRoleConflict,
 }) => {
   const controlsReadOnly = !canControlAgent;
+  const scoreOnlyControls = role?.role_kind === 'sister';
+  const assessmentControlsReadOnly = controlsReadOnly || scoreOnlyControls;
+  const candidateActionControlsReadOnly = controlsReadOnly || scoreOnlyControls;
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
+  const distributionDotCount = Math.min(total, 100);
+  const roundedDistributionBelowCount = total > 0
+    ? Math.round((distributionDotCount * belowThresholdCount) / total)
+    : 0;
+  // The capped dot grid is proportional decoration, while the summary below
+  // remains exact. Preserve a visible dot for each side of a genuinely mixed
+  // large cohort so rounding never paints 1/1000 as all-above (or 999/1000 as
+  // all-below); exact empty/full cohorts still use the true endpoints.
+  const distributionBelowCount = belowThresholdCount > 0 && belowThresholdCount < total
+    ? Math.max(1, Math.min(distributionDotCount - 1, roundedDistributionBelowCount))
+    : roundedDistributionBelowCount;
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
   // Read the cap from the role record (the field PATCH writes, refreshed on
@@ -128,7 +142,7 @@ const RoleAgentSettingsTab = ({
   const autonomySaveInFlightRef = React.useRef(false);
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
   const handleAutonomyToggle = async (key, value) => {
-    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    if (candidateActionControlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
@@ -172,7 +186,7 @@ const RoleAgentSettingsTab = ({
   // while the organisation-wide task library is still loading.
   const assessmentTaskOptions = (() => {
     const byId = new Map();
-    for (const task of (Array.isArray(allTasks) ? allTasks : [])) {
+    for (const task of (scoreOnlyControls ? [] : (Array.isArray(allTasks) ? allTasks : []))) {
       if (task?.id != null) byId.set(String(task.id), task);
     }
     for (const task of activeAssignedTasks) {
@@ -193,7 +207,7 @@ const RoleAgentSettingsTab = ({
     : assessmentTaskOptions;
   const assessmentBusy = savingAssessmentTask || assessmentChangePending;
   const handleAssessmentToggle = async (taskId) => {
-    if (controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
+    if (assessmentControlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
     const id = Number(taskId);
     if (!Number.isFinite(id)) return;
     const previous = selectedAssessmentTaskIds;
@@ -257,7 +271,9 @@ const RoleAgentSettingsTab = ({
         <section className="mc-agent-settings-intro">
           <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
           <p className="mc-agent-settings-intro-help">
-            Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. Configure screening, scoring, assessment flow, autonomy, and budget here. Turn on uses the effective policy shown below without silently changing it.
+            {scoreOnlyControls
+              ? <>Configure this related role’s scoring criteria, threshold, feedback, and budget. Candidate actions and assessments remain owned by the original role.</>
+              : <>Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. Configure screening, scoring, assessment flow, autonomy, and budget here. Turn on uses the effective policy shown below without silently changing it.</>}
           </p>
         </section>
 
@@ -266,6 +282,18 @@ const RoleAgentSettingsTab = ({
             <div>
               <div className="mc-agent-warn-title">Agent settings are read-only</div>
               <div className="mc-agent-warn-body">{controlDisabledReason}</div>
+            </div>
+          </div>
+        ) : null}
+
+        {scoreOnlyControls ? (
+          <div className="mc-agent-warn" role="status">
+            <div>
+              <div className="mc-agent-warn-title">Related-role Agent is score-only</div>
+              <div className="mc-agent-warn-body">
+                Scoring controls and budget remain editable here. Assessment and candidate-action
+                policy stays on the original role and is shown below only as non-editable context.
+              </div>
             </div>
           </div>
         ) : null}
@@ -394,10 +422,10 @@ const RoleAgentSettingsTab = ({
                 PIPELINE DISTRIBUTION · {total} SCORED
               </div>
               <div className="mc-agent-settings-dotgrid">
-                {Array.from({ length: total }).map((_, i) => (
+                {Array.from({ length: distributionDotCount }).map((_, i) => (
                   <span
                     key={i}
-                    className={`mc-agent-settings-dot ${i < belowThresholdCount ? 'is-below' : 'is-above'}`}
+                    className={`mc-agent-settings-dot ${i < distributionBelowCount ? 'is-below' : 'is-above'}`}
                     aria-hidden="true"
                   />
                 ))}
@@ -431,7 +459,9 @@ const RoleAgentSettingsTab = ({
                 Assessment <em>tasks</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Choose the assessment sent to qualified candidates. If none is assigned, Turn on creates and validates one automatically.
+                {scoreOnlyControls
+                  ? 'Related roles do not send assessments. Manage tasks and assessment delivery from the original role.'
+                  : 'Choose the assessment sent to qualified candidates. If none is assigned, Turn on creates and validates one automatically.'}
               </p>
             </div>
           </div>
@@ -475,10 +505,14 @@ const RoleAgentSettingsTab = ({
                 </svg>
                 <div>
                   <div className="mc-agent-warn-title">
-                    {generatedDraft ? 'Generated assessment awaiting Turn on validation' : 'No assessment task assigned'}
+                    {scoreOnlyControls
+                      ? 'Assessment tasks are managed on the original role'
+                      : (generatedDraft ? 'Generated assessment awaiting Turn on validation' : 'No assessment task assigned')}
                   </div>
                   <div className="mc-agent-warn-body">
-                    {generatedDraft
+                    {scoreOnlyControls
+                      ? 'This score-only role cannot assign, send, retry, or skip assessments.'
+                      : generatedDraft
                       ? `${generatedDraft.name} is still a draft. Turn on once and the agent will validate and approve it automatically, or explicitly skip the assessment stage.`
                       : (role?.agentic_mode_enabled
                         ? 'This running role is skipping the assessment stage. Choose an active task before turning assessment skipping off.'
@@ -525,7 +559,7 @@ const RoleAgentSettingsTab = ({
                           type="checkbox"
                           checked={checked}
                           onChange={() => handleAssessmentToggle(taskId)}
-                          disabled={controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
+                disabled={assessmentControlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
                         />
                         <span className="mc-agent-settings-task-option-copy">
                           <strong>{task.name}</strong>
@@ -552,7 +586,9 @@ const RoleAgentSettingsTab = ({
             </fieldset>
           ) : (
             <p className="mc-agent-settings-card-help mc-agent-settings-task-library-empty">
-              No reusable tasks in the library yet. Turn on will generate and validate one for this role automatically.
+              {scoreOnlyControls
+                ? 'Open the original role to view or change its assessment tasks.'
+                : 'No reusable tasks in the library yet. Turn on will generate and validate one for this role automatically.'}
             </p>
           )}
         </section>
@@ -565,11 +601,13 @@ const RoleAgentSettingsTab = ({
                 Automatic <em>actions</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Choose what the agent can do without asking you.
+                {scoreOnlyControls
+                  ? 'Related-role agents only score the shared roster. Candidate actions remain on the original role.'
+                  : 'Choose what the agent can do without asking you.'}
               </p>
             </div>
             <span className="mc-kicker is-mute" role="status" aria-live="polite">
-              {pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
+              {scoreOnlyControls ? 'SCORE-ONLY · READ-ONLY' : (pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY')}
             </span>
           </div>
           {externalProvider && externalJobLive === false && (
@@ -652,7 +690,7 @@ const RoleAgentSettingsTab = ({
                 onClick={() => {
                   if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
                 }}
-                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
+                disabled={Boolean(candidateActionControlsReadOnly || rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
               />
@@ -667,7 +705,9 @@ const RoleAgentSettingsTab = ({
         {/* Save bar */}
         <div className="mc-agent-settings-savebar">
           <span>
-            Automation switches save instantly. Threshold changes apply to this role only —{' '}
+            {scoreOnlyControls
+              ? 'Candidate-action policy is owned by the original role. Threshold changes apply only to this scoring view — '
+              : 'Automation switches save instantly. Threshold changes apply to this role only — '}
             <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
           </span>
           <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>

@@ -48,11 +48,13 @@ vi.mock('./useWorkspaceAgentControl', () => ({
 }));
 
 vi.mock('../../shared/layout/AgentHeader', () => ({
-  AgentHeader: ({ agent }) => (
+  AgentHeader: ({ agent, pauseLabel, resumeLabel }) => (
     <div
       data-testid="agent-status"
       data-in-flight={agent?.inFlight ? 'true' : 'false'}
       data-tick={agent?.tick || ''}
+      data-pause-label={pauseLabel}
+      data-resume-label={resumeLabel}
     />
   ),
   buildAgentPropFromStatus: (status) => ({
@@ -103,6 +105,14 @@ test('header refreshes when only current run and latest activity change', async 
     );
   });
   expect(view.getByTestId('agent-status')).toHaveAttribute('data-in-flight', 'false');
+  expect(view.getByTestId('agent-status')).toHaveAttribute(
+    'data-pause-label',
+    'Pause running agents',
+  );
+  expect(view.getByTestId('agent-status')).toHaveAttribute(
+    'data-resume-label',
+    'Resume eligible paused agents',
+  );
 
   harness.payload = {
     ...harness.payload,

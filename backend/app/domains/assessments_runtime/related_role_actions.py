@@ -9,11 +9,46 @@ from ...models.candidate_application import CandidateApplication
 from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
+from ...services import related_role_pipeline_queries as related_pipeline
 from ...services.sister_role_service import (
     source_application_is_globally_closed,
     transition_related_role_stage,
 )
+from .application_mutation_authorization import (
+    lock_application_for_mutation,
+    require_application_job_permission,
+)
 from .job_authorization import JobPermission, require_job_permission
+
+
+def require_application_edit_action(
+    db: Session,
+    *,
+    current_user: User,
+    application_id: int,
+    acting_role_id: int | None,
+) -> CandidateApplication:
+    """Authorize an application edit through its owner or a live related roster."""
+
+    if acting_role_id is None:
+        return require_application_job_permission(
+            db,
+            current_user=current_user,
+            application_id=int(application_id),
+            permission=JobPermission.EDIT_ROLE,
+        )
+    application = lock_application_for_mutation(
+        db,
+        application_id=int(application_id),
+        organization_id=int(current_user.organization_id),
+    )
+    _require_related_role_for_locked_application(
+        db,
+        current_user=current_user,
+        related_role_id=int(acting_role_id),
+        locked_application=application,
+    )
+    return application
 
 
 def require_related_role_application_action(
@@ -25,28 +60,81 @@ def require_related_role_application_action(
 ) -> Role:
     """Authorize one action against a related role's shared roster."""
 
-    role = db.get(Role, int(related_role_id))
+    # The durable ATS worker locks application -> related role -> evaluation.
+    # Take the same leading lock here so hiring-team changes still serialize
+    # through the canonical role lock without creating an inverse-order
+    # deadlock with an in-flight provider operation.
+    locked_application = lock_application_for_mutation(
+        db,
+        application_id=int(application.id),
+        organization_id=int(current_user.organization_id),
+        missing_status_code=409,
+        missing_detail="Related role does not own this shared candidate roster",
+    )
+    return _require_related_role_for_locked_application(
+        db,
+        current_user=current_user,
+        related_role_id=related_role_id,
+        locked_application=locked_application,
+    )
+
+
+def _require_related_role_for_locked_application(
+    db: Session,
+    *,
+    current_user: User,
+    related_role_id: int,
+    locked_application: CandidateApplication,
+) -> Role:
+    """Apply related-roster policy after the application row is locked."""
+
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(related_role_id),
+        permission=JobPermission.EDIT_ROLE,
+    )
     if (
-        role is None
-        or int(role.organization_id) != int(current_user.organization_id)
+        int(role.organization_id) != int(current_user.organization_id)
         or str(role.role_kind or "") != ROLE_KIND_SISTER
-        or int(role.ats_owner_role_id or 0) != int(application.role_id)
+        or int(role.ats_owner_role_id or 0) != int(locked_application.role_id)
     ):
         raise HTTPException(
             status_code=409,
             detail="Related role does not own this shared candidate roster",
         )
-    require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=int(role.id),
-        permission=JobPermission.EDIT_ROLE,
-        lock_for_update=False,
-    )
-    if source_application_is_globally_closed(application):
+    if source_application_is_globally_closed(locked_application):
         raise HTTPException(
             status_code=409,
             detail="A disqualified or closed shared ATS application cannot be changed",
+        )
+    roster_evaluation = (
+        db.query(SisterRoleEvaluation.id)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id
+            == SisterRoleEvaluation.source_application_id,
+        )
+        .filter(
+            SisterRoleEvaluation.organization_id
+            == int(current_user.organization_id),
+            SisterRoleEvaluation.role_id == int(role.id),
+            SisterRoleEvaluation.source_application_id
+            == int(locked_application.id),
+            related_pipeline.valid_source_scope(
+                organization_id=int(current_user.organization_id),
+                owner_role_id=int(role.ats_owner_role_id),
+            ),
+        )
+        .one_or_none()
+    )
+    if roster_evaluation is None:
+        # A related role shares its owner's ATS application table, but it does
+        # not gain mutation authority over every source candidate. Only a row
+        # projected into this role's own roster may be changed from that role.
+        raise HTTPException(
+            status_code=409,
+            detail="Related role does not own this shared candidate roster",
         )
     return role
 
@@ -94,5 +182,6 @@ def move_related_role_application_stage(
 
 __all__ = [
     "move_related_role_application_stage",
+    "require_application_edit_action",
     "require_related_role_application_action",
 ]

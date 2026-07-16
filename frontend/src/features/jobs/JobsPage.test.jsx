@@ -1,4 +1,5 @@
 import React from 'react';
+import fs from 'node:fs';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -90,6 +91,22 @@ const baseOrg = {
   workable_last_sync_status: 'success',
   workable_last_sync_summary: { jobs_seen: 79, candidates_seen: 83217, errors: [] },
 };
+
+describe('JobsPage responsive styling', () => {
+  it('owns the narrow sync-strip layout in the globally loaded Jobs stylesheet', () => {
+    const jobsStyles = fs.readFileSync(
+      'src/styles/05-roles-postings.css',
+      'utf8',
+    );
+    const mobileSyncStripRule = jobsStyles.match(
+      /@media \(max-width: 860px\) \{\s*\.wk-strip\s*\{([^}]*)\}\s*\}/,
+    );
+
+    expect(mobileSyncStripRule).not.toBeNull();
+    expect(mobileSyncStripRule[1]).toMatch(/grid-template-columns:\s*1fr/);
+    expect(mobileSyncStripRule[1]).toMatch(/align-items:\s*stretch/);
+  });
+});
 
 describe('JobsPage Workable sync states', () => {
   const trackWorkableSync = vi.fn();
@@ -367,7 +384,7 @@ describe('JobsPage Workable sync states', () => {
     expect(within(locallyPausedCard).getByText('PAUSED')).toBeInTheDocument();
     expect(within(offCard).getByText('OFF')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume eligible paused agents' }));
     await waitFor(() => expect(apiClient.agent.resumeAll).toHaveBeenCalledWith(12));
     expect(apiClient.agent.pauseAll).not.toHaveBeenCalled();
   });
@@ -395,10 +412,10 @@ describe('JobsPage Workable sync states', () => {
     );
 
     expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
-    const resume = screen.getByRole('button', { name: 'Resume workspace' });
+    const resume = screen.getByRole('button', { name: 'Resume eligible paused agents' });
     expect(resume).toBeDisabled();
-    expect(resume).toHaveAttribute('title', 'Workspace owners can pause or resume all agents.');
-    expect(resume).toHaveAttribute('aria-description', 'Workspace owners can pause or resume all agents.');
+    expect(resume).toHaveAttribute('title', 'Only workspace owners can pause running agents or resume eligible paused agents.');
+    expect(resume).toHaveAttribute('aria-description', 'Only workspace owners can pause running agents or resume eligible paused agents.');
     expect(apiClient.agent.resumeAll).not.toHaveBeenCalled();
   });
 
@@ -443,11 +460,11 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Pause workspace' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause running agents' }));
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(4));
     expect(await screen.findByText(/workspace agents were paused by Aisha Khan/i)).toBeInTheDocument();
     expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resume eligible paused agents' })).not.toBeDisabled();
   });
 
   it('accepts a pause click when the cached status predates the control version', async () => {
@@ -484,12 +501,79 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    const pause = await screen.findByRole('button', { name: 'Pause workspace' });
+    const pause = await screen.findByRole('button', { name: 'Pause running agents' });
     expect(pause).not.toBeDisabled();
     fireEvent.click(pause);
 
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(6));
-    expect(await screen.findByRole('button', { name: 'Resume workspace' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Resume eligible paused agents' })).toBeInTheDocument();
+  });
+
+  it('reports a saved pause honestly when the status poll cannot reconcile it', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 706 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{ ...baseRoles[0], agentic_mode_enabled: true }],
+    });
+    apiClient.agent.orgStatus
+      .mockResolvedValueOnce({
+        data: {
+          active_role_count: 1,
+          paused_role_count: 0,
+          workspace_paused: false,
+          workspace_control_version: 9,
+        },
+      })
+      .mockRejectedValueOnce(new Error('status unavailable'));
+    apiClient.agent.pauseAll.mockResolvedValue({
+      data: { affected: 1, skipped: 0, workspace_control_version: 10 },
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause running agents' }));
+    await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(9));
+    expect(await screen.findByText(
+      'The workspace change was saved, but the latest status could not be refreshed yet.',
+    )).toBeInTheDocument();
+  });
+
+  it('reports roles skipped by a partial bulk resume', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 707 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        agentic_mode_enabled: true,
+        agent_paused_at: '2026-07-14T10:00:00Z',
+      }],
+    });
+    apiClient.agent.orgStatus.mockResolvedValue({
+      data: {
+        active_role_count: 0,
+        paused_role_count: 2,
+        local_paused_role_count: 2,
+        workspace_paused: false,
+        workspace_control_version: 14,
+      },
+    });
+    apiClient.agent.resumeAll.mockResolvedValue({
+      data: { affected: 1, enabled_count: 2, skipped: 1 },
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume eligible paused agents' }));
+    await waitFor(() => expect(apiClient.agent.resumeAll).toHaveBeenCalledWith(14));
+    expect(await screen.findByText(
+      '1 role resumed; 1 needs attention. Review role budgets and status, then retry.',
+    )).toBeInTheDocument();
   });
 
   it('does not reuse a pre-mutation workspace poll after Pause succeeds', async () => {
@@ -529,7 +613,7 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    const pause = await screen.findByRole('button', { name: 'Pause workspace' });
+    const pause = await screen.findByRole('button', { name: 'Pause running agents' });
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
@@ -545,8 +629,8 @@ describe('JobsPage Workable sync states', () => {
     await act(async () => {
       resolveOldPoll({ data: initial });
     });
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Pause workspace' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume eligible paused agents' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause running agents' })).not.toBeInTheDocument();
   });
 
   it('keeps durable Turn-on progress visible without presenting the agent as ON', async () => {

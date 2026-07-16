@@ -359,3 +359,101 @@ describe('RoleAgentSettingsTab budget validation', () => {
     expect(onSaveBudget).not.toHaveBeenCalled();
   });
 });
+
+describe('RoleAgentSettingsTab related-role and large-roster boundaries', () => {
+  it('keeps scoring and budget editable while related-role candidate actions stay read-only', async () => {
+    const onAutonomyChange = vi.fn();
+    const onAssignAssessmentTasks = vi.fn();
+    const setThresholdDraft = vi.fn();
+    const onSaveBudget = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps({
+          role_kind: 'sister',
+          auto_send_assessment: true,
+          auto_resend_assessment: true,
+          auto_advance: true,
+        })}
+        setThresholdDraft={setThresholdDraft}
+        roleTasks={[{ id: 42, name: 'Owner API exercise', is_active: true }]}
+        allTasks={[
+          { id: 42, name: 'Owner API exercise', is_active: true },
+          { id: 43, name: 'Unrelated library task', is_active: true },
+        ]}
+        onAutonomyChange={onAutonomyChange}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
+        onSaveBudget={onSaveBudget}
+      />,
+    );
+
+    expect(screen.getByText(/Related-role Agent is score-only/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Threshold mode' })).not.toBeDisabled();
+    const threshold = screen.getByRole('slider', { name: 'Screening threshold percent' });
+    expect(threshold).not.toBeDisabled();
+    fireEvent.change(threshold, { target: { value: '61' } });
+    expect(setThresholdDraft).toHaveBeenCalledWith('61');
+
+    expect(screen.getByRole('checkbox', { name: 'Owner API exercise' })).toBeDisabled();
+    expect(screen.queryByRole('checkbox', { name: 'Unrelated library task' })).not.toBeInTheDocument();
+    for (const label of [
+      'Auto-reject pre-screen failures',
+      'Auto-send assessments',
+      'Auto-retry assessment invites',
+      'Auto-advance qualified candidates',
+    ]) {
+      const control = screen.getByRole('button', { name: label });
+      expect(control).toBeDisabled();
+      fireEvent.click(control);
+    }
+    expect(onAutonomyChange).not.toHaveBeenCalled();
+    expect(onAssignAssessmentTasks).not.toHaveBeenCalled();
+
+    const editBudget = screen.getByRole('button', { name: /edit/i });
+    expect(editBudget).not.toBeDisabled();
+    fireEvent.click(editBudget);
+    expect(screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' })).not.toBeDisabled();
+  });
+
+  it('preserves exact 10,000-candidate counts with at most 100 decorative dots', () => {
+    const { container } = render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        activeApplications={Array.from({ length: 10_000 }, (_, id) => ({ id }))}
+        belowThresholdCount={2_345}
+      />,
+    );
+
+    expect(screen.getByText('PIPELINE DISTRIBUTION · 10000 SCORED')).toBeInTheDocument();
+    expect(container.querySelector('.mc-agent-settings-distribution-summary'))
+      .toHaveTextContent('2345 below threshold · 7655 above');
+    expect(container.querySelectorAll('.mc-agent-settings-dot')).toHaveLength(100);
+  });
+
+  it.each([
+    { belowThresholdCount: 0, expectedBelowDots: 0, expectedAboveDots: 100 },
+    { belowThresholdCount: 1, expectedBelowDots: 1, expectedAboveDots: 99 },
+    { belowThresholdCount: 999, expectedBelowDots: 99, expectedAboveDots: 1 },
+    { belowThresholdCount: 1_000, expectedBelowDots: 100, expectedAboveDots: 0 },
+  ])(
+    'maps a 1,000-candidate cohort with $belowThresholdCount below without false endpoints',
+    ({ belowThresholdCount, expectedBelowDots, expectedAboveDots }) => {
+      const { container } = render(
+        <RoleAgentSettingsTab
+          {...baseProps()}
+          activeApplications={Array.from({ length: 1_000 }, (_, id) => ({ id }))}
+          belowThresholdCount={belowThresholdCount}
+        />,
+      );
+
+      expect(container.querySelectorAll('.mc-agent-settings-dot')).toHaveLength(100);
+      expect(container.querySelectorAll('.mc-agent-settings-dot.is-below'))
+        .toHaveLength(expectedBelowDots);
+      expect(container.querySelectorAll('.mc-agent-settings-dot.is-above'))
+        .toHaveLength(expectedAboveDots);
+      expect(container.querySelector('.mc-agent-settings-distribution-summary'))
+        .toHaveTextContent(
+          `${belowThresholdCount} below threshold · ${1_000 - belowThresholdCount} above`,
+        );
+    },
+  );
+});

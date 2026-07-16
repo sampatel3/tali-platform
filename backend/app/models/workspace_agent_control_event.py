@@ -28,7 +28,7 @@ class WorkspaceAgentControlEvent(Base):
     __tablename__ = "workspace_agent_control_events"
     __table_args__ = (
         CheckConstraint(
-            "action IN ('paused', 'resumed')",
+            "action IN ('paused', 'resumed', 'migrated')",
             name="ck_workspace_agent_control_events_action",
         ),
         CheckConstraint(

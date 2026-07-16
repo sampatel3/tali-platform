@@ -23,6 +23,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.job_hiring_team import JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.workspace_agent_control_event import WorkspaceAgentControlEvent
 
 
 def _seed_org_with_agent_roles(org_name: str, *, role_names: list[str]) -> dict:
@@ -218,6 +219,29 @@ def _workspace_db_state(org_id: int) -> tuple:
         sess.close()
 
 
+def _workspace_last_change(org_id: int) -> tuple[int, str, int, int] | None:
+    from tests.conftest import TestingSessionLocal
+
+    sess = TestingSessionLocal()
+    try:
+        event = (
+            sess.query(WorkspaceAgentControlEvent)
+            .filter(WorkspaceAgentControlEvent.organization_id == org_id)
+            .order_by(WorkspaceAgentControlEvent.id.desc())
+            .first()
+        )
+        if event is None:
+            return None
+        return (
+            int(event.id),
+            str(event.action),
+            int(event.from_version),
+            int(event.to_version),
+        )
+    finally:
+        sess.close()
+
+
 def _decision_status(decision_id: int) -> str:
     from tests.conftest import TestingSessionLocal
 
@@ -375,6 +399,9 @@ def test_workspace_resume_leaves_bulk_pauses_when_runtime_is_unready(client):
     seeded = _seed_org_with_agent_roles("Resume Unready Org", role_names=["A", "B"])
     _attach_user_to_org(email, seeded["org_id"])
     _workspace_command(client, headers, "pause")
+    paused_version = _workspace_db_state(seeded["org_id"])[3]
+    paused_event = _workspace_last_change(seeded["org_id"])
+    assert paused_event is not None
 
     with (
         patch("app.platform.startup_validation.is_production_like", return_value=True),
@@ -388,10 +415,29 @@ def test_workspace_resume_leaves_bulk_pauses_when_runtime_is_unready(client):
     assert resp.status_code == 200, resp.text
     assert resp.json()["affected"] == 0
     assert resp.json()["skipped"] == 2
+    assert resp.json()["workspace_control_version"] == paused_version
+    assert _workspace_db_state(seeded["org_id"])[3] == paused_version
+    assert _workspace_last_change(seeded["org_id"]) == paused_event
     for role_id in seeded["role_ids"]:
         paused_at, reason, _enabled = _role_pause_state(role_id)
         assert paused_at is not None
         assert reason == "paused by workspace control"
+
+    with patch(
+        "app.services.role_agent_dispatch.dispatch_role_agent_cycle",
+        return_value=None,
+    ):
+        retried = _workspace_command(
+            client, headers, "resume", expected=paused_version
+        )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["affected"] == 2
+    assert retried.json()["skipped"] == 0
+    assert retried.json()["workspace_control_version"] == paused_version + 1
+    resumed_event = _workspace_last_change(seeded["org_id"])
+    assert resumed_event is not None
+    assert resumed_event[0] > paused_event[0]
+    assert resumed_event[1:] == ("resumed", paused_version, paused_version + 1)
 
 
 def test_pause_all_is_org_scoped(client):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +18,7 @@ from app.scripts.database_migrate import (
     MigrationSafetyError,
     _alembic_config,
     _preflight_database,
+    _require_supported_database_dialect,
     main,
 )
 from tests.postgres_support import (
@@ -74,7 +76,13 @@ def test_migration_graph_has_canonical_initial_schema_and_one_head():
         "180_merge_related_role_workflow",
         "175_workspace_bulk_role_pause",
     )
-    assert script.get_heads() == ["181_merge_workspace_bulk_role_pause"]
+    assert script.get_revision("182_workspace_pause_compat_audit").down_revision == (
+        "181_merge_workspace_bulk_role_pause"
+    )
+    assert script.get_revision("183_preserve_related_role_history").down_revision == (
+        "182_workspace_pause_compat_audit"
+    )
+    assert script.get_heads() == ["183_preserve_related_role_history"]
 
 
 def test_preflight_allows_a_genuinely_empty_schema():
@@ -84,6 +92,15 @@ def test_preflight_allows_a_genuinely_empty_schema():
             assert _preflight_database(connection, _script_directory()) == "empty"
     finally:
         engine.dispose()
+
+
+def test_migrator_rejects_unsupported_dialect_before_preflight_or_ddl():
+    connection = SimpleNamespace(
+        dialect=SimpleNamespace(name="unsupported-test-dialect")
+    )
+
+    with pytest.raises(MigrationSafetyError, match="unsupported database dialect"):
+        _require_supported_database_dialect(connection)
 
 
 def test_preflight_rejects_unversioned_partial_schema_before_ddl():
@@ -158,7 +175,7 @@ def test_fresh_postgres_schema_runs_full_chain_and_preserves_invariants(
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "181_merge_workspace_bulk_role_pause"
+            ).scalar_one() == "183_preserve_related_role_history"
 
             indexes = set(
                 connection.execute(
@@ -289,7 +306,59 @@ def test_postgres_migration_lock_timeout_is_bounded_and_applies_no_ddl(
         engine.dispose()
 
 
-def test_postgres_upgrade_from_related_role_branch_preserves_data_and_pause_provenance(
+def test_versioned_postgres_ddl_timeout_rolls_back_compatibility_revisions(
+    postgres_database_url: str,
+):
+    historical = run_alembic_upgrade(
+        postgres_database_url,
+        revision="181_merge_workspace_bulk_role_pause",
+    )
+    assert historical.returncode == 0, historical.stdout + historical.stderr
+
+    engine = create_engine(postgres_database_url, poolclass=NullPool)
+    try:
+        with engine.connect() as lock_holder:
+            lock_holder.execute(text("LOCK TABLE roles IN ACCESS EXCLUSIVE MODE"))
+
+            result = _run_migrator(
+                postgres_database_url,
+                lock_timeout_seconds=0.2,
+            )
+            assert result.returncode == 1
+            assert "migration failed" in result.stderr
+
+            with engine.connect() as observer:
+                assert observer.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one() == "181_merge_workspace_bulk_role_pause"
+                assert not inspect(observer).has_table(
+                    "workspace_pause_migration_audits"
+                )
+                action_check = observer.execute(
+                    text(
+                        """
+                        SELECT pg_get_constraintdef(constraint_row.oid)
+                        FROM pg_constraint AS constraint_row
+                        WHERE constraint_row.conname =
+                              'ck_workspace_agent_control_events_action'
+                        """
+                    )
+                ).scalar_one()
+                assert "migrated" not in action_check
+
+            lock_holder.rollback()
+
+        recovered = _run_migrator(postgres_database_url)
+        assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "183_preserve_related_role_history"
+    finally:
+        engine.dispose()
+
+
+def test_postgres_upgrade_from_published_related_role_head_preserves_data_and_pause_state(
     postgres_database_url: str,
 ):
     branch_result = run_alembic_upgrade(
@@ -664,7 +733,7 @@ def test_postgres_upgrade_from_related_role_branch_preserves_data_and_pause_prov
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "181_merge_workspace_bulk_role_pause"
+            ).scalar_one() == "183_preserve_related_role_history"
 
             preserved_evaluation = dict(
                 connection.execute(
@@ -762,6 +831,7 @@ def test_postgres_upgrade_from_related_role_branch_preserves_data_and_pause_prov
                 text(
                     """
                     SELECT
+                        id,
                         organization_id,
                         role_id,
                         actor_user_id,
@@ -781,19 +851,19 @@ def test_postgres_upgrade_from_related_role_branch_preserves_data_and_pause_prov
             assert role_event["from_version"] == 11
             assert role_event["to_version"] == 12
             assert role_event["request_id"] is None
-            provenance = role_event["changes"]["workspace_pause_provenance"]
-            assert provenance == {
-                "paused_at": paused_at.isoformat(),
-                "reason": pause_reason,
-                "actor_user_id": 1101,
-                "actor_name": "Original Recruiter",
+            assert role_event["changes"] == {
+                "agent_paused_at": {
+                    "before": None,
+                    "after": paused_at.isoformat(),
+                },
+                "agent_paused_reason": {
+                    "before": None,
+                    "after": "paused by workspace control",
+                },
             }
-            assert role_event["changes"]["agent_paused_at"] == {
-                "before": None,
-                "after": paused_at.isoformat(),
-            }
-            assert pause_reason in role_event["reason"]
-            assert "conversion was automated" in role_event["reason"]
+            assert role_event["reason"] == (
+                "workspace pause migrated to role bulk control"
+            )
 
             workspace_event = connection.execute(
                 text(
@@ -811,13 +881,59 @@ def test_postgres_upgrade_from_related_role_branch_preserves_data_and_pause_prov
                     """
                 )
             ).mappings().one()
-            assert workspace_event["actor_user_id"] == 1101
-            assert workspace_event["actor_name"] == "Original Recruiter"
-            assert workspace_event["action"] == "paused"
+            assert workspace_event["actor_user_id"] is None
+            assert workspace_event["actor_name"] == "Taali migration"
+            assert workspace_event["action"] == "migrated"
             assert workspace_event["from_version"] == 7
             assert workspace_event["to_version"] == 8
-            assert workspace_event["request_id"] is None
-            assert pause_reason in workspace_event["reason"]
-            assert paused_at.isoformat() in workspace_event["reason"]
+            assert "no role was resumed" in workspace_event["reason"]
+            assert workspace_event["request_id"] == (
+                "migration:182_workspace_pause_compat_audit:1001"
+            )
+
+            compatibility_audit = connection.execute(
+                text(
+                    """
+                    SELECT
+                        evidence_source,
+                        evidence_quality,
+                        converted_role_count,
+                        source_role_event_ids,
+                        source_role_ids,
+                        compatibility_applied,
+                        control_version_before,
+                        control_version_after,
+                        anomalies
+                    FROM workspace_pause_migration_audits
+                    WHERE organization_id = 1001
+                    """
+                )
+            ).mappings().one()
+            assert compatibility_audit["evidence_source"] == (
+                "published_175_role_events"
+            )
+            assert compatibility_audit["evidence_quality"] == "exact"
+            assert compatibility_audit["converted_role_count"] == 1
+            assert compatibility_audit["source_role_event_ids"] == [role_event["id"]]
+            assert compatibility_audit["source_role_ids"] == [2001]
+            assert compatibility_audit["compatibility_applied"] is True
+            assert compatibility_audit["control_version_before"] == 7
+            assert compatibility_audit["control_version_after"] == 8
+            assert compatibility_audit["anomalies"] == []
+
+            role_owner_fk = next(
+                fk
+                for fk in inspect(connection).get_foreign_keys("roles")
+                if fk["constrained_columns"] == ["ats_owner_role_id"]
+            )
+            evaluation_role_fk = next(
+                fk
+                for fk in inspect(connection).get_foreign_keys(
+                    "sister_role_evaluations"
+                )
+                if fk["constrained_columns"] == ["role_id"]
+            )
+            assert role_owner_fk["options"]["ondelete"] == "RESTRICT"
+            assert evaluation_role_fk["options"]["ondelete"] == "RESTRICT"
     finally:
         engine.dispose()

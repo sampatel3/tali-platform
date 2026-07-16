@@ -40,7 +40,7 @@ LEGACY_SIZE_BASELINES: dict[str, int] = {
     "app/models/__init__.py": 414,
     "app/domains/agentic/routes.py": 1526,
     "app/domains/assessments_runtime/analytics_routes.py": 1901,
-    "app/domains/assessments_runtime/applications_routes.py": 5698,
+    "app/domains/assessments_runtime/applications_routes.py": 5672,
     "app/domains/assessments_runtime/candidate_runtime_routes.py": 893,
     "app/domains/assessments_runtime/interview_feedback_routes.py": 558,
     "app/domains/assessments_runtime/pipeline_service.py": 1289,

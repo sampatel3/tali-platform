@@ -53,10 +53,12 @@ export const agent = {
   // Manual trigger
   runNow: (roleId, body = {}) => api.post(`/roles/${roleId}/agent/run-now`, body),
 
-  // Workspace-wide pause overlay. It gates every role without rewriting any
-  // role's own ON / locally-paused / OFF choice; resumeAll clears only that
-  // overlay. Both commands use the viewed workspace version so concurrent
-  // recruiters cannot silently overwrite one another.
+  // Workspace-owner bulk role controls. pauseAll soft-pauses currently running
+  // enabled roles while preserving roles that were already held; resumeAll
+  // explicitly attempts every enabled paused role and may skip roles whose
+  // budget/readiness checks are not healthy. Both commands use the viewed
+  // shared control version so concurrent recruiters cannot silently overwrite
+  // one another. Neither command creates a workspace execution overlay.
   pauseAll: (expectedControlVersion) => api.post('/agent/pause-all', {
     expected_control_version: expectedControlVersion,
   }),
@@ -90,7 +92,7 @@ export const agent = {
 
   // ---- Hub (org-wide) ----
   // 30-second poll target for the live tab badge + Hub KPI strip.
-  // This request gates the workspace pause/resume control. Keep its failure
+  // This request gates the workspace-wide bulk controls. Keep its failure
   // bound short so a dropped connection cannot leave the control looking
   // permanently disabled behind the global 60-second API timeout.
   orgStatus: () => api.get('/agent/org-status', { timeout: 10000 }),

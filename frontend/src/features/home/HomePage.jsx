@@ -623,17 +623,17 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
           title={greetingFor(user)}
           subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
-          // Workspace control is a bulk convenience; role Resume remains
-          // independent after a workspace Pause.
+          // These are bulk edits of role controls, not a workspace execution
+          // overlay. Already-paused roles keep their existing hold on Pause.
           agent={headerAgent}
           onPauseAgent={canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
           onResumeAgent={canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
-          pauseLabel="Pause workspace"
-          resumeLabel="Resume workspace"
+          pauseLabel="Pause running agents"
+          resumeLabel="Resume eligible paused agents"
           pauseAllCount={headerAgent?.runningRoleCount ?? 0}
           resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
           controlsDisabledReason={!canControlWorkspaceAgent
-            ? 'Workspace owners can pause or resume all agents.'
+            ? 'Only workspace owners can pause running agents or resume eligible paused agents.'
             : null}
           offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
         />

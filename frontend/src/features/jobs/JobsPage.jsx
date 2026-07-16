@@ -17,10 +17,6 @@ import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import {
-  resolveWorkspaceControlVersion,
-  workspaceControlConflictMessage,
-} from '../../shared/workspaceAgentControl';
-import {
   EmptyState,
   Select,
   Spinner,
@@ -49,6 +45,7 @@ import {
   isRoleLive,
 } from './JobsRoleGrid';
 import { JobsRoleCatalogue } from './JobsRoleCatalogue';
+import { useJobsBulkAgentControls } from './useJobsBulkAgentControls';
 
 // Paint a bounded first page; keep every additional page explicitly requested.
 const JOBS_FIRST_PAGE = 24;
@@ -230,7 +227,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
-  const [agentControlError, setAgentControlError] = useState('');
   // HANDOFF v2 §4 — Live agent spend across roles for the BUDGET USED tile.
   // Fan-out to /roles/{id}/agent/status for every agent-enabled role. Capped
   // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
@@ -586,55 +582,20 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
     orgStatusResult,
   );
 
-  // Workspace pause / resume is a convenience bulk edit. Individual role
-  // controls remain authoritative between those global actions.
-  const agentBulkBusyRef = useRef(false);
-  const [agentBulkAction, setAgentBulkAction] = useState(null);
-  const runAgentBulk = useCallback(async (actionName, action, failMsg) => {
-    if (isShowcase || agentBulkBusyRef.current) return;
-    agentBulkBusyRef.current = true;
-    setAgentBulkAction(actionName);
-    setAgentControlError('');
-    try {
-      await action();
-      // Release the mutation guard before the heavier jobs refresh. The org
-      // status request is enough to reconcile the header immediately.
-      await refetchAgentStatus({ force: true });
-      void loadJobsHub();
-    } catch (error) {
-      await refetchAgentStatus({ force: true });
-      if (Number(error?.response?.status) === 409) {
-        setAgentControlError(workspaceControlConflictMessage(error));
-      } else {
-        setAgentControlError(failMsg);
-      }
-    } finally {
-      agentBulkBusyRef.current = false;
-      setAgentBulkAction(null);
-    }
-  }, [isShowcase, loadJobsHub, refetchAgentStatus]);
-  const handlePauseAllAgents = useCallback(
-    () => runAgentBulk(
-      'pause',
-      async () => apiClient.agent.pauseAll(await resolveWorkspaceControlVersion(
-        headerAgent?.workspaceControlVersion,
-        refetchAgentStatus,
-      )),
-      'Could not pause the workspace agent.',
-    ),
-    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
-  );
-  const handleResumeAllAgents = useCallback(
-    () => runAgentBulk(
-      'resume',
-      async () => apiClient.agent.resumeAll(await resolveWorkspaceControlVersion(
-        headerAgent?.workspaceControlVersion,
-        refetchAgentStatus,
-      )),
-      'Could not resume the workspace agent.',
-    ),
-    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
-  );
+  // These controls bulk-edit role pauses; they do not create a workspace
+  // execution overlay. Existing role holds remain untouched by bulk Pause.
+  const {
+    action: agentBulkAction,
+    message: agentControlMessage,
+    pause: handlePauseAllAgents,
+    resume: handleResumeAllAgents,
+    dismissMessage: dismissAgentControlMessage,
+  } = useJobsBulkAgentControls({
+    isShowcase,
+    loadJobsHub,
+    refetchAgentStatus,
+    workspaceControlVersion: headerAgent?.workspaceControlVersion,
+  });
   return (
     <>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
@@ -690,12 +651,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
         agent={headerAgent ? { ...headerAgent, controlAction: agentBulkAction } : headerAgent}
         onPauseAgent={!isShowcase && canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
         onResumeAgent={!isShowcase && canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
-        pauseLabel="Pause workspace"
-        resumeLabel="Resume workspace"
+        pauseLabel="Pause running agents"
+        resumeLabel="Resume eligible paused agents"
         pauseAllCount={headerAgent?.runningRoleCount ?? 0}
         resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
         controlsDisabledReason={!canControlWorkspaceAgent
-          ? 'Workspace owners can pause or resume all agents.'
+          ? 'Only workspace owners can pause running agents or resume eligible paused agents.'
           : null}
         offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
@@ -704,13 +665,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
             ⌘K palette in Shell. The local "Search jobs by name" input was
             redundant chrome and is gone per the canvas spec. */}
 
-        {agentControlError ? (
-          <div className="card flat mb-3 flex flex-wrap items-center justify-between gap-3 p-3 text-sm text-[var(--red)]" role="alert">
-            <span>{agentControlError}</span>
+        {agentControlMessage ? (
+          <div
+            className={`card flat mb-3 flex flex-wrap items-center justify-between gap-3 p-3 text-sm ${agentControlMessage.tone === 'error' ? 'text-[var(--red)]' : 'text-[var(--ink-2)]'}`}
+            role={agentControlMessage.tone === 'error' ? 'alert' : 'status'}
+          >
+            <span>{agentControlMessage.text}</span>
             <button
               type="button"
               className="btn btn-outline btn-sm"
-              onClick={() => setAgentControlError('')}
+              onClick={dismissAgentControlMessage}
             >
               Dismiss
             </button>

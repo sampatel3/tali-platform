@@ -107,7 +107,7 @@ const JOB_STATUS_CHOICES = [
   { key: 'cancelled', label: 'Cancelled' },
 ];
 
-export function JobStatusControl({ status, onChange, busy }) {
+export function JobStatusControl({ status, onChange, busy, disabled = false, disabledReason = null }) {
   if (!status) return null;
   return (
     <div className="job-status-control">
@@ -122,7 +122,8 @@ export function JobStatusControl({ status, onChange, busy }) {
           <button
             key={c.key}
             type="button"
-            disabled={busy || status === c.key}
+            disabled={disabled || busy || status === c.key}
+            title={disabled ? disabledReason : undefined}
             className={`jsc-btn ${status === c.key ? 'is-current' : ''}`}
             onClick={() => onChange(c.key)}
           >
@@ -143,7 +144,15 @@ export function JobStatusControl({ status, onChange, busy }) {
 // stub when none exists) so the Jobs Department column / filter + per-department
 // rollups pick the role up. NB the backend entity is still `client`.
 // --------------------------------------------------------------------------- //
-export function ClientControl({ clientId, clientName, clients, onChange, busy }) {
+export function ClientControl({
+  clientId,
+  clientName,
+  clients,
+  onChange,
+  busy,
+  disabled = false,
+  disabledReason = null,
+}) {
   const options = Array.isArray(clients) ? clients : [];
   return (
     <div className="job-status-control client-control">
@@ -158,7 +167,8 @@ export function ClientControl({ clientId, clientName, clients, onChange, busy })
           inline
           value={clientId == null ? '' : String(clientId)}
           onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-          disabled={busy}
+          disabled={disabled || busy}
+          title={disabled ? disabledReason : undefined}
           aria-label="Assign hiring department"
           placeholder="Assign a department…"
         >

@@ -16,6 +16,8 @@ const ACTIVE_PROCESS_STATUSES = new Set([
 
 export function JobPipelineHeaderActions({
   canEditJobSpec,
+  canMutateRole = true,
+  mutationDisabledReason = null,
   externalProvider,
   externalProviderLabel,
   navigate,
@@ -60,7 +62,8 @@ export function JobPipelineHeaderActions({
           type="button"
           className="btn btn-outline btn-sm"
           onClick={onRescoreSister}
-          disabled={sisterRescoring || sisterScoringActive}
+          disabled={!canMutateRole || sisterRescoring || sisterScoringActive}
+          title={!canMutateRole ? mutationDisabledReason : undefined}
         >
           {sisterRescoring || sisterScoringState === 'running' || sisterScoringState === 'retrying'
             ? <Spinner size={12} />
@@ -73,8 +76,10 @@ export function JobPipelineHeaderActions({
             type="button"
             className="btn btn-outline btn-sm"
             onClick={onOpenProcessDialog}
-            disabled={processActive}
-            title="Fetch CVs, pre-screen, score, and update semantic search in one governed run"
+            disabled={!canMutateRole || processActive}
+            title={!canMutateRole
+              ? mutationDisabledReason
+              : 'Fetch CVs, pre-screen, score, and update semantic search in one governed run'}
           >
             <RefreshCw size={12} />
             {processActive ? 'Processing…' : 'Process candidates'}
@@ -93,8 +98,10 @@ export function JobPipelineHeaderActions({
               type="button"
               className="btn btn-outline btn-sm"
               onClick={onStartRelatedRole}
-              disabled={startingRelatedRole}
-              title={`Create a separate scoring role over this ${externalProviderLabel} candidate pool`}
+              disabled={!canMutateRole || startingRelatedRole}
+              title={!canMutateRole
+                ? mutationDisabledReason
+                : `Create a separate scoring role over this ${externalProviderLabel} candidate pool`}
             >
               {startingRelatedRole ? <Spinner size={12} /> : <GitFork size={12} />}
               {startingRelatedRole ? 'Opening draft…' : 'Create related role'}

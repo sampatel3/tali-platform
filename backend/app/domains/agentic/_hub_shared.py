@@ -179,7 +179,7 @@ class WorkspacePausedBy(BaseModel):
 
 
 class WorkspaceControlLastChange(WorkspacePausedBy):
-    action: Literal["paused", "resumed"]
+    action: Literal["paused", "resumed", "migrated"]
 
 
 class OrgStatusPayload(OrgKpiPayload):

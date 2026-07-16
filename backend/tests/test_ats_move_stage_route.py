@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.candidate_application import CandidateApplication
+from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
@@ -14,9 +15,14 @@ from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.platform.config import settings
 from app.domains.assessments_runtime.applications_routes import (
+    ApplicationOutcomeUpdate,
     WorkableMoveStageRequest,
     move_application_in_active_ats,
     move_application_in_workable,
+    update_application_outcome,
+)
+from app.domains.assessments_runtime.related_role_capability_routes import (
+    related_ats_transition_capability,
 )
 from app.services.workable_op_runner import AtsJobRunPersistenceError
 from tests.conftest import TestingSessionLocal, auth_headers
@@ -175,7 +181,9 @@ def test_related_role_attribution_is_propagated_to_durable_move_payload(client, 
     assert enqueue.call_count == 1
 
 
-def _legacy_related_role_actor(db, *, org, owner, app, related_access: bool):
+def _legacy_related_role_actor(
+    db, *, org, owner, app, related_access: bool, source_access: bool = True
+):
     actor = User(
         email=f"legacy-related-{'allowed' if related_access else 'denied'}@example.com",
         hashed_password="x",
@@ -194,14 +202,15 @@ def _legacy_related_role_actor(db, *, org, owner, app, related_access: bool):
     )
     db.add_all([actor, related])
     db.flush()
-    db.add(
-        JobHiringTeam(
-            organization_id=org.id,
-            role_id=owner.id,
-            user_id=actor.id,
-            team_role=TEAM_ROLE_RECRUITER,
+    if source_access:
+        db.add(
+            JobHiringTeam(
+                organization_id=org.id,
+                role_id=owner.id,
+                user_id=actor.id,
+                team_role=TEAM_ROLE_RECRUITER,
+            )
         )
-    )
     if related_access:
         db.add(
             JobHiringTeam(
@@ -254,6 +263,27 @@ def test_legacy_workable_related_move_requires_related_role_edit_access(client, 
     enqueue.assert_not_called()
 
 
+def test_related_role_capability_requires_related_role_edit_access(client, db):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=False,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        related_ats_transition_capability(
+            role_id=int(related.id),
+            db=db,
+            current_user=actor,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Forbidden"
+
+
 def test_legacy_workable_related_move_allows_related_role_recruiter(client, db):
     _headers, org, owner, app = _application(client, db)
     actor, related = _legacy_related_role_actor(
@@ -262,6 +292,7 @@ def test_legacy_workable_related_move_allows_related_role_recruiter(client, db):
         owner=owner,
         app=app,
         related_access=True,
+        source_access=False,
     )
 
     with patch(
@@ -280,6 +311,174 @@ def test_legacy_workable_related_move_allows_related_role_recruiter(client, db):
     assert response.ats_writeback_status == "queued"
     assert response.ats_writeback_job_run_id == 125
     assert enqueue.call_args.kwargs["payload"]["acting_role_id"] == related.id
+
+
+def test_related_role_recruiter_can_reject_shared_application_without_source_assignment(
+    client, db
+):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=True,
+        source_access=False,
+    )
+
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change",
+        return_value={"status": "succeeded"},
+    ):
+        response = update_application_outcome(
+            application_id=int(app.id),
+            data=ApplicationOutcomeUpdate(
+                application_outcome="rejected",
+                reason="Rejected from related role",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+
+    assert response.application_outcome == "rejected"
+    db.refresh(app)
+    assert app.application_outcome == "rejected"
+    outcome_event = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == int(app.id),
+            CandidateApplicationEvent.event_type == "application_outcome_changed",
+        )
+        .one()
+    )
+    assert outcome_event.event_metadata["acting_role_id"] == int(related.id)
+
+
+def test_related_role_outcome_requires_related_role_edit_access(client, db):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=False,
+        source_access=True,
+    )
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+        ) as sync_outcome,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        update_application_outcome(
+            application_id=int(app.id),
+            data=ApplicationOutcomeUpdate(
+                application_outcome="rejected",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+
+    assert exc_info.value.status_code == 403
+    sync_outcome.assert_not_called()
+    db.rollback()
+    db.refresh(app)
+    assert app.application_outcome == "open"
+
+
+def test_deleted_related_role_cannot_authorize_shared_outcome(client, db):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=True,
+        source_access=False,
+    )
+    related.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+        ) as sync_outcome,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        update_application_outcome(
+            application_id=int(app.id),
+            data=ApplicationOutcomeUpdate(
+                application_outcome="rejected",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Forbidden"
+    sync_outcome.assert_not_called()
+    db.rollback()
+    db.refresh(app)
+    assert app.application_outcome == "open"
+
+
+def test_related_role_actions_require_candidate_in_the_related_roster(client, db):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=True,
+        source_access=False,
+    )
+    db.query(SisterRoleEvaluation).filter(
+        SisterRoleEvaluation.role_id == int(related.id),
+        SisterRoleEvaluation.source_application_id == int(app.id),
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    with (
+        patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue,
+        pytest.raises(HTTPException) as move_exc,
+    ):
+        move_application_in_workable(
+            application_id=int(app.id),
+            data=WorkableMoveStageRequest(
+                target_stage="final-interview",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+    assert move_exc.value.status_code == 409
+    enqueue.assert_not_called()
+
+    db.rollback()
+    with (
+        patch(
+            "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+        ) as sync_outcome,
+        pytest.raises(HTTPException) as outcome_exc,
+    ):
+        update_application_outcome(
+            application_id=int(app.id),
+            data=ApplicationOutcomeUpdate(
+                application_outcome="rejected",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+    assert outcome_exc.value.status_code == 409
+    sync_outcome.assert_not_called()
+    db.rollback()
+    db.refresh(app)
+    assert app.application_outcome == "open"
 
 
 def test_closed_application_is_rejected_before_move_is_queued(client, db):

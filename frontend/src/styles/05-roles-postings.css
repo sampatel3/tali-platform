@@ -530,6 +530,17 @@
   font-weight: 500;
 }
 
+/* Keep the provider summary readable when its action buttons no longer fit
+   beside the title. This rule belongs with the globally loaded Jobs styles:
+   the matching legacy rule in the lazy standing-report bundle is not loaded
+   by the standalone Jobs/showcase route. */
+@media (max-width: 860px) {
+  .wk-strip {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+}
+
 .filter-row {
   display: flex;
   gap: 8px;

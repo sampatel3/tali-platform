@@ -1,6 +1,7 @@
 """Regression coverage for live related-role roster and scoring boundaries."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -78,14 +79,58 @@ def _seed_application(
     return application
 
 
+def _seed_pending_evaluation(db, *, suffix: str):
+    organization = Organization(
+        name=f"Related scoring boundary {suffix}",
+        slug=f"related-scoring-boundary-{suffix}-{id(db)}",
+    )
+    db.add(organization)
+    db.flush()
+    owner, related = _seed_related_role(
+        db,
+        organization_id=int(organization.id),
+    )
+    application = _seed_application(
+        db,
+        organization_id=int(organization.id),
+        role_id=int(owner.id),
+        suffix=suffix,
+    )
+    evaluation = SisterRoleEvaluation(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        source_application_id=int(application.id),
+        status="pending",
+        spec_fingerprint="queued-before-boundary",
+    )
+    db.add(evaluation)
+    db.commit()
+    return organization, owner, related, application, evaluation
+
+
+def _successful_match_output(*, score: float = 87.0):
+    return SimpleNamespace(
+        scoring_status=SimpleNamespace(value="ok"),
+        role_fit_score=score,
+        summary="Boundary-safe related-role score.",
+        error_reason=None,
+        model_version="test-model",
+        prompt_version="test-prompt",
+        trace_id="related-boundary-trace",
+        cache_hit=False,
+        model_dump=lambda **_: {
+            "role_fit_score": score,
+            "summary": "Boundary-safe related-role score.",
+        },
+    )
+
+
 def test_restored_excluded_evaluation_reactivates_without_fingerprint_change(
     client, db
 ):
     _, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
-    owner, related = _seed_related_role(
-        db, organization_id=user.organization_id
-    )
+    owner, related = _seed_related_role(db, organization_id=user.organization_id)
     application = _seed_application(
         db,
         organization_id=user.organization_id,
@@ -128,9 +173,7 @@ def test_restored_excluded_evaluation_reactivates_without_fingerprint_change(
 def test_scoring_status_top_candidates_excludes_invalid_live_roster_rows(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
-    owner, related = _seed_related_role(
-        db, organization_id=user.organization_id
-    )
+    owner, related = _seed_related_role(db, organization_id=user.organization_id)
     reassigned_owner = Role(
         organization_id=user.organization_id,
         name="Different canonical role",
@@ -203,9 +246,7 @@ def test_scoring_status_top_candidates_requires_live_standard_owner(
 ):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
-    owner, related = _seed_related_role(
-        db, organization_id=user.organization_id
-    )
+    owner, related = _seed_related_role(db, organization_id=user.organization_id)
     application = _seed_application(
         db,
         organization_id=user.organization_id,
@@ -248,9 +289,7 @@ def test_scoring_status_top_candidates_requires_live_standard_owner(
 def test_related_applications_applied_filter_includes_missing_evaluation(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
-    owner, related = _seed_related_role(
-        db, organization_id=user.organization_id
-    )
+    owner, related = _seed_related_role(db, organization_id=user.organization_id)
     application = _seed_application(
         db,
         organization_id=user.organization_id,
@@ -295,9 +334,7 @@ def test_delayed_scoring_worker_excludes_rows_outside_live_roster(db, revocation
     )
     db.add_all([organization, other_organization])
     db.flush()
-    owner, related = _seed_related_role(
-        db, organization_id=int(organization.id)
-    )
+    owner, related = _seed_related_role(db, organization_id=int(organization.id))
     application = _seed_application(
         db,
         organization_id=int(organization.id),
@@ -362,6 +399,572 @@ def test_delayed_scoring_worker_excludes_rows_outside_live_roster(db, revocation
     assert saved.scored_at is not None
 
 
+@pytest.mark.parametrize(
+    ("revocation", "expected_status", "expected_error_code"),
+    [
+        (
+            "application_deleted",
+            "excluded",
+            "source_application_outside_owner_roster",
+        ),
+        (
+            "candidate_deleted",
+            "excluded",
+            "source_application_outside_owner_roster",
+        ),
+        (
+            "owner_deleted",
+            "excluded",
+            "source_application_outside_owner_roster",
+        ),
+        ("shared_application_closed", "excluded", "shared_application_closed"),
+        ("related_role_paused", "authority_blocked", "authority_blocked"),
+    ],
+)
+def test_scoring_revalidates_scope_before_each_provider_phase(
+    db,
+    revocation,
+    expected_status,
+    expected_error_code,
+):
+    from tests.conftest import TestingSessionLocal
+
+    _, owner, related, application, evaluation = _seed_pending_evaluation(
+        db,
+        suffix=f"provider-phase-{revocation}",
+    )
+    provider_phases: list[str] = []
+
+    def _score(*_args, before_provider_call, **_kwargs):
+        provider_phases.append("full_score.requirements")
+        before_provider_call("full_score.requirements")
+        with TestingSessionLocal() as concurrent:
+            if revocation == "application_deleted":
+                concurrent.get(
+                    CandidateApplication,
+                    int(application.id),
+                ).deleted_at = datetime.now(timezone.utc)
+            elif revocation == "candidate_deleted":
+                live_application = concurrent.get(
+                    CandidateApplication,
+                    int(application.id),
+                )
+                concurrent.get(
+                    Candidate,
+                    int(live_application.candidate_id),
+                ).deleted_at = datetime.now(timezone.utc)
+            elif revocation == "owner_deleted":
+                concurrent.get(Role, int(owner.id)).deleted_at = datetime.now(
+                    timezone.utc
+                )
+            elif revocation == "shared_application_closed":
+                concurrent.get(
+                    CandidateApplication,
+                    int(application.id),
+                ).application_outcome = "withdrawn"
+            else:
+                concurrent.get(Role, int(related.id)).agent_paused_at = datetime.now(
+                    timezone.utc
+                )
+            concurrent.commit()
+
+        provider_phases.append("full_score.main")
+        before_provider_call("full_score.main")
+        raise AssertionError("revoked scoring reached a later provider call")
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_score,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        result = score_sister_evaluation.run(int(evaluation.id))
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, int(evaluation.id))
+    assert provider_phases == ["full_score.requirements", "full_score.main"]
+    assert result["status"] == expected_status
+    assert result["error_code"] == expected_error_code
+    assert saved.status == (
+        "retry_wait" if expected_status == "authority_blocked" else "excluded"
+    )
+    assert saved.last_error_code == expected_error_code
+    assert saved.role_fit_score is None
+    assert saved.details is None
+
+
+@pytest.mark.parametrize(
+    ("revocation", "expected_status", "expected_error_code"),
+    [
+        (
+            "application_deleted",
+            "excluded",
+            "source_application_outside_owner_roster",
+        ),
+        ("related_role_paused", "authority_blocked", "authority_blocked"),
+        ("job_spec_changed", "retry_wait", "scoring_inputs_changed"),
+    ],
+)
+def test_scoring_revalidates_scope_after_provider_before_persistence(
+    db,
+    revocation,
+    expected_status,
+    expected_error_code,
+):
+    from tests.conftest import TestingSessionLocal
+
+    _, _, related, application, evaluation = _seed_pending_evaluation(
+        db,
+        suffix=f"persist-{revocation}",
+    )
+
+    def _score(*_args, before_provider_call, **_kwargs):
+        before_provider_call("full_score.main")
+        with TestingSessionLocal() as concurrent:
+            if revocation == "application_deleted":
+                concurrent.get(
+                    CandidateApplication,
+                    int(application.id),
+                ).deleted_at = datetime.now(timezone.utc)
+            elif revocation == "related_role_paused":
+                concurrent.get(Role, int(related.id)).agent_paused_at = datetime.now(
+                    timezone.utc
+                )
+            else:
+                concurrent.get(
+                    Role, int(related.id)
+                ).job_spec_text = "A materially changed specification that requires Go."
+            concurrent.commit()
+        return _successful_match_output(score=93.0)
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_score,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        result = score_sister_evaluation.run(int(evaluation.id))
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, int(evaluation.id))
+    assert result["status"] == expected_status
+    assert result["error_code"] == expected_error_code
+    assert saved.status == (
+        "excluded" if expected_status == "excluded" else "retry_wait"
+    )
+    assert saved.last_error_code == expected_error_code
+    assert saved.role_fit_score is None
+    assert saved.details is None
+
+
+def test_scoring_read_fences_close_before_provider_and_final_save_locks_row(db):
+    _, _, _, _, evaluation = _seed_pending_evaluation(
+        db,
+        suffix="transaction-fences",
+    )
+    from app.tasks import sister_role_tasks
+
+    real_scope_check = sister_role_tasks._require_live_related_scoring_scope
+    phase_calls: list[tuple[str, bool, object]] = []
+
+    def _tracked_scope_check(session, **kwargs):
+        phase_calls.append(
+            (
+                str(kwargs["phase"]),
+                bool(kwargs.get("lock_for_update", False)),
+                session,
+            )
+        )
+        return real_scope_check(session, **kwargs)
+
+    def _score(*_args, before_provider_call, **_kwargs):
+        # The cache/provider admission read completed immediately before the
+        # scoring gateway was entered and must not span its network latency.
+        assert phase_calls[-1][0] == "full_score.cache_or_provider"
+        assert phase_calls[-1][2].in_transaction() is False
+        before_provider_call("full_score.main")
+        assert phase_calls[-1][0] == "full_score.main"
+        assert phase_calls[-1][2].in_transaction() is False
+        return _successful_match_output(score=89.0)
+
+    with (
+        patch.object(
+            sister_role_tasks,
+            "_require_live_related_scoring_scope",
+            side_effect=_tracked_scope_check,
+        ),
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_score,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        result = sister_role_tasks.score_sister_evaluation.run(int(evaluation.id))
+
+    assert result["status"] == "done"
+    assert [(phase, locked) for phase, locked, _session in phase_calls] == [
+        ("full_score.client_and_context", False),
+        ("full_score.cache_or_provider", False),
+        ("full_score.main", False),
+        ("full_score.persist", True),
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["roster", "authority", "inputs", "attempt_revoked", "provider"],
+)
+def test_stale_worker_failure_handlers_preserve_explicit_rescore_reset(
+    db,
+    failure_kind,
+):
+    from tests.conftest import TestingSessionLocal
+
+    _, _, related, _, evaluation = _seed_pending_evaluation(
+        db,
+        suffix=f"stale-handler-{failure_kind}",
+    )
+    from app.tasks import sister_role_tasks
+
+    def _score(*_args, before_provider_call, **_kwargs):
+        before_provider_call("full_score.main")
+        with TestingSessionLocal() as concurrent:
+            current_role = concurrent.get(Role, int(related.id))
+            assert current_role is not None
+            ensure_sister_evaluations(
+                concurrent,
+                current_role,
+                reset_existing=True,
+            )
+            concurrent.commit()
+
+        if failure_kind == "roster":
+            raise sister_role_tasks._RelatedRosterRevoked(
+                code="source_application_outside_owner_roster",
+                message="stale worker roster failure",
+                phase="test.failure_handler",
+            )
+        if failure_kind == "authority":
+            raise sister_role_tasks._RelatedAuthorityRevoked(
+                phase="test.failure_handler",
+                message="stale worker authority failure",
+            )
+        if failure_kind == "inputs":
+            raise sister_role_tasks._RelatedInputsChanged(
+                phase="test.failure_handler"
+            )
+        if failure_kind == "provider":
+            raise RuntimeError("stale worker provider failure")
+        return _successful_match_output(score=98.0)
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_score,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        result = sister_role_tasks.score_sister_evaluation.run(int(evaluation.id))
+
+    assert result == {
+        "status": "skipped",
+        "evaluation_id": int(evaluation.id),
+        "current_status": "pending",
+    }
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, int(evaluation.id))
+    assert saved is not None
+    assert saved.status == "pending"
+    assert saved.started_at is None
+    assert saved.attempts == 0
+    assert saved.last_error_code is None
+    assert saved.error_message is None
+    assert saved.role_fit_score is None
+    assert saved.next_attempt_at is None
+
+
+def test_stale_provider_failure_cannot_overwrite_replacement_running_attempt(db):
+    from tests.conftest import TestingSessionLocal
+
+    _, _, _, _, evaluation = _seed_pending_evaluation(
+        db,
+        suffix="replacement-running-attempt",
+    )
+    replacement_started_at: list[datetime] = []
+
+    def _score(*_args, before_provider_call, **_kwargs):
+        before_provider_call("full_score.main")
+        with TestingSessionLocal() as concurrent:
+            replacement = concurrent.get(
+                SisterRoleEvaluation,
+                int(evaluation.id),
+            )
+            assert replacement is not None
+            assert replacement.started_at is not None
+            replacement.started_at = replacement.started_at + timedelta(seconds=1)
+            replacement.attempts = int(replacement.attempts or 0) + 1
+            replacement_started_at.append(replacement.started_at)
+            concurrent.commit()
+        raise RuntimeError("superseded provider attempt failed late")
+
+    from app.tasks import sister_role_tasks
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_score,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+    ):
+        result = sister_role_tasks.score_sister_evaluation.run(int(evaluation.id))
+
+    assert result == {
+        "status": "skipped",
+        "evaluation_id": int(evaluation.id),
+        "current_status": "running",
+    }
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, int(evaluation.id))
+    assert saved is not None
+    assert saved.status == "running"
+    assert saved.attempts == 2
+    assert saved.started_at == replacement_started_at[0]
+    assert saved.last_error_code is None
+    assert saved.error_message is None
+    assert saved.next_attempt_at is None
+
+
+def test_failed_broker_publish_cannot_overwrite_explicit_rescore_reset(db):
+    from tests.conftest import TestingSessionLocal
+
+    _, _, related, _, evaluation = _seed_pending_evaluation(
+        db,
+        suffix="dispatch-reset-race",
+    )
+    from app.tasks.sister_role_tasks import (
+        dispatch_sister_evaluation,
+        score_sister_evaluation,
+    )
+
+    def _reset_then_fail_publish(*_args, **_kwargs):
+        with TestingSessionLocal() as concurrent:
+            current_role = concurrent.get(Role, int(related.id))
+            assert current_role is not None
+            ensure_sister_evaluations(
+                concurrent,
+                current_role,
+                reset_existing=True,
+            )
+            concurrent.commit()
+        raise RuntimeError("broker unavailable after explicit reset")
+
+    with patch.object(
+        score_sister_evaluation,
+        "apply_async",
+        side_effect=_reset_then_fail_publish,
+    ):
+        result = dispatch_sister_evaluation(
+            db,
+            evaluation_id=int(evaluation.id),
+        )
+
+    assert result == {
+        "status": "skipped",
+        "evaluation_id": int(evaluation.id),
+        "current_status": "pending",
+    }
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, int(evaluation.id))
+    assert saved is not None
+    assert saved.status == "pending"
+    assert saved.dispatch_attempted_at is None
+    assert saved.next_attempt_at is None
+    assert saved.last_error_code is None
+    assert saved.error_message is None
+
+
+def test_related_provider_reservation_requires_live_role_authority(db):
+    _, _, related, _, evaluation = _seed_pending_evaluation(
+        db,
+        suffix="metered-authority",
+    )
+    inner_calls: list[dict] = []
+
+    class _Messages:
+        def create(self, **kwargs):
+            inner_calls.append(kwargs)
+            return SimpleNamespace()
+
+    class _Client:
+        messages = _Messages()
+
+    reservation = SimpleNamespace(
+        as_metering_payload=lambda: {"external_ref": "related-authority-hold"}
+    )
+
+    def _score(*_args, client, before_provider_call, **_kwargs):
+        before_provider_call("full_score.main")
+        client.messages.create(
+            model="test-model",
+            max_tokens=10,
+            messages=[],
+            metering={
+                "feature": "score",
+                "organization_id": -1,
+                "role_id": -1,
+                "entity_id": "untrusted",
+                "trace_id": "related-authority-trace",
+            },
+        )
+        return _successful_match_output()
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_score,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=_Client(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+        patch(
+            "app.services.provider_usage_admission.reserve_provider_usage",
+            return_value=reservation,
+        ) as reserve,
+    ):
+        result = score_sister_evaluation.run(int(evaluation.id))
+
+    assert result["status"] == "done"
+    reserve.assert_called_once()
+    admission = reserve.call_args.kwargs
+    assert admission["organization_id"] == int(related.organization_id)
+    assert admission["role_id"] == int(related.id)
+    assert admission["require_role_authority"] is True
+    assert admission["entity_id"] == "untrusted"
+    assert admission["metadata"]["sister_evaluation_id"] == int(evaluation.id)
+    assert len(inner_calls) == 1
+    metering = inner_calls[0]["metering"]
+    assert metering["organization_id"] == int(related.organization_id)
+    assert metering["role_id"] == int(related.id)
+    assert metering["credit_reservation"] == {"external_ref": "related-authority-hold"}
+
+
+def test_metered_authority_rejection_cannot_be_reclassified_as_provider_failure(db):
+    from app.services.provider_usage_admission import AutomaticProviderAuthorityError
+
+    _, _, _, _, evaluation = _seed_pending_evaluation(
+        db,
+        suffix="metered-authority-revoked",
+    )
+    inner_calls: list[dict] = []
+
+    class _Messages:
+        def create(self, **kwargs):
+            inner_calls.append(kwargs)
+            return SimpleNamespace()
+
+    class _Client:
+        messages = _Messages()
+
+    def _score(*_args, client, before_provider_call, **_kwargs):
+        before_provider_call("full_score.main")
+        try:
+            client.messages.create(
+                model="test-model",
+                max_tokens=10,
+                messages=[],
+                metering={"feature": "score"},
+            )
+        except RuntimeError:
+            # The structured gateway converts provider exceptions into a failed
+            # output. The admitted client must retain the authority classification
+            # so the worker does not misreport this as a provider outage.
+            return SimpleNamespace(
+                scoring_status=SimpleNamespace(value="failed"),
+                error_reason="claude_call_failed",
+                role_fit_score=None,
+                cache_hit=False,
+            )
+        raise AssertionError("authority-revoked call reached the provider")
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=_score,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=_Client(),
+        ),
+        patch(
+            "app.services.workable_context_service.format_workable_context",
+            return_value="",
+        ),
+        patch(
+            "app.services.provider_usage_admission.reserve_provider_usage",
+            side_effect=AutomaticProviderAuthorityError("role agent is paused"),
+        ),
+    ):
+        result = score_sister_evaluation.run(int(evaluation.id))
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, int(evaluation.id))
+    assert result["status"] == "authority_blocked"
+    assert result["error_code"] == "authority_blocked"
+    assert saved.status == "retry_wait"
+    assert saved.last_error_code == "authority_blocked"
+    assert inner_calls == []
+
+
 def test_role_wake_releases_only_authority_wait_and_preserves_provider_backoff(db):
     organization = Organization(
         name="Related retry wake safety",
@@ -369,9 +972,7 @@ def test_role_wake_releases_only_authority_wait_and_preserves_provider_backoff(d
     )
     db.add(organization)
     db.flush()
-    owner, related = _seed_related_role(
-        db, organization_id=int(organization.id)
-    )
+    owner, related = _seed_related_role(db, organization_id=int(organization.id))
     authority_application = _seed_application(
         db,
         organization_id=int(organization.id),
