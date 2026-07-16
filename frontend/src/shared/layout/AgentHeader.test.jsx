@@ -197,7 +197,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Workspace agent paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('Workspace paused')).toBeInTheDocument();
     expect(screen.getByLabelText(/Paused by Sam Patel \(you\)/i)).toBeInTheDocument();
     expect(screen.queryByText(/Pause owner not recorded/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
@@ -216,10 +216,40 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
     render(<AgentHeader title="Jobs" agent={agent} onPauseAgent={() => {}} />);
 
-    expect(screen.getByLabelText('Workspace agent on')).toBeInTheDocument();
+    expect(screen.getByLabelText('Agents on')).toBeInTheDocument();
     expect(screen.getByText('2 running · 3 role-paused')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pause workspace' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
+  });
+
+  it('offers both bulk actions after one workspace-paused role resumes', () => {
+    const onPause = vi.fn();
+    const onResume = vi.fn();
+    const agent = buildAgentPropFromStatus({
+      workspace_paused: false,
+      workspace_control_version: 8,
+      active_role_count: 1,
+      paused_role_count: 2,
+      local_paused_role_count: 2,
+      pending_decisions: 0,
+    }, { isEnabled: true, controlScope: 'workspace' });
+
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={agent}
+        onPauseAgent={onPause}
+        onResumeAgent={onResume}
+        pauseAllCount={1}
+        resumeAllCount={2}
+      />,
+    );
+
+    expect(screen.getByText('1 running · 2 paused')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+    expect(onPause).toHaveBeenCalledTimes(1);
+    expect(onResume).toHaveBeenCalledTimes(1);
   });
 
   it('keeps workspace pause clickable while a missing version is refreshed on click', () => {
@@ -253,7 +283,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
     render(<AgentHeader title="Jobs" agent={agent} onResumeAgent={() => {}} />);
 
-    expect(screen.getByLabelText('Workspace agent paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('Workspace paused')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
     expect(screen.queryByText('AI spend')).not.toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();

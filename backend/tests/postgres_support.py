@@ -84,8 +84,31 @@ def run_database_migrator(
     )
 
 
+def run_alembic_upgrade(
+    database_url: str,
+    *,
+    revision: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run Alembic directly to a test fixture's historical branch point."""
+
+    if not revision.strip():
+        raise ValueError("Alembic test revision cannot be empty")
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", revision],
+        cwd=BACKEND_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+
 __all__ = [
     "configured_test_postgres_url",
     "isolated_postgres_database",
+    "run_alembic_upgrade",
     "run_database_migrator",
 ]

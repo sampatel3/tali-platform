@@ -1,13 +1,14 @@
-"""Workspace-wide agent pause state and execution authority.
+"""Workspace bulk-control audit plus legacy overlay compatibility.
 
-The workspace switch is an overlay, not a bulk edit of role controls.  Role
-``agentic_mode_enabled`` and ``agent_paused_*`` remain the recruiter's desired
-state for that role; a workspace pause temporarily denies autonomous work for
-all of them and clearing it reveals those local states unchanged.
+The global buttons now edit the enabled roles in one transaction; they do not
+create an organization-wide execution restriction. Overlay readers remain
+temporarily so rolling deployments fail safely until migration 175 converts
+any pre-existing hold into independently resumable role pauses.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import and_
@@ -16,9 +17,46 @@ from sqlalchemy.orm import Session
 from ..models.organization import Organization
 from ..models.user import User
 from ..models.workspace_agent_control_event import WorkspaceAgentControlEvent
+from .agent_pause_reasons import WORKSPACE_BULK_PAUSE_REASON
 
 
+# Legacy organization-overlay reason. Kept while old rows are migrated, but
+# new workspace controls never create an organization-wide execution hold.
 WORKSPACE_MANUAL_PAUSE_REASON = "workspace paused by recruiter"
+
+
+def advance_workspace_control(
+    db: Session,
+    *,
+    organization: Organization,
+    actor_user_id: int,
+    actor_name: str,
+    action: str,
+    reason: str,
+    request_id: str | None,
+) -> None:
+    """Record one serialized bulk action and retire any legacy overlay."""
+    now = datetime.now(timezone.utc)
+    from_version = int(organization.agent_workspace_control_version or 1)
+    to_version = from_version + 1
+    organization.agent_workspace_paused_at = None
+    organization.agent_workspace_paused_reason = None
+    organization.agent_workspace_paused_by_user_id = None
+    organization.agent_workspace_paused_by_name = None
+    organization.agent_workspace_control_version = to_version
+    db.add(
+        WorkspaceAgentControlEvent(
+            organization_id=int(organization.id),
+            actor_user_id=int(actor_user_id),
+            actor_name=str(actor_name)[:200],
+            action=action,
+            from_version=from_version,
+            to_version=to_version,
+            reason=reason,
+            request_id=request_id,
+            created_at=now,
+        )
+    )
 
 
 def workspace_agent_control_snapshot(
@@ -178,7 +216,9 @@ def workspace_agent_is_paused(db: Session, *, organization_id: int) -> bool:
 
 
 __all__ = [
+    "WORKSPACE_BULK_PAUSE_REASON",
     "WORKSPACE_MANUAL_PAUSE_REASON",
+    "advance_workspace_control",
     "workspace_agent_control_snapshot",
     "workspace_agent_is_paused",
     "workspace_agent_pause_state",

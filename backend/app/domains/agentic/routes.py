@@ -8,8 +8,8 @@
   POST   /api/v1/roles/{id}/agent/run-now         enqueue a manual agent cycle
   POST   /api/v1/roles/{id}/agent/pause           soft-pause one role (keeps pending decisions)
   POST   /api/v1/roles/{id}/agent/resume          resume one paused role (if back under cap)
-  POST   /api/v1/agent/pause-all                  apply the workspace pause overlay
-  POST   /api/v1/agent/resume-all                 clear only the workspace pause overlay
+  POST   /api/v1/agent/pause-all                  pause every currently-running role
+  POST   /api/v1/agent/resume-all                 resume every paused enabled role
 
 All endpoints are org-scoped via ``get_current_user``.
 """

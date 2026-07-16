@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import json
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +22,37 @@ from app.scripts.database_migrate import (
 from tests.postgres_support import (
     configured_test_postgres_url,
     isolated_postgres_database,
+    run_alembic_upgrade,
     run_database_migrator as _run_migrator,
+)
+
+
+_LEGACY_SISTER_EVALUATION_COLUMNS = (
+    "id",
+    "organization_id",
+    "role_id",
+    "source_application_id",
+    "status",
+    "spec_fingerprint",
+    "cv_fingerprint",
+    "role_fit_score",
+    "summary",
+    "details",
+    "history",
+    "model_version",
+    "prompt_version",
+    "trace_id",
+    "cache_hit",
+    "error_message",
+    "queued_at",
+    "started_at",
+    "scored_at",
+    "created_at",
+    "updated_at",
+    "attempts",
+    "next_attempt_at",
+    "dispatch_attempted_at",
+    "last_error_code",
 )
 
 
@@ -34,7 +66,15 @@ def test_migration_graph_has_canonical_initial_schema_and_one_head():
     assert script.get_bases() == ["000_initial_schema"]
     assert script.get_revision("000_initial_schema").down_revision is None
     assert script.get_revision("001").down_revision == "000_initial_schema"
-    assert script.get_heads() == ["180_merge_related_role_workflow"]
+    assert script.get_revision("180_merge_related_role_workflow").down_revision == (
+        "179_restore_schema_metadata_invariants",
+        "174_related_role_workflow",
+    )
+    assert script.get_revision("181_merge_workspace_bulk_role_pause").down_revision == (
+        "180_merge_related_role_workflow",
+        "175_workspace_bulk_role_pause",
+    )
+    assert script.get_heads() == ["181_merge_workspace_bulk_role_pause"]
 
 
 def test_preflight_allows_a_genuinely_empty_schema():
@@ -118,7 +158,7 @@ def test_fresh_postgres_schema_runs_full_chain_and_preserves_invariants(
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "180_merge_related_role_workflow"
+            ).scalar_one() == "181_merge_workspace_bulk_role_pause"
 
             indexes = set(
                 connection.execute(
@@ -245,5 +285,539 @@ def test_postgres_migration_lock_timeout_is_bounded_and_applies_no_ddl(
                 text("SELECT pg_advisory_unlock(:lock_id)"),
                 {"lock_id": POSTGRES_ADVISORY_LOCK_ID},
             ).scalar_one() is True
+    finally:
+        engine.dispose()
+
+
+def test_postgres_upgrade_from_related_role_branch_preserves_data_and_pause_provenance(
+    postgres_database_url: str,
+):
+    branch_result = run_alembic_upgrade(
+        postgres_database_url,
+        revision="173_related_role_drafts",
+    )
+    assert branch_result.returncode == 0, branch_result.stdout + branch_result.stderr
+
+    paused_at = datetime(2026, 7, 16, 8, 9, 10, tzinfo=timezone.utc)
+    pipeline_updated_at = datetime(2026, 7, 15, 11, 12, 13, tzinfo=timezone.utc)
+    queued_at = datetime(2026, 7, 15, 11, 13, 0, tzinfo=timezone.utc)
+    started_at = datetime(2026, 7, 15, 11, 14, 0, tzinfo=timezone.utc)
+    scored_at = datetime(2026, 7, 15, 11, 15, 0, tzinfo=timezone.utc)
+    created_at = datetime(2026, 7, 15, 11, 12, 30, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 7, 15, 11, 16, 0, tzinfo=timezone.utc)
+    dispatch_attempted_at = datetime(
+        2026,
+        7,
+        15,
+        11,
+        13,
+        30,
+        tzinfo=timezone.utc,
+    )
+    pause_reason = "emergency hold: recruiter requested"
+    evaluation_columns = ", ".join(_LEGACY_SISTER_EVALUATION_COLUMNS)
+
+    engine = create_engine(postgres_database_url, poolclass=NullPool)
+    try:
+        with engine.begin() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "173_related_role_drafts"
+
+            inspector = inspect(connection)
+            pre_upgrade_columns = {
+                column["name"]
+                for column in inspector.get_columns("sister_role_evaluations")
+            }
+            assert {
+                "pipeline_stage",
+                "pipeline_stage_updated_at",
+                "pipeline_stage_source",
+            }.isdisjoint(pre_upgrade_columns)
+            assert "ix_sister_evaluations_role_pipeline_stage" not in {
+                index["name"]
+                for index in inspector.get_indexes("sister_role_evaluations")
+            }
+
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO organizations (
+                        id,
+                        name,
+                        sso_enforced,
+                        saml_enabled,
+                        billing_provider,
+                        credits_balance,
+                        default_assessment_duration_minutes,
+                        fireflies_single_account_mode,
+                        two_factor_required,
+                        sync_mode,
+                        bullhorn_credential_generation,
+                        agent_workspace_paused_at,
+                        agent_workspace_paused_reason,
+                        agent_workspace_paused_by_name,
+                        agent_workspace_control_version
+                    ) VALUES (
+                        1001,
+                        'Migration preservation workspace',
+                        false,
+                        false,
+                        'lemon',
+                        0,
+                        30,
+                        true,
+                        false,
+                        'standalone',
+                        0,
+                        :paused_at,
+                        :pause_reason,
+                        'Original Recruiter',
+                        7
+                    )
+                    """
+                ),
+                {"paused_at": paused_at, "pause_reason": pause_reason},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO users (
+                        id,
+                        email,
+                        hashed_password,
+                        is_active,
+                        is_superuser,
+                        is_verified,
+                        organization_id,
+                        role,
+                        failed_login_attempts
+                    ) VALUES (
+                        1101,
+                        'migration-owner@example.test',
+                        'not-a-real-password-hash',
+                        true,
+                        false,
+                        true,
+                        1001,
+                        'owner',
+                        0
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE organizations
+                    SET agent_workspace_paused_by_user_id = 1101
+                    WHERE id = 1001
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO roles (
+                        id,
+                        organization_id,
+                        name,
+                        source,
+                        reject_threshold,
+                        starred_for_auto_sync,
+                        agentic_mode_enabled,
+                        auto_reject,
+                        auto_promote,
+                        auto_reject_threshold_mode,
+                        star_auto_managed,
+                        auto_skip_assessment,
+                        auto_reject_pre_screen,
+                        role_kind,
+                        ats_owner_role_id,
+                        version
+                    ) VALUES (
+                        :id,
+                        1001,
+                        :name,
+                        'manual',
+                        60,
+                        false,
+                        :agentic_mode_enabled,
+                        false,
+                        false,
+                        'auto',
+                        false,
+                        false,
+                        false,
+                        :role_kind,
+                        :ats_owner_role_id,
+                        :version
+                    )
+                    """
+                ),
+                [
+                    {
+                        "id": 2001,
+                        "name": "Platform Engineer",
+                        "agentic_mode_enabled": True,
+                        "role_kind": "standard",
+                        "ats_owner_role_id": None,
+                        "version": 11,
+                    },
+                    {
+                        "id": 2002,
+                        "name": "Related Systems Engineer",
+                        "agentic_mode_enabled": False,
+                        "role_kind": "sister",
+                        "ats_owner_role_id": 2001,
+                        "version": 4,
+                    },
+                ],
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO candidates (
+                        id,
+                        organization_id,
+                        email,
+                        full_name,
+                        marketing_consent,
+                        workable_enriched
+                    ) VALUES (
+                        3001,
+                        1001,
+                        'preserved-candidate@example.test',
+                        'Preserved Candidate',
+                        true,
+                        false
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO candidate_applications (
+                        id,
+                        organization_id,
+                        candidate_id,
+                        role_id,
+                        status,
+                        source,
+                        pipeline_stage,
+                        pipeline_stage_updated_at,
+                        pipeline_stage_source,
+                        application_outcome,
+                        application_outcome_updated_at,
+                        version
+                    ) VALUES (
+                        4001,
+                        1001,
+                        3001,
+                        2001,
+                        'applied',
+                        'manual',
+                        'applied',
+                        :pipeline_updated_at,
+                        'manual',
+                        'open',
+                        :pipeline_updated_at,
+                        5
+                    )
+                    """
+                ),
+                {"pipeline_updated_at": pipeline_updated_at},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO sister_role_evaluations (
+                        id,
+                        organization_id,
+                        role_id,
+                        source_application_id,
+                        status,
+                        spec_fingerprint,
+                        cv_fingerprint,
+                        role_fit_score,
+                        summary,
+                        details,
+                        history,
+                        model_version,
+                        prompt_version,
+                        trace_id,
+                        cache_hit,
+                        error_message,
+                        queued_at,
+                        started_at,
+                        scored_at,
+                        created_at,
+                        updated_at,
+                        attempts,
+                        next_attempt_at,
+                        dispatch_attempted_at,
+                        last_error_code
+                    ) VALUES (
+                        5001,
+                        1001,
+                        2002,
+                        4001,
+                        'completed',
+                        :spec_fingerprint,
+                        :cv_fingerprint,
+                        92.5,
+                        'Strong systems fit; retain exactly.',
+                        CAST(:details AS JSON),
+                        CAST(:history AS JSON),
+                        'migration-test-model',
+                        'migration-test-prompt-v3',
+                        'migration-test-trace',
+                        true,
+                        NULL,
+                        :queued_at,
+                        :started_at,
+                        :scored_at,
+                        :created_at,
+                        :updated_at,
+                        3,
+                        NULL,
+                        :dispatch_attempted_at,
+                        NULL
+                    )
+                    """
+                ),
+                {
+                    "spec_fingerprint": "a" * 64,
+                    "cv_fingerprint": "b" * 64,
+                    "details": json.dumps(
+                        {
+                            "strengths": ["Python", "distributed systems"],
+                            "explanation": "This payload must survive unchanged.",
+                        }
+                    ),
+                    "history": json.dumps(
+                        [
+                            {"status": "pending", "sequence": 1},
+                            {"status": "completed", "sequence": 2},
+                        ]
+                    ),
+                    "queued_at": queued_at,
+                    "started_at": started_at,
+                    "scored_at": scored_at,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "dispatch_attempted_at": dispatch_attempted_at,
+                },
+            )
+            legacy_evaluation = dict(
+                connection.execute(
+                    text(
+                        f"SELECT {evaluation_columns} "
+                        "FROM sister_role_evaluations WHERE id = 5001"
+                    )
+                ).mappings().one()
+            )
+
+        # Revision 180 was exercised before the workspace conversion existed.
+        # Pin that published state explicitly: changing its parent would make a
+        # database already stamped at 180 silently skip revision 175.
+        published_head_result = run_alembic_upgrade(
+            postgres_database_url,
+            revision="180_merge_related_role_workflow",
+        )
+        assert published_head_result.returncode == 0, (
+            published_head_result.stdout + published_head_result.stderr
+        )
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "180_merge_related_role_workflow"
+            assert connection.execute(
+                text(
+                    "SELECT agent_workspace_paused_at FROM organizations "
+                    "WHERE id = 1001"
+                )
+            ).scalar_one() == paused_at
+            assert connection.execute(
+                text("SELECT agent_paused_at FROM roles WHERE id = 2001")
+            ).scalar_one() is None
+            assert dict(
+                connection.execute(
+                    text(
+                        f"SELECT {evaluation_columns} "
+                        "FROM sister_role_evaluations WHERE id = 5001"
+                    )
+                ).mappings().one()
+            ) == legacy_evaluation
+
+        migration_result = _run_migrator(postgres_database_url)
+        assert migration_result.returncode == 0, (
+            migration_result.stdout + migration_result.stderr
+        )
+        assert "Preflight passed (versioned schema)" in migration_result.stdout
+        assert (
+            "Migration and schema invariant validation passed."
+            in migration_result.stdout
+        )
+
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "181_merge_workspace_bulk_role_pause"
+
+            preserved_evaluation = dict(
+                connection.execute(
+                    text(
+                        f"SELECT {evaluation_columns} "
+                        "FROM sister_role_evaluations WHERE id = 5001"
+                    )
+                ).mappings().one()
+            )
+            assert preserved_evaluation == legacy_evaluation
+
+            workflow_state = connection.execute(
+                text(
+                    """
+                    SELECT
+                        pipeline_stage,
+                        pipeline_stage_updated_at,
+                        pipeline_stage_source
+                    FROM sister_role_evaluations
+                    WHERE id = 5001
+                    """
+                )
+            ).mappings().one()
+            assert workflow_state["pipeline_stage"] == "applied"
+            assert workflow_state["pipeline_stage_updated_at"] is not None
+            assert workflow_state["pipeline_stage_source"] == "system"
+
+            related_indexes = {
+                index["name"]: index
+                for index in inspect(connection).get_indexes(
+                    "sister_role_evaluations"
+                )
+            }
+            workflow_index = related_indexes[
+                "ix_sister_evaluations_role_pipeline_stage"
+            ]
+            assert workflow_index["column_names"] == [
+                "role_id",
+                "pipeline_stage",
+            ]
+            assert workflow_index["unique"] is False
+
+            organization = connection.execute(
+                text(
+                    """
+                    SELECT
+                        agent_workspace_paused_at,
+                        agent_workspace_paused_reason,
+                        agent_workspace_paused_by_user_id,
+                        agent_workspace_paused_by_name,
+                        agent_workspace_control_version
+                    FROM organizations
+                    WHERE id = 1001
+                    """
+                )
+            ).mappings().one()
+            assert organization == {
+                "agent_workspace_paused_at": None,
+                "agent_workspace_paused_reason": None,
+                "agent_workspace_paused_by_user_id": None,
+                "agent_workspace_paused_by_name": None,
+                "agent_workspace_control_version": 8,
+            }
+
+            owner_role = connection.execute(
+                text(
+                    """
+                    SELECT agent_paused_at, agent_paused_reason, version
+                    FROM roles
+                    WHERE id = 2001
+                    """
+                )
+            ).mappings().one()
+            assert owner_role == {
+                "agent_paused_at": paused_at,
+                "agent_paused_reason": "paused by workspace control",
+                "version": 12,
+            }
+            related_role = connection.execute(
+                text(
+                    """
+                    SELECT agent_paused_at, agent_paused_reason, version
+                    FROM roles
+                    WHERE id = 2002
+                    """
+                )
+            ).mappings().one()
+            assert related_role == {
+                "agent_paused_at": None,
+                "agent_paused_reason": None,
+                "version": 4,
+            }
+
+            role_event = connection.execute(
+                text(
+                    """
+                    SELECT
+                        organization_id,
+                        role_id,
+                        actor_user_id,
+                        action,
+                        from_version,
+                        to_version,
+                        changes,
+                        reason,
+                        request_id
+                    FROM role_change_events
+                    WHERE role_id = 2001 AND action = 'agent_paused'
+                    """
+                )
+            ).mappings().one()
+            assert role_event["organization_id"] == 1001
+            assert role_event["actor_user_id"] == 1101
+            assert role_event["from_version"] == 11
+            assert role_event["to_version"] == 12
+            assert role_event["request_id"] is None
+            provenance = role_event["changes"]["workspace_pause_provenance"]
+            assert provenance == {
+                "paused_at": paused_at.isoformat(),
+                "reason": pause_reason,
+                "actor_user_id": 1101,
+                "actor_name": "Original Recruiter",
+            }
+            assert role_event["changes"]["agent_paused_at"] == {
+                "before": None,
+                "after": paused_at.isoformat(),
+            }
+            assert pause_reason in role_event["reason"]
+            assert "conversion was automated" in role_event["reason"]
+
+            workspace_event = connection.execute(
+                text(
+                    """
+                    SELECT
+                        actor_user_id,
+                        actor_name,
+                        action,
+                        from_version,
+                        to_version,
+                        reason,
+                        request_id
+                    FROM workspace_agent_control_events
+                    WHERE organization_id = 1001
+                    """
+                )
+            ).mappings().one()
+            assert workspace_event["actor_user_id"] == 1101
+            assert workspace_event["actor_name"] == "Original Recruiter"
+            assert workspace_event["action"] == "paused"
+            assert workspace_event["from_version"] == 7
+            assert workspace_event["to_version"] == 8
+            assert workspace_event["request_id"] is None
+            assert pause_reason in workspace_event["reason"]
+            assert paused_at.isoformat() in workspace_event["reason"]
     finally:
         engine.dispose()

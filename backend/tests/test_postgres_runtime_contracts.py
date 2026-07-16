@@ -54,7 +54,7 @@ def postgres_runtime_engine() -> Iterator[Engine]:
             with engine.connect() as connection:
                 assert connection.execute(
                     text("SELECT version_num FROM alembic_version")
-                ).scalar_one() == "180_merge_related_role_workflow"
+                ).scalar_one() == "181_merge_workspace_bulk_role_pause"
             yield engine
         finally:
             engine.dispose()

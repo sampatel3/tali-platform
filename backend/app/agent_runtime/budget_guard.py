@@ -36,10 +36,13 @@ from sqlalchemy.orm import Session
 
 from ..models.role import Role
 from ..models.usage_event import UsageEvent
+from ..services.agent_pause_reasons import (
+    MANUAL_PAUSE_REASON,
+    WORKSPACE_BULK_PAUSE_REASON,
+)
 
 
 DEFAULT_USD_BUDGET_MONTHLY_CENTS = 5_000  # $50.00
-MANUAL_PAUSE_REASON = "paused by recruiter"
 
 
 def is_manual_pause_reason(reason: str | None) -> bool:
@@ -55,6 +58,7 @@ def is_manual_pause_reason(reason: str | None) -> bool:
         "paused by you",
         "manual pause",
         "manually paused by recruiter",
+        WORKSPACE_BULK_PAUSE_REASON,
     }
 
 

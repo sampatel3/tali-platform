@@ -577,9 +577,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     );
   }, [rolesBreakdown]);
 
-  // Workspace control for the header strip. Effective role counts can all read
-  // paused while the overlay is active, but the explicit workspace fields are
-  // the source of truth for the control and its actor attribution.
+  // Workspace controls are aggregate role actions. Running and paused-role
+  // counts keep both actions available when the workspace is in a mixed state.
   const agentRunningCount = Number(kpis.active_role_count || 0);
   const agentPausedCount = Number(kpis.paused_role_count || 0);
   const headerAgent = useMemo(() => {
@@ -605,13 +604,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       fallbackTick,
     });
     return built ? { ...built, controlAction: orgAgentAction, pending: pendingDecisions } : built;
-  }, [
-    agentRunningCount,
-    agentPausedCount,
-    pendingDecisions,
-    kpis,
-    orgAgentAction,
-  ]);
+  }, [agentRunningCount, agentPausedCount, pendingDecisions, kpis, orgAgentAction]);
 
   return (
     <div>
@@ -630,13 +623,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
           title={greetingFor(user)}
           subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
-          // Workspace control: the overlay gates every enabled role without
-          // rewriting the role's own saved ON/PAUSED/OFF state.
+          // Workspace control is a bulk convenience; role Resume remains
+          // independent after a workspace Pause.
           agent={headerAgent}
           onPauseAgent={canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
           onResumeAgent={canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
           pauseLabel="Pause workspace"
           resumeLabel="Resume workspace"
+          pauseAllCount={headerAgent?.runningRoleCount ?? 0}
+          resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
+          controlsDisabledReason={!canControlWorkspaceAgent
+            ? 'Workspace owners can pause or resume all agents.'
+            : null}
           offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
         />
       </Reveal>
